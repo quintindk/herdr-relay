@@ -104,12 +104,15 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       }
       else if (req.method === 'POST' && path === '/bindings') {
         adminOnly();
-        if (input.opencode?.runtimeKey) {
-          const runtime = ownedRuntime(store, input.opencode.runtimeKey);
-          requireValue(input.opencode.url === `http://127.0.0.1:${runtime.port}` &&
-            input.opencode.authFile === join(runtime.directory, 'auth.json') && input.opencode.directory === runtime.request.directory,
+        const nativeSettings = input.opencode ?? input.hermes;
+        if (nativeSettings?.runtimeKey) {
+          const runtime = ownedRuntime(store, nativeSettings.runtimeKey);
+          const hermes = input.harness === 'hermes';
+          requireValue((runtime.request.harness ?? 'opencode') === input.harness &&
+            nativeSettings.url === (hermes ? `ws://127.0.0.1:${runtime.port}/api/ws` : `http://127.0.0.1:${runtime.port}`) &&
+            nativeSettings.authFile === join(runtime.directory, hermes ? 'gateway-token' : 'auth.json') && nativeSettings.directory === runtime.request.directory,
           'runtime_identity_mismatch', 'Binding does not target the owned native runtime', 409);
-          requireValue(!store.bindings().some(binding => binding.id !== input.id && binding.config.opencode?.runtimeKey === input.opencode.runtimeKey),
+          requireValue(!store.bindings().some(binding => binding.id !== input.id && (binding.config.opencode ?? binding.config.hermes)?.runtimeKey === nativeSettings.runtimeKey),
             'runtime_already_bound', 'Managed native runtime is dedicated to one binding', 409);
         }
         if (input.delivery === 'opencode') await new OpenCode({ ...input, opencode: nativeConfig(input.opencode) }).verify();

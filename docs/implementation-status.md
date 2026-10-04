@@ -9,13 +9,13 @@ item requires implementation and evidence before the specification is complete.
 | --- | --- | --- |
 | Separate agents without managers | Real Paperclip smoke | Preserve through provisioning |
 | Existing native conversations | Live OpenCode/Hermes tests and revisioned rebinding | Enforceable shared-conversation reservation |
-| Native dispatch and CLI submission | Live OpenCode/Hermes delivery, owned OpenCode cancellation | Hermes owned interruption and shared-conversation input locking |
+| Native dispatch and CLI submission | Live OpenCode/Hermes delivery and owned cancellation | Shared-conversation input locking |
 | Duplicate/stale protection | Store, HTTP and process-restart tests | Backend mutation reconciliation beyond result comments |
 | Paperclip host recovery | Real host crash/restart and explicit replacement-run recovery | Board-authorised recovery orchestration |
 | Questions and continuation | Real Paperclip interaction and automatic continuation smoke | Agent answer commands and full native question scenario |
 | Agent discovery and work CLI | Scoped discovery, task create/list/assign, answer commands and shared skill | Inbox, uncertain mutation reconciliation and skill provisioning |
 | Result review and acceptance | Working-tree digest and real candidate-bound board acceptance | Correction orchestration, finalisation and retirement |
-| Lifetimes and provisioning | Owned OpenCode runtime launch/stop and worktree provisioning | Lifetime orchestration, Hermes launch and herdr placement |
+| Lifetimes and provisioning | Owned OpenCode/Hermes launch/stop, task lifetimes and worktrees | Integrated provisioning and herdr placement |
 | Retirement and cleanup | Controller-scoped acceptance retirement, owned runtime stop and worktree cleanup | Hermes runtime ownership and placement reconciliation |
 | Herdr integration | Live-verified interactive work pane, status and discovery actions | Runtime placement restoration reconciliation |
 | Monitoring workflow | Durable source events, atomic checkpoints and inbox receipts | Connectors and bounded schedule lifecycle |

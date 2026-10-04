@@ -55,3 +55,18 @@ test('legacy Hermes terminal replay requires the reserved input segment and uniq
   snapshot.session.messages.push({ role: 'assistant', text: 'done', row_id: 7 });
   assert.equal(observeHermes(snapshot, invocation).state, 'observed');
 });
+
+test('interrupted Hermes output proves failed exit but never successful completion', () => {
+  const invocation = { prompt: 'work', priorUserIds: [], eventCursor: 1 };
+  const snapshot = { idle: true, session: { session_id: 'runtime', messages: [
+    { role: 'user', text: 'work', row_id: 4 }, { role: 'assistant', text: 'Operation interrupted.', row_id: 6 },
+  ] }, events: { events: [{ type: 'message.complete', session_id: 'runtime', seq: 2, payload: {
+    status: 'interrupted', text: null, persisted_turn: { complete: false, user_row_id: 4, row_ids: [4, 6] },
+  } }] } };
+  assert.equal(observeHermes(snapshot, invocation).error, 'interrupted');
+  snapshot.events.events[0].payload.status = 'complete';
+  assert.equal(observeHermes(snapshot, invocation).state, 'observed');
+  snapshot.events.events[0].payload.status = 'interrupted';
+  snapshot.events.events[0].payload.persisted_turn.user_row_id = 3;
+  assert.equal(observeHermes(snapshot, invocation).state, 'observed');
+});

@@ -46,9 +46,10 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
     const binding = store.binding(run.request.bindingId);
     if (!['opencode', 'hermes'].includes(binding.config.delivery) || run.nativeState === 'settled') return;
     const hermes = binding.config.delivery === 'hermes';
+    const runtimeKey = (binding.config.opencode ?? binding.config.hermes)?.runtimeKey;
     const native = hermes ? new Hermes(binding.config) : new OpenCode(binding.config);
     try {
-      if (binding.config.opencode?.runtimeKey) ownedRuntime(store, binding.config.opencode.runtimeKey);
+      if (runtimeKey) ownedRuntime(store, runtimeKey);
       if (!run.invocation) {
         if (!ready(id) || run.cancellationRequested) return;
         const snapshot = await native.snapshot();
@@ -66,9 +67,9 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
       run = store.run(id);
       const observation = (hermes ? observeHermes : observe)(await native.snapshot(), run.invocation);
       store.nativeStatus(id, observation);
-      if (!hermes && binding.config.opencode?.runtimeKey && run.cancellationRequested &&
+      if (runtimeKey && run.cancellationRequested &&
         observation.state === 'observed' && !run.interruption && run.native?.state !== 'conflict') {
-        ownedRuntime(store, binding.config.opencode.runtimeKey);
+        ownedRuntime(store, runtimeKey);
         store.interruptIntent(id);
         await native.interrupt();
         // The abort reply is not settlement. Observe the original message again.

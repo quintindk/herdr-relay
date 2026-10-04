@@ -25,7 +25,10 @@ export function ownedRuntime(store, key) {
 export async function launchRuntime(store, stateDirectory, input) {
   requireValue(process.platform === 'linux', 'unsupported_platform', 'Managed native runtimes currently require Linux');
   const key = text(input.key, 'key');
-  const request = { directory: resolve(text(input.directory, 'directory')), executable: text(input.executable ?? 'opencode', 'executable') };
+  const harness = input.harness ?? 'opencode';
+  requireValue(['opencode', 'hermes'].includes(harness), 'invalid_harness', 'Managed runtime requires OpenCode or Hermes');
+  const request = { directory: resolve(text(input.directory, 'directory')), executable: text(input.executable ?? harness, 'executable'),
+    ...(harness === 'hermes' ? { harness } : {}) };
   const id = `runtime:${key}`;
   let operation = store.operation(id);
   if (operation) {
@@ -40,7 +43,9 @@ export async function launchRuntime(store, stateDirectory, input) {
     const port = server.address().port;
     await new Promise(resolve => server.close(resolve));
     const nonce = randomBytes(24).toString('hex');
-    writeFileSync(join(directory, 'auth.json'), JSON.stringify({ username: 'opencode', password: randomBytes(32).toString('hex') }), { flag: 'wx', mode: 0o600 });
+    const password = randomBytes(32).toString('hex');
+    writeFileSync(join(directory, 'auth.json'), JSON.stringify({ username: 'opencode', password }), { flag: 'wx', mode: 0o600 });
+    if (harness === 'hermes') writeFileSync(join(directory, 'gateway-token'), password, { flag: 'wx', mode: 0o600 });
     writeFileSync(join(directory, 'config.json'), JSON.stringify({ ...request, port, nonce }), { flag: 'wx', mode: 0o600 });
     operation = store.saveOperation({ id, runId: '', request, directory, port, nonce, state: 'launching' });
     const child = spawn(process.execPath, [fileURLToPath(new URL('./runtime-host.mjs', import.meta.url)), directory], {
@@ -56,10 +61,11 @@ export async function launchRuntime(store, stateDirectory, input) {
       requireValue(descriptor.nonce === operation.nonce && !['failed', 'exited'].includes(descriptor.state),
         'runtime_launch_failed', 'Owned native runtime failed during startup', 409);
       try {
-        const response = await fetch(`http://127.0.0.1:${operation.port}/global/health`, {
+        const response = await fetch(`http://127.0.0.1:${operation.port}/${harness === 'hermes' ? 'api/health' : 'global/health'}`, {
           headers: { Authorization: `Basic ${Buffer.from(`opencode:${auth.password}`).toString('base64')}` }, signal: AbortSignal.timeout(500),
         });
-        if (response.ok && (await response.json()).healthy) {
+        const health = response.ok ? await response.json() : {};
+        if (health.healthy || health.ok) {
           store.saveOperation({ ...operation, state: 'ready' });
           return ownedRuntime(store, key);
         }
@@ -75,7 +81,7 @@ export async function stopRuntime(store, key) {
   requireValue(existing, 'runtime_not_found', 'Unknown owned native runtime', 404);
   if (existing.state === 'retired') return existing;
   const operation = existing.state === 'stopping' ? existing : ownedRuntime(store, key);
-  const bindings = store.bindings().filter(binding => binding.config.opencode?.runtimeKey === key);
+  const bindings = store.bindings().filter(binding => (binding.config.opencode ?? binding.config.hermes)?.runtimeKey === key);
   requireValue(bindings.every(binding => !store.runs(binding.id).some(run => run.nativeState !== 'settled')),
     'runtime_busy', 'Managed runtime still has unsettled work', 409);
   const descriptor = JSON.parse(readFileSync(join(operation.directory, 'runtime.json'), 'utf8'));

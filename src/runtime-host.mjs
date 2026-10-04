@@ -11,9 +11,14 @@ const save = () => writeFileSync(join(directory, 'runtime.json'), JSON.stringify
 save();
 const auth = JSON.parse(readFileSync(join(directory, 'auth.json'), 'utf8'));
 const log = openSync(join(directory, 'native.log'), 'a', 0o600);
-const child = spawn(config.executable, ['serve', '--hostname', '127.0.0.1', '--port', String(config.port), '--pure'], {
-  cwd: config.directory, env: { ...process.env, OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: auth.password,
-    OPENCODE_PURE: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: '1' },
+const hermes = config.harness === 'hermes';
+const child = spawn(config.executable, hermes
+  ? ['serve', '--host', '127.0.0.1', '--port', String(config.port), '--skip-build', '--isolated']
+  : ['serve', '--hostname', '127.0.0.1', '--port', String(config.port), '--pure'], {
+  cwd: config.directory, env: { ...process.env, ...(hermes
+    ? { HERMES_DASHBOARD_SESSION_TOKEN: auth.password }
+    : { OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: auth.password,
+      OPENCODE_PURE: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: '1' }) },
   stdio: ['ignore', log, log],
 });
 child.once('spawn', () => { descriptor.childPid = child.pid; descriptor.childStart = identity(child.pid); descriptor.state = 'running'; save(); });

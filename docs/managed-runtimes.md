@@ -1,6 +1,6 @@
-# Managed OpenCode runtimes
+# Managed native runtimes
 
-Linux-only managed mode gives Relay an owned, dedicated OpenCode HTTP server.
+Linux-only managed mode gives Relay an owned, dedicated native server.
 Existing shared servers remain available through reserved-conversation mode.
 
 ```bash
@@ -16,6 +16,11 @@ and launches a detached owner helper. The helper records its PID/start time and 
 native child PID/start time before announcing readiness. Repeated launch with the
 same key returns the existing verified runtime. An uncertain launch is not replayed.
 No numeric PID alone authorises signalling.
+
+Set `harness: "hermes"` and `executable: "hermes"` to launch Hermes. It uses
+`serve --isolated`, a private `gateway-token` file and a local WebSocket endpoint.
+The host must already have the harness and model credentials set up. Hermes bindings
+use `hermes.runtimeKey` and the exact live/stored identity and replay epoch.
 
 Use the returned runtime port and private `auth.json` path to create or identify an
 OpenCode conversation. Register the usual native binding with `opencode.runtimeKey`
@@ -41,10 +46,17 @@ to disappear. Repeated successful stop is a no-op. It preserves the stored nativ
 conversation. There is no force-kill fallback or shared-server shutdown.
 
 The owner survives Relay restart. Its descriptor is reconciled on subsequent
-operations. Automatic runtime relaunch, Hermes owned launch, herdr placement and
-acceptance-triggered shutdown orchestration remain pending.
+operations. Automatic runtime relaunch and herdr placement remain pending.
+Task-scoped acceptance invokes the controller's retirement path. See
+[lifetimes and rebinding](lifetimes-and-rebinding.md) for prerequisites.
 
 `scripts/managed-opencode-smoke.mjs` launches an isolated real-model fixture,
 starts a foreground `sleep 120` tool, verifies active shutdown is refused, requests
 cancellation, observes terminal settlement, confirms conversation preservation,
 and retires the runtime. It removes its isolated credentials and state afterward.
+
+`scripts/managed-hermes-smoke.mjs` verifies owned Hermes cancellation and retirement
+with a real model. Interrupted events can carry `persisted_turn.complete: false`.
+Relay accepts them only as failed/cancelled exit evidence when the event names the
+assigned user row, includes the final assistant row in its row set, and the session
+is idle. Partial output never proves successful work.

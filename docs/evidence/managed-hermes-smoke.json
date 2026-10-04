@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-04",
+  "realModel": "copilot/gpt-6-astra",
+  "ownedHermesRuntime": true,
+  "cancellationObserved": true,
+  "conversationPreservedBeforeRetirement": true,
+  "retirementVerified": true,
+  "backend": "deterministic task fixture"
+}

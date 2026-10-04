@@ -13,6 +13,7 @@ export function hermesConfig(input) {
   requireValue(input.exclusive === true, 'native_reservation_required', 'Reserve the Hermes conversation before native delivery');
   return { url: url.href, directory: input.directory, authFile: input.authFile, exclusive: true,
     runtimeId: text(input.runtimeId, 'hermes.runtimeId'), epoch: text(input.epoch, 'hermes.epoch'),
+    ...(input.runtimeKey ? { runtimeKey: text(input.runtimeKey, 'hermes.runtimeKey') } : {}),
     ...(input.profile ? { profile: text(input.profile, 'hermes.profile') } : {}) };
 }
 
@@ -67,6 +68,8 @@ export class Hermes {
 
   async verify() { return this.snapshot(); }
 
+  async interrupt() { await this.request('session.interrupt'); }
+
   async send(invocation) {
     const receipt = await this.request('prompt.submit', { text: invocation.prompt, queued: true });
     requireValue(receipt.status === 'streaming' && Number.isSafeInteger(receipt.user_row_id),
@@ -83,6 +86,18 @@ export function observeHermes(snapshot, invocation) {
   const user = matches[0];
   if (messages.some(message => message.role === 'user' && message.row_id !== user.row_id && !invocation.priorUserIds.includes(message.row_id))) {
     return { state: 'conflict', reason: 'concurrent_native_input' };
+  }
+  const interrupted = snapshot.events.events.findLast(event => event.type === 'message.complete' &&
+    event.session_id === snapshot.session.session_id && event.seq > invocation.eventCursor &&
+    event.payload?.status === 'interrupted' && event.payload.persisted_turn?.user_row_id === user.row_id);
+  if (snapshot.idle && interrupted) {
+    const rows = interrupted.payload.persisted_turn.row_ids;
+    const last = messages.at(-1);
+    if (last?.role === 'assistant' && Number.isSafeInteger(last.row_id) && rows?.includes(last.row_id)) {
+      // Incomplete persisted-turn output cannot prove successful work. A native
+      // interrupted event naming this user row can prove failed/cancelled exit.
+      return { state: 'finished', messageId: String(last.row_id), error: 'interrupted' };
+    }
   }
   // PersistedTurn is stronger than an idle transcript: it explicitly identifies
   // this user row and the completed final row from the native execution.

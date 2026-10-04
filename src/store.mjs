@@ -387,7 +387,7 @@ export class Store {
         'continuation_mismatch', 'Rebinding must preserve the exact stored conversation and harness', 409);
       const native = config.harness === 'opencode' ? nativeConfig(input.opencode) : hermesConfig(input.hermes);
       requireValue(config.delivery === config.harness, 'invalid_delivery', 'Rebinding requires native delivery', 409);
-      requireValue(!config.opencode?.runtimeKey && !native.runtimeKey, 'managed_rebind_unsupported', 'Managed runtime replacement requires lifecycle reconciliation', 409);
+      requireValue(!(config.opencode ?? config.hermes)?.runtimeKey && !native.runtimeKey, 'managed_rebind_unsupported', 'Managed runtime replacement requires lifecycle reconciliation', 409);
       const conversation = config.harness === 'opencode'
         ? canonical(['opencode', native.url, native.directory, config.conversationId])
         : canonical(['hermes', native.url, native.profile ?? '', config.conversationId]);

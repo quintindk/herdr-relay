@@ -27,8 +27,9 @@ export async function retireAccepted(store, caller, target, token, api) {
       requireValue(finalisation?.state === 'recorded', 'finalisation_required', 'Commit finalisation must precede runtime retirement', 409);
     }
     store.beginRetirement(binding.id);
-    if (binding.config.opencode?.runtimeKey) {
-      await stopRuntime(store, binding.config.opencode.runtimeKey);
+    const runtimeKey = (binding.config.opencode ?? binding.config.hermes)?.runtimeKey;
+    if (runtimeKey) {
+      await stopRuntime(store, runtimeKey);
       operation = store.saveOperation({ ...operation, state: 'runtime_stopped' });
     } else requireValue(binding.config.delivery === 'pull', 'runtime_retirement_unsupported', 'Native runtime is not owned by Relay', 409);
     if (binding.config.worktreeKey) await retireWorktree(store, {
