@@ -23,8 +23,8 @@ test('bounded schedules preserve retry slot, avoid overlapping work and stop at 
   const run = store.dispatch({ bindingId: 'monitor', bindingRevision: 1, companyId: 'company', agentId: 'monitor', taskId: 'brief', runId: 'backend' });
   await tickSchedules(store, api, clock + 20000);
   assert.equal(keys.length, 2);
-  store.cancel(run.id);
   await tickSchedules(store, api, clock + 60000);
   assert.equal(store.operation('schedule:morning').state, 'ended');
+  assert.equal(store.run(run.id).cancellationRequested, true);
   assert.equal(keys.length, 2);
 });

@@ -26,8 +26,10 @@ and agent. Pending slots retain a stable backend idempotency key across lost
 responses and Relay restarts. Unsettled work prevents another wake. Missed slots
 coalesce into the next bounded check rather than replaying an entire outage.
 
-The schedule ends at its boundary. Stopping prevents future wakes and does not
-assert that an already-running turn stopped. Cancel that invocation separately.
+The schedule ends at its boundary and requests cancellation only for unsettled
+work on its binding and standing task. Native settlement still has to be observed.
+Manual stop prevents future wakes. Add `cancelActive: true` to request cancellation
+of the same scoped work. Neither operation claims an in-flight turn already stopped.
 `stop.json` contains the schedule `key`.
 
 Source checkpoints remain separate. A connector reads its cursor and records

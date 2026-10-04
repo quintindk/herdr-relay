@@ -93,7 +93,11 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
   };
   const schedule = () => {
     if (stopped) return;
-    timer = setTimeout(() => { current = tick().finally(schedule); }, interval);
+    timer = setTimeout(() => {
+      current = tick().catch(error => {
+        console.error(JSON.stringify({ code: error.code ?? 'native_reconciliation_failed' }));
+      }).finally(schedule);
+    }, interval);
   };
   schedule();
   return { close: async () => { stopped = true; clearTimeout(timer); await current; } };

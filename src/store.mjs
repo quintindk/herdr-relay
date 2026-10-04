@@ -188,6 +188,9 @@ export class Store {
         return existing;
       }
       requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
+      const runtimeKey = (binding.config.opencode ?? binding.config.hermes)?.runtimeKey;
+      if (runtimeKey) requireValue(this.operation(`runtime:${runtimeKey}`)?.state === 'ready',
+        'runtime_not_ready', 'Owned native runtime is not available for dispatch', 409);
       const decision = this.operation(`review-decision:${digest([request.companyId, request.taskId])}`);
       requireValue(!decision || decision.state === 'recorded', 'review_decision_uncertain', 'Task has an unresolved candidate decision', 409);
       requireValue(!this.db.prepare('SELECT id FROM runs WHERE binding_id = ? AND active = 1').get(binding.id),

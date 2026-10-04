@@ -77,7 +77,11 @@ export function lifecycleRunner(store, operatorApi, locks) {
   let timer;
   const schedule = () => {
     if (stopped) return;
-    timer = setTimeout(() => { pending = reconcileRetirements(store, operatorApi, locks).finally(schedule); }, 1000);
+    timer = setTimeout(() => {
+      pending = reconcileRetirements(store, operatorApi, locks).catch(error => {
+        console.error(JSON.stringify({ code: error.code ?? 'lifecycle_reconciliation_failed' }));
+      }).finally(schedule);
+    }, 1000);
   };
   schedule();
   return { close: async () => { stopped = true; clearTimeout(timer); await pending; } };

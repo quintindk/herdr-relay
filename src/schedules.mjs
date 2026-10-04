@@ -43,6 +43,9 @@ export async function tickSchedules(store, api, clock = Date.now()) {
     if (schedule.state !== 'active') continue;
     if (clock >= Date.parse(schedule.request.endsAt)) {
       store.saveOperation({ ...schedule, state: 'ended' });
+      for (const run of store.runs(schedule.request.bindingId)) {
+        if (run.nativeState !== 'settled' && run.request.taskId === schedule.request.taskId) store.cancel(run.id);
+      }
       continue;
     }
     if (clock < Date.parse(schedule.nextAt)) continue;
@@ -81,7 +84,11 @@ export function scheduleRunner(store, api) {
   let timer;
   const schedule = () => {
     if (stopped) return;
-    timer = setTimeout(() => { pending = tickSchedules(store, api).finally(schedule); }, 1000);
+    timer = setTimeout(() => {
+      pending = tickSchedules(store, api).catch(error => {
+        console.error(JSON.stringify({ code: error.code ?? 'schedule_reconciliation_failed' }));
+      }).finally(schedule);
+    }, 1000);
   };
   schedule();
   return { close: async () => { stopped = true; clearTimeout(timer); await pending; } };

@@ -191,6 +191,11 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         const schedule = store.operation(`schedule:${text(input.key, 'key')}`);
         requireValue(schedule, 'schedule_not_found', 'Unknown schedule', 404);
         result = store.saveOperation({ ...schedule, state: 'stopped' });
+        if (input.cancelActive === true) {
+          for (const run of store.runs(schedule.request.bindingId)) {
+            if (run.nativeState !== 'settled' && run.request.taskId === schedule.request.taskId) store.cancel(run.id);
+          }
+        }
       }
       else if (req.method === 'POST' && ['/runtimes/launch', '/runtimes/stop'].includes(path)) {
         adminOnly();
