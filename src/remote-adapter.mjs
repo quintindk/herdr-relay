@@ -6,6 +6,7 @@ import { remoteCommand } from './remote.mjs';
 import { RelayError, requireValue } from './protocol.mjs';
 
 export async function executeRemote(ctx, { spawnProcess = spawn } = {}) {
+  requireValue(ctx.authToken, 'missing_auth', 'Paperclip run authentication is required');
   const config = JSON.parse(readFileSync(ctx.config.relayNodeFile, 'utf8'));
   const args = remoteCommand(config, ['adapter-stdio']);
   const timeoutSec = ctx.config.timeoutSec ?? 300;
@@ -18,6 +19,7 @@ export async function executeRemote(ctx, { spawnProcess = spawn } = {}) {
     let output = '';
     let result;
     let failure;
+    let logs = Promise.resolve();
     const onAbort = () => { if (child.stdin.writable) child.stdin.write(`${JSON.stringify({ type: 'cancel' })}\n`); };
     ctx.signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(onAbort, Math.max(0, deadline - Date.now()));
@@ -33,9 +35,12 @@ export async function executeRemote(ctx, { spawnProcess = spawn } = {}) {
         output = output.slice(index + 1);
         try {
           const frame = JSON.parse(line);
-          if (frame.type === 'result') result = frame.result;
+          if (frame.type === 'result' && frame.result && typeof frame.result === 'object' &&
+            [0, 1].includes(frame.result.exitCode) && typeof frame.result.timedOut === 'boolean') result = frame.result;
           else if (frame.type === 'error') failure = new RelayError(frame.code, 'Remote adapter rejected the invocation');
-          else if (frame.type === 'log') void ctx.onLog(frame.stream, frame.message);
+          else if (frame.type === 'log' && ['stdout', 'stderr'].includes(frame.stream) && typeof frame.message === 'string') {
+            logs = logs.then(() => ctx.onLog(frame.stream, frame.message)).catch(() => {});
+          }
         } catch {}
       }
     });
@@ -49,6 +54,7 @@ export async function executeRemote(ctx, { spawnProcess = spawn } = {}) {
     await new Promise(resolve => { child.once('error', resolve); child.once('exit', resolve); });
     ctx.signal?.removeEventListener('abort', onAbort);
     clearTimeout(timer);
+    await logs;
     if (result) return result;
     if (failure) throw failure;
     await ctx.onLog('stderr', `${JSON.stringify({ code: 'remote_adapter_disconnected', reconciliationPending: true })}\n`);
@@ -74,6 +80,10 @@ export async function serveAdapterStdio() {
       try { frame = JSON.parse(line); } catch { continue; }
       if (frame.type === 'cancel') abort.abort();
       if (frame.type !== 'execute' || started) continue;
+      if (!frame.context || typeof frame.context !== 'object' || frame.context.config?.relayNodeFile) {
+        process.stdout.write(`${JSON.stringify({ type: 'error', code: 'invalid_remote_context' })}\n`, () => process.exit(1));
+        return;
+      }
       started = true;
       if (frame.context.cancelled) abort.abort();
       void localExecute({ ...frame.context, signal: abort.signal,

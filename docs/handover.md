@@ -9,10 +9,12 @@ owned runtime interruption/resume, Paperclip host recovery, bounded questions,
 task delegation, candidate review, worktree finalisation, acceptance-driven
 retirement, monitoring schedules, inbox receipts, herdr views and service installation.
 
-**Do not describe the entire v2 specification as complete.** The precise evidence
-and remaining limitations are in [implementation status](implementation-status.md).
-Shared human-controlled native sessions have no atomic input reservation. Remote
-Relay transport and managed runtimes on macOS are not implemented.
+The user approved dedicated owned runtimes as the automatic-control boundary.
+Per-node Relay services now support SSH administration and remote adapter attachment.
+The precise evidence and remaining deployment limitations are in
+[implementation status](implementation-status.md) and [node topology](node-topology.md).
+Shared human-controlled sessions have no atomic input reservation. Managed runtimes
+on macOS and a physical second-node deployment have not been verified.
 
 The user requested continued implementation with verified commits and pushes.
 Do not delegate unless explicitly authorised by the user or applicable instructions.
@@ -113,7 +115,7 @@ Schema 1–3 data is retained when schema 4 tables are opened. Future schemas ar
 
 ## Verification actually performed
 
-Latest normal suite: **64 tests passed**, plus `npm run check`. Run the suite again
+Latest normal suite: **68 tests passed**, plus `npm run check`. Run the suite again
 after changes, rather than relying on this count as a permanent fact.
 
 | Probe | Evidence |
@@ -130,6 +132,7 @@ after changes, rather than relying on this count as a permanent fact.
 | Herdr pane and native placement | Actual temporary pane opened/inspected/closed, `scripts/placement-smoke.mjs` |
 | Real systemd crash/restart | `scripts/service-supervision-smoke.mjs` |
 | Unit generation | `scripts/installation-smoke.mjs` |
+| Actual SSH node status and adapter attachment | `scripts/remote-smoke.mjs` |
 
 Sanitised outputs are in `docs/evidence/`. These probes consume model usage when
 marked native. They use isolated homes and copied credentials, which must be

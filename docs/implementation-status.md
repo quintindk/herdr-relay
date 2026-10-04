@@ -2,9 +2,10 @@
 
 Updated: 2026-10-04. Contract: [specification v2](spec-v2.md).
 
-**The supported local Linux workflows are implemented and extensively verified.
-The entire specification is not closed.** Remaining limits are listed explicitly
-below. This document distinguishes implemented behaviour from proposed extensions.
+**The approved Linux owned-runtime workflow is implemented and extensively verified.**
+The user selected dedicated owned runtimes and per-node Relay services on 2026-10-04.
+SSH now provides remote administration and adapter attachment. Remaining deployment
+and platform limits are listed below rather than implied to be verified.
 
 ## First milestone acceptance criteria
 
@@ -36,6 +37,7 @@ below. This document distinguishes implemented behaviour from proposed extension
 | Finalisation | Real Git commit with candidate verification and lost-receipt reconciliation |
 | Retirement | Acceptance-triggered owned runtime stop and worktree cleanup, restart reconciliation, dirty/ignored cleanup refusal |
 | Herdr | Live-verified interactive work/inbox pane and exact pane/terminal/conversation reconciliation |
+| Remote nodes | Verified SSH administration, framed adapter attachment, reconnect recovery and cancellation forwarding |
 | Installation | Owned Linux systemd user install/uninstall, generated-unit validation and real automatic restart test |
 
 ## End-to-end scenarios
@@ -55,13 +57,16 @@ See [scenario verification](scenario-verification.md) and `docs/evidence/`.
 
 ## Remaining limitations and open scope
 
-1. **Shared human-controlled conversations:** native APIs lack atomic idle-and-send
+1. **Shared human-controlled conversations:** the approved automatic boundary is
+   dedicated owned runtimes. Native APIs lack atomic idle-and-send
    and general invocation-scoped interruption. Shared mode requires an operator
    reservation and fails closed on observed conflicts. Dedicated owned mode is the
    verified automated lifecycle path. Arbitrary active TUI adoption is not supported.
-2. **Cross-machine transport:** Relay's socket and native endpoints are local.
-   V2 explicitly leaves topology/routing open. No remote Relay gateway, Windows
-   transport or cross-machine acceptance test has been implemented.
+2. **Cross-machine deployment:** each node keeps its Relay socket and native endpoints
+   local. SSH administration and adapter transport are implemented and tested with
+   an isolated actual SSH server. A physical second-machine deployment has not been
+   exercised. Peer task coordination uses the shared Paperclip backend. Local inbox
+   events and local discovery are not a global machine registry.
 3. **macOS managed lifecycle:** external local native bindings may use Unix sockets,
    but owned process identity and automatic service installation are Linux-only.
    No macOS runtime/launchd verification has been performed.
@@ -87,5 +92,6 @@ See [scenario verification](scenario-verification.md) and `docs/evidence/`.
 10. **Release scope:** the package is a development build, not published to npm.
     No release CI or multi-platform support claim has been established.
 
-These limits must not be hidden by marking the entire spec complete. The v2 open
-decisions remain open where implementation requires a topology or platform contract.
+The owned-runtime and SSH topology choices are recorded in
+[node topology](node-topology.md). Remaining limits must not be hidden by claiming
+untested platforms, arbitrary shared-TUI adoption or production source connectors.
