@@ -17,11 +17,11 @@ item requires implementation and evidence before the specification is complete.
 | Result review and acceptance | Working-tree digest and real candidate-bound board acceptance | Correction orchestration, finalisation and retirement |
 | Lifetimes and provisioning | Existing bindings only | Persistent/service/task-scoped provisioning and placement |
 | Retirement and cleanup | Owned worktree provisioning, commit recovery and acceptance-gated clean removal | Native runtime retirement, placement ownership and orchestration |
-| Herdr integration | Service status action | Discovery, inbox/task views and restoration reconciliation |
-| Monitoring workflow | Historical deterministic evaluation | Durable source checkpoints, event deduplication and bounded schedule lifecycle |
+| Herdr integration | Status, discovery and terminal work overview actions | Interactive panes and restoration reconciliation |
+| Monitoring workflow | Durable source events, atomic checkpoints and inbox receipts | Connectors and bounded schedule lifecycle |
 | Subnet-request workflow | Historical deterministic evaluation | Peer request, clarification, dependency and result acceptance through Relay |
 | Worktree workflow | Historical deterministic evaluation | Provision, exact candidate, corrections, finalisation, acceptance and cleanup |
-| Operational installation | Manual foreground service | Supervision, installation and packaging |
+| Operational installation | Generated Linux user service | Full install lifecycle and macOS supervision |
 
 Cross-machine topology and gateway routing remain open decisions in v2. They must
 be explicitly resolved before claiming the whole specification is implemented.

@@ -10,3 +10,15 @@ id = "status"
 title = "Relay: service status"
 contexts = ["global"]
 command = ["node", "src/cli.mjs", "status"]
+
+[[actions]]
+id = "work"
+title = "Relay: work and agent overview"
+contexts = ["global"]
+command = ["node", "src/cli.mjs", "view"]
+
+[[actions]]
+id = "agents"
+title = "Relay: discover agents"
+contexts = ["global"]
+command = ["node", "src/cli.mjs", "agent", "discover"]

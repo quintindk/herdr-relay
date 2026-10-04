@@ -13,6 +13,8 @@ import { publishQuestion } from './work.mjs';
 import { mutate } from './operations.mjs';
 import { review } from './review.mjs';
 import { provisionWorktree, finaliseWorktree, retireWorktree } from './resources.mjs';
+import { recordEvent, inbox, acknowledgeEvent } from './inbox.mjs';
+import { overview } from './views.mjs';
 
 async function body(req) {
   let size = 0;
@@ -72,6 +74,26 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       let result;
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
+      else if (req.method === 'GET' && path === '/overview') {
+        adminOnly();
+        result = overview(store.bindings(), store.runs());
+      }
+      else if (req.method === 'GET' && path === '/inbox') {
+        requireValue(bindingId, 'binding_required', 'Use a worker context for inbox reads');
+        result = inbox(store, bindingId);
+      }
+      else if (req.method === 'POST' && path === '/events') {
+        requireValue(bindingId, 'binding_required', 'Use a worker context for source events');
+        result = recordEvent(store, bindingId, input);
+      }
+      else if (req.method === 'POST' && path === '/inbox/acknowledge') {
+        requireValue(bindingId, 'binding_required', 'Use a worker context for inbox acknowledgement');
+        result = acknowledgeEvent(store, bindingId, input.eventId);
+      }
+      else if (req.method === 'POST' && path === '/checkpoint') {
+        requireValue(bindingId, 'binding_required', 'Use a worker context for source checkpoints');
+        result = store.operation(`checkpoint:${digest([bindingId, text(input.source, 'source')])}`) ?? { cursor: null };
+      }
       else if (req.method === 'GET' && path === '/peers') {
         const company = bindingId ? store.binding(bindingId).config.companyId : null;
         result = store.bindings().filter(binding => !company || binding.config.companyId === company)

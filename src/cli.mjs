@@ -5,6 +5,9 @@ import { call, credentials, stateDirectory } from './client.mjs';
 import { startService } from './service.mjs';
 import { requireValue } from './protocol.mjs';
 import { candidate } from './candidate.mjs';
+import { systemdUnit } from './installation.mjs';
+import { renderOverview } from './views.mjs';
+import { fileURLToPath } from 'node:url';
 
 const help = `herdr-relay (development)
   service --paperclip-url URL [--state-dir DIR]
@@ -26,6 +29,12 @@ const help = `herdr-relay (development)
   candidate inspect --directory REPOSITORY_ROOT
   result request|inspect|accept|reject CALLER_RUN --file review.json
   resource provision|finalise|retire --file resource.json
+  inbox list
+  inbox acknowledge EVENT_ID
+  event record --file event.json
+  event checkpoint --source SOURCE
+  view
+  service-unit --paperclip-url URL [--state-dir DIR]
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
   operator-context --context-out FILE
@@ -37,7 +46,7 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
@@ -46,6 +55,10 @@ export async function main(args) {
     return;
   }
   if (values['state-dir']) process.env.RELAY_STATE_DIR = values['state-dir'];
+  if (group === 'service-unit') {
+    console.log(systemdUnit({ node: process.execPath, cli: fileURLToPath(import.meta.url), stateDirectory: stateDirectory(), paperclipUrl: values['paperclip-url'] }));
+    return;
+  }
   if (group === 'service') {
     requireValue(values['paperclip-url'], 'invalid_request', '--paperclip-url is required');
     const service = await startService({ directory: stateDirectory(), paperclipUrl: values['paperclip-url'] });
@@ -67,6 +80,17 @@ export async function main(args) {
   };
   let result;
   if (group === 'status') result = await call(connection, 'GET', '/health');
+  else if (group === 'view') {
+    console.log(renderOverview(await call(connection, 'GET', '/overview')));
+    return;
+  }
+  else if (group === 'inbox' && action === 'list') result = await call(connection, 'GET', '/inbox');
+  else if (group === 'inbox' && action === 'acknowledge' && id) result = await call(connection, 'POST', '/inbox/acknowledge', { eventId: id });
+  else if (group === 'event' && action === 'checkpoint') result = await call(connection, 'POST', '/checkpoint', { source: values.source });
+  else if (group === 'event' && action === 'record') {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', '/events', JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'resource' && ['provision', 'finalise', 'retire'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/resources/${action === 'provision' ? 'worktree' : action}`, JSON.parse(readFileSync(values.file, 'utf8')));
