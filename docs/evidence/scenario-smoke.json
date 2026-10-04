@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-04",
+  "backend": "Paperclip 2026.1001.0",
+  "nativeHarness": false,
+  "scenarios": [
+    {
+      "name": "monitoring",
+      "sourceEvents": 3,
+      "duplicateEvents": 0,
+      "tasksCreated": 2,
+      "humanOwnedTask": true,
+      "independentProjectResult": true,
+      "boundedScheduleStopped": true
+    },
+    {
+      "name": "subnet-request",
+      "independentAgents": true,
+      "clarification": true,
+      "fakeResource": true,
+      "resultVerified": true,
+      "providerPreserved": true
+    },
+    {
+      "name": "worktree-review",
+      "corrections": true,
+      "staleAcceptanceRejected": true,
+      "candidateVerified": true,
+      "committedBeforeAcceptance": true,
+      "dirtyCleanupBlocked": true,
+      "acceptedStatePreserved": true,
+      "workerRetired": true,
+      "worktreeRemoved": true,
+      "commitRetained": true
+    }
+  ]
+}
