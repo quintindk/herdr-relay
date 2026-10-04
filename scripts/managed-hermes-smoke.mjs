@@ -77,7 +77,7 @@ try {
     try {
       const descriptor = JSON.parse(readFileSync(join(runtime.directory, 'runtime.json'), 'utf8'));
       const start = readFileSync(`/proc/${descriptor.ownerPid}/stat`, 'utf8').split(') ')[1].split(' ')[19];
-      if (start === descriptor.ownerStart) process.kill(descriptor.ownerPid, 'SIGTERM');
+      if (start === descriptor.ownerStart) process.kill(-descriptor.ownerPid, 'SIGTERM');
     } catch {}
     await delay(1000);
   }

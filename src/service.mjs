@@ -18,6 +18,7 @@ import { overview } from './views.mjs';
 import { launchRuntime, ownedRuntime, stopRuntime } from './runtimes.mjs';
 import { retireAccepted } from './lifecycle.mjs';
 import { backendOperator, createSchedule, scheduleRunner } from './schedules.mjs';
+import { provisionAgent } from './provisioning.mjs';
 
 async function body(req) {
   let size = 0;
@@ -64,6 +65,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
   catch (error) { store.close(); throw error; }
   const publications = new Map();
   const runTokens = new Map();
+  const operatorApi = backendOperator(paperclipUrl, backendContextFile);
 
   const server = createServer(async (req, res) => {
     try {
@@ -130,6 +132,14 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         const snapshot = await native.snapshot();
         requireValue(snapshot.idle, 'native_busy', 'Continuation target must be idle', 409);
         result = store.rebind(input.id, input);
+      }
+      else if (req.method === 'POST' && path === '/agents/provision') {
+        adminOnly();
+        const key = `provision:${text(input.key, 'key')}`;
+        requireValue(!publications.has(key), 'operation_busy', 'Agent provisioning in progress', 409);
+        const pending = provisionAgent(store, directory, operatorApi, input);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); }
       }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
       else if (req.method === 'POST' && path === '/schedules') { adminOnly(); result = createSchedule(store, input); }
@@ -258,7 +268,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
     chmodSync(socketPath, 0o600);
   } catch (error) { store.close(); throw error; }
   const supervisor = supervise({ store, directory, socketPath, ready: id => runTokens.has(id) });
-  const scheduler = scheduleRunner(store, backendOperator(paperclipUrl, backendContextFile));
+  const scheduler = scheduleRunner(store, operatorApi);
   return {
     socketPath, token, store,
     close: async () => {

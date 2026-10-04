@@ -15,7 +15,7 @@ item requires implementation and evidence before the specification is complete.
 | Questions and continuation | Real Paperclip interaction and automatic continuation smoke | Agent answer commands and full native question scenario |
 | Agent discovery and work CLI | Scoped discovery, task create/list/assign, answer commands and shared skill | Inbox, uncertain mutation reconciliation and skill provisioning |
 | Result review and acceptance | Working-tree digest and real candidate-bound board acceptance | Correction orchestration, finalisation and retirement |
-| Lifetimes and provisioning | Owned OpenCode/Hermes launch/stop, task lifetimes and worktrees | Integrated provisioning and herdr placement |
+| Lifetimes and provisioning | Integrated agent/runtime/binding provisioning, task lifetimes and worktrees | Combined live-backend provisioning and herdr placement |
 | Retirement and cleanup | Controller-scoped acceptance retirement, owned runtime stop and worktree cleanup | Hermes runtime ownership and placement reconciliation |
 | Herdr integration | Live-verified interactive work pane, status and discovery actions | Runtime placement restoration reconciliation |
 | Monitoring workflow | Durable events/checkpoints, inbox and bounded backend schedules | Full scenario evidence and production connectors |

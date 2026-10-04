@@ -92,7 +92,9 @@ export async function stopRuntime(store, key) {
     processIdentity(descriptor.childPid) === descriptor.childStart,
   'runtime_identity_mismatch', 'Managed process identity changed before shutdown', 409);
   store.saveOperation({ ...operation, state: 'stopping' });
-  process.kill(descriptor.ownerPid, 'SIGTERM');
+  // The detached owner is the process-group leader. Signal its owned group so
+  // executable wrappers cannot leave the actual native server running.
+  process.kill(-descriptor.ownerPid, 'SIGTERM');
   for (let i = 0; i < 100; i++) {
     if (processIdentity(descriptor.childPid) !== descriptor.childStart) return store.saveOperation({ ...operation, state: 'retired' });
     await delay(100);

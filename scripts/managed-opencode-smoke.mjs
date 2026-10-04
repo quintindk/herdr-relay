@@ -7,6 +7,7 @@ import { startService } from '../src/service.mjs';
 import { call } from '../src/client.mjs';
 import { launchRuntime, stopRuntime } from '../src/runtimes.mjs';
 import { OpenCode } from '../src/opencode.mjs';
+import { provisionAgent } from '../src/provisioning.mjs';
 
 const sourceAuth = join(homedir(), '.local/share/opencode/auth.json');
 const root = mkdtempSync(join(process.env.OPENCODE_SMOKE_TMP ?? tmpdir(), 'relay-owned-smoke-'));
@@ -34,19 +35,30 @@ try {
   const directory = join(root, 'relay');
   service = await startService({ directory, paperclipUrl: 'http://paperclip.test', api: async () => ({ companyId: 'company',
     title: 'Cancellation fixture', description: 'After acknowledging, run sleep 120 in the terminal. Do not run it in the background. This fixture will cancel your turn. Do not submit.' }) });
-  runtime = await launchRuntime(service.store, directory, { key: 'owned', directory: workspace });
-  assert.equal((await launchRuntime(service.store, directory, { key: 'owned', directory: workspace })).nonce, runtime.nonce);
+  const agents = [];
+  const operatorApi = async (method, path, body) => {
+    if (method === 'GET') return agents;
+    if (method === 'PATCH') return { ...agents[0], ...body };
+    const agent = { id: 'agent', companyId: 'company', ...body };
+    agents.push(agent);
+    return agent;
+  };
+  const provisionInput = { key: 'owned', companyId: 'company', bindingId: 'owned-worker', harness: 'opencode', directory: workspace };
+  const provisioned = await provisionAgent(service.store, directory, operatorApi, provisionInput);
+  assert.equal((await provisionAgent(service.store, directory, operatorApi, provisionInput)).agentId, provisioned.agentId);
+  assert.equal(agents.length, 1);
+  const runtimeKey = provisioned.runtimeKey;
+  runtime = service.store.operation(`runtime:${runtimeKey}`);
+  assert.equal((await launchRuntime(service.store, directory, { key: runtimeKey, directory: workspace })).nonce, runtime.nonce);
   const config = { url: `http://127.0.0.1:${runtime.port}`, directory: workspace,
-    authFile: join(runtime.directory, 'auth.json'), exclusive: true, runtimeKey: 'owned' };
+    authFile: join(runtime.directory, 'auth.json'), exclusive: true, runtimeKey };
   native = new OpenCode({ opencode: config, conversationId: 'pending' });
-  const session = await native.request('POST', '/session', { title: 'Relay exact owned cancellation' });
+  const session = await native.request('GET', `/session/${provisioned.conversationId}`);
   config.projectID = session.projectID;
   config.sessionCreatedAt = session.time.created;
   native.sessionId = session.id;
   native.path = `/session/${session.id}`;
   const operator = { socketPath: service.socketPath, token: service.token };
-  await call(operator, 'POST', '/bindings', { id: 'owned-worker', companyId: 'company', agentId: 'agent', harness: 'opencode',
-    instanceId: runtime.nonce, conversationId: session.id, delivery: 'opencode', opencode: config });
   const run = await call(operator, 'POST', '/runs', { bindingId: 'owned-worker', bindingRevision: 1, companyId: 'company',
     agentId: 'agent', runId: 'backend', taskId: 'task' });
   await call(operator, 'POST', `/runs/${run.id}/attach`, { token: 'fixture-token' });
@@ -55,17 +67,17 @@ try {
     return snapshot.messages.some(message => message.parts.some(part => part.type === 'tool' && part.state?.status === 'running' &&
       JSON.stringify(part.state.input).includes('sleep 120')));
   });
-  await assert.rejects(stopRuntime(service.store, 'owned'), { code: 'runtime_busy' });
+  await assert.rejects(stopRuntime(service.store, runtimeKey), { code: 'runtime_busy' });
   await call(operator, 'POST', `/runs/${run.id}/cancel`, {});
   await until(() => service.store.run(run.id).nativeState === 'settled');
   const completed = service.store.run(run.id);
   assert.equal(completed.settlement.outcome, 'cancelled');
   assert.ok(completed.interruption);
   assert.equal((await native.verify()).id, session.id);
-  await stopRuntime(service.store, 'owned');
-  await stopRuntime(service.store, 'owned');
+  await stopRuntime(service.store, runtimeKey);
+  await stopRuntime(service.store, runtimeKey);
   console.log(JSON.stringify({ realModel: 'github-copilot/gpt-6-astra', ownedRuntime: true,
-    duplicateLaunchPrevented: true, activeStopRejected: true, cancellationObserved: true,
+    duplicateLaunchPrevented: true, provisionedAgentCount: agents.length, activeStopRejected: true, cancellationObserved: true,
     conversationPreservedBeforeRetirement: true, retirementVerified: true }, null, 2));
 } catch (error) {
   console.error(JSON.stringify({ error: error.message, runs: service?.store.runs().map(run => ({ native: run.native, interruption: run.interruption })) }));
@@ -77,11 +89,11 @@ try {
   throw error;
 } finally {
   // Clean up only this fixture's verified owner if an assertion failed.
-  if (runtime && service?.store.operation('runtime:owned')?.state !== 'retired') {
+  if (runtime && service?.store.operation(runtime.id)?.state !== 'retired') {
     try {
       const descriptor = JSON.parse(readFileSync(join(runtime.directory, 'runtime.json'), 'utf8'));
       const start = readFileSync(`/proc/${descriptor.ownerPid}/stat`, 'utf8').split(') ')[1].split(' ')[19];
-      if (start === descriptor.ownerStart) process.kill(descriptor.ownerPid, 'SIGTERM');
+      if (start === descriptor.ownerStart) process.kill(-descriptor.ownerPid, 'SIGTERM');
     } catch {}
     await delay(1000);
   }

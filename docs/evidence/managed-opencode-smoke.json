@@ -3,6 +3,7 @@
   "realModel": "github-copilot/gpt-6-astra",
   "ownedRuntime": true,
   "duplicateLaunchPrevented": true,
+  "provisionedAgentCount": 1,
   "activeStopRejected": true,
   "cancellationObserved": true,
   "conversationPreservedBeforeRetirement": true,

@@ -16,6 +16,7 @@ const help = `herdr-relay (development)
   agent discover
   agent register --file binding.json --context-out worker.json
   agent rebind --file continuation.json
+  agent provision --file agent.json
   work list
   work inspect RUN
   work read RUN
@@ -121,6 +122,10 @@ export async function main(args) {
   else if (group === 'agent' && action === 'rebind') {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', '/bindings/rebind', JSON.parse(readFileSync(values.file, 'utf8')));
+  }
+  else if (group === 'agent' && action === 'provision') {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', '/agents/provision', JSON.parse(readFileSync(values.file, 'utf8')));
   }
   else if (group === 'agent' && action === 'register') {
     requireValue(values.file && values['context-out'], 'invalid_request', '--file and --context-out are required');
