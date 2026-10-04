@@ -15,6 +15,7 @@ const help = `herdr-relay (development)
   agent list
   agent discover
   agent register --file binding.json --context-out worker.json
+  agent rebind --file continuation.json
   work list
   work inspect RUN
   work read RUN
@@ -28,6 +29,7 @@ const help = `herdr-relay (development)
   work answer RUN --key KEY --interaction ID --file answers.json
   candidate inspect --directory REPOSITORY_ROOT
   result request|inspect|accept|reject CALLER_RUN --file review.json
+  result retire CALLER_RUN --file review.json
   resource provision|finalise|retire --file resource.json
   runtime launch|stop --file runtime.json
   inbox list
@@ -106,6 +108,10 @@ export async function main(args) {
     result = { written: values['context-out'] };
   } else if (group === 'agent' && action === 'list') result = await call(connection, 'GET', '/bindings');
   else if (group === 'agent' && action === 'discover') result = await call(connection, 'GET', '/peers');
+  else if (group === 'agent' && action === 'rebind') {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', '/bindings/rebind', JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'agent' && action === 'register') {
     requireValue(values.file && values['context-out'], 'invalid_request', '--file and --context-out are required');
     // A lost registration response is recoverable by repeating identical input.
@@ -127,9 +133,9 @@ export async function main(args) {
   };
   else if (group === 'work' && action === 'acknowledge' && id) result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/acknowledge`, {});
   else if (group === 'work' && action === 'interactions' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/interactions`);
-  else if (group === 'result' && ['request', 'inspect', 'accept', 'reject'].includes(action) && id) {
+  else if (group === 'result' && ['request', 'inspect', 'accept', 'reject', 'retire'].includes(action) && id) {
     requireValue(values.file, 'invalid_request', '--file is required');
-    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/review`, {
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/${action === 'retire' ? 'retire' : 'review'}`, {
       ...JSON.parse(readFileSync(values.file, 'utf8')), action,
     });
   }

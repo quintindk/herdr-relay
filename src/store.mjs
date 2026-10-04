@@ -75,6 +75,20 @@ export class Store {
       config[key] = text(input[key], key);
     }
     requireValue(['opencode', 'hermes'].includes(config.harness), 'invalid_harness', 'Use opencode or hermes');
+    if (input.lifetime !== undefined) {
+      requireValue(['persistent', 'service', 'task'].includes(input.lifetime), 'invalid_lifetime', 'Use persistent, service or task lifetime');
+      config.lifetime = input.lifetime;
+    }
+    if (input.controllerBindingId !== undefined) {
+      config.controllerBindingId = text(input.controllerBindingId, 'controllerBindingId');
+      requireValue(this.binding(config.controllerBindingId).config.companyId === config.companyId,
+        'forbidden', 'Lifecycle controller must belong to the same company', 403);
+    }
+    if (config.lifetime === 'task') {
+      config.taskId = text(input.taskId, 'taskId');
+      requireValue(config.controllerBindingId, 'controller_required', 'Task-scoped bindings require a lifecycle controller');
+    }
+    if (input.worktreeKey !== undefined) config.worktreeKey = text(input.worktreeKey, 'worktreeKey');
     config.delivery = input.delivery ?? 'pull';
     requireValue(['pull', 'opencode', 'hermes'].includes(config.delivery), 'unsupported_delivery', 'Use pull, opencode or hermes delivery');
     if (config.delivery === 'opencode') {
@@ -151,6 +165,8 @@ export class Store {
       'invalid_request', 'bindingRevision must be a positive integer');
     request.bindingRevision = input.bindingRevision;
     const binding = this.binding(request.bindingId);
+    requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
+    requireValue(!binding.config.taskId || binding.config.taskId === request.taskId, 'task_scope_mismatch', 'Task-scoped binding belongs to another task', 409);
     requireValue(binding.revision === request.bindingRevision, 'stale_binding', 'Binding revision does not match', 409);
     requireValue(binding.config.companyId === request.companyId && binding.config.agentId === request.agentId,
       'identity_mismatch', 'Paperclip identity does not match binding', 409);
@@ -169,6 +185,10 @@ export class Store {
       }
       requireValue(!this.db.prepare('SELECT id FROM runs WHERE binding_id = ? AND active = 1').get(binding.id),
         'conversation_busy', 'Previous native work is not confirmed settled', 409);
+      if (binding.config.lifetime === 'task') {
+        const previous = this.runs(binding.id).find(run => run.result);
+        requireValue(!previous || previous.review?.status === 'rejected', 'candidate_reserved', 'Task-scoped worker awaits candidate review or retirement', 409);
+      }
       const run = {
         id: randomUUID(), request, conversationId: binding.config.conversationId,
         deliveryState: 'pending', nativeState: 'unclaimed', cancellationRequested: false,
@@ -353,6 +373,52 @@ export class Store {
         'interruption_not_authorised', 'Observed owned invocation and cancellation required', 409);
       run.interruption = { state: 'uncertain', at: now(), messageId: run.invocation.messageId };
       return this.save(run, 'native.interrupt_intent', run.interruption);
+    });
+  }
+
+  rebind(id, input) {
+    return this.transaction(() => {
+      const binding = this.binding(id);
+      requireValue(input.revision === binding.revision, 'stale_binding', 'Binding revision changed', 409);
+      requireValue(!this.runs(id).some(run => run.nativeState !== 'settled'), 'conversation_busy', 'Unsettled work prevents rebinding', 409);
+      requireValue(binding.lifecycleState !== 'retired', 'binding_retired', 'Retired binding cannot be rebound', 409);
+      const config = binding.config;
+      requireValue(input.conversationId === config.conversationId && input.harness === config.harness,
+        'continuation_mismatch', 'Rebinding must preserve the exact stored conversation and harness', 409);
+      const native = config.harness === 'opencode' ? nativeConfig(input.opencode) : hermesConfig(input.hermes);
+      requireValue(config.delivery === config.harness, 'invalid_delivery', 'Rebinding requires native delivery', 409);
+      requireValue(!config.opencode?.runtimeKey && !native.runtimeKey, 'managed_rebind_unsupported', 'Managed runtime replacement requires lifecycle reconciliation', 409);
+      const conversation = config.harness === 'opencode'
+        ? canonical(['opencode', native.url, native.directory, config.conversationId])
+        : canonical(['hermes', native.url, native.profile ?? '', config.conversationId]);
+      requireValue(!this.db.prepare('SELECT id FROM bindings WHERE conversation = ? AND id != ?').get(conversation, id),
+        'identity_conflict', 'Native conversation already bound', 409);
+      binding.history = [...(binding.history ?? []), { revision: binding.revision, config, continuedAt: now() }];
+      binding.config = { ...config, instanceId: text(input.instanceId, 'instanceId'), [config.harness]: native };
+      binding.revision++;
+      this.db.prepare('UPDATE bindings SET conversation = ?, data = ? WHERE id = ?').run(conversation, JSON.stringify(binding), id);
+      return binding;
+    });
+  }
+
+  retireBinding(id) {
+    return this.transaction(() => {
+      const binding = this.binding(id);
+      requireValue(!this.runs(id).some(run => run.nativeState !== 'settled'), 'conversation_busy', 'Unsettled work prevents retirement', 409);
+      binding.lifecycleState = 'retired';
+      binding.retiredAt ??= now();
+      this.db.prepare('UPDATE bindings SET data = ? WHERE id = ?').run(JSON.stringify(binding), id);
+      return binding;
+    });
+  }
+
+  beginRetirement(id) {
+    return this.transaction(() => {
+      const binding = this.binding(id);
+      requireValue(!this.runs(id).some(run => run.nativeState !== 'settled'), 'conversation_busy', 'Unsettled work prevents retirement', 409);
+      if (binding.lifecycleState !== 'retired') binding.lifecycleState = 'retiring';
+      this.db.prepare('UPDATE bindings SET data = ? WHERE id = ?').run(JSON.stringify(binding), id);
+      return binding;
     });
   }
 }

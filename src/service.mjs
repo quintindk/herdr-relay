@@ -16,6 +16,7 @@ import { provisionWorktree, finaliseWorktree, retireWorktree } from './resources
 import { recordEvent, inbox, acknowledgeEvent } from './inbox.mjs';
 import { overview } from './views.mjs';
 import { launchRuntime, ownedRuntime, stopRuntime } from './runtimes.mjs';
+import { retireAccepted } from './lifecycle.mjs';
 
 async function body(req) {
   let size = 0;
@@ -115,6 +116,17 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         if (input.delivery === 'hermes') await new Hermes({ ...input, hermes: hermesConfig(input.hermes) }).verify();
         result = store.register(input);
       }
+      else if (req.method === 'POST' && path === '/bindings/rebind') {
+        adminOnly();
+        const previous = store.binding(text(input.id, 'id'));
+        requireValue(previous.revision === input.revision, 'stale_binding', 'Binding revision changed', 409);
+        const native = input.harness === 'opencode'
+          ? new OpenCode({ ...input, opencode: nativeConfig(input.opencode) })
+          : new Hermes({ ...input, hermes: hermesConfig(input.hermes) });
+        const snapshot = await native.snapshot();
+        requireValue(snapshot.idle, 'native_busy', 'Continuation target must be idle', 409);
+        result = store.rebind(input.id, input);
+      }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
       else if (req.method === 'POST' && ['/runtimes/launch', '/runtimes/stop'].includes(path)) {
         adminOnly();
@@ -141,7 +153,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       }
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -166,6 +178,22 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
           const key = `review:${text(input.runId, 'runId')}`;
           requireValue(!publications.has(key), 'operation_busy', 'Review is already in flight', 409);
           const pending = review(store, run, runTokens.get(id), api, input);
+          publications.set(key, pending);
+          try {
+            result = await pending;
+            const targetBinding = store.binding(result.request.bindingId);
+            if (result.review.status === 'accepted' && targetBinding.config.lifetime === 'task' && targetBinding.config.controllerBindingId === run.request.bindingId) {
+              try { await retireAccepted(store, run, result, runTokens.get(id), api); }
+              catch { /* Acceptance stands. Durable retirement state exposes the blocker. */ }
+            }
+          } finally { publications.delete(key); }
+        }
+        else if (req.method === 'POST' && action === 'retire') {
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live controller backend credentials required', 503);
+          const target = store.run(text(input.runId, 'runId'));
+          const key = `review:${target.id}`;
+          requireValue(!publications.has(key), 'operation_busy', 'Candidate lifecycle operation is in progress', 409);
+          const pending = retireAccepted(store, run, target, runTokens.get(id), api);
           publications.set(key, pending);
           try { result = await pending; } finally { publications.delete(key); }
         }
