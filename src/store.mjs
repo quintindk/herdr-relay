@@ -189,6 +189,7 @@ export class Store {
     requireValue(Number.isSafeInteger(input.bindingRevision) && input.bindingRevision > 0,
       'invalid_request', 'bindingRevision must be a positive integer');
     request.bindingRevision = input.bindingRevision;
+    if (input.scheduleId !== undefined) request.scheduleId = text(input.scheduleId, 'scheduleId');
     const binding = this.binding(request.bindingId);
     requireValue(!binding.config.taskId || binding.config.taskId === request.taskId, 'task_scope_mismatch', 'Task-scoped binding belongs to another task', 409);
     requireValue(binding.revision === request.bindingRevision, 'stale_binding', 'Binding revision does not match', 409);
@@ -207,7 +208,23 @@ export class Store {
         requireValue(canonical(existing.request) === canonical(request), 'dispatch_conflict', 'Run replay has changed payload', 409);
         return existing;
       }
+      // Paperclip filters custom wake payload fields in some adapter contexts.
+      // Registered service schedules are therefore also resolved by exact
+      // binding/task identity, rather than depending on that field surviving.
+      const scheduled = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'schedule:%' ORDER BY rowid DESC").all()
+        .map(row => JSON.parse(row.data)).find(schedule => schedule.request.bindingId === binding.id && schedule.request.taskId === request.taskId);
+      if (scheduled) {
+        requireValue(scheduled.state === 'active' && Date.now() >= Date.parse(scheduled.request.startsAt) &&
+          Date.now() < Date.parse(scheduled.request.endsAt), 'schedule_inactive', 'Registered monitoring window is not active', 409);
+      }
       requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
+      if (request.scheduleId) {
+        const schedule = this.operation(request.scheduleId);
+        requireValue(schedule?.request?.bindingId === binding.id && schedule.request.taskId === request.taskId,
+          'schedule_identity_mismatch', 'Scheduled dispatch does not match its binding and task', 409);
+        requireValue(schedule.state === 'active' && Date.now() >= Date.parse(schedule.request.startsAt) &&
+          Date.now() < Date.parse(schedule.request.endsAt), 'schedule_inactive', 'Monitoring window is not active', 409);
+      }
       const runtimeKey = (binding.config.opencode ?? binding.config.hermes)?.runtimeKey;
       if (runtimeKey) requireValue(this.operation(`runtime:${runtimeKey}`)?.state === 'ready',
         'runtime_not_ready', 'Owned native runtime is not available for dispatch', 409);

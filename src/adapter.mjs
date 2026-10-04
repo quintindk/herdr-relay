@@ -29,6 +29,8 @@ export async function execute(ctx) {
     bindingId: ctx.config.bindingId, bindingRevision: ctx.config.bindingRevision ?? 1,
     companyId: ctx.agent.companyId, agentId: ctx.agent.id,
     runId: ctx.runId, taskId,
+    ...(ctx.context.relayScheduleId || ctx.context.paperclipWake?.relayScheduleId
+      ? { scheduleId: ctx.context.relayScheduleId ?? ctx.context.paperclipWake.relayScheduleId } : {}),
   };
   let run;
   let timedOut = false;

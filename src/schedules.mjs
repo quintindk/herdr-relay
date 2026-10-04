@@ -66,7 +66,7 @@ export async function tickSchedules(store, api, clock = Date.now()) {
       if (store.operation(schedule.id).state !== 'active') continue;
       const receipt = await api('POST', `/api/agents/${encodeURIComponent(binding.config.agentId)}/heartbeat/invoke`, {
         reason: 'relay_scheduled_check', idempotencyKey: key,
-        payload: { taskId: task.id, issueId: task.id },
+        payload: { taskId: task.id, issueId: task.id, relayScheduleId: schedule.id },
       });
       if (!receipt.id) {
         store.saveOperation({ ...store.operation(schedule.id), reason: 'backend_wake_skipped' });

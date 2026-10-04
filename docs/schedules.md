@@ -32,6 +32,10 @@ Manual stop prevents future wakes. Add `cancelActive: true` to request cancellat
 of the same scoped work. Neither operation claims an in-flight turn already stopped.
 `stop.json` contains the schedule `key`.
 
+Late queued backend dispatches are refused after the registered binding/task
+window closes, even when Paperclip filters custom schedule fields out of its
+adapter context. Existing invocations remain recoverable under their original key.
+
 Source checkpoints remain separate. A connector reads its cursor and records
 events atomically. Production email and Teams source access are outside the
 synthetic scenario fixtures.

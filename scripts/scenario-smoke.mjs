@@ -76,6 +76,7 @@ try {
   await call(operator, 'POST', '/schedules', { key: 'window', bindingId: monitor.bindingId, taskId: brief.id,
     startsAt, endsAt: new Date(Date.now() + 120000).toISOString(), intervalSec: 60 });
   const monitorRun = await until(() => service.store.runs(monitor.bindingId)[0]);
+  assert.equal(service.store.operation('schedule:window').request.taskId, monitorRun.request.taskId);
   await call(operator, 'POST', '/schedules/stop', { key: 'window' });
   await enable(monitor, false);
   await call(monitor.connection, 'POST', `/runs/${monitorRun.id}/acknowledge`, {});
