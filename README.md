@@ -84,6 +84,10 @@ candidate review, lifecycle, SSH attachment and Git resource recovery. Opt-in sm
 scripts additionally verify real Paperclip, real OpenCode/Hermes model turns,
 systemd restart and SSH transport. Native tests consume model usage.
 
+The GitHub Actions template is [`docs/ci-check.yml`](docs/ci-check.yml). Copy it to
+`.github/workflows/check.yml` using GitHub credentials with workflow permissions
+to enable hosted checks. It is not currently active.
+
 Production email/Teams access and real Azure provisioning are external connector
 responsibilities. Scenario tests use explicitly synthetic source events and Azure
 resource IDs. Physical second-node deployment and macOS managed lifecycle are not
