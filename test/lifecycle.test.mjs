@@ -85,3 +85,16 @@ test('acceptance recorded while Relay is offline triggers the same retirement on
   await reconcileRetirements(store, api);
   assert.equal(store.binding('controller').lifecycleState, undefined);
 });
+
+test('operator controller transfer preserves history and refuses cross-company or active-work changes', t => {
+  const store = new Store(':memory:');
+  t.after(() => store.close());
+  for (const id of ['first', 'second', 'worker', 'foreign']) store.register({ id, companyId: id === 'foreign' ? 'other' : 'company',
+    agentId: id, harness: 'opencode', instanceId: 'instance', conversationId: id });
+  assert.throws(() => store.transferController('worker', { revision: 1, controllerBindingId: 'foreign' }), { code: 'invalid_controller' });
+  const transferred = store.transferController('worker', { revision: 1, controllerBindingId: 'second' });
+  assert.equal(transferred.revision, 2);
+  assert.equal(transferred.config.controllerBindingId, 'second');
+  store.dispatch({ bindingId: 'worker', bindingRevision: 2, companyId: 'company', agentId: 'worker', taskId: 'task', runId: 'backend' });
+  assert.throws(() => store.transferController('worker', { revision: 2, controllerBindingId: 'first' }), { code: 'conversation_busy' });
+});

@@ -22,6 +22,12 @@ Use `harness: "hermes"` for the Hermes gateway. Optional `model` contains
 Task lifetime also needs `controllerBindingId` and `taskId`. Worktree lifecycle can
 be linked through `worktreeKey` once an owned resource has been provisioned.
 
+For a new worktree, include `worktreeKey` and a `worktree` object containing
+`repository`, `path`, `branch` and optional `base`. Its path must equal `directory`.
+Relay creates and records the owned worktree before backend agent creation or
+native launch, so the worker never starts in the wrong directory. Lost later
+responses retain that same worktree for reconciliation.
+
 Each step records progress under the provisioning key. Agent and conversation
 creation are reconciled using recorded identity and unique provisioning labels.
 If a creation response is lost and no matching identity is visible, another create

@@ -7,11 +7,11 @@ import { canonical, digest, requireValue, text } from './protocol.mjs';
 const git = (directory, args) => execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 const clean = directory => git(directory, ['status', '--porcelain=v1', '--untracked-files=all']).length === 0;
 
-export function provisionWorktree(store, input) {
+export function provisionWorktree(store, input, { pendingBinding = false } = {}) {
   const id = `worktree:${text(input.key, 'key')}`;
   const request = { repository: resolve(text(input.repository, 'repository')), path: resolve(text(input.path, 'path')),
     branch: text(input.branch, 'branch'), base: text(input.base ?? 'HEAD', 'base'), bindingId: text(input.bindingId, 'bindingId') };
-  store.binding(request.bindingId);
+  if (!pendingBinding) store.binding(request.bindingId);
   requireValue(!request.branch.startsWith('-') && !request.base.startsWith('-'), 'invalid_git_ref', 'Git refs cannot begin with a dash');
   git(request.repository, ['check-ref-format', '--branch', request.branch]);
   let operation = store.operation(id);

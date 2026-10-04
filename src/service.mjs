@@ -114,8 +114,10 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       else if (req.method === 'GET' && path === '/peers') {
         const company = bindingId ? store.binding(bindingId).config.companyId : null;
         result = store.bindings().filter(binding => !company || binding.config.companyId === company)
-          .map(binding => ({ id: binding.id, revision: binding.revision, agentId: binding.config.agentId,
-            harness: binding.config.harness, delivery: binding.config.delivery }));
+           .map(binding => ({ id: binding.id, revision: binding.revision, agentId: binding.config.agentId,
+            harness: binding.config.harness, delivery: binding.config.delivery, label: binding.config.label ?? binding.id,
+            capabilities: binding.config.capabilities ?? [], lifetime: binding.config.lifetime ?? 'persistent',
+            lifecycleState: binding.lifecycleState ?? 'active' }));
       }
       else if (req.method === 'POST' && path === '/bindings') {
         adminOnly();
@@ -144,6 +146,10 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         const snapshot = await native.snapshot();
         requireValue(snapshot.idle, 'native_busy', 'Continuation target must be idle', 409);
         result = store.rebind(input.id, input);
+      }
+      else if (req.method === 'POST' && path === '/bindings/controller') {
+        adminOnly();
+        result = store.transferController(text(input.id, 'id'), input);
       }
       else if (req.method === 'POST' && path === '/agents/provision') {
         adminOnly();

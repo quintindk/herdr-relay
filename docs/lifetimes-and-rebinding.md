@@ -29,6 +29,12 @@ cleanup remains blocked without changing accepted outcome.
 
 ## Rebinding
 
+For an orphaned controller, the operator can use `agent controller --file FILE`
+with `id`, current `revision` and a new `controllerBindingId`. The replacement must
+be active, independent and in the same company. Unsettled worker execution blocks
+transfer. History is retained and the revision increments. Update the backend
+adapter revision before dispatching again.
+
 `agent rebind --file continuation.json` is operator-only. It verifies the new
 native endpoint, requires an idle target and no unsettled Relay work, preserves the
 exact stored conversation and harness, and increments the binding revision.

@@ -89,6 +89,11 @@ export class Store {
       requireValue(config.controllerBindingId, 'controller_required', 'Task-scoped bindings require a lifecycle controller');
     }
     if (input.worktreeKey !== undefined) config.worktreeKey = text(input.worktreeKey, 'worktreeKey');
+    if (input.label !== undefined) config.label = text(input.label, 'label');
+    if (input.capabilities !== undefined) {
+      requireValue(Array.isArray(input.capabilities) && input.capabilities.length <= 64, 'invalid_capabilities', 'Capabilities must be an array of at most 64 labels');
+      config.capabilities = [...new Set(input.capabilities.map(value => text(value, 'capability')))];
+    }
     config.delivery = input.delivery ?? 'pull';
     requireValue(['pull', 'opencode', 'hermes'].includes(config.delivery), 'unsupported_delivery', 'Use pull, opencode or hermes delivery');
     if (config.delivery === 'opencode') {
@@ -409,6 +414,23 @@ export class Store {
       requireValue(!this.runs(id).some(run => run.nativeState !== 'settled'), 'conversation_busy', 'Unsettled work prevents retirement', 409);
       binding.lifecycleState = 'retired';
       binding.retiredAt ??= now();
+      this.db.prepare('UPDATE bindings SET data = ? WHERE id = ?').run(JSON.stringify(binding), id);
+      return binding;
+    });
+  }
+
+  transferController(id, input) {
+    return this.transaction(() => {
+      const binding = this.binding(id);
+      requireValue(binding.revision === input.revision, 'stale_binding', 'Binding revision changed', 409);
+      requireValue(!this.runs(id).some(run => run.nativeState !== 'settled'), 'conversation_busy', 'Unsettled work prevents controller transfer', 409);
+      requireValue(!binding.lifecycleState, 'binding_retired', 'Retiring bindings cannot transfer lifecycle control', 409);
+      const controller = this.binding(text(input.controllerBindingId, 'controllerBindingId'));
+      requireValue(controller.id !== id && controller.config.companyId === binding.config.companyId && !controller.lifecycleState,
+        'invalid_controller', 'Controller must be an active independent binding in the same company');
+      binding.history = [...(binding.history ?? []), { revision: binding.revision, config: binding.config, transferredAt: now() }];
+      binding.config = { ...binding.config, controllerBindingId: controller.id };
+      binding.revision++;
       this.db.prepare('UPDATE bindings SET data = ? WHERE id = ?').run(JSON.stringify(binding), id);
       return binding;
     });

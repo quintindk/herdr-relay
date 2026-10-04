@@ -5,6 +5,7 @@ import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { launchRuntime } from './runtimes.mjs';
 import { OpenCode } from './opencode.mjs';
 import { Hermes } from './hermes.mjs';
+import { provisionWorktree } from './resources.mjs';
 
 export async function provisionAgent(store, directory, api, input) {
   const key = text(input.key, 'key');
@@ -12,7 +13,8 @@ export async function provisionAgent(store, directory, api, input) {
     harness: text(input.harness, 'harness'), directory: resolve(text(input.directory, 'directory')),
     lifetime: input.lifetime ?? 'persistent', controllerBindingId: input.controllerBindingId ?? null,
     taskId: input.taskId ?? null, worktreeKey: input.worktreeKey ?? null,
-    model: input.model ?? null, executable: input.executable ?? input.harness };
+    model: input.model ?? null, executable: input.executable ?? input.harness,
+    worktree: input.worktree ?? null };
   requireValue(['opencode', 'hermes'].includes(request.harness), 'invalid_harness', 'Use OpenCode or Hermes');
   const id = `provision:${key}`;
   let operation = store.operation(id);
@@ -24,6 +26,13 @@ export async function provisionAgent(store, directory, api, input) {
       return operation;
     }
   } else operation = store.saveOperation({ id, runId: '', request, state: 'intent' });
+  if (request.worktree) {
+    requireValue(request.worktreeKey && resolve(request.worktree.path) === request.directory,
+      'worktree_configuration_mismatch', 'Provisioned worktree must match worker directory and have a worktreeKey');
+    requireValue(!store.binding(request.bindingId, false) || operation.agentId,
+      'binding_conflict', 'A different binding already uses the requested identity', 409);
+    provisionWorktree(store, { ...request.worktree, key: request.worktreeKey, bindingId: request.bindingId }, { pendingBinding: true });
+  }
   const name = `Relay ${request.bindingId} ${digest(id).slice(0, 12)}`;
   if (!operation.agentId) {
     const agents = await api('GET', `/api/companies/${encodeURIComponent(request.companyId)}/agents`);
