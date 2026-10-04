@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -27,7 +29,7 @@ async function waitFor(fn) {
 async function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'relay-native-'));
   const session = { id: 'ses_fixture', directory, projectID: 'project', time: { created: 1 } };
-  const state = { messages: [], busy: false, posts: 0, lost: false, absent: false, aborts: 0 };
+  const state = { messages: [], busy: false, posts: 0, lost: false, absent: false, aborts: 0, comments: [] };
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://fixture');
     assert.equal(url.searchParams.get('directory'), directory);
@@ -57,7 +59,15 @@ async function fixture(t) {
   };
   let service;
   const start = async () => {
-    service = await startService({ directory: join(directory, 'relay'), paperclipUrl: 'http://paperclip.test' });
+    service = await startService({ directory: join(directory, 'relay'), paperclipUrl: 'http://paperclip.test',
+      api: async (run, token, method, path, body) => {
+        assert.equal(token, 'backend-secret');
+        if (!path.endsWith('/comments')) return { companyId: 'company', title: 'Recovered task' };
+        if (method === 'GET') return state.comments;
+        const comment = { id: 'receipt', ...body, authorAgentId: run.request.agentId, createdByRunId: run.request.runId };
+        state.comments.push(comment);
+        return comment;
+      } });
     return service;
   };
   await start();
@@ -240,4 +250,63 @@ test('native conversation aliases and unreserved registrations are rejected', as
   assert.throws(() => f.service.store.register({ ...f.binding, opencode: { ...f.binding.opencode, exclusive: false } }), code('native_reservation_required'));
   await f.register();
   assert.throws(() => f.service.store.register({ ...f.binding, id: 'alias', agentId: 'other', instanceId: 'another-label' }), code('identity_conflict'));
+});
+
+test('adapter process restart and Relay restart reuse native invocation and publish one result', async t => {
+  const f = await fixture(t);
+  await f.register();
+  const operator = join(f.directory, 'operator.json');
+  writeFileSync(operator, JSON.stringify(f.admin()), { mode: 0o600 });
+  const context = {
+    agent: { companyId: 'company', id: 'agent' }, runId: 'backend', authToken: 'backend-secret',
+    config: { relayContextFile: operator, bindingId: 'native' }, context: { taskId: 'task' },
+  };
+  const children = [];
+  t.after(async () => {
+    for (const child of children) {
+      if (child.exitCode !== null || child.signalCode !== null) continue;
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
+  });
+  const launch = () => {
+    const source = `import { execute } from ${JSON.stringify(new URL('../src/adapter.mjs', import.meta.url).href)};
+      const result = await execute({ ...${JSON.stringify(context)}, onLog: async () => {} });
+      console.log(JSON.stringify(result));`;
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', source], { stdio: ['ignore', 'pipe', 'pipe'] });
+    children.push(child);
+    let output = '';
+    let errors = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { errors += chunk; });
+    return { child, output: () => output, errors: () => errors };
+  };
+  const first = launch();
+  await waitFor(() => f.state.posts === 1);
+  const run = f.service.store.runs()[0];
+  const exit = once(first.child, 'exit');
+  first.child.kill('SIGKILL');
+  await exit;
+  await f.restart();
+  const second = launch();
+  const completed = once(second.child, 'exit');
+  const contextDir = join(f.directory, 'relay/workers');
+  const worker = JSON.parse(readFileSync(join(contextDir, readdirSync(contextDir)[0]), 'utf8'));
+  await waitFor(async () => {
+    try { return (await call(worker, 'GET', `/runs/${run.id}/task`)).title === 'Recovered task'; }
+    catch (error) { if (['adapter_unavailable', 'EPIPE', 'ECONNRESET'].includes(error.code)) return false; throw error; }
+  });
+  await call(worker, 'POST', `/runs/${run.id}/acknowledge`, {});
+  await call(worker, 'POST', `/runs/${run.id}/submit`, result);
+  f.finish(run.id);
+  await waitFor(() => second.child.exitCode !== null);
+  const [status] = await completed;
+  assert.equal(status, 0, second.errors());
+  assert.equal(JSON.parse(second.output()).exitCode, 0);
+  assert.equal(f.service.store.runs().length, 1);
+  assert.equal(f.service.store.run(run.id).invocation.messageId, run.invocation.messageId);
+  assert.equal(f.state.posts, 1);
+  assert.equal(f.state.comments.length, 1);
+  assert.equal(f.state.comments[0].createdByRunId, 'backend');
 });

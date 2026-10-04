@@ -96,6 +96,17 @@ write and POST can therefore leave work unresolved even though nothing was sent.
 An absent message is not proof that an in-flight request cannot still arrive.
 There is no override or automatic replay for this case.
 
+Adapter dispatch has a separate retry boundary. A lost Relay `/runs` response is
+retried with the same backend run key and unchanged payload. Definitive 4xx
+rejections fail promptly. Cancellation received during that recovery is persisted
+before attaching the backend token that enables new native delivery.
+
+An adapter process restarted with the same Paperclip run, binding and task can
+reattach credentials and recover the existing invocation. Tests kill an actual
+adapter process, restart Relay and complete through a replacement adapter, with
+one native prompt and one attributed comment. This does not establish Paperclip's
+own host-restart policy or guarantee it will re-invoke the adapter with that run ID.
+
 Schema 2 adds optional native fields to stored run JSON. Schema-1 pull records and
 credentials are retained. Future schema versions are rejected before schema writes.
 
@@ -152,5 +163,5 @@ Inspected release commit: `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
 - [Runner state](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/effect/runner.ts):
   `ensureRunning` joins an existing run instead of rejecting concurrent prompt input.
 
-Next work: exact interruption or an enforceable native reservation, adapter-host
-recovery, Hermes delivery, rebinding, and bounded waiting/question flows.
+Next work: exact interruption or an enforceable native reservation, real Paperclip
+host-restart policy, Hermes delivery, rebinding, and bounded waiting/question flows.

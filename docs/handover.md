@@ -4,8 +4,8 @@ Handover date: 2026-10-04. Package: `herdr-relay@0.1.0-dev.0`.
 
 ## Start here
 
-**Continue with exact native interruption, adapter-host recovery and Hermes
-delivery.** Reserved OpenCode delivery now persists a native message ID, delivers
+**Continue with exact native interruption, Hermes delivery and bounded waiting.**
+Reserved OpenCode delivery now persists a native message ID, delivers
 once, and settles against a matching terminal response plus worker submission.
 Explicit CLI pull remains supported. Read [the native delivery contract](native-opencode-v1.md)
 before changing supervision. OpenCode session-wide abort is deliberately not used.
@@ -93,7 +93,8 @@ Agents primarily have context, repository bindings and optional capabilities.
 | `src/supervisor.mjs` | Durable delivery intent, scoped worker context and restart reconciliation |
 | `herdr-plugin.toml` | Herdr plugin manifest, currently one service-status action |
 | `test/relay.test.mjs` | Ten persistence, protocol, CLI, service and adapter tests |
-| `test/native.test.mjs` | Ten native HTTP fault, attribution and schema compatibility tests |
+| `test/native.test.mjs` | Eleven native HTTP fault, attribution, process-restart and schema compatibility tests |
+| `test/adapter.test.mjs` | Lost initial dispatch, cancellation ordering and definitive-conflict tests |
 | `scripts/check.mjs` | Syntax checks across source, scripts and tests |
 | `scripts/paperclip-smoke.mjs` | Real Paperclip external-package installation and run-attribution smoke test |
 | `scripts/opencode-smoke.mjs` | Isolated real-model OpenCode test with deterministic Paperclip API |
@@ -179,7 +180,7 @@ npm test
 npm pack --dry-run
 ```
 
-- All twenty tests passed. Syntax and package checks passed.
+- All twenty-four tests passed. Syntax and package checks passed.
 - Tests cover database reopen, service restart while an adapter continues running,
   changed-payload rejection, duplicate registration, stale/overlapping dispatch,
   worker credential scope, CLI registration, publication uncertainty, and waiting
@@ -204,6 +205,12 @@ supervisor and CLI with a real model, prior conversation context, one attributed
 result and automatic correlated settlement. Its Paperclip API is deterministic.
 See [native evidence](evidence/native-opencode-smoke.json).
 
+Recovery tests also kill the actual adapter Node process, restart Relay, and launch
+the adapter again with the same backend run. They establish one native prompt,
+one Relay run and one attributed result comment with HTTP fixtures. A dropped
+initial dispatch response is retried under the original immutable backend-run key.
+Cancellation is applied before attaching credentials for new native delivery.
+
 ## Immediate next work
 
 ### 1. Strengthen native delivery and add Hermes
@@ -224,7 +231,9 @@ Inspect native APIs and earlier fixtures before choosing the Hermes contract.
 
 - Cancel the assigned invocation and verify it stopped before returning.
 - Keep uncertainty visible if the connection drops around delivery or interruption.
-- Test Relay restart and adapter-host restart separately. Only the first is tested.
+- Extend the verified Relay/adapter-process restart tests to real Paperclip host
+  restart and its run re-invocation policy. Relay cannot force Paperclip to resume
+  an interrupted adapter under the same run ID.
 - Never convert timeout or bridge exit into proof of native termination.
 - Keep new native work blocked while prior execution is uncertain.
 
@@ -245,8 +254,8 @@ These are limits visible in the current code, not promises that they are solved:
 
 - Adapter `timeoutSec` requests cancellation but can wait indefinitely for claimed
   work to settle or for result publication to reconcile.
-- Initial dispatch happens before the adapter polling/reconciliation loop. A lost
-  initial response needs deliberate recovery using the stable backend run key.
+- Initial dispatch is inside the recovery loop. Transport/server failures replay
+  its stable backend-run key. Definitive 4xx dispatch rejections fail promptly.
 - OpenCode delivery verifies stored conversation identity and correlates native
   message IDs. There is no native process incarnation ID or atomic reservation.
 - Schema 2 retains schema-1 pull records and rejects future versions. Native state

@@ -25,22 +25,29 @@ export async function execute(ctx) {
   const started = Date.now();
   await ctx.onCancellationReady?.();
   ctx.onDispatch?.();
-  let run = await call(connection, 'POST', '/runs', {
+  const dispatch = {
     bindingId: ctx.config.bindingId, bindingRevision: ctx.config.bindingRevision ?? 1,
     companyId: ctx.agent.companyId, agentId: ctx.agent.id,
     runId: ctx.runId, taskId,
-  });
-  await ctx.onLog('stdout', `${JSON.stringify({ relayRunId: run.id, deliveryState: run.deliveryState })}\n`);
+  };
+  let run;
   let timedOut = false;
   let lastError;
   while (true) {
     timedOut ||= Date.now() - started >= timeoutSec * 1000;
     try {
-      await call(connection, 'POST', `/runs/${run.id}/attach`, { token: ctx.authToken });
+      if (!run) {
+        // A lost response may already have persisted the dispatch. Replay only
+        // this immutable backend-run key, never manufacture a replacement run.
+        run = await call(connection, 'POST', '/runs', dispatch);
+        await ctx.onLog('stdout', `${JSON.stringify({ relayRunId: run.id, deliveryState: run.deliveryState })}\n`);
+      }
       run = await call(connection, 'GET', `/runs/${run.id}`);
       if ((ctx.signal?.aborted || timedOut) && run.nativeState !== 'settled') {
         run = await call(connection, 'POST', `/runs/${run.id}/cancel`, {});
       }
+      // Apply known cancellation before making a fresh native run deliverable.
+      await call(connection, 'POST', `/runs/${run.id}/attach`, { token: ctx.authToken });
       if (run.result && run.publication.state !== 'recorded') {
         run = await call(connection, 'POST', `/runs/${run.id}/publish`, { token: ctx.authToken });
       }
@@ -57,10 +64,13 @@ export async function execute(ctx) {
       }
       lastError = undefined;
     } catch (error) {
+      // A definitive dispatch rejection needs operator correction, not retries.
+      // Once a run exists, loss of access is still not proof that work stopped.
+      if (!run && error.status >= 400 && error.status < 500) throw error;
       // A transport failure is not proof of native termination. Keep the run
       // supervised until Relay can reconcile it, without exposing credentials.
       const code = error.code ?? 'relay_unavailable';
-      if (code !== lastError) await ctx.onLog('stderr', `${JSON.stringify({ code, relayRunId: run.id, reconciliationPending: true })}\n`);
+      if (code !== lastError) await ctx.onLog('stderr', `${JSON.stringify({ code, relayRunId: run?.id, reconciliationPending: true })}\n`);
       lastError = code;
     }
     await delay(250);
