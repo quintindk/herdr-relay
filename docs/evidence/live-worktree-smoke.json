@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-04",
+  "backend": "Paperclip 2026.1001.0",
+  "nativeHarness": "OpenCode 1.18.34",
+  "model": "github-copilot/gpt-6-astra",
+  "realNativeGraphEdit": true,
+  "candidateIndependentlyVerified": true,
+  "committedBeforeAcceptance": true,
+  "boardAcceptance": true,
+  "automaticRuntimeRetirement": true,
+  "worktreeCleanupAfterFixtureResolution": true,
+  "ignoredCleanupBlocked": true,
+  "finalCommitRetained": true,
+  "backendTaskDone": true
+}

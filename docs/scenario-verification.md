@@ -54,3 +54,15 @@ the native Hermes gateway on the host with an isolated home. It verifies real
 backend provisioning, a model-authored question, automatic continuation, one
 attributed result and owned-runtime retirement. Both the container and native
 runtime are stopped and copied credentials removed after the test.
+
+`scripts/live-worktree-smoke.mjs` passed with real Paperclip, OpenCode and Git.
+The model edited graph JSON, computed and submitted a working-tree candidate,
+and ended its turn. The test independently parsed the file, recaptured the digest,
+committed the exact candidate, recorded reviewer evidence and accepted it through
+Paperclip. Background lifecycle reconciliation stopped the owned runtime.
+
+OpenCode had created ignored `.opencode` dependency files. Cleanup correctly
+blocked while preserving acceptance. The fixture removed only its own generated
+dependency files, after which the same retirement operation removed the worktree,
+retained the commit and completed the backend task. This verifies the intended
+separation between acceptance, runtime retirement and eligible file cleanup.
