@@ -30,7 +30,8 @@
       "acceptedStatePreserved": true,
       "workerRetired": true,
       "worktreeRemoved": true,
-      "commitRetained": true
+      "commitRetained": true,
+      "backendTaskDone": true
     }
   ]
 }

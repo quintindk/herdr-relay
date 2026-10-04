@@ -27,6 +27,7 @@ const help = `herdr-relay (development)
   task list RUN
   task create RUN --key KEY --file task.json
   task assign RUN --key KEY --file assignment.json
+  task update RUN --key KEY --file changes.json [--task TARGET_TASK_ID]
   work answer RUN --key KEY --interaction ID --file answers.json
   candidate inspect --directory REPOSITORY_ROOT
   result request|inspect|accept|reject CALLER_RUN --file review.json
@@ -56,7 +57,7 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'task']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
@@ -168,11 +169,11 @@ export async function main(args) {
     });
   }
   else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);
-  else if (id && ((group === 'task' && ['create', 'assign'].includes(action)) || (group === 'work' && action === 'answer'))) {
+  else if (id && ((group === 'task' && ['create', 'assign', 'update'].includes(action)) || (group === 'work' && action === 'answer'))) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/mutate`, {
       key: values.key, kind: group === 'task' ? `task.${action}` : 'question.answer',
-      interactionId: values.interaction, payload: JSON.parse(readFileSync(values.file, 'utf8')),
+      interactionId: values.interaction, taskId: values.task, payload: JSON.parse(readFileSync(values.file, 'utf8')),
     });
   }
   else if (group === 'work' && action === 'ask' && id) {

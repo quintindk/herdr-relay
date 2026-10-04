@@ -112,7 +112,9 @@ try {
   await call(operator, 'POST', `/runs/${providerRun.id}/settle`, { outcome: 'waiting', evidence: 'Provider question turn ended' });
   await until(async () => (await api('GET', `/api/heartbeat-runs/${providerRun.request.runId}`)).status === 'succeeded');
   const interaction = service.store.run(providerRun.id).waiting.interactionId;
-  await api('POST', `/api/issues/${subnet.id}/interactions/${interaction}/respond`, { answers: [{ questionId: 'answer', optionIds: ['text'], otherText: 'southafricanorth' }] });
+  await call(demo.connection, 'POST', `/runs/${demoRun.id}/mutate`, { key: 'region-answer', kind: 'question.answer',
+    taskId: subnet.id, interactionId: interaction,
+    payload: { answers: [{ questionId: 'answer', optionIds: ['text'], otherText: 'southafricanorth' }] } });
   const providerContinuation = await invoke(provider, subnet);
   const answers = await call(provider.connection, 'GET', `/runs/${providerContinuation.id}/interactions`);
   assert.ok(JSON.stringify(answers).includes('southafricanorth'));
@@ -183,10 +185,12 @@ try {
   assert.equal(service.store.binding(worker.bindingId).lifecycleState, 'retired');
   assert.equal(service.store.binding(driver.bindingId).lifecycleState, undefined);
   assert.equal(execFileSync('git', ['-C', repository, 'rev-parse', 'graph-worker'], { encoding: 'utf8' }).trim(), finalised.commit);
+  await call(driver.connection, 'POST', `/runs/${finalReview.id}/mutate`, { key: 'complete-graph', kind: 'task.update', payload: { status: 'done' } });
+  assert.equal((await api('GET', `/api/issues/${graphTask.id}`)).status, 'done');
   await cancel(finalReview);
   evidence.scenarios.push({ name: 'worktree-review', corrections: true, staleAcceptanceRejected: true,
     candidateVerified: true, committedBeforeAcceptance: true, dirtyCleanupBlocked: true,
-    acceptedStatePreserved: true, workerRetired: true, worktreeRemoved: true, commitRetained: true });
+    acceptedStatePreserved: true, workerRetired: true, worktreeRemoved: true, commitRetained: true, backendTaskDone: true });
   console.log(JSON.stringify(evidence, null, 2));
 } finally {
   for (const agent of agents) { try { await enable(agent, false); } catch {} }

@@ -10,6 +10,7 @@ credentials. They execute under that agent's Paperclip permissions:
 herdr-relay task list RUN
 herdr-relay task create RUN --key subnet-request --file task.json
 herdr-relay task assign RUN --key handoff --file assignment.json
+herdr-relay task update RUN --key complete --file changes.json
 herdr-relay work answer RUN --key answer-1 --interaction INTERACTION_ID --file answers.json
 ```
 
@@ -27,7 +28,7 @@ Example delegated task:
 Use `assigneeUserId` for human ownership, or omit both assignees for backlog work.
 Optional `blockedByIssueIds` expresses dependencies. Parentage does not itself
 imply a dependency. Tasks need no project or manager. `task assign` changes the
-task associated with the supplied Relay run, not an arbitrary guessed task.
+  task associated with the supplied Relay run, not an arbitrary guessed task.
 
 Answers use Paperclip's question IDs:
 
@@ -43,3 +44,13 @@ manufacture a new key to hide it.
 
 Real-backend evidence: the question smoke creates one human-owned dependent
 follow-up and repeats the identical request without producing another task.
+
+Use `--task TARGET_TASK_ID` for an explicitly addressed peer task. Relay verifies
+same-company ownership and Paperclip applies the caller's normal permissions.
+The subnet scenario now answers the provider's question from the requesting agent
+through this path. No board impersonation is needed.
+
+Task updates support title, description, priority, dependencies and status. Setting
+`status: "done"` requires the latest Relay candidate to be settled and accepted,
+and refreshes the matching Paperclip review disposition before writing completion.
+The worktree scenario verifies actual backend completion after accepted cleanup.

@@ -4,7 +4,13 @@ import { canonical, digest, requireValue, text } from './protocol.mjs';
 export async function mutate(store, run, token, api, input) {
   const key = text(input.key, 'key');
   const kind = text(input.kind, 'kind');
-  const taskPath = `/api/issues/${encodeURIComponent(run.request.taskId)}`;
+  const taskId = input.taskId ?? run.request.taskId;
+  text(taskId, 'taskId');
+  const taskPath = `/api/issues/${encodeURIComponent(taskId)}`;
+  if (taskId !== run.request.taskId) {
+    const target = await api(run, token, 'GET', taskPath);
+    requireValue(target.companyId === run.request.companyId, 'forbidden', 'Target task belongs to another company', 403);
+  }
   let method = 'POST';
   let path;
   let body;
@@ -26,6 +32,29 @@ export async function mutate(store, run, token, api, input) {
     requireValue(Object.keys(body).length > 0, 'invalid_request', 'Assignee required');
     method = 'PATCH';
     path = taskPath;
+  } else if (kind === 'task.update') {
+    requireValue(input.payload && typeof input.payload === 'object', 'invalid_request', 'Task update required');
+    body = {};
+    for (const field of ['title', 'description', 'priority', 'blockedByIssueIds']) {
+      if (input.payload[field] !== undefined) body[field] = input.payload[field];
+    }
+    if (input.payload.status !== undefined) {
+      requireValue(['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'].includes(input.payload.status),
+        'invalid_status', 'Unsupported task status');
+      if (input.payload.status === 'done') {
+        const latest = store.runs().find(item => item.request.companyId === run.request.companyId && item.request.taskId === taskId && item.result);
+        requireValue(latest?.review?.status === 'accepted' && latest.nativeState === 'settled',
+          'acceptance_required', 'Latest candidate must be accepted and settled before task completion', 409);
+        const interactions = await api(run, token, 'GET', `${taskPath}/interactions`);
+        const accepted = interactions.find(item => item.id === latest.review.interactionId);
+        requireValue(accepted?.status === 'accepted' && accepted.payload?.target?.revisionId === latest.result.candidate,
+          'acceptance_required', 'Backend must confirm exact candidate acceptance', 409);
+      }
+      body.status = input.payload.status;
+    }
+    requireValue(Object.keys(body).length > 0, 'invalid_request', 'No supported task update fields');
+    method = 'PATCH';
+    path = taskPath;
   } else if (kind === 'question.answer') {
     const interactionId = text(input.interactionId, 'interactionId');
     const interactions = await api(run, token, 'GET', `${taskPath}/interactions`);
@@ -44,9 +73,9 @@ export async function mutate(store, run, token, api, input) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Operation key has a different payload', 409);
     if (operation.state === 'recorded') return operation;
     if (!replaySafe) {
-      if (kind === 'task.assign') {
+      if (kind === 'task.assign' || kind === 'task.update') {
         const current = await api(run, token, 'GET', path);
-        if (Object.entries(body).every(([key, value]) => current[key] === value)) {
+        if (Object.entries(body).every(([key, value]) => canonical(current[key]) === canonical(value))) {
           return store.saveOperation({ ...operation, state: 'recorded', receipt: current, reconciled: true });
         }
       } else if (kind === 'question.answer') {
