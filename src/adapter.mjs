@@ -14,6 +14,10 @@ Invocations require a Paperclip task. Submission records a result comment.
 Questions, review and acceptance use separate commands and backend interactions.`;
 
 export async function execute(ctx) {
+  if (ctx.config.relayNodeFile) {
+    const { executeRemote } = await import('./remote-adapter.mjs');
+    return executeRemote(ctx);
+  }
   requireValue(ctx.authToken, 'missing_auth', 'Paperclip run authentication is required');
   requireValue(!ctx.executionTarget || ctx.executionTarget.kind === 'local', 'unsupported_target', 'Relay requires a local adapter host');
   requireValue(typeof ctx.config.relayContextFile === 'string', 'invalid_config', 'relayContextFile is required');
@@ -98,6 +102,18 @@ export function createServerAdapter() {
     async testEnvironment(ctx) {
       const checks = [];
       try {
+        if (ctx.config.relayNodeFile) {
+          const { readFileSync } = await import('node:fs');
+          const { remoteCommand } = await import('./remote.mjs');
+          const { execFile } = await import('node:child_process');
+          const { promisify } = await import('node:util');
+          const node = JSON.parse(readFileSync(ctx.config.relayNodeFile, 'utf8'));
+          const { stdout } = await promisify(execFile)('ssh', remoteCommand(node, ['agent', 'list']), { timeout: 15000 });
+          const bindings = JSON.parse(stdout);
+          requireValue(bindings.some(binding => binding.id === ctx.config.bindingId && binding.config.companyId === ctx.companyId &&
+            binding.revision === (ctx.config.bindingRevision ?? 1)), 'binding_not_found', 'Matching remote binding required');
+          return { adapterType: type, status: 'pass', checks: [{ level: 'info', code: 'remote_relay', message: 'Remote Relay binding verified over SSH.' }], testedAt: new Date().toISOString() };
+        }
         requireValue(typeof ctx.config.relayContextFile === 'string', 'invalid_config', 'relayContextFile is required');
         const connection = credentials(ctx.config.relayContextFile);
         const bindings = await call(connection, 'GET', '/bindings');

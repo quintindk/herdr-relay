@@ -69,6 +69,11 @@ export async function main(args) {
     ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'task', 'timeout']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
+  if (group === 'adapter-stdio') {
+    const { serveAdapterStdio } = await import('./remote-adapter.mjs');
+    await serveAdapterStdio();
+    return;
+  }
   if (values.help || !group) { console.log(help); return; }
   if (group === 'candidate' && action === 'inspect') {
     console.log(JSON.stringify(candidate(values.directory ?? process.cwd()), null, 2));

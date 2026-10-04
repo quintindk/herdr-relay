@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-04",
+  "actualSshTransport": true,
+  "isolatedHostKey": true,
+  "remoteStatus": true,
+  "adapterStdioExecution": true,
+  "sameRelayRun": true,
+  "nativeHarness": false,
+  "physicalSecondMachine": false
+}

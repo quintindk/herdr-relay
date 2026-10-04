@@ -9,6 +9,7 @@
 - Implementation progress: [first working slice](build-v1.md)
 - Native progress: [reserved OpenCode delivery](native-opencode-v1.md)
 - Current coverage and remaining limitations: [implementation status](implementation-status.md)
+- Approved control/topology decision (2026-10-04): [owned-runtime nodes over SSH](node-topology.md)
 
 ## 1. Defining principle
 
@@ -400,6 +401,12 @@ acceptance-driven retirement and the herdr task/inbox view. Run the three scenar
 families end to end before calling the integration complete.
 
 ## 13. Open decisions
+
+The user selected the owned-runtime boundary on 2026-10-04. Automatic lifecycle
+control targets dedicated runtimes on local Relay nodes. Shared conversations stay
+conservative. Nodes share Paperclip and use SSH for remote administration/adapter
+attachment. This resolves the initial control-boundary and transport choice without
+requiring modifications to the native harnesses.
 
 - Exact Paperclip adapter result, cancellation and recovery contracts per release.
 - Mapping of Relay attempt identity to Paperclip runs and candidate revisions.
