@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-04",
+  "scope": "Approved Linux owned-runtime boundary with per-node Relay and SSH attachment",
+  "automatedTestsPassed": 69,
+  "syntaxChecksPassed": true,
+  "shellSyntaxPassed": true,
+  "packageDryRunPassed": true,
+  "realPaperclipScenariosPassed": true,
+  "combinedOpenCodePaperclipPassed": true,
+  "combinedHermesPaperclipPassed": true,
+  "liveWorktreeAcceptancePassed": true,
+  "managedCancellationAndResumePassed": ["opencode", "hermes"],
+  "realSystemdRestartPassed": true,
+  "actualSshTransportPassed": true,
+  "physicalSecondMachineTested": false,
+  "hostedCiActive": false,
+  "hostedCiBlocker": "GitHub OAuth token lacks workflow scope",
+  "productionSourceConnectorsTested": false
+}

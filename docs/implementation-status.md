@@ -90,7 +90,9 @@ See [scenario verification](scenario-verification.md) and `docs/evidence/`.
    not a replacement for Paperclip's task/review UI. It does not automatically
    create agent panes or close unrelated/restored terminal resources.
 10. **Release scope:** the package is a development build, not published to npm.
-    No release CI or multi-platform support claim has been established.
+    The CI definition is retained at `docs/ci-check.yml`; GitHub rejected workflow
+    activation because the current token lacks workflow scope. Hosted CI is not
+    active, and no multi-platform support claim has been established.
 
 The owned-runtime and SSH topology choices are recorded in
 [node topology](node-topology.md). Remaining limits must not be hidden by claiming

@@ -115,7 +115,7 @@ Schema 1–3 data is retained when schema 4 tables are opened. Future schemas ar
 
 ## Verification actually performed
 
-Latest normal suite: **68 tests passed**, plus `npm run check`. Run the suite again
+Latest normal suite: **69 tests passed**, plus `npm run check`. Run the suite again
 after changes, rather than relying on this count as a permanent fact.
 
 | Probe | Evidence |
@@ -185,10 +185,15 @@ OpenCode processes based on executable name alone.
 
 ## Next work
 
-1. Check pending Git pushes after DNS recovers.
-2. Review the explicit limitations in `implementation-status.md` before claiming
-   complete v2 coverage. Resolve supported topology and platform scope with the user.
-3. Tighten unproven race/recovery boundaries through targeted tests, especially
-   shared-session input, provider compaction, and native crash before terminal receipt.
-4. Keep the historical docs clearly separated from the current contracts. Avoid
-   another handover made of contradictory appended status paragraphs.
+1. Deploy the approved owned-runtime node model to an actual second machine and
+   verify its SSH identity, backend connectivity and local runtime permissions.
+2. Enable hosted CI by placing `docs/ci-check.yml` in `.github/workflows/check.yml`
+   with workflow-scoped GitHub credentials. The current token cannot create workflows.
+3. Treat shared-session input, provider compaction and native crash before a
+   terminal receipt as explicit uncertainty boundaries. Do not invent safe replay.
+4. Production inbox/Teams and Azure resource integrations need their own source
+   authority and provider-side idempotency. Current scenarios deliberately use fixtures.
+
+The owned-runtime scope and per-node SSH topology were approved by the user. The
+README now documents the implemented workflow. Final local checks passed, test
+containers and temporary services were stopped, and all commits were pushed.
