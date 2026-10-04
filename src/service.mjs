@@ -88,6 +88,9 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       requireValue(admin || bindingId, 'unauthorised', 'Valid Relay credentials required', 401);
       const path = new URL(req.url, 'http://relay').pathname;
       const input = req.method === 'POST' ? await body(req) : {};
+      if (bindingId && req.method === 'POST') {
+        requireValue(!store.binding(bindingId).lifecycleState, 'binding_inactive', 'Retiring or retired bindings cannot initiate writes', 403);
+      }
       const adminOnly = () => requireValue(admin, 'forbidden', 'Operator credentials required', 403);
       let result;
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };

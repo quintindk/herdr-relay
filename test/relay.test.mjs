@@ -139,6 +139,11 @@ test('service scopes worker credentials and gates settlement behind operator ide
   await assert.rejects(call(worker, 'GET', '/bindings'), errorCode('forbidden'));
   await assert.rejects(call(admin, 'POST', '/bindings', null), errorCode('invalid_request'));
   await assert.rejects(call(worker, 'POST', `/runs/${own.id}/settle`, {}), errorCode('forbidden'));
+  await call(worker, 'POST', `/runs/${own.id}/acknowledge`, {});
+  service.store.cancel(own.id);
+  service.store.settle(own.id, { outcome: 'cancelled', evidence: 'Fixture stopped' });
+  service.store.retireBinding('driver');
+  await assert.rejects(call(worker, 'POST', '/events', { source: 'fixture', eventId: 'one', cursor: 'one', recipient: 'peer', summary: 'late', reference: 'fixture://one' }), errorCode('binding_inactive'));
   await assert.rejects(call(worker, 'GET', `/runs/${own.id}/task`), errorCode('adapter_unavailable'));
   await call(admin, 'POST', `/runs/${own.id}/attach`, { token: 'backend-token' });
   assert.equal((await call(worker, 'GET', `/runs/${own.id}/task`)).title, 'Actual backend task');

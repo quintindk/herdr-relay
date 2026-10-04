@@ -6,12 +6,12 @@ export const type = 'herdr_relay';
 export const label = 'Herdr Relay';
 export const agentConfigurationDoc = `# Herdr Relay (development)
 Requires a local Relay service. Configure relayContextFile with an operator
-credential file, bindingId, bindingRevision (1), and timeoutSec (default 300).
+credential file, bindingId, current bindingRevision, and timeoutSec (default 300).
 Bindings select explicit CLI pull with operator settlement, or reserved native
 delivery with message-correlated native settlement.
 timeoutSec requests cancellation, but cannot force an unverified native stop.
-Only task-scoped work invocations are supported. Submission records a comment,
-not task acceptance or a review transition.`;
+Invocations require a Paperclip task. Submission records a result comment.
+Questions, review and acceptance use separate commands and backend interactions.`;
 
 export async function execute(ctx) {
   requireValue(ctx.authToken, 'missing_auth', 'Paperclip run authentication is required');
@@ -103,13 +103,16 @@ export function createServerAdapter() {
           binding.revision === (ctx.config.bindingRevision ?? 1) && binding.config.companyId === ctx.companyId);
         requireValue(binding,
         'binding_not_found', 'Matching binding and company required');
-        checks.push(['opencode', 'hermes'].includes(binding.config.delivery)
+        const managed = (binding.config.opencode ?? binding.config.hermes)?.runtimeKey;
+        checks.push(managed
+          ? { level: 'info', code: 'managed_native_delivery', message: 'Relay reachable. Dedicated owned runtime supports verified interruption and settlement.' }
+          : ['opencode', 'hermes'].includes(binding.config.delivery)
           ? { level: 'warn', code: 'reserved_native_delivery', message: 'Relay reachable. Native conversation must remain reserved. Automatic interruption is unavailable.' }
           : { level: 'warn', code: 'manual_settlement', message: 'Relay reachable. CLI pull and operator settlement required.' });
       } catch (error) {
         checks.push({ level: 'error', code: error.code ?? 'relay_unavailable', message: 'Relay configuration or connection failed' });
       }
-      return { adapterType: type, status: checks.some(check => check.level === 'error') ? 'fail' : 'warn', checks, testedAt: new Date().toISOString() };
+      return { adapterType: type, status: checks.some(check => check.level === 'error') ? 'fail' : checks.some(check => check.level === 'warn') ? 'warn' : 'pass', checks, testedAt: new Date().toISOString() };
     },
   };
 }

@@ -35,7 +35,7 @@ test('concurrent service starters cannot unlink the winning socket and a crash r
   const entries = [first, second].map(item => ({ ...item, result: JSON.parse(item.output()) }));
   const winner = entries.find(item => item.result.socketPath);
   const loser = entries.find(item => item.result.code);
-  assert.ok(winner);
+  assert.ok(winner, JSON.stringify(entries.map(entry => entry.result)));
   assert.equal(loser.result.code, 'already_running');
   assert.equal((await call(winner.result, 'GET', '/health')).status, 'ok');
   const exited = once(winner.child, 'exit'); winner.child.kill('SIGKILL'); await exited;

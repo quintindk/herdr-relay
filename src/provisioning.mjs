@@ -15,7 +15,7 @@ export async function provisionAgent(store, directory, api, input) {
     lifetime: input.lifetime ?? 'persistent', controllerBindingId: input.controllerBindingId ?? null,
     taskId: input.taskId ?? null, worktreeKey: input.worktreeKey ?? null,
     model: input.model ?? null, executable: input.executable ?? input.harness,
-    worktree: input.worktree ?? null };
+    worktree: input.worktree ?? null, label: input.label ?? null, capabilities: input.capabilities ?? null };
   requireValue(['opencode', 'hermes'].includes(request.harness), 'invalid_harness', 'Use OpenCode or Hermes');
   const id = `provision:${key}`;
   let operation = store.operation(id);
@@ -23,7 +23,7 @@ export async function provisionAgent(store, directory, api, input) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Provisioning key configuration changed', 409);
     if (operation.state === 'recorded') {
       const binding = store.binding(operation.bindingId);
-      requireValue(binding.lifecycleState !== 'retired', 'binding_retired', 'Provisioned binding has been retired', 409);
+      requireValue(!binding.lifecycleState, 'binding_retired', 'Provisioned binding is retiring or retired', 409);
       return operation;
     }
   } else operation = store.saveOperation({ id, runId: '', request, state: 'intent', marker: randomUUID() });
@@ -103,6 +103,7 @@ export async function provisionAgent(store, directory, api, input) {
     harness: request.harness, instanceId: runtime.nonce, conversationId: operation.conversationId, delivery: request.harness,
     lifetime: request.lifetime, ...(request.controllerBindingId ? { controllerBindingId: request.controllerBindingId } : {}),
     ...(request.taskId ? { taskId: request.taskId } : {}), ...(request.worktreeKey ? { worktreeKey: request.worktreeKey } : {}),
+    ...(request.label ? { label: request.label } : {}), ...(request.capabilities ? { capabilities: request.capabilities } : {}),
     [request.harness]: nativeConfig }).binding;
   const operatorFile = join(directory, 'adapter-context.json');
   const context = JSON.stringify({ socketPath: join(directory, 'relay.sock'), token: readFileSync(join(directory, 'admin-token'), 'utf8').trim() });
