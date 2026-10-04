@@ -22,6 +22,7 @@ import { provisionAgent } from './provisioning.mjs';
 import { bindPlacement, reconcilePlacement } from './placement.mjs';
 import { recoverBackend } from './backend-recovery.mjs';
 import { serviceLock } from './service-lock.mjs';
+import { resumeRuntime } from './resume.mjs';
 
 async function body(req) {
   let size = 0;
@@ -197,11 +198,12 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           }
         }
       }
-      else if (req.method === 'POST' && ['/runtimes/launch', '/runtimes/stop'].includes(path)) {
+      else if (req.method === 'POST' && ['/runtimes/launch', '/runtimes/stop', '/runtimes/resume'].includes(path)) {
         adminOnly();
         const key = `runtime:${text(input.key, 'key')}`;
         requireValue(!publications.has(key), 'operation_busy', 'Runtime operation in progress', 409);
-        const pending = path === '/runtimes/launch' ? launchRuntime(store, directory, input) : stopRuntime(store, input.key);
+        const pending = path === '/runtimes/launch' ? launchRuntime(store, directory, input)
+          : path === '/runtimes/resume' ? resumeRuntime(store, directory, operatorApi, input) : stopRuntime(store, input.key);
         publications.set(key, pending);
         try { result = await pending; } finally { publications.delete(key); }
       }

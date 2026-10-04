@@ -8,5 +8,6 @@
   "cancellationObserved": true,
   "conversationPreservedBeforeRetirement": true,
   "retirementVerified": true,
+  "managedResumeVerified": true,
   "backend": "deterministic task fixture"
 }

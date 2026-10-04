@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
-import { ownedRuntime, stopRuntime, processGroupMembers } from '../src/runtimes.mjs';
+import { ownedRuntime, stoppedRuntime, stopRuntime, processGroupMembers } from '../src/runtimes.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 
@@ -18,6 +18,7 @@ test('owned runtime verification rejects replaced process identity before any st
   writeFileSync(join(root, 'runtime.json'), JSON.stringify(descriptor));
   store.saveOperation({ id: 'runtime:owned', runId: '', directory: root, nonce: 'nonce', state: 'ready' });
   assert.equal(ownedRuntime(store, 'owned').nonce, 'nonce');
+  assert.throws(() => stoppedRuntime(store, 'owned'), { code: 'runtime_still_alive' });
   writeFileSync(join(root, 'runtime.json'), JSON.stringify({ ...descriptor, childStart: 'stale-start' }));
   assert.throws(() => ownedRuntime(store, 'owned'), { code: 'runtime_identity_mismatch' });
   await assert.rejects(stopRuntime(store, 'owned'), { code: 'runtime_identity_mismatch' });

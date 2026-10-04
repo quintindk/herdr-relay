@@ -37,7 +37,7 @@ const help = `herdr-relay (development)
   result retire CALLER_RUN --file review.json
   result check CALLER_RUN --file evidence.json
   resource provision|finalise|retire --file resource.json
-  runtime launch|stop --file runtime.json
+  runtime launch|stop|resume --file runtime.json
   inbox list
   inbox acknowledge EVENT_ID
   event record --file event.json
@@ -113,7 +113,7 @@ export async function main(args) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', action === 'create' ? '/schedules' : '/schedules/stop', JSON.parse(readFileSync(values.file, 'utf8')));
   }
-  else if (group === 'runtime' && ['launch', 'stop'].includes(action)) {
+  else if (group === 'runtime' && ['launch', 'stop', 'resume'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/runtimes/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));
   }

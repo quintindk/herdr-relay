@@ -8,6 +8,7 @@ import { call } from '../src/client.mjs';
 import { launchRuntime, stopRuntime } from '../src/runtimes.mjs';
 import { OpenCode } from '../src/opencode.mjs';
 import { provisionAgent } from '../src/provisioning.mjs';
+import { resumeRuntime } from '../src/resume.mjs';
 
 const sourceAuth = join(homedir(), '.local/share/opencode/auth.json');
 const root = mkdtempSync(join(process.env.OPENCODE_SMOKE_TMP ?? tmpdir(), 'relay-owned-smoke-'));
@@ -37,8 +38,8 @@ try {
     title: 'Cancellation fixture', description: 'After acknowledging, run sleep 120 in the terminal. Do not run it in the background. This fixture will cancel your turn. Do not submit.' }) });
   const agents = [];
   const operatorApi = async (method, path, body) => {
-    if (method === 'GET') return agents;
-    if (method === 'PATCH') return { ...agents[0], ...body };
+    if (method === 'GET') return path.startsWith('/api/agents/') ? agents[0] : agents;
+    if (method === 'PATCH') { agents[0] = { ...agents[0], ...body }; return agents[0]; }
     const agent = { id: 'agent', companyId: 'company', ...body };
     agents.push(agent);
     return agent;
@@ -76,9 +77,16 @@ try {
   assert.equal((await native.verify()).id, session.id);
   await stopRuntime(service.store, runtimeKey);
   await stopRuntime(service.store, runtimeKey);
+  const resumeInput = { key: 'resume-owned', bindingId: 'owned-worker', revision: 1, runtimeKey: 'resumed-owned' };
+  const resumed = await resumeRuntime(service.store, directory, operatorApi, resumeInput);
+  assert.equal(resumed.conversationId, session.id);
+  assert.equal(resumed.revision, 2);
+  assert.equal((await resumeRuntime(service.store, directory, operatorApi, resumeInput)).revision, 2);
+  runtime = service.store.operation('runtime:resumed-owned');
+  await stopRuntime(service.store, 'resumed-owned');
   console.log(JSON.stringify({ realModel: 'github-copilot/gpt-6-astra', ownedRuntime: true,
     duplicateLaunchPrevented: true, provisionedAgentCount: agents.length, activeStopRejected: true, cancellationObserved: true,
-    conversationPreservedBeforeRetirement: true, retirementVerified: true }, null, 2));
+    conversationPreservedBeforeRetirement: true, retirementVerified: true, managedResumeVerified: true }, null, 2));
 } catch (error) {
   console.error(JSON.stringify({ error: error.message, runs: service?.store.runs().map(run => ({ native: run.native, interruption: run.interruption })) }));
   if (native) {

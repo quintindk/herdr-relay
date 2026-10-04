@@ -60,3 +60,18 @@ with a real model. Interrupted events can carry `persisted_turn.complete: false`
 Relay accepts them only as failed/cancelled exit evidence when the event names the
 assigned user row, includes the final assistant row in its row set, and the session
 is idle. Partial output never proves successful work.
+
+## Explicit managed resume
+
+`runtime resume --file resume.json` requires a configured backend operator context:
+
+```json
+{"key":"resume-worker-1","bindingId":"graph-worker","revision":1,"runtimeKey":"graph-worker-incarnation-2"}
+```
+
+The old owner, native child and process group must be verified gone. No unsettled
+Relay work may remain. Relay launches one new owned runtime, restores the exact
+stored conversation, verifies native idle state, advances binding revision and
+updates the matching Paperclip adapter revision. Hermes auto-continuation of an
+interrupted turn blocks this path. Identical retries reconcile the same operation.
+Both managed native smoke scripts now verify this resume path with real servers.

@@ -40,6 +40,16 @@ export function ownedRuntime(store, key) {
   return operation;
 }
 
+export function stoppedRuntime(store, key) {
+  const operation = store.operation(`runtime:${key}`);
+  requireValue(operation, 'runtime_not_found', 'Unknown owned native runtime', 404);
+  const descriptor = JSON.parse(readFileSync(join(operation.directory, 'runtime.json'), 'utf8'));
+  requireValue(descriptor.nonce === operation.nonce && processIdentity(descriptor.ownerPid) !== descriptor.ownerStart &&
+    processIdentity(descriptor.childPid) !== descriptor.childStart && processGroupMembers(descriptor.ownerPid).length === 0,
+  'runtime_still_alive', 'Old runtime process group must be verified gone before resume', 409);
+  return operation;
+}
+
 export async function launchRuntime(store, stateDirectory, input) {
   requireValue(process.platform === 'linux', 'unsupported_platform', 'Managed native runtimes currently require Linux');
   const key = text(input.key, 'key');

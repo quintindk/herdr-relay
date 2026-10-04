@@ -8,6 +8,7 @@ import { startService } from '../src/service.mjs';
 import { launchRuntime, stopRuntime } from '../src/runtimes.mjs';
 import { Hermes } from '../src/hermes.mjs';
 import { call } from '../src/client.mjs';
+import { resumeRuntime } from '../src/resume.mjs';
 
 const sourceHome = homedir();
 const install = process.env.HERMES_SMOKE_INSTALL ?? join(sourceHome, '.hermes/hermes-agent');
@@ -60,8 +61,20 @@ try {
   assert.ok(service.store.run(run.id).interruption);
   assert.equal((await native.snapshot()).session.session_id, session.session_id);
   await stopRuntime(service.store, 'owned');
+  let agent = { companyId: 'company', adapterType: 'herdr_relay', adapterConfig: { bindingId: 'worker', bindingRevision: 1 } };
+  const operatorApi = async (method, path, body) => {
+    if (method === 'PATCH') agent = { ...agent, ...body };
+    return agent;
+  };
+  const resumed = await resumeRuntime(service.store, directory, operatorApi, {
+    key: 'resume-hermes', bindingId: 'worker', revision: 1, runtimeKey: 'resumed-hermes',
+  });
+  assert.equal(resumed.conversationId, session.stored_session_id);
+  assert.equal(resumed.revision, 2);
+  runtime = service.store.operation('runtime:resumed-hermes');
+  await stopRuntime(service.store, 'resumed-hermes');
   console.log(JSON.stringify({ realModel: 'copilot/gpt-6-astra', ownedHermesRuntime: true,
-    cancellationObserved: true, conversationPreservedBeforeRetirement: true, retirementVerified: true }, null, 2));
+    cancellationObserved: true, conversationPreservedBeforeRetirement: true, retirementVerified: true, managedResumeVerified: true }, null, 2));
 } catch (error) {
   if (native) {
     try {
@@ -73,7 +86,7 @@ try {
   console.error(JSON.stringify({ error: error.message, runs: service?.store.runs().map(run => ({ native: run.native, interruption: run.interruption })) }));
   throw error;
 } finally {
-  if (runtime && service?.store.operation('runtime:owned')?.state !== 'retired') {
+  if (runtime && service?.store.operation(runtime.id)?.state !== 'retired') {
     try {
       const descriptor = JSON.parse(readFileSync(join(runtime.directory, 'runtime.json'), 'utf8'));
       const start = readFileSync(`/proc/${descriptor.ownerPid}/stat`, 'utf8').split(') ')[1].split(' ')[19];
