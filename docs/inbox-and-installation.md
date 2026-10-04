@@ -95,3 +95,8 @@ verified lifecycle commands. This is required for restart reconciliation.
 
 `node scripts/installation-smoke.mjs` validates the generated unit using the local
 systemd parser without installing or starting it. macOS supervision is pending.
+
+`node scripts/service-supervision-smoke.mjs` also passed against a real systemd
+user manager. It created a uniquely named temporary service, registered a binding,
+killed the coordinator process and verified automatic restart with the same
+credentials and binding. The temporary unit was stopped and removed afterward.

@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-04",
+  "systemdSupervision": true,
+  "coordinatorKilled": true,
+  "automaticRestart": true,
+  "credentialsPreserved": true,
+  "bindingPreserved": true,
+  "isolatedUnit": true,
+  "cleanup": "Temporary unit stopped, disabled and removed"
+}
