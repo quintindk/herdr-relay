@@ -17,6 +17,7 @@ import { recordEvent, inbox, acknowledgeEvent } from './inbox.mjs';
 import { overview } from './views.mjs';
 import { launchRuntime, ownedRuntime, stopRuntime } from './runtimes.mjs';
 import { retireAccepted } from './lifecycle.mjs';
+import { backendOperator, createSchedule, scheduleRunner } from './schedules.mjs';
 
 async function body(req) {
   let size = 0;
@@ -48,7 +49,7 @@ async function socketAvailable(path) {
   try { unlinkSync(path); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
-export async function startService({ directory, paperclipUrl, api = paperclipClient(paperclipUrl) }) {
+export async function startService({ directory, paperclipUrl, api = paperclipClient(paperclipUrl), backendContextFile }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   const socketPath = join(directory, 'relay.sock');
@@ -131,6 +132,13 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         result = store.rebind(input.id, input);
       }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
+      else if (req.method === 'POST' && path === '/schedules') { adminOnly(); result = createSchedule(store, input); }
+      else if (req.method === 'POST' && path === '/schedules/stop') {
+        adminOnly();
+        const schedule = store.operation(`schedule:${text(input.key, 'key')}`);
+        requireValue(schedule, 'schedule_not_found', 'Unknown schedule', 404);
+        result = store.saveOperation({ ...schedule, state: 'stopped' });
+      }
       else if (req.method === 'POST' && ['/runtimes/launch', '/runtimes/stop'].includes(path)) {
         adminOnly();
         const key = `runtime:${text(input.key, 'key')}`;
@@ -250,9 +258,11 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
     chmodSync(socketPath, 0o600);
   } catch (error) { store.close(); throw error; }
   const supervisor = supervise({ store, directory, socketPath, ready: id => runTokens.has(id) });
+  const scheduler = scheduleRunner(store, backendOperator(paperclipUrl, backendContextFile));
   return {
     socketPath, token, store,
     close: async () => {
+      await scheduler.close();
       await supervisor.close();
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       store.close();

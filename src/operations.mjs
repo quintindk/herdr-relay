@@ -43,7 +43,21 @@ export async function mutate(store, run, token, api, input) {
   if (operation) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Operation key has a different payload', 409);
     if (operation.state === 'recorded') return operation;
-    requireValue(replaySafe, 'operation_uncertain', 'Operation outcome requires backend reconciliation before retry', 409);
+    if (!replaySafe) {
+      if (kind === 'task.assign') {
+        const current = await api(run, token, 'GET', path);
+        if (Object.entries(body).every(([key, value]) => current[key] === value)) {
+          return store.saveOperation({ ...operation, state: 'recorded', receipt: current, reconciled: true });
+        }
+      } else if (kind === 'question.answer') {
+        const interactions = await api(run, token, 'GET', `${taskPath}/interactions`);
+        const current = interactions.find(item => item.id === input.interactionId);
+        if (current?.status === 'answered' && canonical(current.result?.answers) === canonical(body.answers)) {
+          return store.saveOperation({ ...operation, state: 'recorded', receipt: current, reconciled: true });
+        }
+      }
+      requireValue(false, 'operation_uncertain', 'Backend does not confirm this mutation. No replay is authorised.', 409);
+    }
   } else operation = store.saveOperation({ id: operationId, runId: run.id, request, state: 'uncertain' });
   const receipt = await api(run, token, method, path, body);
   return store.saveOperation({ ...operation, state: 'recorded', receipt });

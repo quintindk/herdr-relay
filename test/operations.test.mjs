@@ -31,8 +31,26 @@ test('uncertain assignment is not blindly reapplied over a newer assignment', as
   const run = { id: 'relay', request: { companyId: 'company', bindingId: 'binding', taskId: 'parent' } };
   const input = { key: 'assign', kind: 'task.assign', payload: { assigneeAgentId: 'peer' } };
   let calls = 0;
-  const api = async () => { calls++; throw new Error('Lost reply'); };
+  const api = async (run, token, method) => {
+    if (method === 'GET') return { assigneeAgentId: 'new-owner' };
+    calls++; throw new Error('Lost reply');
+  };
   await assert.rejects(mutate(store, run, 'token', api, input));
   await assert.rejects(mutate(store, run, 'token', api, input), { code: 'operation_uncertain' });
   assert.equal(calls, 1);
+});
+
+test('uncertain assignment can reconcile matching current backend state without repeating PATCH', async t => {
+  const store = new Store(':memory:');
+  t.after(() => store.close());
+  const run = { id: 'relay', request: { companyId: 'company', bindingId: 'binding', taskId: 'task' } };
+  const input = { key: 'assign', kind: 'task.assign', payload: { assigneeAgentId: 'peer' } };
+  let writes = 0;
+  const api = async (run, token, method) => {
+    if (method === 'GET') return { id: 'task', assigneeAgentId: 'peer' };
+    writes++; throw new Error('Lost response');
+  };
+  await assert.rejects(mutate(store, run, 'token', api, input));
+  assert.equal((await mutate(store, run, 'token', api, input)).reconciled, true);
+  assert.equal(writes, 1);
 });

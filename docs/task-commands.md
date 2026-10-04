@@ -36,9 +36,10 @@ Answers use Paperclip's question IDs:
 ```
 
 Create retries reuse a stable backend idempotency key. Changed input under the
-same key conflicts locally. Uncertain assignment and answer writes are retained
-and not blindly replayed. A dedicated reconciliation command for those writes
-remains pending. Never manufacture a new key merely to hide uncertainty.
+same key conflicts locally. Uncertain assignment and answer writes are read back
+on identical retry. A matching current assignee or recorded answer reconciles the
+receipt without another write. Otherwise uncertainty remains visible. Never
+manufacture a new key to hide it.
 
 Real-backend evidence: the question smoke creates one human-owned dependent
 follow-up and repeats the identical request without producing another task.

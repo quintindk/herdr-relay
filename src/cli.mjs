@@ -10,7 +10,7 @@ import { renderOverview, watchOverview } from './views.mjs';
 import { fileURLToPath } from 'node:url';
 
 const help = `herdr-relay (development)
-  service --paperclip-url URL [--state-dir DIR]
+  service --paperclip-url URL [--state-dir DIR] [--backend-context FILE]
   status
   agent list
   agent discover
@@ -38,6 +38,7 @@ const help = `herdr-relay (development)
   event checkpoint --source SOURCE
   view [--watch]
   service-unit --paperclip-url URL [--state-dir DIR]
+  schedule create|stop --file schedule.json
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
   operator-context --context-out FILE
@@ -49,7 +50,7 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
@@ -64,7 +65,7 @@ export async function main(args) {
   }
   if (group === 'service') {
     requireValue(values['paperclip-url'], 'invalid_request', '--paperclip-url is required');
-    const service = await startService({ directory: stateDirectory(), paperclipUrl: values['paperclip-url'] });
+    const service = await startService({ directory: stateDirectory(), paperclipUrl: values['paperclip-url'], backendContextFile: values['backend-context'] });
     console.log(JSON.stringify({ listening: service.socketPath }));
     let stopping = false;
     const stop = async () => {
@@ -87,6 +88,10 @@ export async function main(args) {
   };
   let result;
   if (group === 'status') result = await call(connection, 'GET', '/health');
+  else if (group === 'schedule' && ['create', 'stop'].includes(action)) {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', action === 'create' ? '/schedules' : '/schedules/stop', JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'runtime' && ['launch', 'stop'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/runtimes/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));
