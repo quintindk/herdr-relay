@@ -25,6 +25,7 @@ const help = `herdr-relay (development)
   work answer RUN --key KEY --interaction ID --file answers.json
   candidate inspect --directory REPOSITORY_ROOT
   result request|inspect|accept|reject CALLER_RUN --file review.json
+  resource provision|finalise|retire --file resource.json
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
   operator-context --context-out FILE
@@ -66,6 +67,10 @@ export async function main(args) {
   };
   let result;
   if (group === 'status') result = await call(connection, 'GET', '/health');
+  else if (group === 'resource' && ['provision', 'finalise', 'retire'].includes(action)) {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', `/resources/${action === 'provision' ? 'worktree' : action}`, JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'operator-context') {
     await call(connection, 'GET', '/bindings');
     writeContext(connection);

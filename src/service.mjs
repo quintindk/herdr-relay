@@ -12,6 +12,7 @@ import { supervise } from './supervisor.mjs';
 import { publishQuestion } from './work.mjs';
 import { mutate } from './operations.mjs';
 import { review } from './review.mjs';
+import { provisionWorktree, finaliseWorktree, retireWorktree } from './resources.mjs';
 
 async function body(req) {
   let size = 0;
@@ -84,6 +85,21 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         result = store.register(input);
       }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
+      else if (req.method === 'POST' && ['/resources/worktree', '/resources/finalise', '/resources/retire'].includes(path)) {
+        adminOnly();
+        if (path === '/resources/worktree') result = provisionWorktree(store, input);
+        else if (path === '/resources/finalise') result = finaliseWorktree(store, input);
+        else {
+          result = await retireWorktree(store, input, async run => {
+            const caller = store.run(text(input.callerRunId, 'callerRunId'));
+            requireValue(runTokens.has(caller.id), 'adapter_unavailable', 'Live reviewer backend credentials required', 503);
+            const observed = await review(store, caller, runTokens.get(caller.id), api, {
+              runId: run.id, candidate: input.candidate, action: 'inspect',
+            });
+            requireValue(observed.review.status === 'accepted', 'acceptance_required', 'Paperclip has not accepted this candidate', 409);
+          });
+        }
+      }
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
         const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review))?$/);

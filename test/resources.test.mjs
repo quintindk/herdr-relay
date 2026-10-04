@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { Store } from '../src/store.mjs';
+import { candidate } from '../src/candidate.mjs';
+import { provisionWorktree, finaliseWorktree, retireWorktree } from '../src/resources.mjs';
+
+test('owned worktree finalisation and accepted cleanup survive retries and refuse dirty deletion', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'relay-resource-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repository = join(root, 'repository');
+  execFileSync('git', ['init', '-q', repository]);
+  writeFileSync(join(repository, 'graph.json'), '{}\n');
+  execFileSync('git', ['-C', repository, 'add', '.']);
+  execFileSync('git', ['-C', repository, 'commit', '-qm', 'Initial fixture']);
+  const store = new Store(join(root, 'relay.sqlite'));
+  t.after(() => store.close());
+  store.register({ id: 'worker', companyId: 'company', agentId: 'worker', harness: 'opencode', instanceId: 'instance', conversationId: 'worker' });
+  const config = { key: 'graph-worker', repository, path: join(root, 'worker'), branch: 'graph-worker', bindingId: 'worker' };
+  provisionWorktree(store, config);
+  provisionWorktree(store, config);
+  writeFileSync(join(config.path, 'graph.json'), '{"node":"updated"}\n');
+  const snapshot = candidate(config.path);
+  const run = store.dispatch({ bindingId: 'worker', bindingRevision: 1, companyId: 'company', agentId: 'worker', taskId: 'task', runId: 'backend' });
+  store.acknowledge(run.id);
+  store.submit(run.id, { key: 'one', summary: 'Updated graph', candidate: snapshot.id });
+  store.settle(run.id, { outcome: 'completed', evidence: 'Fixture execution ended' });
+  const input = { key: config.key, runId: run.id, candidate: snapshot.id, message: 'Update graph fixture' };
+  const committed = finaliseWorktree(store, input);
+  assert.equal(finaliseWorktree(store, input).commit, committed.commit);
+  // Simulate crash after Git commit but before recording the receipt.
+  store.saveOperation({ ...committed, state: 'intent', commit: undefined });
+  assert.equal(finaliseWorktree(store, input).commit, committed.commit);
+  assert.equal(execFileSync('git', ['-C', config.path, 'rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim(), '2');
+  await assert.rejects(retireWorktree(store, input, async () => { throw new Error('Not accepted'); }));
+  writeFileSync(join(config.path, 'untracked.txt'), 'keep me');
+  await assert.rejects(retireWorktree(store, input, async () => {}), { code: 'dirty_cleanup_blocked' });
+  assert.ok(existsSync(config.path));
+  rmSync(join(config.path, 'untracked.txt'));
+  await retireWorktree(store, input, async () => {});
+  await retireWorktree(store, input, async () => {});
+  assert.equal(existsSync(config.path), false);
+  assert.equal(execFileSync('git', ['-C', repository, 'rev-parse', 'graph-worker'], { encoding: 'utf8' }).trim(), committed.commit);
+});
