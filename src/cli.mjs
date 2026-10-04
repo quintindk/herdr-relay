@@ -18,6 +18,10 @@ const help = `herdr-relay (development)
   work submit RUN --key KEY --summary-file FILE --candidate ID
   work ask RUN --key KEY --question-file FILE
   work interactions RUN
+  task list RUN
+  task create RUN --key KEY --file task.json
+  task assign RUN --key KEY --file assignment.json
+  work answer RUN --key KEY --interaction ID --file answers.json
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
   operator-context --context-out FILE
@@ -29,7 +33,7 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
@@ -82,6 +86,14 @@ export async function main(args) {
   };
   else if (group === 'work' && action === 'acknowledge' && id) result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/acknowledge`, {});
   else if (group === 'work' && action === 'interactions' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/interactions`);
+  else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);
+  else if (id && ((group === 'task' && ['create', 'assign'].includes(action)) || (group === 'work' && action === 'answer'))) {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/mutate`, {
+      key: values.key, kind: group === 'task' ? `task.${action}` : 'question.answer',
+      interactionId: values.interaction, payload: JSON.parse(readFileSync(values.file, 'utf8')),
+    });
+  }
   else if (group === 'work' && action === 'ask' && id) {
     requireValue(values['question-file'], 'invalid_request', '--question-file is required');
     result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/ask`, {

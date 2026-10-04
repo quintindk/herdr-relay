@@ -10,6 +10,7 @@ import { nativeConfig, OpenCode } from './opencode.mjs';
 import { hermesConfig, Hermes } from './hermes.mjs';
 import { supervise } from './supervisor.mjs';
 import { publishQuestion } from './work.mjs';
+import { mutate } from './operations.mjs';
 
 async function body(req) {
   let size = 0;
@@ -67,7 +68,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       const input = req.method === 'POST' ? await body(req) : {};
       const adminOnly = () => requireValue(admin, 'forbidden', 'Operator credentials required', 403);
       let result;
-      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 3 };
+      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'GET' && path === '/peers') {
         const company = bindingId ? store.binding(bindingId).config.companyId : null;
@@ -84,7 +85,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -103,6 +104,19 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         else if (req.method === 'POST' && action === 'acknowledge') result = store.acknowledge(id);
         else if (req.method === 'POST' && action === 'submit') result = store.submit(id, input);
         else if (req.method === 'POST' && action === 'ask') result = store.ask(id, input);
+        else if (req.method === 'POST' && action === 'mutate') {
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
+          requireValue(run.nativeState === 'claimed' && !run.cancellationRequested, 'work_inactive', 'Acknowledge active work before backend changes', 409);
+          const key = digest([run.request.bindingId, input.kind, input.key]);
+          requireValue(!publications.has(key), 'operation_busy', 'Operation is already in flight', 409);
+          const pending = mutate(store, run, runTokens.get(id), api, input);
+          publications.set(key, pending);
+          try { result = await pending; } finally { publications.delete(key); }
+        }
+        else if (req.method === 'GET' && action === 'tasks') {
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
+          result = await api(run, runTokens.get(id), 'GET', `/api/companies/${encodeURIComponent(run.request.companyId)}/issues`);
+        }
         else if (req.method === 'GET' && action === 'interactions') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
           result = await api(run, runTokens.get(id), 'GET', `/api/issues/${encodeURIComponent(run.request.taskId)}/interactions`);

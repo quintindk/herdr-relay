@@ -33,3 +33,10 @@ using `work inspect RUN` before proceeding. Respect cancellation and stop editin
 Native completion, result publication, review and acceptance are separate states.
 Only the operator or verified harness observer can settle native execution. Never
 use an idle-looking UI or a failed Paperclip run as proof that execution stopped.
+
+For delegation, discover the peer, then `task create RUN --key KEY --file task.json`
+with its `assigneeAgentId`. This creates a task, not a reporting relationship or
+lifecycle grant. Use `assigneeUserId` for human work. `blockedByIssueIds` expresses
+dependencies explicitly. `task list RUN` reads the company backlog under your
+backend authority. Answer an addressed question with `work answer RUN --key KEY
+--interaction ID --file answers.json`, using its exact question and option IDs.

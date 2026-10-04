@@ -6,5 +6,7 @@
   "boundedWaitingRun": true,
   "automaticContinuation": true,
   "sameConversation": true,
-  "answerReadThroughRelay": true
+  "answerReadThroughRelay": true,
+  "idempotentTaskCreation": true,
+  "humanOwnedFollowup": true
 }

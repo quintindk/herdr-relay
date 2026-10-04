@@ -10,7 +10,7 @@ export class Store {
   constructor(path) {
     this.db = new DatabaseSync(path);
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 3) {
+    if (version > 4) {
       this.db.close();
       throw new RelayError('unsupported_schema', 'Database schema is newer than this Relay build');
     }
@@ -36,13 +36,26 @@ export class Store {
       CREATE TABLE IF NOT EXISTS backend_recoveries (
         backend_key TEXT PRIMARY KEY, run_id TEXT NOT NULL, request TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
     `);
     // Schema 2 adds optional native fields. Schema 3 adds replacement backend
     // run mappings. Existing pull bindings and runs are retained unchanged.
-    if (version < 3) this.transaction(() => this.db.exec('PRAGMA user_version = 3'));
+    if (version < 4) this.transaction(() => this.db.exec('PRAGMA user_version = 4'));
   }
 
   close() { this.db.close(); }
+
+  operation(id) {
+    const row = this.db.prepare('SELECT data FROM operations WHERE id = ?').get(id);
+    return row ? JSON.parse(row.data) : null;
+  }
+
+  saveOperation(operation) {
+    operation.updatedAt = now();
+    this.db.prepare('INSERT INTO operations VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data')
+      .run(operation.id, operation.runId, JSON.stringify(operation));
+    return operation;
+  }
 
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE');

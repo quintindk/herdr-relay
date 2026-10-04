@@ -55,11 +55,18 @@ try {
   });
   assert.ok(JSON.stringify(answers).includes('southafricanorth'));
   await call(worker, 'POST', `/runs/${continuation.id}/acknowledge`, {});
+  const childRequest = { key: 'child-task', kind: 'task.create', payload: { title: 'Human-owned follow-up',
+    parentId: issue.id, assigneeUserId: 'local-board', blockedByIssueIds: [issue.id] } };
+  const child = await call(worker, 'POST', `/runs/${continuation.id}/mutate`, childRequest);
+  const replay = await call(worker, 'POST', `/runs/${continuation.id}/mutate`, childRequest);
+  assert.equal(child.receipt.id, replay.receipt.id);
+  assert.equal(child.receipt.assigneeUserId, 'local-board');
   await call(worker, 'POST', `/runs/${continuation.id}/submit`, { key: 'answer', summary: 'Used southafricanorth', candidate: 'fixture:region' });
   await until(() => service.store.run(continuation.id).publication.state === 'recorded');
   await call(operator, 'POST', `/runs/${continuation.id}/settle`, { outcome: 'completed', evidence: 'Deterministic continuation ended' });
   await until(async () => (await api('GET', `/api/heartbeat-runs/${continuation.request.runId}`)).status === 'succeeded');
   await api('PATCH', `/api/agents/${agent.id}`, { runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: false, maxConcurrentRuns: 1 } } });
   console.log(JSON.stringify({ backend: 'Paperclip 2026.1001.0', nativeHarness: false, questionCount: 1,
-    boundedWaitingRun: true, automaticContinuation: true, sameConversation: true, answerReadThroughRelay: true }, null, 2));
+    boundedWaitingRun: true, automaticContinuation: true, sameConversation: true, answerReadThroughRelay: true,
+    idempotentTaskCreation: true, humanOwnedFollowup: true }, null, 2));
 } finally { await service.close(); }

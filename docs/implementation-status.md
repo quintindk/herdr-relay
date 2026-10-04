@@ -13,7 +13,7 @@ item requires implementation and evidence before the specification is complete.
 | Duplicate/stale protection | Store, HTTP and process-restart tests | Backend mutation reconciliation beyond result comments |
 | Paperclip host recovery | Real host crash/restart and explicit replacement-run recovery | Board-authorised recovery orchestration |
 | Questions and continuation | Real Paperclip interaction and automatic continuation smoke | Agent answer commands and full native question scenario |
-| Agent discovery and work CLI | Scoped peer discovery, work receipts and shared skill | Tasks, assignment, delegation, inbox and skill provisioning |
+| Agent discovery and work CLI | Scoped discovery, task create/list/assign, answer commands and shared skill | Inbox, uncertain mutation reconciliation and skill provisioning |
 | Result review and acceptance | Submission comments only | Candidate digests, revision-bound review and acceptance |
 | Lifetimes and provisioning | Existing bindings only | Persistent/service/task-scoped provisioning and placement |
 | Retirement and cleanup | Not implemented | Acceptance-driven retirement and separately authorised Git/resource operations |
