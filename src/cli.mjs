@@ -29,6 +29,7 @@ const help = `herdr-relay (development)
   candidate inspect --directory REPOSITORY_ROOT
   result request|inspect|accept|reject CALLER_RUN --file review.json
   resource provision|finalise|retire --file resource.json
+  runtime launch|stop --file runtime.json
   inbox list
   inbox acknowledge EVENT_ID
   event record --file event.json
@@ -80,6 +81,10 @@ export async function main(args) {
   };
   let result;
   if (group === 'status') result = await call(connection, 'GET', '/health');
+  else if (group === 'runtime' && ['launch', 'stop'].includes(action)) {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', `/runtimes/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'view') {
     console.log(renderOverview(await call(connection, 'GET', '/overview')));
     return;

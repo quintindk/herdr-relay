@@ -15,6 +15,7 @@ import { review } from './review.mjs';
 import { provisionWorktree, finaliseWorktree, retireWorktree } from './resources.mjs';
 import { recordEvent, inbox, acknowledgeEvent } from './inbox.mjs';
 import { overview } from './views.mjs';
+import { launchRuntime, ownedRuntime, stopRuntime } from './runtimes.mjs';
 
 async function body(req) {
   let size = 0;
@@ -102,11 +103,27 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       }
       else if (req.method === 'POST' && path === '/bindings') {
         adminOnly();
+        if (input.opencode?.runtimeKey) {
+          const runtime = ownedRuntime(store, input.opencode.runtimeKey);
+          requireValue(input.opencode.url === `http://127.0.0.1:${runtime.port}` &&
+            input.opencode.authFile === join(runtime.directory, 'auth.json') && input.opencode.directory === runtime.request.directory,
+          'runtime_identity_mismatch', 'Binding does not target the owned native runtime', 409);
+          requireValue(!store.bindings().some(binding => binding.id !== input.id && binding.config.opencode?.runtimeKey === input.opencode.runtimeKey),
+            'runtime_already_bound', 'Managed native runtime is dedicated to one binding', 409);
+        }
         if (input.delivery === 'opencode') await new OpenCode({ ...input, opencode: nativeConfig(input.opencode) }).verify();
         if (input.delivery === 'hermes') await new Hermes({ ...input, hermes: hermesConfig(input.hermes) }).verify();
         result = store.register(input);
       }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
+      else if (req.method === 'POST' && ['/runtimes/launch', '/runtimes/stop'].includes(path)) {
+        adminOnly();
+        const key = `runtime:${text(input.key, 'key')}`;
+        requireValue(!publications.has(key), 'operation_busy', 'Runtime operation in progress', 409);
+        const pending = path === '/runtimes/launch' ? launchRuntime(store, directory, input) : stopRuntime(store, input.key);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); }
+      }
       else if (req.method === 'POST' && ['/resources/worktree', '/resources/finalise', '/resources/retire'].includes(path)) {
         adminOnly();
         if (path === '/resources/worktree') result = provisionWorktree(store, input);

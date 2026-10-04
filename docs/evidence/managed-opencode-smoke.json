@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-04",
+  "realModel": "github-copilot/gpt-6-astra",
+  "ownedRuntime": true,
+  "duplicateLaunchPrevented": true,
+  "activeStopRejected": true,
+  "cancellationObserved": true,
+  "conversationPreservedBeforeRetirement": true,
+  "retirementVerified": true,
+  "backend": "deterministic task fixture"
+}

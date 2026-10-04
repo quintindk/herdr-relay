@@ -211,6 +211,8 @@ test('idle status, wrong parents, unfinished tools and intermediate tool respons
   const user = { info: { id: 'msg_work', role: 'user' }, parts: [{ type: 'text', text: 'work' }] };
   const response = { info: { id: 'msg_reply', role: 'assistant', parentID: 'msg_work', finish: 'stop', time: { created: 1, completed: 2 } }, parts: [] };
   const snapshot = { idle: true, messages: [user] };
+  assert.equal(observe({ ...snapshot, messages: [{ ...user, parts: [] }] }, invocation).reason, 'message_parts_pending');
+  assert.equal(observe({ ...snapshot, messages: [{ ...user, parts: [...user.parts, { type: 'text', synthetic: true, text: 'Native reminder' }] }] }, invocation).state, 'observed');
   assert.equal(observe(snapshot, invocation).state, 'observed');
   snapshot.messages.push({ ...response, info: { ...response.info, parentID: 'msg_other' } });
   assert.equal(observe(snapshot, invocation).state, 'observed');

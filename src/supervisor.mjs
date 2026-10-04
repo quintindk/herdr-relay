@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { OpenCode, observe } from './opencode.mjs';
 import { Hermes, observeHermes } from './hermes.mjs';
 import { canonical, digest, requireValue } from './protocol.mjs';
+import { ownedRuntime } from './runtimes.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -47,6 +48,7 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
     const hermes = binding.config.delivery === 'hermes';
     const native = hermes ? new Hermes(binding.config) : new OpenCode(binding.config);
     try {
+      if (binding.config.opencode?.runtimeKey) ownedRuntime(store, binding.config.opencode.runtimeKey);
       if (!run.invocation) {
         if (!ready(id) || run.cancellationRequested) return;
         const snapshot = await native.snapshot();
@@ -64,6 +66,13 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
       run = store.run(id);
       const observation = (hermes ? observeHermes : observe)(await native.snapshot(), run.invocation);
       store.nativeStatus(id, observation);
+      if (!hermes && binding.config.opencode?.runtimeKey && run.cancellationRequested &&
+        observation.state === 'observed' && !run.interruption && run.native?.state !== 'conflict') {
+        ownedRuntime(store, binding.config.opencode.runtimeKey);
+        store.interruptIntent(id);
+        await native.interrupt();
+        // The abort reply is not settlement. Observe the original message again.
+      }
       if (observation.state === 'finished') store.finishNative(id, observation);
     } catch (error) {
       store.nativeStatus(id, { state: run.invocation ? 'uncertain' : 'blocked', reason: error.code ?? 'native_unavailable' });

@@ -23,6 +23,7 @@ export function nativeConfig(input) {
   if (input.model !== undefined) config.model = {
     providerID: text(input.model.providerID, 'model.providerID'), modelID: text(input.model.modelID, 'model.modelID'),
   };
+  if (input.runtimeKey !== undefined) config.runtimeKey = text(input.runtimeKey, 'opencode.runtimeKey');
   return config;
 }
 
@@ -79,12 +80,18 @@ export class OpenCode {
       parts: [{ type: 'text', text: invocation.prompt }],
     });
   }
+
+  async interrupt() { await this.request('POST', `${this.path}/abort`, {}); }
 }
 
 export function observe(snapshot, invocation) {
   const user = snapshot.messages.find(message => message.info.id === invocation.messageId);
   if (!user) return { state: 'uncertain', reason: 'message_not_observed' };
-  if (user.info.role !== 'user' || canonical(user.parts.filter(part => part.type === 'text').map(part => part.text)) !== canonical([invocation.prompt])) {
+  const texts = user.parts.filter(part => part.type === 'text' && !part.synthetic).map(part => part.text);
+  // OpenCode commits message metadata before its parts. A read in that window
+  // proves neither a matching payload nor a conflicting one.
+  if (user.info.role === 'user' && texts.length === 0) return { state: 'uncertain', reason: 'message_parts_pending' };
+  if (user.info.role !== 'user' || canonical(texts) !== canonical([invocation.prompt])) {
     return { state: 'conflict', reason: 'message_payload_mismatch' };
   }
   // Newly introduced user messages (including compaction continuation) invalidate

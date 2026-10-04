@@ -345,4 +345,14 @@ export class Store {
       return this.save(run, 'review.observed', receipt);
     });
   }
+
+  interruptIntent(id) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      requireValue(run.cancellationRequested && run.invocation && run.native?.state === 'observed',
+        'interruption_not_authorised', 'Observed owned invocation and cancellation required', 409);
+      run.interruption = { state: 'uncertain', at: now(), messageId: run.invocation.messageId };
+      return this.save(run, 'native.interrupt_intent', run.interruption);
+    });
+  }
 }
