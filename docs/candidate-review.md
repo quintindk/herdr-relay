@@ -44,3 +44,21 @@ Board acceptance was exercised through the real backend and read back through
 Relay. Rejection does not yet automatically create a correction invocation.
 Acceptance is not automatic task completion or runtime retirement. Finalisation,
 retirement and cleanup remain separate implementation work.
+
+## Structured evidence
+
+`work submit RUN --file submission.json` accepts the normal key, summary and
+candidate plus optional `deliverables` and `checks`. Each check contains `command`,
+`outcome` (`passed`, `failed` or `not_run`) and `evidence`. Relay labels these as
+`worker_reported`, regardless of a supplied source label, and includes them in the
+backend result comment.
+
+An independent reviewer records its own checks with `result check CALLER_RUN
+--file evidence.json`. The file names `runId`, exact `candidate`, stable `key`,
+`command`, `outcome` and `evidence`. These are recorded separately as
+`reviewer_reported`. Relay records the reporting identity and does not claim to
+have independently run commands merely because an agent reports them.
+
+`work progress RUN --key KEY --summary-file FILE` records durable, retry-safe
+progress while the turn is acknowledged and active. Progress after submission,
+clarification or cancellation is refused.

@@ -23,6 +23,8 @@ const help = `herdr-relay (development)
   work read RUN
   work acknowledge RUN
   work submit RUN --key KEY --summary-file FILE --candidate ID
+  work submit RUN --file submission.json
+  work progress RUN --key KEY --summary-file FILE
   work ask RUN --key KEY --question-file FILE
   work interactions RUN
   task list RUN
@@ -33,6 +35,7 @@ const help = `herdr-relay (development)
   candidate inspect --directory REPOSITORY_ROOT
   result request|inspect|accept|reject CALLER_RUN --file review.json
   result retire CALLER_RUN --file review.json
+  result check CALLER_RUN --file evidence.json
   resource provision|finalise|retire --file resource.json
   runtime launch|stop --file runtime.json
   inbox list
@@ -168,10 +171,16 @@ export async function main(args) {
     task: await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/task`),
   };
   else if (group === 'work' && action === 'acknowledge' && id) result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/acknowledge`, {});
+  else if (group === 'work' && action === 'progress' && id) {
+    requireValue(values['summary-file'], 'invalid_request', '--summary-file is required');
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/progress`, {
+      key: values.key, summary: readFileSync(values['summary-file'], 'utf8'),
+    });
+  }
   else if (group === 'work' && action === 'interactions' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/interactions`);
-  else if (group === 'result' && ['request', 'inspect', 'accept', 'reject', 'retire'].includes(action) && id) {
+  else if (group === 'result' && ['request', 'inspect', 'accept', 'reject', 'retire', 'check'].includes(action) && id) {
     requireValue(values.file, 'invalid_request', '--file is required');
-    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/${action === 'retire' ? 'retire' : 'review'}`, {
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/${action === 'retire' ? 'retire' : action === 'check' ? 'reviewer-check' : 'review'}`, {
       ...JSON.parse(readFileSync(values.file, 'utf8')), action,
     });
   }
@@ -190,8 +199,8 @@ export async function main(args) {
     });
   }
   else if (group === 'work' && action === 'submit' && id) {
-    requireValue(values['summary-file'], 'invalid_request', '--summary-file is required');
-    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/submit`, {
+    requireValue(values.file || values['summary-file'], 'invalid_request', '--file or --summary-file is required');
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/submit`, values.file ? JSON.parse(readFileSync(values.file, 'utf8')) : {
       key: values.key, summary: readFileSync(values['summary-file'], 'utf8'), candidate: values.candidate,
     });
   } else if (group === 'operation' && action === 'cancel' && id) result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/cancel`, {});

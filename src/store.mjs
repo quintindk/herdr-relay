@@ -245,6 +245,18 @@ export class Store {
 
   submit(id, input) {
     const result = { key: text(input.key, 'key'), summary: text(input.summary, 'summary'), candidate: text(input.candidate, 'candidate') };
+    if (input.deliverables !== undefined) {
+      requireValue(Array.isArray(input.deliverables) && input.deliverables.length <= 128, 'invalid_evidence', 'Deliverables must be an array of at most 128 references');
+      result.deliverables = input.deliverables.map(value => text(value, 'deliverable'));
+    }
+    if (input.checks !== undefined) {
+      requireValue(Array.isArray(input.checks) && input.checks.length <= 128, 'invalid_evidence', 'Checks must be an array of at most 128 entries');
+      result.checks = input.checks.map(check => {
+        requireValue(check && ['passed', 'failed', 'not_run'].includes(check.outcome), 'invalid_evidence', 'Check outcome is required');
+        return { command: text(check.command, 'check.command'), outcome: check.outcome,
+          evidence: text(check.evidence, 'check.evidence'), source: 'worker_reported' };
+      });
+    }
     return this.transaction(() => {
       const run = this.run(id);
       if (run.result) {
@@ -356,6 +368,41 @@ export class Store {
         'invalid_question', 'Only acknowledged active work can ask before submission', 409);
       run.waiting = { payload, request: payload.request, state: 'pending' };
       return this.save(run, 'question.requested', { key: payload.key });
+    });
+  }
+
+  progress(id, input) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      const entry = { key: text(input.key, 'key'), summary: text(input.summary, 'summary') };
+      const previous = run.progress?.find(item => item.key === entry.key);
+      if (previous) {
+        requireValue(previous.summary === entry.summary, 'progress_conflict', 'Progress key has different content', 409);
+        return run;
+      }
+      requireValue(run.nativeState === 'claimed' && !run.result && !run.waiting && !run.cancellationRequested,
+        'work_inactive', 'Progress requires an active acknowledged turn', 409);
+      run.progress = [...(run.progress ?? []), { ...entry, at: now() }];
+      return this.save(run, 'work.progress', entry);
+    });
+  }
+
+  reviewerEvidence(id, input, caller) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      requireValue(run.result && run.result.candidate === input.candidate, 'stale_candidate', 'Reviewer checks must name the exact candidate', 409);
+      requireValue(caller.request.companyId === run.request.companyId && caller.request.agentId !== run.request.agentId,
+        'self_review_forbidden', 'Independent same-company reviewer required', 403);
+      const entry = { key: text(input.key, 'key'), candidate: input.candidate, reviewerAgentId: caller.request.agentId,
+        command: text(input.command, 'command'), outcome: text(input.outcome, 'outcome'), evidence: text(input.evidence, 'evidence'), source: 'reviewer_reported' };
+      requireValue(['passed', 'failed', 'not_run'].includes(entry.outcome), 'invalid_evidence', 'Invalid check outcome');
+      const previous = run.reviewerChecks?.find(check => check.key === entry.key && check.reviewerAgentId === entry.reviewerAgentId);
+      if (previous) {
+        requireValue(canonical(previous) === canonical(entry), 'evidence_conflict', 'Reviewer evidence key changed', 409);
+        return run;
+      }
+      run.reviewerChecks = [...(run.reviewerChecks ?? []), entry];
+      return this.save(run, 'reviewer.check', entry);
     });
   }
 

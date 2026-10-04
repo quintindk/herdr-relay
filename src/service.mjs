@@ -222,7 +222,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       }
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -243,6 +243,11 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         }
         else if (req.method === 'POST' && action === 'acknowledge') result = store.acknowledge(id);
         else if (req.method === 'POST' && action === 'submit') result = store.submit(id, input);
+        else if (req.method === 'POST' && action === 'progress') result = store.progress(id, input);
+        else if (req.method === 'POST' && action === 'reviewer-check') {
+          requireValue(run.nativeState === 'claimed' && !run.cancellationRequested, 'work_inactive', 'Reviewer work must be active', 409);
+          result = store.reviewerEvidence(text(input.runId, 'runId'), input, run);
+        }
         else if (req.method === 'POST' && action === 'ask') result = store.ask(id, input);
         else if (req.method === 'POST' && action === 'review') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
