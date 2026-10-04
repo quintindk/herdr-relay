@@ -37,7 +37,7 @@ export class Hermes {
       };
       const timer = setTimeout(() => finish(new RelayError('native_timeout', 'Hermes RPC timed out', 503)), 5000);
       ws.addEventListener('open', () => ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method,
-        params: { ...(method === 'session.create' ? {} : { session_id: this.config.runtimeId }),
+        params: { ...(['session.create', 'session.list', 'session.events.stats'].includes(method) ? {} : { session_id: this.config.runtimeId }),
           ...(this.config.profile ? { profile: this.config.profile } : {}), ...params } })));
       ws.addEventListener('error', () => finish(new RelayError('native_unavailable', 'Hermes connection failed', 503)));
       ws.addEventListener('close', () => finish(new RelayError('native_disconnected', 'Hermes connection closed before receipt', 503)));

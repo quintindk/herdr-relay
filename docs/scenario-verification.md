@@ -46,3 +46,11 @@ continuation in the same conversation. The model used the answer and submitted
 one attributed synthetic subnet result. The owned runtime was then retired.
 This closes the combined native/backend question and provisioning path. The
 monitoring and correction/worktree scenario workers remain deterministic.
+
+The same combined flow also passed with Hermes using
+`scripts/live-paperclip-hermes.mjs`. It launches an isolated Paperclip container,
+shares only the disposable Relay fixture directory for its Unix socket, and runs
+the native Hermes gateway on the host with an isolated home. It verifies real
+backend provisioning, a model-authored question, automatic continuation, one
+attributed result and owned-runtime retirement. Both the container and native
+runtime are stopped and copied credentials removed after the test.
