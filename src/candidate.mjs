@@ -22,6 +22,10 @@ export function candidate(directory) {
     try { stat = lstatSync(path); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     requireValue(stat.isFile() || stat.isSymbolicLink(), 'unsupported_candidate_entry', 'Submodules and special files require explicit candidate support');
     const content = stat.isSymbolicLink() ? Buffer.from(readlinkSync(path)) : readFileSync(path);
+    const after = lstatSync(path);
+    requireValue(stat.dev === after.dev && stat.ino === after.ino && stat.size === after.size &&
+      stat.mtimeMs === after.mtimeMs && stat.ctimeMs === after.ctimeMs,
+    'candidate_changed', 'File changed while capturing candidate', 409);
     const mode = stat.isSymbolicLink() ? '120000' : stat.mode & 0o111 ? '100755' : '100644';
     const contentDigest = createHash('sha256').update(content).digest('hex');
     hash.update(JSON.stringify([file, mode, content.length, contentDigest]) + '\n');

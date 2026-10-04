@@ -418,13 +418,14 @@ export class Store {
   recordReview(id, receipt) {
     return this.transaction(() => {
       const run = this.run(id);
-      run.review = receipt;
       const decisionId = `review-decision:${digest([run.request.companyId, run.request.taskId])}`;
       const decision = this.operation(decisionId);
       if (decision?.state === 'uncertain' && decision.targetRunId === id &&
         receipt.status === (decision.action === 'accept' ? 'accepted' : 'rejected')) {
         this.saveOperation({ ...decision, state: 'recorded', interactionId: receipt.interactionId });
       }
+      if (run.review && ['interactionId', 'candidate', 'status'].every(key => run.review[key] === receipt[key])) return run;
+      run.review = receipt;
       return this.save(run, 'review.observed', receipt);
     });
   }

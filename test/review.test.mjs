@@ -48,6 +48,9 @@ test('review remains backend-owned and rejects stale candidates and self accepta
   await review(store, caller, 'token', api, { ...input, action: 'request' });
   await assert.rejects(review(store, run, 'token', api, { ...input, action: 'accept' }), { code: 'self_review_forbidden' });
   assert.equal((await review(store, caller, 'token', api, { ...input, action: 'accept' })).review.status, 'accepted');
+  const eventCount = store.db.prepare('SELECT count(*) AS total FROM events').get().total;
+  await review(store, caller, 'token', api, { ...input, action: 'inspect' });
+  assert.equal(store.db.prepare('SELECT count(*) AS total FROM events').get().total, eventCount);
   const next = store.dispatch({ ...request, runId: 'new-backend' });
   store.acknowledge(next.id);
   store.submit(next.id, { key: 'two', summary: 'Corrected graph', candidate: 'sha256:two' });

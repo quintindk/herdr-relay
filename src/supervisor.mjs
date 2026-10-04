@@ -86,9 +86,12 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
   }
 
   const tick = async () => {
-    for (const run of store.runs()) {
+    const runs = store.runs().filter(run => run.nativeState !== 'settled');
+    // A disconnected native host must not serially stall every independent agent.
+    // There is still at most one reconciliation per binding in this service.
+    for (let offset = 0; offset < runs.length; offset += 8) {
       if (stopped) break;
-      await reconcile(run.id);
+      await Promise.all(runs.slice(offset, offset + 8).map(run => reconcile(run.id)));
     }
   };
   const schedule = () => {
