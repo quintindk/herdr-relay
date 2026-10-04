@@ -206,6 +206,24 @@ test('a terminal response without submission stays unresolved', async t => {
   assert.throws(() => f.service.store.dispatch({ ...request, runId: 'next' }), code('conversation_busy'));
 });
 
+test('persisted native completion survives replay eviction while question publication catches up', async t => {
+  const f = await fixture(t);
+  await f.register();
+  const id = await f.dispatch();
+  await waitFor(() => f.state.posts === 1);
+  f.service.store.acknowledge(id);
+  f.service.store.ask(id, { key: 'region', question: 'Which region?' });
+  f.finish(id);
+  await waitFor(() => f.service.store.run(id).native?.state === 'finished');
+  assert.equal(f.service.store.run(id).nativeState, 'claimed');
+  f.state.messages.length = 0;
+  await f.restart();
+  f.service.store.questionReceipt(id, { state: 'recorded', interactionId: 'backend-question' });
+  await waitFor(() => f.service.store.run(id).nativeState === 'settled');
+  assert.equal(f.service.store.run(id).settlement.outcome, 'waiting');
+  assert.equal(f.state.posts, 1);
+});
+
 test('idle status, wrong parents, unfinished tools and intermediate tool responses cannot settle work', () => {
   const invocation = { messageId: 'msg_work', prompt: 'work', priorUserIds: [] };
   const user = { info: { id: 'msg_work', role: 'user' }, parts: [{ type: 'text', text: 'work' }] };

@@ -334,7 +334,7 @@ export class Store {
       const run = this.run(id);
       if (run.nativeState === 'settled' || canonical(run.native) === canonical(observation)) return run;
       // Once conflicting input is observed, a later deletion must not erase it.
-      if (run.native?.state === 'conflict') return run;
+      if (['conflict', 'finished'].includes(run.native?.state)) return run;
       run.native = observation;
       return this.save(run, 'native.observed', observation);
     });
@@ -344,7 +344,8 @@ export class Store {
     return this.transaction(() => {
       const run = this.run(id);
       if (run.nativeState === 'settled' || run.native?.state === 'conflict') return run;
-      requireValue(run.invocation && observation.state === 'finished', 'native_observation_required', 'Terminal native response required');
+      requireValue(run.invocation && observation.state === 'finished' && canonical(run.native) === canonical(observation),
+        'native_observation_required', 'Persisted terminal native response required');
       // An idle/finished turn without a submitted result remains unresolved.
       if (!run.cancellationRequested && !observation.error && !run.result && run.waiting?.state !== 'recorded') return run;
       run.nativeState = 'settled';

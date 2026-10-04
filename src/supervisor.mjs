@@ -50,6 +50,13 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
     const runtimeKey = (binding.config.opencode ?? binding.config.hermes)?.runtimeKey;
     const native = hermes ? new Hermes(binding.config) : new OpenCode(binding.config);
     try {
+      // A terminal receipt already persisted by this observer survives native
+      // replay-buffer eviction and coordinator restart. Backend publication may
+      // still be pending, but must not erase verified native completion.
+      if (run.native?.state === 'finished') {
+        store.finishNative(id, run.native);
+        return;
+      }
       if (store.operation(`placement:${binding.id}`)) {
         const placement = await reconcilePlacement(store, binding.id);
         requireValue(placement.state === 'verified', 'placement_unresolved', 'Native placement requires reconciliation', 409);
