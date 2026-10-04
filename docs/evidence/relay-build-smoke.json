@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-03",
+  "paperclipVersion": "2026.1001.0",
+  "adapter": "herdr_relay",
+  "nativeHarness": false,
+  "checks": [
+    { "check": "external package installed", "type": "herdr_relay" },
+    {
+      "check": "opencode configured binding",
+      "companyId": "152b5901-40fa-46d2-bc0b-4c3eedb7cbf9",
+      "agentId": "46cfed03-c1ed-4399-a217-4d04e594f419",
+      "runId": "36ed985d-e63e-482e-9e4e-c1888b08d489",
+      "relayRunId": "00784a58-a86a-40fc-af7f-d827554d0480",
+      "issueId": "f64499e2-952f-4149-b491-c7915878ee03",
+      "commentId": "a42b9524-39bc-4793-adc4-f3aba22d33bd",
+      "adapterRun": "succeeded",
+      "heldUntilSettlement": true,
+      "receiptCount": 1
+    },
+    {
+      "check": "hermes configured binding",
+      "companyId": "152b5901-40fa-46d2-bc0b-4c3eedb7cbf9",
+      "agentId": "5295adc3-93b2-47b8-8138-c778b8eab8cf",
+      "runId": "7a75b781-fd88-4206-becc-a67fa43bb40c",
+      "relayRunId": "bdc021ef-f13f-4b0c-9a83-e704b01f44e0",
+      "issueId": "7cf64f96-726e-441a-b22e-3a7327645e30",
+      "commentId": "cb2d8f7e-a8cb-418c-992e-7f9a6b889f14",
+      "adapterRun": "succeeded",
+      "heldUntilSettlement": true,
+      "receiptCount": 1
+    }
+  ]
+}

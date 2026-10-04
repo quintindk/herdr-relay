@@ -1,0 +1,247 @@
+[
+  {
+    "label": "S0.3 unassigned backlog",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 400,
+    "response": {
+      "error": "destinationSession is required"
+    }
+  },
+  {
+    "label": "S2.1 unrelated peer request across rigs",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 201,
+    "response": {
+      "qitemId": "eval-subnet",
+      "state": "pending",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@landing",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "Vend fake subnet; clarify size."
+    }
+  },
+  {
+    "label": "S2.5 identical creation retry",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 201,
+    "response": {
+      "qitemId": "eval-subnet",
+      "state": "pending",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@landing",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "Vend fake subnet; clarify size."
+    }
+  },
+  {
+    "label": "S1.3 changed payload under same ID",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 201,
+    "response": {
+      "qitemId": "eval-subnet",
+      "state": "pending",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@landing",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "Vend fake subnet; clarify size."
+    }
+  },
+  {
+    "label": "S0.3 human work without human registration",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 400,
+    "response": {
+      "error": "unknown_destination_rig",
+      "message": "destination_session human:quintin references an unknown rig"
+    }
+  },
+  {
+    "label": "S2.1 provider claims",
+    "method": "POST",
+    "path": "/api/queue/eval-subnet/claim",
+    "status": 200,
+    "response": {
+      "qitemId": "eval-subnet",
+      "state": "in-progress",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@landing",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "Vend fake subnet; clarify size."
+    }
+  },
+  {
+    "label": "S2.2 provider clarification deposit",
+    "method": "POST",
+    "path": "/api/queue/inbox/drop",
+    "status": 201,
+    "response": {
+      "state": "pending",
+      "destinationSession": "main-lead@daily",
+      "body": "What subnet size?"
+    }
+  },
+  {
+    "label": "S2.2 response deposit while provider owns work",
+    "method": "POST",
+    "path": "/api/queue/inbox/drop",
+    "status": 201,
+    "response": {
+      "state": "pending",
+      "destinationSession": "main-lead@landing",
+      "body": "10.230.1.0/24"
+    }
+  },
+  {
+    "label": "S1.4 create daily-a",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 201,
+    "response": {
+      "qitemId": "eval-daily-a",
+      "state": "pending",
+      "sourceSession": "main-lead@monitor",
+      "destinationSession": "main-lead@daily",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "daily-a"
+    }
+  },
+  {
+    "label": "S1.4 claim daily-a",
+    "method": "POST",
+    "path": "/api/queue/eval-daily-a/claim",
+    "status": 200,
+    "response": {
+      "qitemId": "eval-daily-a",
+      "state": "in-progress",
+      "sourceSession": "main-lead@monitor",
+      "destinationSession": "main-lead@daily",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "daily-a"
+    }
+  },
+  {
+    "label": "S1.4 create daily-b",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 201,
+    "response": {
+      "qitemId": "eval-daily-b",
+      "state": "pending",
+      "sourceSession": "main-lead@monitor",
+      "destinationSession": "main-lead@daily",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "daily-b"
+    }
+  },
+  {
+    "label": "S1.4 claim daily-b",
+    "method": "POST",
+    "path": "/api/queue/eval-daily-b/claim",
+    "status": 200,
+    "response": {
+      "qitemId": "eval-daily-b",
+      "state": "in-progress",
+      "sourceSession": "main-lead@monitor",
+      "destinationSession": "main-lead@daily",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "daily-b"
+    }
+  },
+  {
+    "label": "S1.4 create project-event",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 201,
+    "response": {
+      "qitemId": "eval-project-event",
+      "state": "pending",
+      "sourceSession": "main-lead@monitor",
+      "destinationSession": "main-lead@project",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "project-event"
+    }
+  },
+  {
+    "label": "S2.4 provider closes with fake result",
+    "method": "POST",
+    "path": "/api/queue/eval-subnet/update",
+    "status": 400,
+    "response": {
+      "error": "summary_evidence_not_persistable",
+      "message": "evidenceRef persist only on a human-seat park (state=blocked on a human seat); the 'done' transition cannot store them. Remove --evidence-ref, or park the item (rig queue block --on <human-seat> --summary … --evidence-ref …)."
+    }
+  },
+  {
+    "label": "S2.4 result notification to requester",
+    "method": "POST",
+    "path": "/api/queue/inbox/drop",
+    "status": 201,
+    "response": {
+      "state": "pending",
+      "destinationSession": "main-lead@daily",
+      "body": "Subnet ready: /subscriptions/fixture/subnets/demo"
+    }
+  },
+  {
+    "label": "S3.1 graph request",
+    "method": "POST",
+    "path": "/api/queue/create",
+    "status": 201,
+    "response": {
+      "qitemId": "eval-graph",
+      "state": "pending",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@graph",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "Update graph and return exact candidate"
+    }
+  },
+  {
+    "label": "S3.2 graph claim",
+    "method": "POST",
+    "path": "/api/queue/eval-graph/claim",
+    "status": 200,
+    "response": {
+      "qitemId": "eval-graph",
+      "state": "in-progress",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@graph",
+      "closureReason": null,
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "Update graph and return exact candidate"
+    }
+  },
+  {
+    "label": "S3.2 handoff candidate for review",
+    "method": "POST",
+    "path": "/api/queue/eval-graph/handoff",
+    "status": 201,
+    "response": {}
+  }
+]

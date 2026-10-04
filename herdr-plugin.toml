@@ -1,0 +1,12 @@
+id = "synthswarm.herdr-relay"
+name = "Herdr Relay"
+version = "0.1.0-dev.0"
+min_herdr_version = "0.9.3"
+platforms = ["linux", "macos"]
+description = "Connect Paperclip work to persistent agents in herdr."
+
+[[actions]]
+id = "status"
+title = "Relay: service status"
+contexts = ["global"]
+command = ["node", "src/cli.mjs", "status"]

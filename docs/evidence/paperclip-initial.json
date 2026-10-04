@@ -1,0 +1,436 @@
+[
+  {
+    "label": "S0.1 agent Daily without role/manager",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/agents",
+    "status": 201,
+    "response": {
+      "id": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+      "status": "idle",
+      "title": null,
+      "role": "general",
+      "reportsTo": null
+    }
+  },
+  {
+    "label": "S0.1 agent Project without role/manager",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/agents",
+    "status": 201,
+    "response": {
+      "id": "8d56d9e2-f0a0-4e5f-aea8-d93be8c5cea9",
+      "status": "idle",
+      "title": null,
+      "role": "general",
+      "reportsTo": null
+    }
+  },
+  {
+    "label": "S0.1 agent Landing without role/manager",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/agents",
+    "status": 201,
+    "response": {
+      "id": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+      "status": "idle",
+      "title": null,
+      "role": "general",
+      "reportsTo": null
+    }
+  },
+  {
+    "label": "S0.1 agent Monitor without role/manager",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/agents",
+    "status": 201,
+    "response": {
+      "id": "0ea6ca1b-db0f-4136-9042-1f883614af32",
+      "status": "idle",
+      "title": null,
+      "role": "general",
+      "reportsTo": null
+    }
+  },
+  {
+    "label": "S0.1 agent Graph without role/manager",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/agents",
+    "status": 201,
+    "response": {
+      "id": "8d7506df-de51-466f-b044-2a7c6afa4390",
+      "status": "idle",
+      "title": null,
+      "role": "general",
+      "reportsTo": null
+    }
+  },
+  {
+    "label": "S0.2 agent-authenticated discovery",
+    "method": "GET",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/agents",
+    "status": 200,
+    "response": [
+      {
+        "id": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+        "status": "idle",
+        "title": null,
+        "role": "general",
+        "reportsTo": null
+      },
+      {
+        "id": "0d6639cf-e5b9-4139-a36a-95e1e555b619",
+        "status": "idle",
+        "title": null,
+        "role": "general",
+        "reportsTo": null
+      },
+      {
+        "id": "0ea6ca1b-db0f-4136-9042-1f883614af32",
+        "status": "idle",
+        "title": null,
+        "role": "general",
+        "reportsTo": null
+      },
+      {
+        "id": "8d56d9e2-f0a0-4e5f-aea8-d93be8c5cea9",
+        "status": "idle",
+        "title": null,
+        "role": "general",
+        "reportsTo": null
+      },
+      {
+        "id": "8d7506df-de51-466f-b044-2a7c6afa4390",
+        "status": "idle",
+        "title": null,
+        "role": "general",
+        "reportsTo": null
+      },
+      {
+        "id": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+        "status": "idle",
+        "title": null,
+        "role": "general",
+        "reportsTo": null
+      }
+    ]
+  },
+  {
+    "label": "S0.3 unassigned backlog",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "370ea28b-21cc-4c0f-9f3a-963d570d95d2",
+      "status": "backlog",
+      "title": "Unassigned follow-up",
+      "assigneeAgentId": null,
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S0.3 human-owned work",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "392f79e8-46f9-4a43-844f-151aa5ec625d",
+      "status": "todo",
+      "title": "Quintin decision",
+      "assigneeAgentId": null,
+      "assigneeUserId": "local-board",
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S2.1 unrelated peer creates request (agent key)",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "14161378-03a8-454a-8bc0-2bdf8c90cb45",
+      "status": "todo",
+      "title": "Vend demo subnet",
+      "assigneeAgentId": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S1.3/S2.5 identical task creation retry",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 200,
+    "response": {
+      "id": "14161378-03a8-454a-8bc0-2bdf8c90cb45",
+      "status": "todo",
+      "title": "Vend demo subnet",
+      "assigneeAgentId": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S1.3 changed payload under same key",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 200,
+    "response": {
+      "id": "14161378-03a8-454a-8bc0-2bdf8c90cb45",
+      "status": "todo",
+      "title": "Vend demo subnet",
+      "assigneeAgentId": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S1.4 daily driver task A",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "fb98c426-d694-42d2-94ea-4483ac813391",
+      "status": "todo",
+      "title": "Daily active work",
+      "assigneeAgentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S1.4 daily driver task B while A unresolved",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "0c32dfb5-8516-4279-889b-68f67f288066",
+      "status": "todo",
+      "title": "Daily pending decision",
+      "assigneeAgentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S1.2 project-targeted event",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "d63434b8-3533-4979-8249-84c6219be415",
+      "status": "todo",
+      "title": "Project event follow-up",
+      "assigneeAgentId": "8d56d9e2-f0a0-4e5f-aea8-d93be8c5cea9",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S2.3 deployment blocked by subnet",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "93c2ee8b-a5bf-4735-ae22-23c30dba294e",
+      "status": "blocked",
+      "title": "Deploy demo",
+      "assigneeAgentId": "8d56d9e2-f0a0-4e5f-aea8-d93be8c5cea9",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [
+        {
+          "id": "14161378-03a8-454a-8bc0-2bdf8c90cb45",
+          "identifier": "RET-3",
+          "title": "Vend demo subnet",
+          "status": "todo",
+          "priority": "medium",
+          "assigneeAgentId": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+          "assigneeUserId": null,
+          "scheduledRetry": null
+        }
+      ],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S2.2 provider asks via comment with agent key",
+    "method": "POST",
+    "path": "/api/issues/14161378-03a8-454a-8bc0-2bdf8c90cb45/comments",
+    "status": 403,
+    "response": {
+      "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry.",
+      "details": {
+        "code": "cross_issue_influence_run_context_required",
+        "boundary": "Heartbeat run context",
+        "whoCanAct": "this agent, once the request carries its own run id.",
+        "sanctionedPath": "Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry."
+      }
+    }
+  },
+  {
+    "label": "S2.2 structured agent-directed question (agent key)",
+    "method": "POST",
+    "path": "/api/issues/14161378-03a8-454a-8bc0-2bdf8c90cb45/interactions",
+    "status": 400,
+    "response": {
+      "error": "Validation error",
+      "details": [
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "payload",
+            "questions"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        }
+      ]
+    }
+  },
+  {
+    "label": "S2.2 requester answers via comment",
+    "method": "POST",
+    "path": "/api/issues/14161378-03a8-454a-8bc0-2bdf8c90cb45/comments",
+    "status": 403,
+    "response": {
+      "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry.",
+      "details": {
+        "code": "cross_issue_influence_run_context_required",
+        "boundary": "Heartbeat run context",
+        "whoCanAct": "this agent, once the request carries its own run id.",
+        "sanctionedPath": "Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry."
+      }
+    }
+  },
+  {
+    "label": "S3.1 create graph work with agent reviewer",
+    "method": "POST",
+    "path": "/api/companies/d7e739bd-13f0-4764-be31-e1af89420e15/issues",
+    "status": 201,
+    "response": {
+      "id": "37d5fcfa-56bd-460b-a997-75fa735afb34",
+      "status": "todo",
+      "title": "Update graph candidate",
+      "assigneeAgentId": "8d7506df-de51-466f-b044-2a7c6afa4390",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": {
+        "mode": "normal",
+        "stages": [
+          {
+            "id": "ebe72e29-0558-493c-a4a2-31f11059b6b4",
+            "type": "review",
+            "participants": [
+              {
+                "id": "153b70f0-6422-47c2-8937-bdc90211b4cd",
+                "type": "agent",
+                "userId": null,
+                "agentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44"
+              }
+            ],
+            "approvalsNeeded": 1
+          }
+        ],
+        "commentRequired": true
+      },
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S3.2 checkout with persistent agent key, no run",
+    "method": "POST",
+    "path": "/api/issues/37d5fcfa-56bd-460b-a997-75fa735afb34/checkout",
+    "status": 401,
+    "response": {
+      "error": "Agent run id required"
+    }
+  },
+  {
+    "label": "S3.2 submit candidate as agent",
+    "method": "PATCH",
+    "path": "/api/issues/37d5fcfa-56bd-460b-a997-75fa735afb34",
+    "status": 403,
+    "response": {
+      "error": "Cross-issue writes need a run to attribute them to (Heartbeat run context). Every agent comment and task update is attributed to a heartbeat run so the cross-issue cap can be counted and the audit trail can name who acted for whom. This request arrived without a valid run, so it could not be contained. Who can act: this agent, once the request carries its own run id. Try this: Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry.",
+      "details": {
+        "code": "cross_issue_influence_run_context_required",
+        "boundary": "Heartbeat run context",
+        "whoCanAct": "this agent, once the request carries its own run id.",
+        "sanctionedPath": "Send the `X-Paperclip-Run-Id` header with your current run (`$PAPERCLIP_RUN_ID`) and retry."
+      }
+    }
+  },
+  {
+    "label": "S3.2 inspect persisted review state",
+    "method": "GET",
+    "path": "/api/issues/37d5fcfa-56bd-460b-a997-75fa735afb34",
+    "status": 200,
+    "response": {
+      "id": "37d5fcfa-56bd-460b-a997-75fa735afb34",
+      "status": "todo",
+      "title": "Update graph candidate",
+      "assigneeAgentId": "8d7506df-de51-466f-b044-2a7c6afa4390",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": {
+        "mode": "normal",
+        "stages": [
+          {
+            "id": "ebe72e29-0558-493c-a4a2-31f11059b6b4",
+            "type": "review",
+            "participants": [
+              {
+                "id": "153b70f0-6422-47c2-8937-bdc90211b4cd",
+                "type": "agent",
+                "userId": null,
+                "agentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44"
+              }
+            ],
+            "approvalsNeeded": 1
+          }
+        ],
+        "commentRequired": true
+      },
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  }
+]

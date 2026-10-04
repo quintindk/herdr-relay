@@ -1,0 +1,330 @@
+[
+  {
+    "label": "S3 typed candidate candidate-a",
+    "status": 400,
+    "body": {
+      "error": "acceptance_payload_mismatch",
+      "message": "step \"accept\" acceptance payload does not match its declared candidate/verdict/evidence contract",
+      "instanceId": "01M40MDC52CXSN4D838CWCB8BG",
+      "stepId": "accept",
+      "mismatches": {
+        "candidate": {
+          "expected": "candidate-b",
+          "actual": "candidate-a"
+        }
+      }
+    }
+  },
+  {
+    "label": "S3 typed candidate candidate-b",
+    "status": 200,
+    "body": {
+      "instance": {
+        "instanceId": "01M40MDC52CXSN4D838CWCB8BG",
+        "workflowName": "eval-acceptance",
+        "workflowVersion": "1",
+        "createdBySession": "main-lead@daily",
+        "createdAt": "2026-10-03T10:19:32.386Z",
+        "status": "completed",
+        "currentFrontier": [],
+        "currentStepId": null,
+        "hopCount": 1,
+        "fallbackSynthesis": null,
+        "lastContinuationDecision": {
+          "exit": "done",
+          "actorSession": "main-lead@daily",
+          "closedPacket": "qitem-20261003101933-cf6677d4",
+          "nextPacket": null,
+          "resultNote": null,
+          "blockedOn": null,
+          "currentStep": "accept",
+          "branchTaken": null
+        },
+        "completedAt": "2026-10-03T10:20:28.849Z",
+        "version": 3,
+        "resumeCount": 0,
+        "hopsBaseline": 0,
+        "boundRig": null,
+        "lifecycleOperationKey": null,
+        "compiledInputDigest": null,
+        "lifecycleBinding": null
+      },
+      "closurePriorPacketId": "qitem-20261003101933-cf6677d4",
+      "closureReason": "done",
+      "nextQitemId": null,
+      "nextOwnerSession": null,
+      "nextStepId": null,
+      "emittedEventTypes": [
+        "queue.updated",
+        "workflow.step_closed",
+        "workflow.completed"
+      ]
+    }
+  },
+  {
+    "label": "S3 accepted workflow state",
+    "status": 200,
+    "body": {
+      "instanceId": "01M40MDC52CXSN4D838CWCB8BG",
+      "workflowName": "eval-acceptance",
+      "workflowVersion": "1",
+      "createdBySession": "main-lead@daily",
+      "createdAt": "2026-10-03T10:19:32.386Z",
+      "status": "completed",
+      "currentFrontier": [],
+      "currentStepId": null,
+      "hopCount": 1,
+      "fallbackSynthesis": null,
+      "lastContinuationDecision": {
+        "exit": "done",
+        "actorSession": "main-lead@daily",
+        "closedPacket": "qitem-20261003101933-cf6677d4",
+        "nextPacket": null,
+        "resultNote": null,
+        "blockedOn": null,
+        "currentStep": "accept",
+        "branchTaken": null
+      },
+      "completedAt": "2026-10-03T10:20:28.849Z",
+      "version": 3,
+      "resumeCount": 0,
+      "hopsBaseline": 0,
+      "boundRig": null,
+      "lifecycleOperationKey": null,
+      "compiledInputDigest": null,
+      "lifecycleBinding": null,
+      "deadline": {
+        "state": "healthy",
+        "evidence": null
+      },
+      "guidance": {
+        "state": "unselected",
+        "selectionSource": null,
+        "catalogSource": null,
+        "catalogPath": null,
+        "catalogHash": null,
+        "sources": [],
+        "position": "UNKNOWN: component position is not authored. Exact owner matches establish relevance, not a stage; choose from selected components and explicit edges using current evidence. Array order is presentation only.",
+        "ownerSession": null,
+        "unknowns": [],
+        "expansionCommand": "rig workflow guidance '01M40MDC52CXSN4D838CWCB8BG' --full",
+        "lines": [
+          "Workflow method: No SDLC composition selected in the available authored context.",
+          "Workflow method: Expand relevant teaching: rig workflow guidance '01M40MDC52CXSN4D838CWCB8BG' --full; select another with --component <id>. Read authored caveats and edges before adapting; advice grants no extra assignment."
+        ]
+      },
+      "exceptionReadiness": {
+        "scope": "future-occurrences",
+        "posture": "advisory",
+        "selection": {
+          "state": "missing",
+          "role": null,
+          "source": "/home/node/eval-workflow.yaml#workflow.exception_routing.orchestrator_role",
+          "entryRole": "producer"
+        },
+        "routes": [
+          {
+            "exceptionClass": "unmapped_failed",
+            "state": "ready",
+            "roleResolution": "missing-selection",
+            "destinationSession": "quintin@external",
+            "position": "fallback",
+            "resolvedVia": "engine-default",
+            "identity": "registered-human",
+            "message": "Registered-human fallback; agent resolution: missing-selection."
+          },
+          {
+            "exceptionClass": "stuck_overdue",
+            "state": "ready",
+            "roleResolution": "missing-selection",
+            "destinationSession": "quintin@external",
+            "position": "fallback",
+            "resolvedVia": "engine-default",
+            "identity": "registered-human",
+            "message": "Registered-human fallback; agent resolution: missing-selection."
+          }
+        ],
+        "nextAction": "A defined entry/ordinary role does not select exception ownership. Select the intended declared role at /home/node/eval-workflow.yaml#workflow.exception_routing.orchestrator_role. After a source correction, inspect rig workflow revise 01M40MDC52CXSN4D838CWCB8BG and deliberately apply its compatible proposal. Editing a file does not change the running owner. Existing exception obligations keep their owners."
+      },
+      "exceptionObligations": [],
+      "frontierPackets": [],
+      "failureOccurrences": [],
+      "unknowns": [],
+      "boundaryObligations": []
+    }
+  },
+  {
+    "label": "S0.3 human task using canonical registered address",
+    "status": 201,
+    "body": {
+      "pickup": {
+        "state": "unclaimed"
+      },
+      "waiting": {
+        "obligation": "eval-human-canonical",
+        "owner": "quintin@external",
+        "state": "pending",
+        "actionableSince": "2026-10-03T10:20:28.889Z",
+        "blocker": null,
+        "lastMeaningfulChange": {
+          "id": 27,
+          "at": "2026-10-03T10:20:28.891Z"
+        },
+        "liveness": {
+          "subject": "quintin@external",
+          "activity": "unknown",
+          "needsInput": {
+            "count": 0,
+            "reason": null
+          },
+          "confidence": "unknown"
+        },
+        "nextBackstop": {
+          "owner": "quintin@external",
+          "mechanism": "queue-stuck-sweep:unclaimed",
+          "dueAt": "2026-10-03T11:20:28.889Z",
+          "intervalSeconds": 300
+        },
+        "deadlineAt": null
+      },
+      "qitemId": "eval-human-canonical",
+      "tsCreated": "2026-10-03T10:20:28.889Z",
+      "tsUpdated": "2026-10-03T10:20:28.889Z",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "quintin@external",
+      "state": "pending",
+      "priority": "routine",
+      "tier": null,
+      "tags": null,
+      "blockedOn": null,
+      "handedOffTo": null,
+      "handedOffFrom": null,
+      "expiresAt": null,
+      "chainOfRecord": null,
+      "body": "Decide demo direction",
+      "summary": "Demo direction",
+      "evidenceRef": "fixture://message-1",
+      "humanIntent": null,
+      "humanDetail": null,
+      "closureReason": null,
+      "closureTarget": null,
+      "closureRequiredAt": null,
+      "claimedAt": null,
+      "lastNudgeAttempt": null,
+      "lastNudgeResult": null,
+      "lastHeartbeat": null,
+      "resolution": null,
+      "targetRepo": null,
+      "deliveryOutcome": null
+    }
+  },
+  {
+    "label": "S1.1 standing monitor reminder",
+    "status": 201,
+    "body": {
+      "jobId": "01M40MF3B6BYVH8GMEVY7CJ12X",
+      "policy": "periodic-reminder",
+      "specYaml": "policy: periodic-reminder\ntarget:\n  session: main-lead@monitor\ninterval_seconds: 3600\nmessage: Check fixture inbox from saved cursor\n",
+      "targetSession": "main-lead@monitor",
+      "intervalSeconds": 3600,
+      "activeWakeIntervalSeconds": null,
+      "scanIntervalSeconds": null,
+      "lastEvaluationAt": null,
+      "lastFireAt": null,
+      "actionable": false,
+      "lastActionableAt": null,
+      "state": "active",
+      "registeredBySession": "main-lead@daily",
+      "registeredAt": "2026-10-03T10:20:28.902Z",
+      "terminalReason": null,
+      "registeredByGeneration": "ed2624fc-67e6-4845-9ad0-24c49a5da3a3",
+      "targetGeneration": null,
+      "watchedFilePath": null,
+      "watchedFileGeneration": null,
+      "bindingState": null,
+      "thresholdBytes": null,
+      "requiresJobId": null,
+      "lastFiredGeneration": null
+    }
+  },
+  {
+    "label": "S1.7 stop monitoring schedule",
+    "status": 200,
+    "body": {
+      "jobId": "01M40MF3B6BYVH8GMEVY7CJ12X",
+      "policy": "periodic-reminder",
+      "specYaml": "policy: periodic-reminder\ntarget:\n  session: main-lead@monitor\ninterval_seconds: 3600\nmessage: Check fixture inbox from saved cursor\n",
+      "targetSession": "main-lead@monitor",
+      "intervalSeconds": 3600,
+      "activeWakeIntervalSeconds": null,
+      "scanIntervalSeconds": null,
+      "lastEvaluationAt": null,
+      "lastFireAt": null,
+      "actionable": false,
+      "lastActionableAt": null,
+      "state": "stopped",
+      "registeredBySession": "main-lead@daily",
+      "registeredAt": "2026-10-03T10:20:28.902Z",
+      "terminalReason": "operator_stopped",
+      "registeredByGeneration": "ed2624fc-67e6-4845-9ad0-24c49a5da3a3",
+      "targetGeneration": null,
+      "watchedFilePath": null,
+      "watchedFileGeneration": null,
+      "bindingState": null,
+      "thresholdBytes": null,
+      "requiresJobId": null,
+      "lastFiredGeneration": null
+    }
+  },
+  {
+    "label": "S1.6 pending inbox read",
+    "status": 200,
+    "body": [
+      {
+        "inboxId": "eval-question",
+        "destinationSession": "main-lead@daily",
+        "senderSession": "main-lead@landing",
+        "body": "What subnet size?",
+        "tags": null,
+        "urgency": "routine",
+        "tsDropped": "2026-10-03T10:12:24.624Z",
+        "state": "pending",
+        "absorbedAt": null,
+        "absorbedQitemId": null,
+        "deniedAt": null,
+        "deniedReason": null,
+        "auditPointer": null
+      },
+      {
+        "inboxId": "eval-result",
+        "destinationSession": "main-lead@daily",
+        "senderSession": "main-lead@landing",
+        "body": "Subnet ready: /subscriptions/fixture/subnets/demo",
+        "tags": null,
+        "urgency": "routine",
+        "tsDropped": "2026-10-03T10:12:24.685Z",
+        "state": "pending",
+        "absorbedAt": null,
+        "absorbedQitemId": null,
+        "deniedAt": null,
+        "deniedReason": null,
+        "auditPointer": null
+      },
+      {
+        "inboxId": "eval-offline-event",
+        "destinationSession": "main-lead@daily",
+        "senderSession": "main-lead@monitor",
+        "body": "Important Teams event source=teams-42",
+        "tags": null,
+        "urgency": "routine",
+        "tsDropped": "2026-10-03T10:19:32.312Z",
+        "state": "pending",
+        "absorbedAt": null,
+        "absorbedQitemId": null,
+        "deniedAt": null,
+        "deniedReason": null,
+        "auditPointer": null
+      }
+    ]
+  }
+]

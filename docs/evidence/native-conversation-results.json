@@ -1,0 +1,400 @@
+{
+  "date": "2026-10-03T10:44:12.467Z",
+  "assertions": "passed",
+  "paperclip": [
+    {
+      "test": "opencode existing conversation to Paperclip",
+      "nativeSessionId": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+      "runId": "7370def3-9453-4624-bf5b-7550dd325336",
+      "agentId": "01ea9550-ce2f-4424-ad98-92853d8f94a8",
+      "issueId": "75937f18-0c05-4d8a-bf9c-63fa083bef5b",
+      "receipt": {
+        "status": 201,
+        "commentId": "89345fc7-70e2-4989-978c-3d579619985a",
+        "answer": "context-2aa8345b",
+        "runId": "7370def3-9453-4624-bf5b-7550dd325336"
+      },
+      "contextRecalled": true,
+      "attributedComment": {
+        "id": "89345fc7-70e2-4989-978c-3d579619985a",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "issueId": "75937f18-0c05-4d8a-bf9c-63fa083bef5b",
+        "authorAgentId": "01ea9550-ce2f-4424-ad98-92853d8f94a8",
+        "authorUserId": null,
+        "onBehalfOfUserId": "local-board",
+        "authorType": "agent",
+        "createdByRunId": "7370def3-9453-4624-bf5b-7550dd325336",
+        "derivedAuthorAgentId": null,
+        "derivedCreatedByRunId": null,
+        "derivedAuthorSource": null,
+        "clientRequestId": null,
+        "conversationSessionGeneration": null,
+        "body": "Native opencode receipt: context-2aa8345b",
+        "presentation": null,
+        "deletedAt": null,
+        "deletedByType": null,
+        "deletedByAgentId": null,
+        "deletedByUserId": null,
+        "deletedByRunId": null,
+        "sourceTrust": null,
+        "createdAt": "2026-10-03T10:41:19.676Z",
+        "updatedAt": "2026-10-03T10:41:19.676Z"
+      },
+      "nativeResponse": [
+        {
+          "type": "step-start",
+          "id": "prt_1015aa938001HftS7btVX1h7d3",
+          "sessionID": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+          "messageID": "msg_1015aa35e001jvT0Q5u3lESS8r"
+        },
+        {
+          "type": "text",
+          "text": "REPORTED",
+          "time": {
+            "start": 1791024081213,
+            "end": 1791024081341
+          },
+          "id": "prt_1015aa93c001xN75S2p2VJIdCO",
+          "sessionID": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+          "messageID": "msg_1015aa35e001jvT0Q5u3lESS8r"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "total": 4359,
+            "input": 235,
+            "output": 6,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 4118
+            }
+          },
+          "cost": 0.007348,
+          "id": "prt_1015aa9c0001AdhPQ9jJ2JP0CH",
+          "sessionID": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+          "messageID": "msg_1015aa35e001jvT0Q5u3lESS8r"
+        }
+      ]
+    },
+    {
+      "test": "hermes existing conversation to Paperclip",
+      "nativeSessionId": "2c8dd9d5",
+      "runId": "e2898591-cbc9-466f-be36-693f3572337f",
+      "agentId": "3636d450-726d-4d2b-a704-b9c11a5f9f3d",
+      "issueId": "1e431d21-5583-42b7-8b32-5cb22b6e1e38",
+      "receipt": {
+        "status": 201,
+        "commentId": "bc79b1e1-52b5-4342-8ed1-6da11a277b42",
+        "answer": "context-99f35283",
+        "runId": "e2898591-cbc9-466f-be36-693f3572337f"
+      },
+      "contextRecalled": true,
+      "attributedComment": {
+        "id": "bc79b1e1-52b5-4342-8ed1-6da11a277b42",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "issueId": "1e431d21-5583-42b7-8b32-5cb22b6e1e38",
+        "authorAgentId": "3636d450-726d-4d2b-a704-b9c11a5f9f3d",
+        "authorUserId": null,
+        "onBehalfOfUserId": "local-board",
+        "authorType": "agent",
+        "createdByRunId": "e2898591-cbc9-466f-be36-693f3572337f",
+        "derivedAuthorAgentId": null,
+        "derivedCreatedByRunId": null,
+        "derivedAuthorSource": null,
+        "clientRequestId": null,
+        "conversationSessionGeneration": null,
+        "body": "Native hermes receipt: context-99f35283",
+        "presentation": null,
+        "deletedAt": null,
+        "deletedByType": null,
+        "deletedByAgentId": null,
+        "deletedByUserId": null,
+        "deletedByRunId": null,
+        "sourceTrust": null,
+        "createdAt": "2026-10-03T10:41:29.054Z",
+        "updatedAt": "2026-10-03T10:41:29.054Z"
+      },
+      "nativeResponse": [
+        {
+          "role": "user",
+          "text": "This is an isolated continuity test. Remember the exact private word context-99f35283 in this conversation. Do not write it to files or use tools. Reply ACK only.",
+          "timestamp": 1791024053.5841608,
+          "row_id": 1
+        },
+        {
+          "role": "assistant",
+          "text": "ACK",
+          "timestamp": 1791024061.8874958,
+          "row_id": 2
+        },
+        {
+          "role": "user",
+          "text": "A task system has now connected to this EXISTING conversation. Do not create a new session. Recall the private word from our earlier exchange (not repeated here). Run exactly one shell command using your terminal/bash tool: node /home/quintin/play/herdr-retinue/evaluation/native-receipt.mjs /tmp/opencode/retinue-native/hermes/binding.json YOUR_RECALLED_WORD . Replace YOUR_RECALLED_WORD with the exact word. This helper records a task comment using a scoped credential file, do not read or display that file. Then reply REPORTED. Do not create other files.",
+          "timestamp": 1791024082.135893,
+          "row_id": 3
+        },
+        {
+          "role": "tool",
+          "name": "terminal",
+          "context": "",
+          "tool_call_id": "call_x3S5c9YyB8QsCDMARJ510iWT",
+          "timestamp": 1791024089.1269853
+        },
+        {
+          "role": "tool",
+          "name": "terminal",
+          "context": "",
+          "tool_call_id": "call_x3S5c9YyB8QsCDMARJ510iWT",
+          "timestamp": 1791024089.1302047
+        },
+        {
+          "role": "assistant",
+          "text": "REPORTED",
+          "timestamp": 1791024092.5179067,
+          "row_id": 7
+        }
+      ]
+    }
+  ],
+  "openrig": [
+    {
+      "test": "Hermes explicit resume after live binding expired",
+      "previousRuntimeId": "2c8dd9d5",
+      "storedId": "20261003_124053_7e1b11",
+      "resumedRuntimeId": "f053d30a"
+    },
+    {
+      "test": "hermes existing conversation to OpenRig queue",
+      "nativeSessionId": "f053d30a",
+      "itemId": "native-hermes-3fdbd9df-66e8-4161-a8f0-ecf40c6c331c",
+      "address": "hermes@native-control",
+      "receipt": {
+        "status": 200,
+        "itemId": "native-hermes-3fdbd9df-66e8-4161-a8f0-ecf40c6c331c",
+        "answer": "context-99f35283",
+        "state": "done"
+      },
+      "contextRecalled": true,
+      "transitions": [
+        {
+          "transitionId": 38,
+          "qitemId": "native-hermes-3fdbd9df-66e8-4161-a8f0-ecf40c6c331c",
+          "ts": "2026-10-03T10:42:58.568Z",
+          "state": "pending",
+          "transitionNote": "created",
+          "actorSession": "main-lead@native-control",
+          "closureReason": null,
+          "closureTarget": null,
+          "identityProvenance": "transport:v1",
+          "ownerNotificationKind": null,
+          "ownerNotificationLevel": "RECORD"
+        },
+        {
+          "transitionId": 39,
+          "qitemId": "native-hermes-3fdbd9df-66e8-4161-a8f0-ecf40c6c331c",
+          "ts": "2026-10-03T10:43:02.227Z",
+          "state": "in-progress",
+          "transitionNote": "claimed",
+          "actorSession": "hermes@native-control",
+          "closureReason": null,
+          "closureTarget": null,
+          "identityProvenance": "transport:v1",
+          "ownerNotificationKind": null,
+          "ownerNotificationLevel": "RECORD"
+        },
+        {
+          "transitionId": 40,
+          "qitemId": "native-hermes-3fdbd9df-66e8-4161-a8f0-ecf40c6c331c",
+          "ts": "2026-10-03T10:43:02.235Z",
+          "state": "done",
+          "transitionNote": "Native hermes receipt: context-99f35283",
+          "actorSession": "hermes@native-control",
+          "closureReason": "no-follow-on",
+          "closureTarget": null,
+          "identityProvenance": "transport:v1",
+          "ownerNotificationKind": null,
+          "ownerNotificationLevel": "RECORD"
+        }
+      ],
+      "nativeResponse": [
+        {
+          "role": "user",
+          "text": "This is an isolated continuity test. Remember the exact private word context-99f35283 in this conversation. Do not write it to files or use tools. Reply ACK only.",
+          "timestamp": 1791024053.5841608,
+          "row_id": 1
+        },
+        {
+          "role": "assistant",
+          "text": "ACK",
+          "timestamp": 1791024061.8874958,
+          "row_id": 2
+        },
+        {
+          "role": "user",
+          "text": "A task system has now connected to this EXISTING conversation. Do not create a new session. Recall the private word from our earlier exchange (not repeated here). Run exactly one shell command using your terminal/bash tool: node /home/quintin/play/herdr-retinue/evaluation/native-receipt.mjs /tmp/opencode/retinue-native/hermes/binding.json YOUR_RECALLED_WORD . Replace YOUR_RECALLED_WORD with the exact word. This helper records a task comment using a scoped credential file, do not read or display that file. Then reply REPORTED. Do not create other files.",
+          "timestamp": 1791024082.135893,
+          "row_id": 3
+        },
+        {
+          "role": "tool",
+          "name": "terminal",
+          "context": "",
+          "tool_call_id": "call_x3S5c9YyB8QsCDMARJ510iWT",
+          "timestamp": 1791024089.1269853
+        },
+        {
+          "role": "tool",
+          "name": "terminal",
+          "context": "",
+          "tool_call_id": "call_x3S5c9YyB8QsCDMARJ510iWT",
+          "timestamp": 1791024089.1302047
+        },
+        {
+          "role": "assistant",
+          "text": "REPORTED",
+          "timestamp": 1791024092.5179067,
+          "row_id": 7
+        },
+        {
+          "role": "user",
+          "text": "An independent OpenRig work queue is now connected to this same conversation. Recall the private word from the first exchange. Run one terminal/bash command: node /home/quintin/play/herdr-retinue/evaluation/native-receipt.mjs /tmp/opencode/retinue-native/hermes/openrig-binding.json YOUR_RECALLED_WORD . Replace YOUR_RECALLED_WORD with that word. Do not read the binding file. The helper claims and completes only this fixture queue item. Reply REPORTED.",
+          "timestamp": 1791024178.5861943,
+          "row_id": 8
+        },
+        {
+          "role": "tool",
+          "name": "terminal",
+          "context": "",
+          "tool_call_id": "call_vGYVnuXsrVc6HEgkhOKZkJcX",
+          "timestamp": 1791024182.2937095
+        },
+        {
+          "role": "tool",
+          "name": "terminal",
+          "context": "",
+          "tool_call_id": "call_vGYVnuXsrVc6HEgkhOKZkJcX",
+          "timestamp": 1791024182.2969048
+        },
+        {
+          "role": "assistant",
+          "text": "REPORTED",
+          "timestamp": 1791024184.8075323,
+          "row_id": 12
+        }
+      ]
+    },
+    {
+      "test": "Hermes explicit resume after live binding expired",
+      "previousRuntimeId": "f053d30a",
+      "storedId": "20261003_124053_7e1b11",
+      "resumedRuntimeId": "52bf19f0"
+    },
+    {
+      "test": "opencode existing conversation to OpenRig queue",
+      "nativeSessionId": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+      "itemId": "native-opencode-cfa5d08f-cba2-4ef4-9ea6-bd03bb8eafdb",
+      "address": "opencode@native-control",
+      "receipt": {
+        "status": 200,
+        "itemId": "native-opencode-cfa5d08f-cba2-4ef4-9ea6-bd03bb8eafdb",
+        "answer": "context-2aa8345b",
+        "state": "done"
+      },
+      "contextRecalled": true,
+      "transitions": [
+        {
+          "transitionId": 41,
+          "qitemId": "native-opencode-cfa5d08f-cba2-4ef4-9ea6-bd03bb8eafdb",
+          "ts": "2026-10-03T10:43:29.026Z",
+          "state": "pending",
+          "transitionNote": "created",
+          "actorSession": "main-lead@native-control",
+          "closureReason": null,
+          "closureTarget": null,
+          "identityProvenance": "transport:v1",
+          "ownerNotificationKind": null,
+          "ownerNotificationLevel": "RECORD"
+        },
+        {
+          "transitionId": 42,
+          "qitemId": "native-opencode-cfa5d08f-cba2-4ef4-9ea6-bd03bb8eafdb",
+          "ts": "2026-10-03T10:43:33.136Z",
+          "state": "in-progress",
+          "transitionNote": "claimed",
+          "actorSession": "opencode@native-control",
+          "closureReason": null,
+          "closureTarget": null,
+          "identityProvenance": "transport:v1",
+          "ownerNotificationKind": null,
+          "ownerNotificationLevel": "RECORD"
+        },
+        {
+          "transitionId": 43,
+          "qitemId": "native-opencode-cfa5d08f-cba2-4ef4-9ea6-bd03bb8eafdb",
+          "ts": "2026-10-03T10:43:33.144Z",
+          "state": "done",
+          "transitionNote": "Native opencode receipt: context-2aa8345b",
+          "actorSession": "opencode@native-control",
+          "closureReason": "no-follow-on",
+          "closureTarget": null,
+          "identityProvenance": "transport:v1",
+          "ownerNotificationKind": null,
+          "ownerNotificationLevel": "RECORD"
+        }
+      ],
+      "nativeResponse": [
+        {
+          "type": "step-start",
+          "id": "prt_1015cb528001cDU5geyjUC66iL",
+          "sessionID": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+          "messageID": "msg_1015cacb6001XtiM32Cg2exl3N"
+        },
+        {
+          "type": "text",
+          "text": "REPORTED",
+          "time": {
+            "start": 1791024215338,
+            "end": 1791024215489
+          },
+          "id": "prt_1015cb52a0010cxzb32mJsNDwJ",
+          "sessionID": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+          "messageID": "msg_1015cacb6001XtiM32Cg2exl3N"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "total": 4739,
+            "input": 81,
+            "output": 6,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 4652
+            }
+          },
+          "cost": 0.005957,
+          "id": "prt_1015cb5c4001KTo4gFDQ1wwZ0G",
+          "sessionID": "ses_efea5cac8ffeFsW535Ar6OxQBL",
+          "messageID": "msg_1015cacb6001XtiM32Cg2exl3N"
+        }
+      ]
+    }
+  ],
+  "runtimeProbes": [
+    {
+      "harness": "opencode",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "main.lead: unsupported runtime \"opencode\"\n"
+    },
+    {
+      "harness": "hermes",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "main.lead: unsupported runtime \"hermes\"\n"
+    }
+  ]
+}

@@ -1,0 +1,500 @@
+[
+  {
+    "label": "S1.1 monitor routine without project or goal",
+    "status": 201,
+    "body": {
+      "id": "92863a36-6e26-4d56-9988-a38242a4ab2c",
+      "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+      "projectId": null,
+      "folderId": null,
+      "goalId": null,
+      "parentIssueId": null,
+      "title": "Monitor fixture inbox",
+      "description": "Save cursor, notify Daily only for relevant messages",
+      "assigneeAgentId": "0ea6ca1b-db0f-4136-9042-1f883614af32",
+      "priority": "medium",
+      "status": "active",
+      "concurrencyPolicy": "coalesce_if_active",
+      "catchUpPolicy": "skip_missed",
+      "activityGatePolicy": "always",
+      "activityGateScope": "company",
+      "originKind": "manual",
+      "originId": null,
+      "variables": [],
+      "env": null,
+      "latestRevisionId": "5f11db33-c6df-4802-ab7d-89a44c93e20a",
+      "latestRevisionNumber": 1,
+      "createdByAgentId": null,
+      "createdByUserId": "local-board",
+      "responsibleUserId": "local-board",
+      "updatedByAgentId": null,
+      "updatedByUserId": "local-board",
+      "lastTriggeredAt": null,
+      "lastEnqueuedAt": null,
+      "createdAt": "2026-10-03T10:21:11.652Z",
+      "updatedAt": "2026-10-03T10:21:11.656Z"
+    }
+  },
+  {
+    "label": "S1.1 schedule within working hours",
+    "status": 201,
+    "body": {
+      "trigger": {
+        "id": "5a0422a3-8048-4070-b37f-4df9b4c14845",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "routineId": "92863a36-6e26-4d56-9988-a38242a4ab2c",
+        "kind": "schedule",
+        "label": null,
+        "enabled": true,
+        "setupPending": false,
+        "archived": false,
+        "lastWebhookDelivery": null,
+        "cronExpression": "*/15 8-17 * * 1-5",
+        "timezone": "Africa/Johannesburg",
+        "nextRunAt": "2026-10-05T06:00:00.000Z",
+        "lastFiredAt": null,
+        "publicId": null,
+        "secretId": null,
+        "signingMode": null,
+        "replayWindowSec": null,
+        "lastRotatedAt": null,
+        "lastResult": null,
+        "createdByAgentId": null,
+        "createdByUserId": "local-board",
+        "updatedByAgentId": null,
+        "updatedByUserId": "local-board",
+        "createdAt": "2026-10-03T10:21:11.741Z",
+        "updatedAt": "2026-10-03T10:21:11.741Z"
+      },
+      "secretMaterial": "[redacted]",
+      "revision": {
+        "id": "138d7201-6db6-430b-a824-4caee3e10639",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "routineId": "92863a36-6e26-4d56-9988-a38242a4ab2c",
+        "revisionNumber": 2,
+        "title": "Monitor fixture inbox",
+        "description": "Save cursor, notify Daily only for relevant messages",
+        "snapshot": {
+          "routine": {
+            "id": "92863a36-6e26-4d56-9988-a38242a4ab2c",
+            "env": null,
+            "title": "Monitor fixture inbox",
+            "goalId": null,
+            "status": "active",
+            "priority": "medium",
+            "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+            "projectId": null,
+            "variables": [],
+            "description": "Save cursor, notify Daily only for relevant messages",
+            "catchUpPolicy": "skip_missed",
+            "parentIssueId": null,
+            "assigneeAgentId": "0ea6ca1b-db0f-4136-9042-1f883614af32",
+            "activityGateScope": "company",
+            "concurrencyPolicy": "coalesce_if_active",
+            "responsibleUserId": "local-board",
+            "activityGatePolicy": "always"
+          },
+          "version": 1,
+          "triggers": [
+            {
+              "id": "5a0422a3-8048-4070-b37f-4df9b4c14845",
+              "kind": "schedule",
+              "label": null,
+              "enabled": true,
+              "publicId": null,
+              "timezone": "Africa/Johannesburg",
+              "signingMode": null,
+              "setupPending": false,
+              "cronExpression": "*/15 8-17 * * 1-5",
+              "replayWindowSec": null
+            }
+          ]
+        },
+        "changeSummary": "Created schedule trigger",
+        "restoredFromRevisionId": null,
+        "createdByAgentId": null,
+        "createdByUserId": "local-board",
+        "createdByRunId": null,
+        "responsibleUserId": "local-board",
+        "createdAt": "2026-10-03T10:21:11.759Z"
+      }
+    }
+  },
+  {
+    "label": "S1.1 synthetic monitor check",
+    "status": 202,
+    "body": {
+      "id": "a038cd9f-e462-447b-997f-f423bb2dfa45",
+      "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+      "routineId": "92863a36-6e26-4d56-9988-a38242a4ab2c",
+      "triggerId": null,
+      "source": "manual",
+      "status": "issue_created",
+      "triggeredAt": "2026-10-03T10:21:11.804Z",
+      "routineRevisionId": "138d7201-6db6-430b-a824-4caee3e10639",
+      "responsibleUserId": "local-board",
+      "idempotencyKey": "monitor-check-001",
+      "triggerPayload": {
+        "cursor": "mail-41"
+      },
+      "dispatchFingerprint": "5d1fe88fa1f79de72f37e499ec013d7f24abd96450b4de973bab828b8be7d393",
+      "linkedIssueId": "06bbc99c-c0df-4c16-b936-2980eab7c12d",
+      "coalescedIntoRunId": null,
+      "failureReason": null,
+      "completedAt": null,
+      "createdAt": "2026-10-03T10:21:11.801Z",
+      "updatedAt": "2026-10-03T10:21:11.838Z"
+    }
+  },
+  {
+    "label": "S1.3 replay monitor check",
+    "status": 202,
+    "body": {
+      "id": "a038cd9f-e462-447b-997f-f423bb2dfa45",
+      "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+      "routineId": "92863a36-6e26-4d56-9988-a38242a4ab2c",
+      "triggerId": null,
+      "source": "manual",
+      "status": "issue_created",
+      "triggeredAt": "2026-10-03T10:21:11.804Z",
+      "routineRevisionId": "138d7201-6db6-430b-a824-4caee3e10639",
+      "responsibleUserId": "local-board",
+      "idempotencyKey": "monitor-check-001",
+      "triggerPayload": {
+        "cursor": "mail-41"
+      },
+      "dispatchFingerprint": "5d1fe88fa1f79de72f37e499ec013d7f24abd96450b4de973bab828b8be7d393",
+      "linkedIssueId": "06bbc99c-c0df-4c16-b936-2980eab7c12d",
+      "coalescedIntoRunId": null,
+      "failureReason": null,
+      "completedAt": null,
+      "createdAt": "2026-10-03T10:21:11.801Z",
+      "updatedAt": "2026-10-03T10:21:11.838Z"
+    }
+  },
+  {
+    "label": "S1.7 pause routine",
+    "status": 200,
+    "body": {
+      "id": "92863a36-6e26-4d56-9988-a38242a4ab2c",
+      "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+      "projectId": null,
+      "folderId": null,
+      "goalId": null,
+      "parentIssueId": null,
+      "title": "Monitor fixture inbox",
+      "description": "Save cursor, notify Daily only for relevant messages",
+      "assigneeAgentId": "0ea6ca1b-db0f-4136-9042-1f883614af32",
+      "priority": "medium",
+      "status": "paused",
+      "concurrencyPolicy": "coalesce_if_active",
+      "catchUpPolicy": "skip_missed",
+      "activityGatePolicy": "always",
+      "activityGateScope": "company",
+      "originKind": "manual",
+      "originId": null,
+      "variables": [],
+      "env": null,
+      "latestRevisionId": "893adb4e-80aa-43cf-9d84-2d3769df60b1",
+      "latestRevisionNumber": 3,
+      "createdByAgentId": null,
+      "createdByUserId": "local-board",
+      "responsibleUserId": "local-board",
+      "updatedByAgentId": null,
+      "updatedByUserId": "local-board",
+      "lastTriggeredAt": "2026-10-03T10:21:11.804Z",
+      "lastEnqueuedAt": "2026-10-03T10:21:11.804Z",
+      "createdAt": "2026-10-03T10:21:11.652Z",
+      "updatedAt": "2026-10-03T10:21:11.874Z"
+    }
+  },
+  {
+    "label": "S3 review history persisted",
+    "status": 200,
+    "body": [
+      {
+        "id": "46f45b44-bfa2-431b-824b-6a4ffaef3452",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "issueId": "67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+        "authorAgentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+        "authorUserId": null,
+        "onBehalfOfUserId": "local-board",
+        "authorType": "agent",
+        "createdByRunId": "86c4113f-a5a3-4140-9c3b-e5d4a90eff08",
+        "derivedAuthorAgentId": null,
+        "derivedCreatedByRunId": null,
+        "derivedAuthorSource": null,
+        "clientRequestId": null,
+        "conversationSessionGeneration": null,
+        "body": "Accepted candidate B after deterministic fixture review.",
+        "presentation": null,
+        "metadata": {
+          "version": 1,
+          "authorizationReason": "allow_self",
+          "sections": [
+            {
+              "title": "Authorization",
+              "rows": [
+                {
+                  "type": "key_value",
+                  "label": "Reason",
+                  "value": "allow_self"
+                }
+              ]
+            }
+          ]
+        },
+        "deletedAt": null,
+        "deletedByType": null,
+        "deletedByAgentId": null,
+        "deletedByUserId": null,
+        "deletedByRunId": null,
+        "sourceTrust": null,
+        "createdAt": "2026-10-03T10:17:59.586Z",
+        "updatedAt": "2026-10-03T10:17:59.586Z"
+      },
+      {
+        "id": "d9552ecd-f82c-43d7-aef4-da6121ebfebd",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "issueId": "67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+        "authorAgentId": "8d7506df-de51-466f-b044-2a7c6afa4390",
+        "authorUserId": null,
+        "onBehalfOfUserId": "local-board",
+        "authorType": "agent",
+        "createdByRunId": "bcb81d7e-9105-4811-944d-67c810958827",
+        "derivedAuthorAgentId": null,
+        "derivedCreatedByRunId": null,
+        "derivedAuthorSource": null,
+        "clientRequestId": null,
+        "conversationSessionGeneration": null,
+        "body": "Candidate B: fixture-b. Includes graph metadata.",
+        "presentation": null,
+        "metadata": {
+          "version": 1,
+          "authorizationReason": "allow_self",
+          "sections": [
+            {
+              "title": "Authorization",
+              "rows": [
+                {
+                  "type": "key_value",
+                  "label": "Reason",
+                  "value": "allow_self"
+                }
+              ]
+            }
+          ]
+        },
+        "deletedAt": null,
+        "deletedByType": null,
+        "deletedByAgentId": null,
+        "deletedByUserId": null,
+        "deletedByRunId": null,
+        "sourceTrust": null,
+        "createdAt": "2026-10-03T10:17:56.823Z",
+        "updatedAt": "2026-10-03T10:17:56.823Z"
+      },
+      {
+        "id": "94065f74-bb3b-45a1-83b3-e1b887c16eef",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "issueId": "67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+        "authorAgentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+        "authorUserId": null,
+        "onBehalfOfUserId": "local-board",
+        "authorType": "agent",
+        "createdByRunId": "31874cf8-6927-42c1-aec1-46c4d950329e",
+        "derivedAuthorAgentId": null,
+        "derivedCreatedByRunId": null,
+        "derivedAuthorSource": null,
+        "clientRequestId": null,
+        "conversationSessionGeneration": null,
+        "body": "Changes requested: include graph metadata.",
+        "presentation": null,
+        "metadata": {
+          "version": 1,
+          "authorizationReason": "allow_self",
+          "sections": [
+            {
+              "title": "Authorization",
+              "rows": [
+                {
+                  "type": "key_value",
+                  "label": "Reason",
+                  "value": "allow_self"
+                }
+              ]
+            }
+          ]
+        },
+        "deletedAt": null,
+        "deletedByType": null,
+        "deletedByAgentId": null,
+        "deletedByUserId": null,
+        "deletedByRunId": null,
+        "sourceTrust": null,
+        "createdAt": "2026-10-03T10:17:53.965Z",
+        "updatedAt": "2026-10-03T10:17:53.965Z"
+      },
+      {
+        "id": "fd830864-040e-48d3-945b-96a08960711b",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "issueId": "67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+        "authorAgentId": "8d7506df-de51-466f-b044-2a7c6afa4390",
+        "authorUserId": null,
+        "onBehalfOfUserId": "local-board",
+        "authorType": "agent",
+        "createdByRunId": "1f59331b-ff89-4b45-a9f3-29b34ccb917e",
+        "derivedAuthorAgentId": null,
+        "derivedCreatedByRunId": null,
+        "derivedAuthorSource": null,
+        "clientRequestId": null,
+        "conversationSessionGeneration": null,
+        "body": "Candidate A: fixture-a. Ready for review.",
+        "presentation": null,
+        "metadata": {
+          "version": 1,
+          "authorizationReason": "allow_self",
+          "sections": [
+            {
+              "title": "Authorization",
+              "rows": [
+                {
+                  "type": "key_value",
+                  "label": "Reason",
+                  "value": "allow_self"
+                }
+              ]
+            }
+          ]
+        },
+        "deletedAt": null,
+        "deletedByType": null,
+        "deletedByAgentId": null,
+        "deletedByUserId": null,
+        "deletedByRunId": null,
+        "sourceTrust": null,
+        "createdAt": "2026-10-03T10:17:51.189Z",
+        "updatedAt": "2026-10-03T10:17:51.189Z"
+      }
+    ]
+  },
+  {
+    "label": "S2 answered interaction persisted",
+    "status": 200,
+    "body": [
+      {
+        "id": "b6cc6afa-a7a9-4c2c-8f81-7e31433b52f6",
+        "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+        "issueId": "c4ab3af6-45f1-4acc-919c-624654bb0c78",
+        "kind": "ask_user_questions",
+        "status": "answered",
+        "continuationPolicy": "wake_assignee",
+        "requestedResolverPolicy": "anyone",
+        "effectiveResolverPolicy": "anyone",
+        "resolverPolicyProvenance": "inherited",
+        "effectiveResolverPolicySource": "requested",
+        "idempotencyKey": "subnet-size-v2",
+        "originCommentIds": [],
+        "sourceCommentId": null,
+        "sourceIdentityContextId": "75f51401-d2f1-4db4-9d31-efcb75e42a5b",
+        "sourceRunId": "00de9e89-85ab-43c9-85c6-c530b3f268e1",
+        "title": null,
+        "summary": null,
+        "createdByAgentId": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+        "addresseeAgentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+        "addresseeUserId": null,
+        "createdByUserId": null,
+        "resolvedByAgentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+        "resolvedByRunId": "ec48b184-82fe-4d2f-9d1e-6f6c925a4d83",
+        "resolvedByUserId": null,
+        "payload": {
+          "version": 1,
+          "supersedeOnUserComment": true,
+          "questions": [
+            {
+              "id": "size",
+              "prompt": "Subnet CIDR?",
+              "selectionMode": "single",
+              "required": true,
+              "options": [
+                {
+                  "id": "small",
+                  "label": "10.230.1.0/24"
+                }
+              ]
+            }
+          ]
+        },
+        "result": {
+          "version": 1,
+          "answers": [
+            {
+              "questionId": "size",
+              "optionIds": [
+                "small"
+              ]
+            }
+          ],
+          "summaryMarkdown": null
+        },
+        "resolvedAt": "2026-10-03T10:17:45.463Z",
+        "createdAt": "2026-10-03T10:17:42.639Z",
+        "updatedAt": "2026-10-03T10:17:45.463Z",
+        "resolverPolicy": "anyone",
+        "legacyResolverPolicyAliases": {
+          "requested": "board_or_agents",
+          "effective": "board_or_agents"
+        }
+      }
+    ]
+  },
+  {
+    "label": "S3.3 create revisioned candidate document",
+    "status": 201,
+    "body": {
+      "id": "cd7110f8-5724-4a83-8fb2-a32588c5f745",
+      "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+      "issueId": "67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+      "key": "candidate",
+      "title": "Graph candidate",
+      "format": "markdown",
+      "body": "Candidate B: fixture-b",
+      "latestRevisionId": "9a27df7a-9600-49b6-bb2f-825268da5c58",
+      "latestRevisionNumber": 1,
+      "createdByAgentId": null,
+      "createdByUserId": "local-board",
+      "updatedByAgentId": null,
+      "updatedByUserId": "local-board",
+      "lockedAt": null,
+      "lockedByAgentId": null,
+      "lockedByUserId": null,
+      "sourceTrust": null,
+      "createdAt": "2026-10-03T10:21:11.931Z",
+      "updatedAt": "2026-10-03T10:21:11.931Z"
+    }
+  },
+  {
+    "label": "S3 candidate revision result",
+    "document": {
+      "id": "cd7110f8-5724-4a83-8fb2-a32588c5f745",
+      "companyId": "d7e739bd-13f0-4764-be31-e1af89420e15",
+      "issueId": "67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+      "key": "candidate",
+      "title": "Graph candidate",
+      "format": "markdown",
+      "body": "Candidate B: fixture-b",
+      "latestRevisionId": "9a27df7a-9600-49b6-bb2f-825268da5c58",
+      "latestRevisionNumber": 1,
+      "createdByAgentId": null,
+      "createdByUserId": "local-board",
+      "updatedByAgentId": null,
+      "updatedByUserId": "local-board",
+      "lockedAt": null,
+      "lockedByAgentId": null,
+      "lockedByUserId": null,
+      "sourceTrust": null,
+      "createdAt": "2026-10-03T10:21:11.931Z",
+      "updatedAt": "2026-10-03T10:21:11.931Z"
+    }
+  }
+]

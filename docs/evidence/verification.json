@@ -1,0 +1,19 @@
+{
+  "verifiedAt": "2026-10-03T10:23:24.458Z",
+  "evidenceFiles": [
+    "paperclip-initial",
+    "paperclip-runs",
+    "paperclip-extra",
+    "paperclip-staleness",
+    "paperclip-recovery",
+    "paperclip-worktree",
+    "openrig-initial",
+    "openrig-deep",
+    "openrig-followup",
+    "openrig-recovery",
+    "openrig-retire",
+    "openrig-worktree"
+  ],
+  "assertions": "passed",
+  "scope": "Deterministic API/process/stub tests and separately labelled Git fixture. Not native OpenCode/Hermes or production source integration."
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "label": "S3 worker remains running after typed acceptance",
+    "status": 0,
+    "output": "[{\"rigId\":\"01M40KY1PZEXK98REBMNV2AC06\",\"rigName\":\"graph\",\"logicalId\":\"main.lead\",\"canonicalSessionName\":\"main-lead@graph\",\"hostSelfId\":\"host-0177a372\",\"runtime\":\"stub\",\"model\":null,\"sessionStatus\":\"running\",\"startupStatus\":\"ready\",\"oriented\":\"n-a\",\"lifecycleState\":\"running\",\"agentActivity\":{\"state\":\"unknown\"},\"hasAssignedWork\":false,\"assignedWorkCount\":0,\"pendingWorkCount\":0,\"resumeType\":null,\"resumeTokenPresent\":false,\"lastActivity\":\"2026-10-03T10:21:44.082Z\"}]\n"
+  },
+  {
+    "label": "S3 explicit runtime retirement (separate coordinator operation)",
+    "status": 0,
+    "output": "{\n  \"ok\": true,\n  \"rigId\": \"01M40KY1PZEXK98REBMNV2AC06\",\n  \"nodeId\": \"01M40KY1Q1QS29HKH87A7N3E0B\",\n  \"logicalId\": \"main.lead\",\n  \"sessionsKilled\": 1,\n  \"reroutedQitemIds\": []\n}\n"
+  },
+  {
+    "label": "S3 worker state after explicit retirement",
+    "status": 0,
+    "output": "[]\n"
+  },
+  {
+    "label": "S3 unrelated project still running",
+    "status": 0,
+    "output": "[{\"rigId\":\"01M40KXZDK3QRBCF58VJH7DJF8\",\"rigName\":\"project\",\"logicalId\":\"main.lead\",\"canonicalSessionName\":\"main-lead@project\",\"hostSelfId\":\"host-0177a372\",\"runtime\":\"stub\",\"model\":null,\"sessionStatus\":\"running\",\"startupStatus\":\"ready\",\"oriented\":\"n-a\",\"lifecycleState\":\"running\",\"agentActivity\":{\"state\":\"unknown\"},\"hasAssignedWork\":true,\"assignedWorkCount\":2,\"pendingWorkCount\":2,\"resumeType\":null,\"resumeTokenPresent\":false,\"lastActivity\":\"2026-10-03T10:21:45.711Z\"}]\n"
+  }
+]

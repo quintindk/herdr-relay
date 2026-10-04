@@ -1,0 +1,24 @@
+[
+  {
+    "label": "S3.3 candidate changed after correction",
+    "candidateA": "0fdfa1777ff44c139213ddc725e815479d7f4d7622e5086ed1240630bb83569f",
+    "candidateB": "00c2772f2deb6626c1e1eca2900a11dd53af3ce2d8ed9d487b362156f20fbf78",
+    "staleCandidateRejected": true
+  },
+  {
+    "label": "S3.4/S3.6 reviewed commit and retry reconciliation",
+    "commit": "9ef80fac9fd2fb543d939f47f25b04fbe86bb0ea",
+    "commitCount": "2",
+    "replayCommit": "9ef80fac9fd2fb543d939f47f25b04fbe86bb0ea"
+  },
+  {
+    "label": "S3.7 dirty cleanup refused",
+    "blocked": true,
+    "filePreserved": true
+  },
+  {
+    "label": "S3.7 clean retry",
+    "worktreeRemoved": true,
+    "branchRetained": true
+  }
+]

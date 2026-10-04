@@ -1,0 +1,93 @@
+[
+  {
+    "label": "S1.6 persisted backlog after restart",
+    "method": "GET",
+    "path": "/api/issues/370ea28b-21cc-4c0f-9f3a-963d570d95d2",
+    "status": 200,
+    "response": {
+      "id": "370ea28b-21cc-4c0f-9f3a-963d570d95d2",
+      "status": "backlog",
+      "title": "Unassigned follow-up",
+      "assigneeAgentId": null,
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S2.5 persisted subnet request after restart",
+    "method": "GET",
+    "path": "/api/issues/c4ab3af6-45f1-4acc-919c-624654bb0c78",
+    "status": 200,
+    "response": {
+      "id": "c4ab3af6-45f1-4acc-919c-624654bb0c78",
+      "status": "done",
+      "title": "Run-scoped subnet 1791022661317",
+      "assigneeAgentId": "baa5d81e-4155-440b-8a95-d2fe0fc2cf0c",
+      "assigneeUserId": null,
+      "executionState": null,
+      "executionPolicy": null,
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  },
+  {
+    "label": "S3.6 persisted graph review after restart",
+    "method": "GET",
+    "path": "/api/issues/67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+    "status": 200,
+    "response": {
+      "id": "67c4ff93-e8c1-4c3f-8d78-f2b3e8d41ad4",
+      "status": "done",
+      "title": "Run-scoped graph 1791022661317",
+      "assigneeAgentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44",
+      "assigneeUserId": null,
+      "executionState": {
+        "status": "completed",
+        "monitor": null,
+        "reviewRequest": null,
+        "currentStageId": null,
+        "lastDecisionId": "9f40bfed-9bc1-4295-9261-085a63c55d98",
+        "returnAssignee": {
+          "type": "agent",
+          "userId": null,
+          "agentId": "8d7506df-de51-466f-b044-2a7c6afa4390"
+        },
+        "currentStageType": null,
+        "completedStageIds": [
+          "120942b4-5796-49aa-8bda-05dbd3a9bd07"
+        ],
+        "currentStageIndex": null,
+        "currentParticipant": null,
+        "lastDecisionOutcome": "approved",
+        "changesRequestedCount": 0
+      },
+      "executionPolicy": {
+        "mode": "normal",
+        "stages": [
+          {
+            "id": "120942b4-5796-49aa-8bda-05dbd3a9bd07",
+            "type": "review",
+            "participants": [
+              {
+                "id": "f05376f3-a074-4073-acd7-6e3891024fba",
+                "type": "agent",
+                "userId": null,
+                "agentId": "0976affe-5641-4f7e-b7c7-e5e37bb8de44"
+              }
+            ],
+            "approvalsNeeded": 1
+          }
+        ],
+        "commentRequired": true
+      },
+      "parentId": null,
+      "blockedBy": [],
+      "blocks": []
+    }
+  }
+]

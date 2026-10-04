@@ -1,0 +1,57 @@
+[
+  {
+    "label": "S1.6 durable inbox after restart",
+    "method": "GET",
+    "path": "/api/queue/inbox/pending?destinationSession=main-lead@daily",
+    "status": 200,
+    "response": [
+      {
+        "state": "pending",
+        "destinationSession": "main-lead@daily",
+        "body": "What subnet size?"
+      },
+      {
+        "state": "pending",
+        "destinationSession": "main-lead@daily",
+        "body": "Subnet ready: /subscriptions/fixture/subnets/demo"
+      },
+      {
+        "state": "pending",
+        "destinationSession": "main-lead@daily",
+        "body": "Important Teams event source=teams-42"
+      }
+    ]
+  },
+  {
+    "label": "S2.5 subnet state after restart",
+    "method": "GET",
+    "path": "/api/queue/eval-subnet",
+    "status": 200,
+    "response": {
+      "qitemId": "eval-subnet",
+      "state": "done",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@landing",
+      "closureReason": "no-follow-on",
+      "closureTarget": null,
+      "blockedOn": null,
+      "body": "Vend fake subnet; clarify size."
+    }
+  },
+  {
+    "label": "S3.6 graph handoff after restart",
+    "method": "GET",
+    "path": "/api/queue/eval-graph",
+    "status": 200,
+    "response": {
+      "qitemId": "eval-graph",
+      "state": "handed-off",
+      "sourceSession": "main-lead@daily",
+      "destinationSession": "main-lead@graph",
+      "closureReason": "handed_off_to",
+      "closureTarget": "main-lead@daily",
+      "blockedOn": null,
+      "body": "Update graph and return exact candidate"
+    }
+  }
+]
