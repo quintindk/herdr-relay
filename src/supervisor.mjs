@@ -5,6 +5,7 @@ import { OpenCode, observe } from './opencode.mjs';
 import { Hermes, observeHermes } from './hermes.mjs';
 import { canonical, digest, requireValue } from './protocol.mjs';
 import { ownedRuntime } from './runtimes.mjs';
+import { reconcilePlacement } from './placement.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -49,6 +50,10 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
     const runtimeKey = (binding.config.opencode ?? binding.config.hermes)?.runtimeKey;
     const native = hermes ? new Hermes(binding.config) : new OpenCode(binding.config);
     try {
+      if (store.operation(`placement:${binding.id}`)) {
+        const placement = await reconcilePlacement(store, binding.id);
+        requireValue(placement.state === 'verified', 'placement_unresolved', 'Native placement requires reconciliation', 409);
+      }
       if (runtimeKey) ownedRuntime(store, runtimeKey);
       if (!run.invocation) {
         if (!ready(id) || run.cancellationRequested) return;

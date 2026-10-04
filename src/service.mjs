@@ -19,6 +19,7 @@ import { launchRuntime, ownedRuntime, stopRuntime } from './runtimes.mjs';
 import { retireAccepted } from './lifecycle.mjs';
 import { backendOperator, createSchedule, scheduleRunner } from './schedules.mjs';
 import { provisionAgent } from './provisioning.mjs';
+import { bindPlacement, reconcilePlacement } from './placement.mjs';
 
 async function body(req) {
   let size = 0;
@@ -142,6 +143,10 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         try { result = await pending; } finally { publications.delete(key); }
       }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
+      else if (req.method === 'POST' && ['/placement/bind', '/placement/reconcile'].includes(path)) {
+        adminOnly();
+        result = path === '/placement/bind' ? await bindPlacement(store, input) : await reconcilePlacement(store, text(input.bindingId, 'bindingId'));
+      }
       else if (req.method === 'POST' && path === '/schedules') { adminOnly(); result = createSchedule(store, input); }
       else if (req.method === 'POST' && path === '/schedules/stop') {
         adminOnly();

@@ -40,6 +40,7 @@ const help = `herdr-relay (development)
   view [--watch]
   service-unit --paperclip-url URL [--state-dir DIR]
   schedule create|stop --file schedule.json
+  placement bind|reconcile --file placement.json
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
   operator-context --context-out FILE
@@ -89,6 +90,10 @@ export async function main(args) {
   };
   let result;
   if (group === 'status') result = await call(connection, 'GET', '/health');
+  else if (group === 'placement' && ['bind', 'reconcile'].includes(action)) {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', `/placement/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'schedule' && ['create', 'stop'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', action === 'create' ? '/schedules' : '/schedules/stop', JSON.parse(readFileSync(values.file, 'utf8')));
