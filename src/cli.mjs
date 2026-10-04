@@ -5,7 +5,7 @@ import { call, credentials, stateDirectory } from './client.mjs';
 import { startService } from './service.mjs';
 import { requireValue } from './protocol.mjs';
 import { candidate } from './candidate.mjs';
-import { systemdUnit } from './installation.mjs';
+import { systemdUnit, installService, uninstallService } from './installation.mjs';
 import { renderOverview, watchOverview } from './views.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +39,8 @@ const help = `herdr-relay (development)
   event checkpoint --source SOURCE
   view [--watch]
   service-unit --paperclip-url URL [--state-dir DIR]
+  install --paperclip-url URL [--state-dir DIR] [--backend-context FILE]
+  uninstall [--state-dir DIR]
   schedule create|stop --file schedule.json
   placement bind|reconcile --file placement.json
   operation inspect OPERATION_ID
@@ -63,8 +65,10 @@ export async function main(args) {
     return;
   }
   if (values['state-dir']) process.env.RELAY_STATE_DIR = values['state-dir'];
-  if (group === 'service-unit') {
-    console.log(systemdUnit({ node: process.execPath, cli: fileURLToPath(import.meta.url), stateDirectory: stateDirectory(), paperclipUrl: values['paperclip-url'] }));
+  if (['service-unit', 'install', 'uninstall'].includes(group)) {
+    const config = { node: process.execPath, cli: fileURLToPath(import.meta.url), stateDirectory: stateDirectory(),
+      paperclipUrl: values['paperclip-url'], backendContextFile: values['backend-context'] };
+    console.log(group === 'service-unit' ? systemdUnit(config) : JSON.stringify(group === 'install' ? installService(config) : uninstallService(stateDirectory())));
     return;
   }
   if (group === 'service') {

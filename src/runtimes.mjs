@@ -8,7 +8,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 
 function processIdentity(pid) {
-  try { return readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ')[19]; }
+  try {
+    const fields = readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ');
+    return fields[0] === 'Z' ? null : fields[19];
+  }
   catch { return null; }
 }
 

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
 import { recordEvent, inbox, acknowledgeEvent } from '../src/inbox.mjs';
-import { systemdUnit } from '../src/installation.mjs';
+import { systemdUnit, installService, uninstallService } from '../src/installation.mjs';
 import { overview, renderOverview } from '../src/views.mjs';
 
 test('source event and checkpoint are atomic, deduplicated and recoverable after restart', t => {
@@ -44,4 +44,23 @@ test('overview strips terminal controls from task and agent labels', () => {
   const rendered = renderOverview(overview([], [run]));
   assert.ok(!rendered.includes('\x1b'));
   assert.ok(rendered.includes('unsettled'));
+});
+
+test('service installation is repeatable, preserves state and refuses overwritten units', t => {
+  const home = mkdtempSync(join(tmpdir(), 'relay-install-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const config = { node: process.execPath, cli: '/relay/src/cli.mjs', stateDirectory: join(home, 'state'), paperclipUrl: 'http://127.0.0.1:3100' };
+  const calls = [];
+  const options = { home, execute: (command, args) => calls.push([command, args]) };
+  const result = installService(config, options);
+  installService(config, options);
+  writeFileSync(join(config.stateDirectory, 'preserve'), 'state');
+  writeFileSync(result.installed, 'user changes');
+  assert.throws(() => installService(config, options), { code: 'installation_conflict' });
+  assert.throws(() => uninstallService(config.stateDirectory, options), { code: 'installation_conflict' });
+  writeFileSync(result.installed, systemdUnit(config));
+  assert.equal(uninstallService(config.stateDirectory, options).removed, true);
+  assert.equal(uninstallService(config.stateDirectory, options).removed, false);
+  assert.ok(existsSync(join(config.stateDirectory, 'preserve')));
+  assert.ok(calls.some(([command, args]) => command === 'systemctl' && args.includes('--now')));
 });

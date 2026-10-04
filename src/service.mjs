@@ -202,7 +202,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         const [, id, action] = match;
         const run = store.run(id);
         requireValue(admin || run.request.bindingId === bindingId, 'forbidden', 'Run belongs to another binding', 403);
-        if (req.method === 'POST' && admin && input.runId !== undefined && action !== 'recover') {
+        if (req.method === 'POST' && admin && input.runId !== undefined && ['attach', 'cancel', 'publish', 'publish-question'].includes(action)) {
           requireValue(input.runId === (run.backendRunId ?? run.request.runId), 'stale_backend_run', 'Adapter no longer owns this backend invocation', 409);
         }
         if (req.method === 'GET' && !action) result = run;

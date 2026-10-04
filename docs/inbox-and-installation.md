@@ -57,6 +57,19 @@ Herdr `0.9.3`. Runtime placement restoration remains pending.
 
 ## Linux user service
 
+Install or remove the owned user service directly:
+
+```bash
+node src/cli.mjs install --paperclip-url http://127.0.0.1:3100
+node src/cli.mjs uninstall
+```
+
+Installation records its owned unit content, validates it, reloads systemd and
+enables/starts the service. Repeating installation is safe. A unit changed outside
+Relay is not overwritten or removed. Uninstall stops/disables the service while
+preserving integration state. Add `--backend-context FILE` for scheduling,
+provisioning and operator recovery. These paths are included in the generated unit.
+
 Generate a systemd user unit with absolute paths:
 
 ```bash
