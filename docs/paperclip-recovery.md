@@ -17,6 +17,14 @@ can become unavailable. New work stays blocked behind unsettled native execution
 
 ## Recovery procedure
 
+The operator can now orchestrate this procedure with `backend recover RUN` when
+Relay has a configured `--backend-context` file. Native result and settlement must
+already be complete. The command resolves the matching Paperclip recovery action,
+configures and invokes a replacement under a stable key, then restores prior agent
+configuration once attachment is observed. Repeat the command while its operation
+is `replacement_started`. It never invents native settlement. The real host-restart
+smoke now exercises this command rather than manual configuration changes.
+
 1. Inspect the Relay run with `work inspect RUN`. Establish actual native
    settlement. For native delivery, Relay must observe the terminal response. For
    pull mode, the operator records verified settlement using `operation settle`.
@@ -66,5 +74,5 @@ Upstream source inspected at `8f8a0ab7effbd6a0584107d8038736c134ee5047`:
 - `server/src/services/heartbeat.ts`: orphan processing and `process_lost` status.
 - `server/src/routes/issues.ts`: recovery-action resolution and outcome checks.
 
-Automatic board-authorised recovery orchestration remains to be implemented.
-The current adapter option is an explicit operator recovery path.
+Recovery remains operator-triggered and board-authorised. A background process
+does not silently make outcome assertions or rewrite unrelated agent configuration.

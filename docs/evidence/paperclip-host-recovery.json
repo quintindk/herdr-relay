@@ -10,5 +10,6 @@
   "replacementStatus": "succeeded",
   "resultReceipts": 1,
   "correctReplacementAttribution": true,
+  "operatorRecoveryCommand": true,
   "requires": "Verified native settlement and Paperclip recovery-action resolution before replacement invocation"
 }

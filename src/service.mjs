@@ -20,6 +20,7 @@ import { retireAccepted } from './lifecycle.mjs';
 import { backendOperator, createSchedule, scheduleRunner } from './schedules.mjs';
 import { provisionAgent } from './provisioning.mjs';
 import { bindPlacement, reconcilePlacement } from './placement.mjs';
+import { recoverBackend } from './backend-recovery.mjs';
 
 async function body(req) {
   let size = 0;
@@ -143,6 +144,23 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         try { result = await pending; } finally { publications.delete(key); }
       }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
+      else if (req.method === 'POST' && path === '/backend/recover') {
+        adminOnly();
+        const key = `backend-recovery:${text(input.runId, 'runId')}`;
+        requireValue(!publications.has(key), 'operation_busy', 'Backend recovery is already in progress', 409);
+        const pending = recoverBackend(store, operatorApi, input);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); }
+      }
+      else if (req.method === 'POST' && path === '/operations/inspect') {
+        const operation = store.operation(text(input.id, 'id'));
+        requireValue(operation, 'operation_not_found', 'Unknown operation', 404);
+        if (!admin) {
+          requireValue(operation.runId && store.run(operation.runId).request.bindingId === bindingId,
+            'forbidden', 'Operation belongs to another principal', 403);
+        }
+        result = operation;
+      }
       else if (req.method === 'POST' && ['/placement/bind', '/placement/reconcile'].includes(path)) {
         adminOnly();
         result = path === '/placement/bind' ? await bindPlacement(store, input) : await reconcilePlacement(store, text(input.bindingId, 'bindingId'));

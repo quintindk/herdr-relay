@@ -52,7 +52,9 @@ async function stop(crash = false) {
 }
 try {
   await start(true);
-  service = await startService({ directory: join(directory, 'relay'), paperclipUrl: base });
+  const backendContextFile = join(directory, 'backend.json');
+  writeFileSync(backendContextFile, JSON.stringify({ localTrusted: true }), { mode: 0o600 });
+  service = await startService({ directory: join(directory, 'relay'), paperclipUrl: base, backendContextFile });
   const operator = { socketPath: service.socketPath, token: service.token };
   const contextFile = join(directory, 'operator.json');
   writeFileSync(contextFile, JSON.stringify(operator), { mode: 0o600 });
@@ -100,19 +102,11 @@ try {
   assert.equal(after.errorCode, 'process_lost');
   assert.equal(comments.filter(comment => comment.body.includes(`herdr-relay:${run.id}:`)).length, 0);
   await call(operator, 'POST', `/runs/${run.id}/settle`, { outcome: 'completed', evidence: 'Deterministic worker finished and all fixture effects are known' });
-  const recovery = await api('GET', `/api/issues/${issue.id}/recovery-actions`);
-  await api('POST', `/api/issues/${issue.id}/recovery-actions/resolve`, {
-    actionId: recovery.active.id, outcome: 'restored', sourceIssueStatus: 'todo',
-    executionReconciliation: { runId: heartbeat.id, providerStopped: true, actionOutcome: 'completed',
-      outcomeEvidence: `Relay ${run.id} has a persisted result and verified fixture settlement. Only publication remains.` },
+  const recovery = await until(async () => {
+    const operation = await call(operator, 'POST', '/backend/recover', { runId: run.id });
+    return operation.state === 'recorded' ? operation : false;
   });
-  await api('PATCH', `/api/agents/${agent.id}`, {
-    adapterConfig: { relayContextFile: contextFile, bindingId: 'recovery', bindingRevision: 1, timeoutSec: 300, recoverRelayRunId: run.id },
-  });
-  await enable(true);
-  const replacement = await api('POST', `/api/agents/${agent.id}/heartbeat/invoke`, { reason: 'relay_recovery', payload: { taskId: issue.id, issueId: issue.id } });
-  assert.ok(replacement.id, `Replacement invoke: ${JSON.stringify(replacement)}`);
-  await enable(false);
+  const replacement = { id: recovery.replacementId };
   await until(async () => {
     const backend = await api('GET', `/api/heartbeat-runs/${replacement.id}`);
     if (['failed', 'cancelled', 'timed_out'].includes(backend.status)) throw new Error(`Replacement failed: ${JSON.stringify(backend)}`);
