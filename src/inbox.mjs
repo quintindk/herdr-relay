@@ -27,7 +27,7 @@ export function recordEvent(store, bindingId, input) {
 
 export function inbox(store, bindingId) {
   return store.db.prepare("SELECT data FROM operations WHERE id LIKE 'event:%' ORDER BY rowid DESC").all()
-    .map(row => JSON.parse(row.data)).filter(event => event.request.recipient === bindingId);
+    .map(row => JSON.parse(row.data)).filter(event => !bindingId || event.request.recipient === bindingId);
 }
 
 export function acknowledgeEvent(store, bindingId, id) {

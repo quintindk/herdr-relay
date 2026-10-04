@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { hostname } from 'node:os';
 import { requireValue, text } from './protocol.mjs';
 
 export async function herdrPane(paneId) {
@@ -18,7 +19,9 @@ export async function bindPlacement(store, input, inspect = herdrPane) {
     pane.agent_session?.value === binding.config.conversationId,
   'placement_identity_mismatch', 'Herdr pane does not report the bound native conversation', 409);
   const placement = { paneId, terminalId: pane.terminal_id, workspaceId: pane.workspace_id,
-    tabId: pane.tab_id, nativeSessionId: pane.agent_session.value, state: 'verified' };
+    tabId: pane.tab_id, nativeSessionId: pane.agent_session.value, state: 'verified',
+    machine: hostname(), serverSocket: process.env.HERDR_SOCKET_PATH ?? process.env.HERDR_SOCKET ?? null,
+    session: process.env.HERDR_SESSION ?? null };
   requireValue(typeof placement.terminalId === 'string', 'placement_identity_mismatch', 'Herdr terminal identity required');
   return store.saveOperation({ id: `placement:${binding.id}`, runId: '', bindingId: binding.id, ...placement });
 }

@@ -94,7 +94,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'GET' && path === '/overview') {
         adminOnly();
-        result = overview(store.bindings(), store.runs());
+        result = overview(store.bindings(), store.runs(), inbox(store));
       }
       else if (req.method === 'GET' && path === '/inbox') {
         requireValue(bindingId, 'binding_required', 'Use a worker context for inbox reads');

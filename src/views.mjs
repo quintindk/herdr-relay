@@ -1,10 +1,12 @@
-export function overview(bindings, runs) {
+export function overview(bindings, runs, events = []) {
   const rows = runs.map(run => ({ run: run.id, agent: run.request.bindingId, task: run.request.taskId,
     delivery: run.deliveryState, native: run.native?.state ?? run.nativeState,
     outcome: run.settlement?.outcome ?? 'unsettled', publication: run.publication.state,
     question: run.waiting?.state ?? '-', review: run.review?.status ?? '-' }));
   return { agents: bindings.map(binding => ({ id: binding.id, harness: binding.config.harness,
-    conversation: binding.config.conversationId, delivery: binding.config.delivery })), work: rows };
+    conversation: binding.config.conversationId, delivery: binding.config.delivery })), work: rows,
+    inbox: events.map(event => ({ id: event.id, recipient: event.request.recipient, source: event.request.source,
+      summary: event.request.summary, reference: event.request.reference, state: event.state })) };
 }
 
 export function renderOverview(value) {
@@ -12,7 +14,8 @@ export function renderOverview(value) {
   const rows = value.work.map(row => Object.values(row).map(safe));
   const headers = ['Run', 'Agent', 'Task', 'Delivery', 'Native', 'Outcome', 'Publication', 'Question', 'Review'];
   return ['Herdr Relay', '', `${value.agents.length} registered agents, ${rows.length} work invocations`, '',
-    headers.join(' | '), ...rows.map(row => row.join(' | ')), ''].join('\n');
+    headers.join(' | '), ...rows.map(row => row.join(' | ')), '', 'Inbox',
+    ...(value.inbox ?? []).map(event => [event.state, event.recipient, event.source, event.summary, event.reference].map(safe).join(' | ')), ''].join('\n');
 }
 
 export async function watchOverview(read, { input = process.stdin, output = process.stdout, interval = 1000 } = {}) {

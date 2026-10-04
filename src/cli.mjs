@@ -8,6 +8,7 @@ import { candidate } from './candidate.mjs';
 import { systemdUnit, installService, uninstallService } from './installation.mjs';
 import { renderOverview, watchOverview } from './views.mjs';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const help = `herdr-relay (development)
   service --paperclip-url URL [--state-dir DIR] [--backend-context FILE]
@@ -39,6 +40,8 @@ const help = `herdr-relay (development)
   resource provision|finalise|retire --file resource.json
   runtime launch|stop|resume --file runtime.json
   inbox list
+  inbox read EVENT_ID
+  inbox wait [--timeout SECONDS]
   inbox acknowledge EVENT_ID
   event record --file event.json
   event checkpoint --source SOURCE
@@ -62,7 +65,7 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'task']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'task', 'timeout']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
@@ -123,6 +126,20 @@ export async function main(args) {
     return;
   }
   else if (group === 'inbox' && action === 'list') result = await call(connection, 'GET', '/inbox');
+  else if (group === 'inbox' && action === 'read' && id) {
+    result = (await call(connection, 'GET', '/inbox')).find(event => event.id === id);
+    requireValue(result, 'event_not_found', 'Event is not in your inbox', 404);
+  }
+  else if (group === 'inbox' && action === 'wait') {
+    const timeout = Number(values.timeout ?? 60);
+    requireValue(Number.isFinite(timeout) && timeout > 0 && timeout <= 86400, 'invalid_timeout', 'Timeout must be between 0 and 86400 seconds');
+    const end = Date.now() + timeout * 1000;
+    do {
+      result = (await call(connection, 'GET', '/inbox')).filter(event => event.state === 'unread');
+      if (result.length || Date.now() >= end) break;
+      await delay(Math.min(1000, end - Date.now()));
+    } while (true);
+  }
   else if (group === 'inbox' && action === 'acknowledge' && id) result = await call(connection, 'POST', '/inbox/acknowledge', { eventId: id });
   else if (group === 'event' && action === 'checkpoint') result = await call(connection, 'POST', '/checkpoint', { source: values.source });
   else if (group === 'event' && action === 'record') {
