@@ -25,6 +25,10 @@ The operation records the resolved base commit before Git changes. Repeating the
 same key reconciles the owned branch and worktree. Existing unrelated paths and
 branches conflict. The command creates only a Git resource, not an agent runtime.
 
+Finalisation and cleanup also check the recorded real path, common Git directory
+and worktree metadata directory. A replacement clone at the same path and branch
+is rejected even when its file bytes match the candidate.
+
 Finalisation input contains `key`, `runId`, `candidate` and `message`. It requires
 the bound worker's native execution to have settled and its submitted candidate
 to match the current working bytes. It stages and commits those bytes under the

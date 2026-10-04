@@ -19,6 +19,7 @@ const help = `herdr-relay (development)
   agent rebind --file continuation.json
   agent provision --file agent.json
   agent controller --file controller.json
+  agent rotate ID --key KEY --context-out FILE
   work list
   work inspect RUN
   work read RUN
@@ -167,6 +168,18 @@ export async function main(args) {
   else if (group === 'agent' && action === 'controller') {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', '/bindings/controller', JSON.parse(readFileSync(values.file, 'utf8')));
+  }
+  else if (group === 'agent' && action === 'rotate' && id) {
+    requireValue(values['context-out'], 'invalid_request', '--context-out is required');
+    if (existsSync(values['context-out'])) {
+      const existing = JSON.parse(readFileSync(values['context-out'], 'utf8'));
+      requireValue(existing.bindingId === id && existing.socketPath === connection.socketPath,
+        'context_conflict', 'Output context belongs to another binding');
+    }
+    result = await call(connection, 'POST', '/bindings/credential', { id, key: values.key });
+    writeFileSync(values['context-out'], `${JSON.stringify({ socketPath: connection.socketPath, bindingId: id,
+      token: result.token, credentialGeneration: result.binding.credentialGeneration })}\n`, { mode: 0o600 });
+    delete result.token;
   }
   else if (group === 'agent' && action === 'register') {
     requireValue(values.file && values['context-out'], 'invalid_request', '--file and --context-out are required');

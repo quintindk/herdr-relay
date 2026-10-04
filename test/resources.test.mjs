@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -29,6 +29,14 @@ test('owned worktree finalisation and accepted cleanup survive retries and refus
   store.submit(run.id, { key: 'one', summary: 'Updated graph', candidate: snapshot.id });
   store.settle(run.id, { outcome: 'completed', evidence: 'Fixture execution ended' });
   const input = { key: config.key, runId: run.id, candidate: snapshot.id, message: 'Update graph fixture' };
+  const saved = join(root, 'saved-worker');
+  renameSync(config.path, saved);
+  execFileSync('git', ['clone', '-q', repository, config.path]);
+  execFileSync('git', ['-C', config.path, 'checkout', '-q', 'graph-worker']);
+  writeFileSync(join(config.path, 'graph.json'), '{"node":"updated"}\n');
+  assert.throws(() => finaliseWorktree(store, input), { code: 'resource_conflict' });
+  rmSync(config.path, { recursive: true });
+  renameSync(saved, config.path);
   const committed = finaliseWorktree(store, input);
   assert.equal(finaliseWorktree(store, input).commit, committed.commit);
   // Simulate crash after Git commit but before recording the receipt.

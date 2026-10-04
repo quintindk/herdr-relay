@@ -76,8 +76,9 @@ See [scenario verification](scenario-verification.md) and `docs/evidence/`.
 6. **Source integrations:** production mail/Teams connectors and real Azure subnet
    provisioning are not part of the implemented synthetic scenario connectors.
    Provider-side resource idempotency must be supplied by those integrations.
-7. **Credential lifecycle:** run tokens are memory-only and reattached by adapters.
-   General rotation, revocation and retention policy are not implemented.
+7. **Credential lifecycle:** worker-token rotation is generation-bound and invalidates
+   old credentials. Run tokens are memory-only and reattached by adapters. Operator
+   and native/backend credential renewal and retention policy remain manual.
 8. **Recovery administration:** uncertain non-idempotent backend writes with no
    matching current state remain unresolved. There is no general operator override.
 9. **UI scope:** the herdr pane is a local state overview with selection/details,

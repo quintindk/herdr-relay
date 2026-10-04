@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenCode, observe } from './opencode.mjs';
@@ -13,12 +13,19 @@ export function workerContext(directory, socketPath, store, binding) {
   const parent = join(directory, 'workers');
   mkdirSync(parent, { recursive: true, mode: 0o700 });
   const path = join(parent, `${digest(binding.id)}.json`);
-  const context = { socketPath, bindingId: binding.id, token: store.register(binding.config).token };
+  const context = { socketPath, bindingId: binding.id, token: store.register(binding.config).token,
+    credentialGeneration: binding.credentialGeneration ?? 0 };
   try { writeFileSync(path, `${JSON.stringify(context)}\n`, { flag: 'wx', mode: 0o600 }); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
-    requireValue(canonical(JSON.parse(readFileSync(path, 'utf8'))) === canonical(context),
-      'context_conflict', 'Existing native worker context differs from binding', 409);
+    const previous = JSON.parse(readFileSync(path, 'utf8'));
+    if (previous.token === context.token && previous.bindingId === binding.id && previous.socketPath === socketPath) return path;
+    requireValue(previous.bindingId === binding.id && previous.socketPath === socketPath &&
+      (previous.credentialGeneration ?? 0) < context.credentialGeneration,
+    'context_conflict', 'Existing native worker context differs from binding', 409);
+    const temporary = `${path}.next`;
+    writeFileSync(temporary, `${JSON.stringify(context)}\n`, { mode: 0o600 });
+    renameSync(temporary, path);
   }
   return path;
 }

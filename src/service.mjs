@@ -8,7 +8,7 @@ import { digest, RelayError, requireValue, text } from './protocol.mjs';
 import { paperclipClient, publish, verifyRecovery } from './paperclip.mjs';
 import { nativeConfig, OpenCode } from './opencode.mjs';
 import { hermesConfig, Hermes } from './hermes.mjs';
-import { supervise } from './supervisor.mjs';
+import { supervise, workerContext } from './supervisor.mjs';
 import { publishQuestion } from './work.mjs';
 import { mutate } from './operations.mjs';
 import { review } from './review.mjs';
@@ -154,6 +154,11 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       else if (req.method === 'POST' && path === '/bindings/controller') {
         adminOnly();
         result = store.transferController(text(input.id, 'id'), input);
+      }
+      else if (req.method === 'POST' && path === '/bindings/credential') {
+        adminOnly();
+        result = store.rotateCredential(text(input.id, 'id'), input.key);
+        if (['opencode', 'hermes'].includes(result.binding.config.delivery)) workerContext(directory, socketPath, store, result.binding);
       }
       else if (req.method === 'POST' && path === '/agents/provision') {
         adminOnly();

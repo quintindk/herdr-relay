@@ -134,6 +134,26 @@ export class Store {
     return row?.id ?? null;
   }
 
+  rotateCredential(id, key) {
+    return this.transaction(() => {
+      const binding = this.binding(id);
+      requireValue(!binding.lifecycleState && !this.runs(id).some(run => run.nativeState !== 'settled'),
+        'binding_busy', 'Credential rotation requires an active binding without unsettled work', 409);
+      const operationId = `credential:${digest([id, text(key, 'key')])}`;
+      const previous = this.operation(operationId);
+      if (previous) {
+        requireValue(binding.credentialGeneration === previous.generation, 'credential_rotation_superseded', 'A later rotation replaced this operation', 409);
+        return { binding, token: this.db.prepare('SELECT token FROM bindings WHERE id = ?').get(id).token };
+      }
+      const token = randomBytes(32).toString('hex');
+      binding.credentialGeneration = (binding.credentialGeneration ?? 0) + 1;
+      this.db.prepare('UPDATE bindings SET token = ?, token_hash = ?, data = ? WHERE id = ?')
+        .run(token, digest(token), JSON.stringify(binding), id);
+      this.saveOperation({ id: operationId, runId: '', bindingId: id, generation: binding.credentialGeneration, state: 'recorded' });
+      return { binding, token };
+    });
+  }
+
   pinBackend(url) {
     const existing = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('paperclip');
     requireValue(!existing || existing.value === url, 'backend_mismatch', 'State directory belongs to a different Paperclip backend', 409);

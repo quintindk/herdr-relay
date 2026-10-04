@@ -1,11 +1,21 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { candidate } from './candidate.mjs';
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 
 const git = (directory, args) => execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 const clean = directory => git(directory, ['status', '--porcelain=v1', '--untracked-files=all']).length === 0;
+
+function worktreeIdentity(resource) {
+  const path = resource.request.path;
+  const common = realpathSync(resolve(path, git(path, ['rev-parse', '--git-common-dir']).trim()));
+  const metadata = realpathSync(git(path, ['rev-parse', '--absolute-git-dir']).trim());
+  requireValue(common === resource.commonDirectory && metadata === resource.gitDirectory &&
+    realpathSync(path) === resource.realPath &&
+    git(path, ['symbolic-ref', '--short', 'HEAD']).trim() === resource.request.branch,
+  'resource_conflict', 'Owned worktree or repository identity changed', 409);
+}
 
 export function provisionWorktree(store, input, { pendingBinding = false } = {}) {
   const id = `worktree:${text(input.key, 'key')}`;
@@ -17,7 +27,11 @@ export function provisionWorktree(store, input, { pendingBinding = false } = {})
   let operation = store.operation(id);
   if (operation) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Worktree key has different configuration', 409);
-    requireValue(operation.state !== 'retired', 'resource_retired', 'Worktree has already been retired', 409);
+    requireValue(['intent', 'ready'].includes(operation.state), 'resource_retired', 'Worktree is retiring or retired', 409);
+    if (operation.state === 'ready') {
+      worktreeIdentity(operation);
+      return operation;
+    }
   } else {
     requireValue(!existsSync(request.path), 'path_occupied', 'Worktree path already exists', 409);
     const refs = git(request.repository, ['for-each-ref', '--format=%(refname)', `refs/heads/${request.branch}`]).trim();
@@ -33,10 +47,11 @@ export function provisionWorktree(store, input, { pendingBinding = false } = {})
   }
   requireValue(git(request.path, ['symbolic-ref', '--short', 'HEAD']).trim() === request.branch,
     'resource_conflict', 'Worktree branch identity changed', 409);
-  const common = resolve(request.path, git(request.path, ['rev-parse', '--git-common-dir']).trim());
-  const expected = resolve(request.repository, git(request.repository, ['rev-parse', '--git-common-dir']).trim());
+  const common = realpathSync(resolve(request.path, git(request.path, ['rev-parse', '--git-common-dir']).trim()));
+  const expected = realpathSync(resolve(request.repository, git(request.repository, ['rev-parse', '--git-common-dir']).trim()));
   requireValue(common === expected, 'resource_conflict', 'Worktree belongs to another repository', 409);
-  return store.saveOperation({ ...operation, state: 'ready', commonDirectory: common });
+  return store.saveOperation({ ...operation, state: 'ready', commonDirectory: common,
+    gitDirectory: realpathSync(git(request.path, ['rev-parse', '--absolute-git-dir']).trim()), realPath: realpathSync(request.path) });
 }
 
 export function finaliseWorktree(store, input) {
@@ -54,8 +69,7 @@ export function finaliseWorktree(store, input) {
   let operation = store.operation(id);
   if (operation) requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Finalisation payload changed', 409);
   const directory = resource.request.path;
-  requireValue(git(directory, ['symbolic-ref', '--short', 'HEAD']).trim() === resource.request.branch,
-    'resource_conflict', 'Worktree branch changed', 409);
+  worktreeIdentity(resource);
   requireValue(candidate(directory).id === input.candidate, 'stale_candidate', 'Working bytes differ from submitted candidate', 409);
   if (operation?.state === 'recorded') {
     requireValue(git(directory, ['rev-parse', 'HEAD']).trim() === operation.commit, 'finalisation_changed', 'Worktree HEAD changed after finalisation', 409);
@@ -96,6 +110,7 @@ export async function retireWorktree(store, input, verifyAcceptance) {
   if (resource.state === 'retired') return resource;
   const directory = resource.request.path;
   if (existsSync(directory)) {
+    worktreeIdentity(resource);
     requireValue(git(directory, ['symbolic-ref', '--short', 'HEAD']).trim() === resource.request.branch &&
       git(directory, ['rev-parse', 'HEAD']).trim() === finalisation.commit,
     'resource_conflict', 'Worktree identity or commit changed', 409);
