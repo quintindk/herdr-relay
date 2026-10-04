@@ -55,7 +55,7 @@ export async function executeRemote(ctx, { spawnProcess = spawn } = {}) {
     ctx.signal?.removeEventListener('abort', onAbort);
     clearTimeout(timer);
     await logs;
-    if (result) return result;
+    if (result) return { ...result, timedOut: result.timedOut || Date.now() >= deadline };
     if (failure) throw failure;
     await ctx.onLog('stderr', `${JSON.stringify({ code: 'remote_adapter_disconnected', reconciliationPending: true })}\n`);
     // Same immutable backend-run key. Disconnect is not evidence of native stop.

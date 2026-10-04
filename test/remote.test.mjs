@@ -97,3 +97,40 @@ test('remote cancellation waits for confirmed native settlement', async t => {
   service.store.settle(run.id, { outcome: 'cancelled', evidence: 'Verified remote fixture stopped' });
   assert.equal((await promise).exitCode, 1);
 });
+
+test('remote deadlines remain visible after reconnecting to the same backend run', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'relay-remote-deadline-'));
+  const service = await startService({ directory: join(root, 'relay'), paperclipUrl: 'http://paperclip.test' });
+  const children = [];
+  t.after(async () => {
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await service.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  service.store.register({ id: 'worker', companyId: 'company', agentId: 'agent', harness: 'opencode', instanceId: 'instance', conversationId: 'session' });
+  const context = join(root, 'operator.json');
+  writeFileSync(context, JSON.stringify({ socketPath: service.socketPath, token: service.token }), { mode: 0o600 });
+  const configPath = join(root, 'node.json');
+  const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
+  writeFileSync(configPath, JSON.stringify({ host: 'fixture', node: process.execPath, cli, contextFile: context }));
+  const promise = executeRemote({ runId: 'backend', agent: { id: 'agent', companyId: 'company' }, authToken: 'secret',
+    context: { taskId: 'task' }, config: { relayNodeFile: configPath, bindingId: 'worker', timeoutSec: 0.2 }, onLog: async () => {} }, {
+    spawnProcess: (command, args, options) => {
+      const child = spawn(process.execPath, [cli, 'adapter-stdio'], options);
+      children.push(child);
+      return child;
+    },
+  });
+  for (let i = 0; i < 100 && !service.store.runs().length; i++) await delay(10);
+  const run = service.store.runs()[0];
+  assert.ok(run);
+  service.store.acknowledge(run.id);
+  children[0].kill('SIGKILL');
+  for (let i = 0; i < 150 && !service.store.run(run.id).cancellationRequested; i++) await delay(20);
+  assert.equal(service.store.run(run.id).cancellationRequested, true);
+  service.store.settle(run.id, { outcome: 'cancelled', evidence: 'Confirmed timed-out native fixture stopped' });
+  const result = await promise;
+  assert.equal(result.timedOut, true);
+  assert.equal(result.exitCode, 1);
+  assert.equal(service.store.runs().length, 1);
+});
