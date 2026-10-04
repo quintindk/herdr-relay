@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../src/store.mjs';
 import { candidate } from '../src/candidate.mjs';
-import { provisionWorktree, finaliseWorktree, retireWorktree } from '../src/resources.mjs';
+import { provisionWorktree, finaliseWorktree, retireWorktree, reconcileWorktree } from '../src/resources.mjs';
 
 test('owned worktree finalisation and accepted cleanup survive retries and refuse dirty deletion', async t => {
   const root = mkdtempSync(join(tmpdir(), 'relay-resource-'));
@@ -22,6 +22,12 @@ test('owned worktree finalisation and accepted cleanup survive retries and refus
   const config = { key: 'graph-worker', repository, path: join(root, 'worker'), branch: 'graph-worker', bindingId: 'worker' };
   provisionWorktree(store, config);
   provisionWorktree(store, config);
+  const old = store.operation(`worktree:${config.key}`);
+  delete old.gitDirectory;
+  delete old.realPath;
+  store.saveOperation(old);
+  assert.throws(() => provisionWorktree(store, config), { code: 'resource_conflict' });
+  assert.ok(reconcileWorktree(store, { key: config.key }).gitDirectory);
   writeFileSync(join(config.path, 'graph.json'), '{"node":"updated"}\n');
   const snapshot = candidate(config.path);
   const run = store.dispatch({ bindingId: 'worker', bindingRevision: 1, companyId: 'company', agentId: 'worker', taskId: 'task', runId: 'backend' });

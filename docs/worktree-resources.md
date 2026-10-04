@@ -29,6 +29,11 @@ Finalisation and cleanup also check the recorded real path, common Git directory
 and worktree metadata directory. A replacement clone at the same path and branch
 is rejected even when its file bytes match the candidate.
 
+Resources created before metadata-directory pinning require an explicit
+`resource reconcile --file resource.json` with their `key`. It verifies the
+recorded repository, branch and Git worktree registration before recording the
+additional identity fields. Finalisation and cleanup do not silently adopt them.
+
 Finalisation input contains `key`, `runId`, `candidate` and `message`. It requires
 the bound worker's native execution to have settled and its submitted candidate
 to match the current working bytes. It stages and commits those bytes under the

@@ -18,8 +18,10 @@ The user requested continued implementation with verified commits and pushes.
 Do not delegate unless explicitly authorised by the user or applicable instructions.
 The repository is public, MIT-licensed, and tracks `quintindk/herdr-relay` on `main`.
 Inspect Git status before continuing. GitHub DNS failed near the end of this work,
-so check for local commits ahead of `origin/main` and push them when connectivity
-returns. Do not rewrite history.
+so check for local commits ahead of `origin/main`. A one-command Git DNS override
+using GitHub's address resolved through the Wi-Fi interface successfully pushed the
+pending commits without changing machine DNS. Re-resolve before reusing an address.
+Do not rewrite history.
 
 ## Required reading
 
@@ -111,7 +113,7 @@ Schema 1–3 data is retained when schema 4 tables are opened. Future schemas ar
 
 ## Verification actually performed
 
-Latest normal suite: **63 tests passed**, plus `npm run check`. Run the suite again
+Latest normal suite: **64 tests passed**, plus `npm run check`. Run the suite again
 after changes, rather than relying on this count as a permanent fact.
 
 | Probe | Evidence |

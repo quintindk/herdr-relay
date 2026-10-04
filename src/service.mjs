@@ -12,7 +12,7 @@ import { supervise, workerContext } from './supervisor.mjs';
 import { publishQuestion } from './work.mjs';
 import { mutate } from './operations.mjs';
 import { review } from './review.mjs';
-import { provisionWorktree, finaliseWorktree, retireWorktree } from './resources.mjs';
+import { provisionWorktree, finaliseWorktree, retireWorktree, reconcileWorktree } from './resources.mjs';
 import { recordEvent, inbox, acknowledgeEvent } from './inbox.mjs';
 import { overview } from './views.mjs';
 import { launchRuntime, ownedRuntime, stopRuntime } from './runtimes.mjs';
@@ -215,9 +215,10 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         publications.set(key, pending);
         try { result = await pending; } finally { publications.delete(key); }
       }
-      else if (req.method === 'POST' && ['/resources/worktree', '/resources/finalise', '/resources/retire'].includes(path)) {
+      else if (req.method === 'POST' && ['/resources/worktree', '/resources/finalise', '/resources/retire', '/resources/reconcile'].includes(path)) {
         adminOnly();
         if (path === '/resources/worktree') result = provisionWorktree(store, input);
+        else if (path === '/resources/reconcile') result = reconcileWorktree(store, input);
         else if (path === '/resources/finalise') result = finaliseWorktree(store, input);
         else {
           result = await retireWorktree(store, input, async run => {

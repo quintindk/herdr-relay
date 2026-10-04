@@ -38,7 +38,7 @@ const help = `herdr-relay (development)
   result request|inspect|accept|reject CALLER_RUN --file review.json
   result retire CALLER_RUN --file review.json
   result check CALLER_RUN --file evidence.json
-  resource provision|finalise|retire --file resource.json
+  resource provision|finalise|retire|reconcile --file resource.json
   runtime launch|stop|resume --file runtime.json
   inbox list
   inbox read EVENT_ID
@@ -147,7 +147,7 @@ export async function main(args) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', '/events', JSON.parse(readFileSync(values.file, 'utf8')));
   }
-  else if (group === 'resource' && ['provision', 'finalise', 'retire'].includes(action)) {
+  else if (group === 'resource' && ['provision', 'finalise', 'retire', 'reconcile'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/resources/${action === 'provision' ? 'worktree' : action}`, JSON.parse(readFileSync(values.file, 'utf8')));
   }

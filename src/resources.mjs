@@ -17,6 +17,22 @@ function worktreeIdentity(resource) {
   'resource_conflict', 'Owned worktree or repository identity changed', 409);
 }
 
+export function reconcileWorktree(store, input) {
+  const resource = store.operation(`worktree:${text(input.key, 'key')}`);
+  requireValue(resource && ['ready', 'retiring'].includes(resource.state), 'resource_not_ready', 'Existing owned resource required', 409);
+  if (resource.gitDirectory && resource.realPath) { worktreeIdentity(resource); return resource; }
+  const path = resource.request.path;
+  const common = realpathSync(resolve(path, git(path, ['rev-parse', '--git-common-dir']).trim()));
+  const expected = realpathSync(resolve(resource.request.repository, git(resource.request.repository, ['rev-parse', '--git-common-dir']).trim()));
+  requireValue(common === expected && common === realpathSync(resource.commonDirectory) &&
+    git(path, ['symbolic-ref', '--short', 'HEAD']).trim() === resource.request.branch,
+  'resource_conflict', 'Legacy worktree no longer belongs to the recorded repository and branch', 409);
+  const registered = git(resource.request.repository, ['worktree', 'list', '--porcelain', '-z']).split('\0');
+  requireValue(registered.includes(`worktree ${realpathSync(path)}`), 'resource_conflict', 'Git does not list this owned worktree', 409);
+  return store.saveOperation({ ...resource, commonDirectory: common, realPath: realpathSync(path),
+    gitDirectory: realpathSync(git(path, ['rev-parse', '--absolute-git-dir']).trim()), identityReconciledAt: new Date().toISOString() });
+}
+
 export function provisionWorktree(store, input, { pendingBinding = false } = {}) {
   const id = `worktree:${text(input.key, 'key')}`;
   const request = { repository: resolve(text(input.repository, 'repository')), path: resolve(text(input.path, 'path')),
