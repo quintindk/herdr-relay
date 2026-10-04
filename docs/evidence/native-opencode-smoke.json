@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-04",
+  "command": "node scripts/opencode-smoke.mjs",
+  "opencodeVersion": "1.18.34",
+  "upstreamCommit": "aec0b9a6d8898f68f923aaf08b7306d931fd9d76",
+  "backend": "deterministic fixture",
+  "realModel": "github-copilot/gpt-6-astra",
+  "existingContextRecalled": true,
+  "nativePromptCount": 1,
+  "comments": 1,
+  "attributed": true,
+  "conversationPreserved": true,
+  "settlementOutcome": "completed",
+  "nativeState": "finished",
+  "cleanup": "Isolated server terminated and temporary home removed",
+  "limits": [
+    "Paperclip boundary is deterministic in this test",
+    "No automatic native interruption",
+    "No concurrent human input in the reserved conversation",
+    "Relay restart and delivery uncertainty use separate HTTP fault tests"
+  ]
+}

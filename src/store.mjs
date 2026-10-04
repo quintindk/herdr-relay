@@ -2,10 +2,16 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { canonical, digest, now, RelayError, requireValue, text } from './protocol.mjs';
+import { nativeConfig } from './opencode.mjs';
 
 export class Store {
   constructor(path) {
     this.db = new DatabaseSync(path);
+    const version = this.db.prepare('PRAGMA user_version').get().user_version;
+    if (version > 2) {
+      this.db.close();
+      throw new RelayError('unsupported_schema', 'Database schema is newer than this Relay build');
+    }
     if (path !== ':memory:') chmodSync(path, 0o600);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -25,8 +31,10 @@ export class Store {
         kind TEXT NOT NULL, data TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      PRAGMA user_version = 1;
     `);
+    // Schema 2 adds optional native invocation/observation fields to run JSON.
+    // Existing schema-1 bindings and runs remain explicit pull records.
+    if (version < 2) this.transaction(() => this.db.exec('PRAGMA user_version = 2'));
   }
 
   close() { this.db.close(); }
@@ -49,15 +57,21 @@ export class Store {
       config[key] = text(input[key], key);
     }
     requireValue(['opencode', 'hermes'].includes(config.harness), 'invalid_harness', 'Use opencode or hermes');
-    requireValue(input.delivery === undefined || input.delivery === 'pull', 'unsupported_delivery', 'Only explicit CLI pull is implemented');
-    config.delivery = 'pull';
+    config.delivery = input.delivery ?? 'pull';
+    requireValue(['pull', 'opencode'].includes(config.delivery), 'unsupported_delivery', 'Use pull or opencode delivery');
+    if (config.delivery === 'opencode') {
+      requireValue(config.harness === 'opencode', 'invalid_harness', 'Native OpenCode delivery requires an OpenCode binding');
+      config.opencode = nativeConfig(input.opencode);
+    }
     const existing = this.binding(config.id, false);
     if (existing) {
       requireValue(canonical(existing.config) === canonical(config), 'binding_conflict', 'Binding exists with different configuration', 409);
       return { binding: existing, token: this.db.prepare('SELECT token FROM bindings WHERE id = ?').get(config.id).token, created: false };
     }
     const identity = canonical([config.companyId, config.agentId]);
-    const conversation = canonical([config.harness, config.instanceId, config.conversationId]);
+    const conversation = config.delivery === 'opencode'
+      ? canonical(['opencode', config.opencode.url, config.opencode.directory, config.conversationId])
+      : canonical([config.harness, config.instanceId, config.conversationId]);
     requireValue(!this.db.prepare('SELECT id FROM bindings WHERE identity = ? OR conversation = ?').get(identity, conversation),
       'identity_conflict', 'Agent or conversation already has a binding', 409);
     const token = randomBytes(32).toString('hex');
@@ -169,7 +183,7 @@ export class Store {
       const run = this.run(id);
       if (run.cancellationRequested || run.nativeState === 'settled') return run;
       run.cancellationRequested = true;
-      if (run.nativeState === 'unclaimed') {
+      if (run.nativeState === 'unclaimed' && !run.invocation) {
         run.nativeState = 'settled';
         run.settlement = { outcome: 'cancelled', evidence: 'Never acknowledged through the pull protocol' };
       }
@@ -178,6 +192,7 @@ export class Store {
   }
 
   settle(id, input) {
+    requireValue(!this.run(id).invocation, 'native_observation_required', 'Native delivery requires verified native settlement', 409);
     const settlement = { outcome: text(input.outcome, 'outcome'), evidence: text(input.evidence, 'evidence') };
     requireValue(['completed', 'cancelled', 'failed'].includes(settlement.outcome), 'invalid_outcome', 'Unknown settlement outcome');
     return this.transaction(() => {
@@ -202,6 +217,45 @@ export class Store {
       const run = this.run(id);
       run.publication = publication;
       return this.save(run, 'publication.updated', publication);
+    });
+  }
+
+  beginNative(id, prompt, priorUserIds) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      if (run.invocation || run.cancellationRequested || run.nativeState === 'settled') return run;
+      requireValue(this.binding(run.request.bindingId).config.delivery === 'opencode', 'invalid_delivery', 'Native binding required');
+      const prefix = (BigInt(Date.now()) * 4096n).toString(16).padStart(12, '0').slice(-12);
+      run.invocation = { messageId: `msg_${prefix}${randomBytes(7).toString('hex')}`, prompt, priorUserIds, createdAt: now() };
+      run.native = { state: 'uncertain', reason: 'delivery_intent_persisted' };
+      return this.save(run, 'native.delivery_intent', { messageId: run.invocation.messageId });
+    });
+  }
+
+  nativeStatus(id, observation) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      if (run.nativeState === 'settled' || canonical(run.native) === canonical(observation)) return run;
+      // Once conflicting input is observed, a later deletion must not erase it.
+      if (run.native?.state === 'conflict') return run;
+      run.native = observation;
+      return this.save(run, 'native.observed', observation);
+    });
+  }
+
+  finishNative(id, observation) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      if (run.nativeState === 'settled' || run.native?.state === 'conflict') return run;
+      requireValue(run.invocation && observation.state === 'finished', 'native_observation_required', 'Terminal native response required');
+      // An idle/finished turn without a submitted result remains unresolved.
+      if (!run.cancellationRequested && !observation.error && !run.result) return run;
+      run.nativeState = 'settled';
+      run.settlement = {
+        outcome: run.cancellationRequested ? 'cancelled' : observation.error ? 'failed' : 'completed',
+        evidence: `OpenCode response ${observation.messageId} to ${run.invocation.messageId} is terminal and the reserved session is idle`,
+      };
+      return this.save(run, 'native.settled', run.settlement);
     });
   }
 }

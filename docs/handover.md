@@ -4,10 +4,11 @@ Handover date: 2026-10-04. Package: `herdr-relay@0.1.0-dev.0`.
 
 ## Start here
 
-**Continue building native delivery and verified turn settlement on top of the
-working Relay service, CLI and external Paperclip adapter.** The current build
-uses explicit CLI pull and operator-attested settlement. It is not a finished
-OpenCode/Hermes integration.
+**Continue with exact native interruption, adapter-host recovery and Hermes
+delivery.** Reserved OpenCode delivery now persists a native message ID, delivers
+once, and settles against a matching terminal response plus worker submission.
+Explicit CLI pull remains supported. Read [the native delivery contract](native-opencode-v1.md)
+before changing supervision. OpenCode session-wide abort is deliberately not used.
 
 - Working directory: `/home/quintin/play/herdr-relay`.
 - Product name: **Herdr Relay**. The user approved `herdr-relay` and explicitly
@@ -16,6 +17,8 @@ OpenCode/Hermes integration.
   paths from the earlier Retinue directory.
 - Git is initialised on `main`. The requested GitHub destination is
   `quintindk/herdr-relay`. Inspect current Git and remote state before continuing.
+- The repository is public under the MIT licence. The user authorised incremental
+  commits and pushes after verification.
 - Node 24, native ESM JavaScript, built-in SQLite, no npm dependencies or compile step.
 - Read local/inherited instructions before working. Do not delegate to subagents
   unless the user or applicable instructions explicitly request delegation.
@@ -86,10 +89,14 @@ Agents primarily have context, repository bindings and optional capabilities.
 | `src/adapter.mjs` | Paperclip external adapter factory, execution loop and environment diagnostics |
 | `src/paperclip.mjs` | Backend API calls and comment publication/reconciliation |
 | `src/protocol.mjs` | Validation, errors, canonical payload hashing and receipt marker |
+| `src/opencode.mjs` | Local native HTTP client, identity checks and message-correlated observation |
+| `src/supervisor.mjs` | Durable delivery intent, scoped worker context and restart reconciliation |
 | `herdr-plugin.toml` | Herdr plugin manifest, currently one service-status action |
 | `test/relay.test.mjs` | Ten persistence, protocol, CLI, service and adapter tests |
+| `test/native.test.mjs` | Ten native HTTP fault, attribution and schema compatibility tests |
 | `scripts/check.mjs` | Syntax checks across source, scripts and tests |
 | `scripts/paperclip-smoke.mjs` | Real Paperclip external-package installation and run-attribution smoke test |
+| `scripts/opencode-smoke.mjs` | Isolated real-model OpenCode test with deterministic Paperclip API |
 | `docs/evidence/relay-build-smoke.json` | Sanitised successful real-backend evidence |
 | `evaluation/` | Earlier investigative product/native fixtures, separate from the new implementation |
 
@@ -124,8 +131,9 @@ of identical registration requests.
    candidate string through the CLI.
 5. Adapter requests publication. Relay writes a marked, correctly attributed
    Paperclip comment. Submission remains separate from native completion.
-6. Operator attests native settlement. Only after required publication and
-   settlement does the adapter return its execution result to Paperclip.
+6. Pull mode requires operator-attested settlement. Native OpenCode mode requires
+   a matching terminal assistant response and idle reserved conversation. Only
+   after required publication and settlement does the adapter return its result.
 
 There is no automatic task status change, review transition or acceptance yet.
 Candidate strings are recorded, not independently computed or verified.
@@ -143,6 +151,8 @@ Candidate strings are recorded, not independently computed or verified.
 - Submission does not release the conversation. Native settlement does.
 - Cancelling unacknowledged pull work settles it immediately. Cancelling claimed
   work only records the request, blocks late submission and awaits settlement.
+- Native delivery intent also prevents immediate cancellation settlement before
+  acknowledgement. Once intent is stored, there is no automatic prompt replay.
 - Worker credentials cannot settle, cancel, register peers or access other bindings.
 - Paperclip origin is pinned to a state directory to prevent backend substitution.
 
@@ -169,7 +179,7 @@ npm test
 npm pack --dry-run
 ```
 
-- All ten tests passed. Syntax and package checks passed.
+- All twenty tests passed. Syntax and package checks passed.
 - Tests cover database reopen, service restart while an adapter continues running,
   changed-payload rejection, duplicate registration, stale/overlapping dispatch,
   worker credential scope, CLI registration, publication uncertainty, and waiting
@@ -188,12 +198,18 @@ conversations and write correctly attributed Paperclip comments. Those used a
 process-holder bridge and machine-specific helpers. They established continuity
 and connectivity, not cancellation, delivery safety or a production supervisor.
 
+The new native OpenCode smoke also passed against OpenCode `1.18.34` with
+`github-copilot/gpt-6-astra`. It exercised the actual Relay adapter, service,
+supervisor and CLI with a real model, prior conversation context, one attributed
+result and automatic correlated settlement. Its Paperclip API is deterministic.
+See [native evidence](evidence/native-opencode-smoke.json).
+
 ## Immediate next work
 
-### 1. Implement one real native delivery path
+### 1. Strengthen native delivery and add Hermes
 
-Start with server-backed OpenCode, then Hermes. Inspect installed native APIs and
-the earlier fixtures before choosing connector contracts.
+Reserved server-backed OpenCode delivery is implemented. Hermes remains pull-only.
+Inspect native APIs and earlier fixtures before choosing the Hermes contract.
 
 - Verify exact native instance and conversation before dispatch.
 - Bind credentials through runtime context without placing secrets in prompts.
@@ -231,10 +247,10 @@ These are limits visible in the current code, not promises that they are solved:
   work to settle or for result publication to reconcile.
 - Initial dispatch happens before the adapter polling/reconciliation loop. A lost
   initial response needs deliberate recovery using the stable backend run key.
-- There is no native invocation ID or harness observer yet. `instanceId` and
-  `conversationId` are supplied references, not verified runtime identities.
-- The store writes schema version 1 but has no migration framework. Introduce
-  migrations before changing persisted structures used by retained instances.
+- OpenCode delivery verifies stored conversation identity and correlates native
+  message IDs. There is no native process incarnation ID or atomic reservation.
+- Schema 2 retains schema-1 pull records and rejects future versions. Native state
+  is stored as optional run JSON fields. Add explicit migrations for later changes.
 - Socket startup probes for an existing listener and removes stale sockets. Test
   competing process startups before treating supervision as production-ready.
 - Run tokens remain in service memory for attached runs until service exit.
@@ -314,6 +330,7 @@ docker stop herdr-relay-build-smoke
 
 ## Recommended first action
 
-Run `npm run check && npm test`, inspect the current adapter and native OpenCode
-API, then implement and test a supervised turn in an existing isolated conversation.
-Keep evidence explicit about real model execution versus deterministic fixtures.
+Run `npm run check && npm test`, then continue from the native delivery limitations.
+OpenCode `1.18.34` prompt delivery joins busy execution and its abort is session-wide.
+Do not add automatic abort based on a status check. Keep evidence explicit about
+real model execution versus deterministic fixtures.

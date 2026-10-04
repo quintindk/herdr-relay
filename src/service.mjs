@@ -6,6 +6,8 @@ import { randomBytes } from 'node:crypto';
 import { Store } from './store.mjs';
 import { digest, RelayError, requireValue, text } from './protocol.mjs';
 import { paperclipClient, publish } from './paperclip.mjs';
+import { nativeConfig, OpenCode } from './opencode.mjs';
+import { supervise } from './supervisor.mjs';
 
 async function body(req) {
   let size = 0;
@@ -63,9 +65,13 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       const input = req.method === 'POST' ? await body(req) : {};
       const adminOnly = () => requireValue(admin, 'forbidden', 'Operator credentials required', 403);
       let result;
-      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: 'pull', schema: 1 };
+      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode'], schema: 2 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
-      else if (req.method === 'POST' && path === '/bindings') { adminOnly(); result = store.register(input); }
+      else if (req.method === 'POST' && path === '/bindings') {
+        adminOnly();
+        if (input.delivery === 'opencode') await new OpenCode({ ...input, opencode: nativeConfig(input.opencode) }).verify();
+        result = store.register(input);
+      }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
@@ -106,9 +112,11 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
     chmodSync(socketPath, 0o600);
   } catch (error) { store.close(); throw error; }
+  const supervisor = supervise({ store, directory, socketPath, ready: id => runTokens.has(id) });
   return {
     socketPath, token, store,
     close: async () => {
+      await supervisor.close();
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       store.close();
     },

@@ -5,6 +5,10 @@ Date: 2026-10-03. Development package `0.1.0-dev.0`.
 This implements the durable CLI-pull protocol and an actual external Paperclip
 adapter. It is the first part of the [v2 implementation milestone](spec-v2.md#12-first-implementation-milestone).
 
+Update 2026-10-04: [reserved OpenCode delivery](native-opencode-v1.md) adds native
+prompt delivery and message-correlated settlement. The commands below describe
+the original explicit-pull mode, which remains supported.
+
 ## Implemented
 
 - Node 24 service using SQLite WAL and a local Unix socket.

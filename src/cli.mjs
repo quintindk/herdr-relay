@@ -11,6 +11,7 @@ const help = `herdr-relay (development)
   agent list
   agent register --file binding.json --context-out worker.json
   work list
+  work inspect RUN
   work read RUN
   work acknowledge RUN
   work submit RUN --key KEY --summary-file FILE --candidate ID
@@ -20,7 +21,8 @@ const help = `herdr-relay (development)
 
 All responses are JSON. Use --context FILE or RELAY_CONTEXT for scoped credentials.
 Operator credentials default to $XDG_STATE_HOME/herdr-relay/admin-token.
-Settlement is an explicit operator attestation, not automatic harness observation.`;
+Pull settlement is operator-attested. Native OpenCode settlement requires a
+matching terminal response. Cancellation does not automatically interrupt OpenCode.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
@@ -69,6 +71,7 @@ export async function main(args) {
     if (result.token) writeFileSync(values['context-out'], `${JSON.stringify({ socketPath: connection.socketPath, token: result.token, bindingId: result.binding.id })}\n`, { mode: 0o600 });
     delete result.token;
   } else if (group === 'work' && action === 'list') result = await call(connection, 'GET', '/runs');
+  else if (group === 'work' && action === 'inspect' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}`);
   else if (group === 'work' && action === 'read' && id) result = {
     run: await call(connection, 'GET', `/runs/${encodeURIComponent(id)}`),
     task: await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/task`),

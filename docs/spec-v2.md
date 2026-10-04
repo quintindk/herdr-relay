@@ -7,6 +7,7 @@
 - Initial harnesses: OpenCode and Hermes
 - Work backend: Paperclip
 - Implementation progress: [first working slice](build-v1.md)
+- Native progress: [reserved OpenCode delivery](native-opencode-v1.md)
 
 ## 1. Defining principle
 
