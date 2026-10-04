@@ -21,6 +21,7 @@ import { backendOperator, createSchedule, scheduleRunner } from './schedules.mjs
 import { provisionAgent } from './provisioning.mjs';
 import { bindPlacement, reconcilePlacement } from './placement.mjs';
 import { recoverBackend } from './backend-recovery.mjs';
+import { serviceLock } from './service-lock.mjs';
 
 async function body(req) {
   let size = 0;
@@ -55,6 +56,15 @@ async function socketAvailable(path) {
 export async function startService({ directory, paperclipUrl, api = paperclipClient(paperclipUrl), backendContextFile }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
+  const unlock = serviceLock(directory);
+  try {
+    const service = await startLockedService({ directory, paperclipUrl, api, backendContextFile });
+    let closing;
+    return { ...service, close: () => closing ??= service.close().finally(unlock) };
+  } catch (error) { unlock(); throw error; }
+}
+
+async function startLockedService({ directory, paperclipUrl, api, backendContextFile }) {
   const socketPath = join(directory, 'relay.sock');
   await socketAvailable(socketPath);
   const tokenPath = join(directory, 'admin-token');
