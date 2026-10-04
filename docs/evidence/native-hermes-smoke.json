@@ -1,0 +1,13 @@
+{
+  "date": "2026-10-04",
+  "hermesVersion": "0.21.5+2164.gfdec926",
+  "backend": "deterministic fixture",
+  "realModel": "copilot/gpt-6-astra",
+  "existingContextRecalled": true,
+  "comments": 1,
+  "conversationPreserved": true,
+  "nativeState": "finished",
+  "settlementOutcome": "completed",
+  "terminalContract": "Reserved transcript segment with replayed message.complete and matching durable final assistant row",
+  "automaticInterruption": false
+}

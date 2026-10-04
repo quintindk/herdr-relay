@@ -7,6 +7,7 @@ import { Store } from './store.mjs';
 import { digest, RelayError, requireValue, text } from './protocol.mjs';
 import { paperclipClient, publish, verifyRecovery } from './paperclip.mjs';
 import { nativeConfig, OpenCode } from './opencode.mjs';
+import { hermesConfig, Hermes } from './hermes.mjs';
 import { supervise } from './supervisor.mjs';
 
 async function body(req) {
@@ -65,11 +66,12 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       const input = req.method === 'POST' ? await body(req) : {};
       const adminOnly = () => requireValue(admin, 'forbidden', 'Operator credentials required', 403);
       let result;
-      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode'], schema: 3 };
+      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 3 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'POST' && path === '/bindings') {
         adminOnly();
         if (input.delivery === 'opencode') await new OpenCode({ ...input, opencode: nativeConfig(input.opencode) }).verify();
+        if (input.delivery === 'hermes') await new Hermes({ ...input, hermes: hermesConfig(input.hermes) }).verify();
         result = store.register(input);
       }
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);

@@ -7,7 +7,7 @@ export const label = 'Herdr Relay';
 export const agentConfigurationDoc = `# Herdr Relay (development)
 Requires a local Relay service. Configure relayContextFile with an operator
 credential file, bindingId, bindingRevision (1), and timeoutSec (default 300).
-Bindings select explicit CLI pull with operator settlement, or reserved OpenCode
+Bindings select explicit CLI pull with operator settlement, or reserved native
 delivery with message-correlated native settlement.
 timeoutSec requests cancellation, but cannot force an unverified native stop.
 Only task-scoped work invocations are supported. Submission records a comment,
@@ -97,8 +97,8 @@ export function createServerAdapter() {
           binding.revision === (ctx.config.bindingRevision ?? 1) && binding.config.companyId === ctx.companyId);
         requireValue(binding,
         'binding_not_found', 'Matching binding and company required');
-        checks.push(binding.config.delivery === 'opencode'
-          ? { level: 'warn', code: 'reserved_native_delivery', message: 'Relay reachable. OpenCode conversation must remain reserved. Automatic interruption is unavailable.' }
+        checks.push(['opencode', 'hermes'].includes(binding.config.delivery)
+          ? { level: 'warn', code: 'reserved_native_delivery', message: 'Relay reachable. Native conversation must remain reserved. Automatic interruption is unavailable.' }
           : { level: 'warn', code: 'manual_settlement', message: 'Relay reachable. CLI pull and operator settlement required.' });
       } catch (error) {
         checks.push({ level: 'error', code: error.code ?? 'relay_unavailable', message: 'Relay configuration or connection failed' });

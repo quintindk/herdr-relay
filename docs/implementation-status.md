@@ -8,7 +8,7 @@ item requires implementation and evidence before the specification is complete.
 | Requirement | Current evidence | Remaining work |
 | --- | --- | --- |
 | Separate agents without managers | Real Paperclip smoke | Preserve through provisioning |
-| Existing native conversations | Live OpenCode test, historical Hermes experiment | Implement Hermes connector and verified rebinding |
+| Existing native conversations | Live OpenCode and Hermes Relay tests | Verified rebinding and enforceable reservation |
 | Native dispatch and CLI submission | Reserved OpenCode mode | Enforce reservation and establish exact interruption |
 | Duplicate/stale protection | Store, HTTP and process-restart tests | Backend mutation reconciliation beyond result comments |
 | Paperclip host recovery | Real host crash/restart and explicit replacement-run recovery | Board-authorised recovery orchestration |

@@ -21,8 +21,8 @@ const help = `herdr-relay (development)
 
 All responses are JSON. Use --context FILE or RELAY_CONTEXT for scoped credentials.
 Operator credentials default to $XDG_STATE_HOME/herdr-relay/admin-token.
-Pull settlement is operator-attested. Native OpenCode settlement requires a
-matching terminal response. Cancellation does not automatically interrupt OpenCode.`;
+Pull settlement is operator-attested. Native settlement requires a matching
+terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(

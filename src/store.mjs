@@ -3,6 +3,7 @@ import { chmodSync } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { canonical, digest, now, RelayError, requireValue, text } from './protocol.mjs';
 import { nativeConfig } from './opencode.mjs';
+import { hermesConfig } from './hermes.mjs';
 
 export class Store {
   constructor(path) {
@@ -61,10 +62,14 @@ export class Store {
     }
     requireValue(['opencode', 'hermes'].includes(config.harness), 'invalid_harness', 'Use opencode or hermes');
     config.delivery = input.delivery ?? 'pull';
-    requireValue(['pull', 'opencode'].includes(config.delivery), 'unsupported_delivery', 'Use pull or opencode delivery');
+    requireValue(['pull', 'opencode', 'hermes'].includes(config.delivery), 'unsupported_delivery', 'Use pull, opencode or hermes delivery');
     if (config.delivery === 'opencode') {
       requireValue(config.harness === 'opencode', 'invalid_harness', 'Native OpenCode delivery requires an OpenCode binding');
       config.opencode = nativeConfig(input.opencode);
+    }
+    if (config.delivery === 'hermes') {
+      requireValue(config.harness === 'hermes', 'invalid_harness', 'Native Hermes delivery requires a Hermes binding');
+      config.hermes = hermesConfig(input.hermes);
     }
     const existing = this.binding(config.id, false);
     if (existing) {
@@ -74,6 +79,7 @@ export class Store {
     const identity = canonical([config.companyId, config.agentId]);
     const conversation = config.delivery === 'opencode'
       ? canonical(['opencode', config.opencode.url, config.opencode.directory, config.conversationId])
+      : config.delivery === 'hermes' ? canonical(['hermes', config.hermes.url, config.hermes.profile ?? '', config.conversationId])
       : canonical([config.harness, config.instanceId, config.conversationId]);
     requireValue(!this.db.prepare('SELECT id FROM bindings WHERE identity = ? OR conversation = ?').get(identity, conversation),
       'identity_conflict', 'Agent or conversation already has a binding', 409);
@@ -251,13 +257,14 @@ export class Store {
     });
   }
 
-  beginNative(id, prompt, priorUserIds) {
+  beginNative(id, prompt, priorUserIds, eventCursor) {
     return this.transaction(() => {
       const run = this.run(id);
       if (run.invocation || run.cancellationRequested || run.nativeState === 'settled') return run;
-      requireValue(this.binding(run.request.bindingId).config.delivery === 'opencode', 'invalid_delivery', 'Native binding required');
+      requireValue(['opencode', 'hermes'].includes(this.binding(run.request.bindingId).config.delivery), 'invalid_delivery', 'Native binding required');
       const prefix = (BigInt(Date.now()) * 4096n).toString(16).padStart(12, '0').slice(-12);
       run.invocation = { messageId: `msg_${prefix}${randomBytes(7).toString('hex')}`, prompt, priorUserIds, createdAt: now() };
+      if (eventCursor !== undefined) run.invocation.eventCursor = eventCursor;
       run.native = { state: 'uncertain', reason: 'delivery_intent_persisted' };
       return this.save(run, 'native.delivery_intent', { messageId: run.invocation.messageId });
     });
@@ -284,7 +291,7 @@ export class Store {
       run.nativeState = 'settled';
       run.settlement = {
         outcome: run.cancellationRequested ? 'cancelled' : observation.error ? 'failed' : 'completed',
-        evidence: `OpenCode response ${observation.messageId} to ${run.invocation.messageId} is terminal and the reserved session is idle`,
+        evidence: `${this.binding(run.request.bindingId).config.harness} response ${observation.messageId} to ${run.invocation.messageId} is terminal and the reserved session is idle`,
       };
       return this.save(run, 'native.settled', run.settlement);
     });

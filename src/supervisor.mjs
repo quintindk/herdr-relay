@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenCode, observe } from './opencode.mjs';
+import { Hermes, observeHermes } from './hermes.mjs';
 import { canonical, digest, requireValue } from './protocol.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
@@ -40,8 +41,9 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
   async function reconcile(id) {
     let run = store.run(id);
     const binding = store.binding(run.request.bindingId);
-    if (binding.config.delivery !== 'opencode' || run.nativeState === 'settled') return;
-    const native = new OpenCode(binding.config);
+    if (!['opencode', 'hermes'].includes(binding.config.delivery) || run.nativeState === 'settled') return;
+    const hermes = binding.config.delivery === 'hermes';
+    const native = hermes ? new Hermes(binding.config) : new OpenCode(binding.config);
     try {
       if (!run.invocation) {
         if (!ready(id) || run.cancellationRequested) return;
@@ -50,12 +52,15 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
         const context = workerContext(directory, socketPath, store, binding);
         // Persist before POST. Even a crash immediately after this write leaves
         // uncertainty, never an instruction to send the same prompt again.
-        run = store.beginNative(id, promptFor(run, context), snapshot.messages.filter(message => message.info.role === 'user').map(message => message.info.id));
+        const priorUserIds = hermes
+          ? snapshot.session.messages.filter(message => message.role === 'user').map(message => message.row_id)
+          : snapshot.messages.filter(message => message.info.role === 'user').map(message => message.info.id);
+        run = store.beginNative(id, promptFor(run, context).trim(), priorUserIds, hermes ? snapshot.events.latest_seq : undefined);
         if (!run.invocation) return; // Cancelled while preflight was in flight.
         await native.send(run.invocation);
       }
       run = store.run(id);
-      const observation = observe(await native.snapshot(), run.invocation);
+      const observation = (hermes ? observeHermes : observe)(await native.snapshot(), run.invocation);
       store.nativeStatus(id, observation);
       if (observation.state === 'finished') store.finishNative(id, observation);
     } catch (error) {
