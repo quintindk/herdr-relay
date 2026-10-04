@@ -42,3 +42,43 @@ export async function retireAccepted(store, caller, target, token, api) {
     throw error;
   }
 }
+
+export async function reconcileRetirements(store, operatorApi, locks = new Map()) {
+  for (const binding of store.bindings()) {
+    if (binding.config.lifetime !== 'task' || binding.lifecycleState === 'retired') continue;
+    const target = store.runs(binding.id).find(run => run.result);
+    if (!target || target.nativeState !== 'settled' || target.settlement?.outcome !== 'completed' ||
+      target.publication.state !== 'recorded' || !target.review) continue;
+    const key = `review:${target.id}`;
+    if (locks.has(key)) continue;
+    const controller = store.binding(binding.config.controllerBindingId);
+    if (controller.lifecycleState === 'retired') continue;
+    const caller = { id: `operator-lifecycle:${binding.id}`, request: { companyId: controller.config.companyId,
+      agentId: controller.config.agentId, bindingId: controller.id } };
+    const api = (run, token, method, path, body) => operatorApi(method, path, body);
+    const pending = (async () => {
+      try {
+        const observed = await review(store, caller, undefined, api, { runId: target.id, candidate: target.result.candidate, action: 'inspect' });
+        if (observed.review.status === 'accepted') await retireAccepted(store, caller, observed, undefined, api);
+      } catch (error) {
+        const id = `retirement:${target.id}`;
+        const operation = store.operation(id);
+        if (operation) store.saveOperation({ ...operation, reason: error.code ?? 'backend_unavailable' });
+      }
+    })();
+    locks.set(key, pending);
+    try { await pending; } finally { locks.delete(key); }
+  }
+}
+
+export function lifecycleRunner(store, operatorApi, locks) {
+  let stopped = false;
+  let pending = Promise.resolve();
+  let timer;
+  const schedule = () => {
+    if (stopped) return;
+    timer = setTimeout(() => { pending = reconcileRetirements(store, operatorApi, locks).finally(schedule); }, 1000);
+  };
+  schedule();
+  return { close: async () => { stopped = true; clearTimeout(timer); await pending; } };
+}

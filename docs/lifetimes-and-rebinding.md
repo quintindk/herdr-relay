@@ -21,6 +21,12 @@ preserves dirty or ignored files. Persistent peers are unaffected.
 Service lifetime is recorded but does not yet enforce an operating window. Native
 Hermes retirement and automatic correction dispatch remain open work.
 
+Update: service windows are implemented by [bounded schedules](schedules.md), and
+owned Hermes retirement is supported. When `--backend-context` is configured,
+Relay polls registered task-candidate reviews and resumes acceptance-driven
+retirement after restart. The original controller binding is preserved. Dirty
+cleanup remains blocked without changing accepted outcome.
+
 ## Rebinding
 
 `agent rebind --file continuation.json` is operator-only. It verifies the new

@@ -16,7 +16,7 @@ import { provisionWorktree, finaliseWorktree, retireWorktree } from './resources
 import { recordEvent, inbox, acknowledgeEvent } from './inbox.mjs';
 import { overview } from './views.mjs';
 import { launchRuntime, ownedRuntime, stopRuntime } from './runtimes.mjs';
-import { retireAccepted } from './lifecycle.mjs';
+import { retireAccepted, lifecycleRunner } from './lifecycle.mjs';
 import { backendOperator, createSchedule, scheduleRunner } from './schedules.mjs';
 import { provisionAgent } from './provisioning.mjs';
 import { bindPlacement, reconcilePlacement } from './placement.mjs';
@@ -305,10 +305,12 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   } catch (error) { store.close(); throw error; }
   const supervisor = supervise({ store, directory, socketPath, ready: id => runTokens.has(id) });
   const scheduler = scheduleRunner(store, operatorApi);
+  const lifecycle = backendContextFile ? lifecycleRunner(store, operatorApi, publications) : null;
   return {
     socketPath, token, store,
     close: async () => {
       await scheduler.close();
+      await lifecycle?.close();
       await supervisor.close();
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       store.close();

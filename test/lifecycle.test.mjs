@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Store } from '../src/store.mjs';
-import { retireAccepted } from '../src/lifecycle.mjs';
+import { retireAccepted, reconcileRetirements } from '../src/lifecycle.mjs';
 import { digest } from '../src/protocol.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('task-scoped acceptance retires only the authorised binding and preserves persistent peers', async t => {
   const store = new Store(':memory:');
@@ -55,4 +58,30 @@ test('verified rebinding preserves stored conversation, credentials and revision
   assert.equal(rebound.history[0].config.hermes.runtimeId, 'runtime-old');
   assert.equal(store.authenticate(registered.token), 'worker');
   assert.throws(() => store.rebind('worker', next), { code: 'stale_binding' });
+});
+
+test('acceptance recorded while Relay is offline triggers the same retirement on restart', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'relay-retirement-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  let store = new Store(join(directory, 'state.sqlite'));
+  const binding = id => ({ id, companyId: 'company', agentId: id, harness: 'opencode', instanceId: 'instance', conversationId: id });
+  store.register(binding('controller'));
+  store.register({ ...binding('worker'), lifetime: 'task', taskId: 'task', controllerBindingId: 'controller' });
+  const run = store.dispatch({ bindingId: 'worker', bindingRevision: 1, companyId: 'company', agentId: 'worker', taskId: 'task', runId: 'backend' });
+  store.acknowledge(run.id);
+  store.submit(run.id, { key: 'one', candidate: 'sha256:one', summary: 'done' });
+  store.publication(run.id, { state: 'recorded', commentId: 'receipt' });
+  store.settle(run.id, { outcome: 'completed', evidence: 'Native fixture stopped' });
+  store.recordReview(run.id, { interactionId: 'review', candidate: 'sha256:one', status: 'pending' });
+  const result = store.run(run.id).result;
+  store.close();
+  store = new Store(join(directory, 'state.sqlite'));
+  t.after(() => store.close());
+  const api = async () => [{ id: 'review', status: 'accepted', idempotencyKey: `relay-review:${run.id}:${digest(result)}`,
+    payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: result.candidate, label: run.id } } }];
+  await reconcileRetirements(store, api);
+  assert.equal(store.binding('worker').lifecycleState, 'retired');
+  assert.equal(store.operation(`retirement:${run.id}`).state, 'recorded');
+  await reconcileRetirements(store, api);
+  assert.equal(store.binding('controller').lifecycleState, undefined);
 });

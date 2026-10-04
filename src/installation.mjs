@@ -16,7 +16,7 @@ export function systemdUnit({ node, cli, stateDirectory, paperclipUrl, backendCo
   return `[Unit]\nDescription=Herdr Relay coordination service\nAfter=network.target\n\n[Service]\nType=simple\n` +
     `ExecStart=${[node, cli, 'service', '--state-dir', stateDirectory, '--paperclip-url', paperclipUrl,
       ...(backendContextFile ? ['--backend-context', backendContextFile] : [])].map(quote).join(' ')}\n` +
-    `Restart=on-failure\nRestartSec=2\nTimeoutStopSec=30\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
+    `Restart=on-failure\nRestartSec=2\nTimeoutStopSec=30\nKillMode=process\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
 }
 
 export function installService(config, { home = homedir(), execute = execFileSync } = {}) {

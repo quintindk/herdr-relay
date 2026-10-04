@@ -89,5 +89,9 @@ restricted permissions and remains separate from the UI. The generated paths poi
 to the current Node executable and checkout, so regenerate after moving either.
 User-manager persistence across logout depends on the host's login/linger setup.
 
+The unit uses `KillMode=process`: stopping or restarting the Relay coordinator must
+not kill independently supervised native runtimes. Stop those through their
+verified lifecycle commands. This is required for restart reconciliation.
+
 `node scripts/installation-smoke.mjs` validates the generated unit using the local
 systemd parser without installing or starting it. macOS supervision is pending.
