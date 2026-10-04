@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { canonical, digest, now, RelayError, requireValue, text } from './protocol.mjs';
 import { nativeConfig } from './opencode.mjs';
 import { hermesConfig } from './hermes.mjs';
+import { questionPayload } from './work.mjs';
 
 export class Store {
   constructor(path) {
@@ -209,6 +210,7 @@ export class Store {
       }
       requireValue(run.nativeState === 'claimed' && !run.cancellationRequested,
         'invalid_submission', 'Acknowledge active work before submitting', 409);
+      requireValue(!run.waiting, 'work_waiting', 'This turn has already requested clarification', 409);
       run.result = result;
       run.publication = { state: 'pending' };
       return this.save(run, 'result.submitted', { digest: digest(result) });
@@ -231,7 +233,7 @@ export class Store {
   settle(id, input) {
     requireValue(!this.run(id).invocation, 'native_observation_required', 'Native delivery requires verified native settlement', 409);
     const settlement = { outcome: text(input.outcome, 'outcome'), evidence: text(input.evidence, 'evidence') };
-    requireValue(['completed', 'cancelled', 'failed'].includes(settlement.outcome), 'invalid_outcome', 'Unknown settlement outcome');
+    requireValue(['completed', 'cancelled', 'failed', 'waiting'].includes(settlement.outcome), 'invalid_outcome', 'Unknown settlement outcome');
     return this.transaction(() => {
       const run = this.run(id);
       if (run.nativeState === 'settled') {
@@ -243,6 +245,8 @@ export class Store {
         'invalid_completion', 'Completion requires a result and no cancellation request', 409);
       requireValue(settlement.outcome !== 'cancelled' || run.cancellationRequested,
         'cancellation_required', 'Request cancellation first', 409);
+      requireValue(settlement.outcome !== 'waiting' || (run.waiting?.state === 'recorded' && !run.cancellationRequested),
+        'question_not_published', 'Waiting requires a published question and no cancellation', 409);
       run.nativeState = 'settled';
       run.settlement = settlement;
       return this.save(run, 'native.settled', settlement);
@@ -287,13 +291,37 @@ export class Store {
       if (run.nativeState === 'settled' || run.native?.state === 'conflict') return run;
       requireValue(run.invocation && observation.state === 'finished', 'native_observation_required', 'Terminal native response required');
       // An idle/finished turn without a submitted result remains unresolved.
-      if (!run.cancellationRequested && !observation.error && !run.result) return run;
+      if (!run.cancellationRequested && !observation.error && !run.result && run.waiting?.state !== 'recorded') return run;
       run.nativeState = 'settled';
       run.settlement = {
-        outcome: run.cancellationRequested ? 'cancelled' : observation.error ? 'failed' : 'completed',
+        outcome: run.cancellationRequested ? 'cancelled' : observation.error ? 'failed' : run.waiting ? 'waiting' : 'completed',
         evidence: `${this.binding(run.request.bindingId).config.harness} response ${observation.messageId} to ${run.invocation.messageId} is terminal and the reserved session is idle`,
       };
       return this.save(run, 'native.settled', run.settlement);
+    });
+  }
+
+  ask(id, input) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      const payload = questionPayload(run, input);
+      if (run.waiting) {
+        requireValue(canonical(run.waiting.payload) === canonical(payload), 'question_conflict', 'Turn already has a different question', 409);
+        return run;
+      }
+      requireValue(run.nativeState === 'claimed' && !run.result && !run.cancellationRequested,
+        'invalid_question', 'Only acknowledged active work can ask before submission', 409);
+      run.waiting = { payload, request: payload.request, state: 'pending' };
+      return this.save(run, 'question.requested', { key: payload.key });
+    });
+  }
+
+  questionReceipt(id, receipt) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      requireValue(run.waiting, 'question_required', 'No question was requested');
+      run.waiting = { ...run.waiting, ...receipt };
+      return this.save(run, 'question.publication', receipt);
     });
   }
 }

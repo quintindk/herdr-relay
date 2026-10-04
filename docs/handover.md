@@ -5,6 +5,8 @@ Handover date: 2026-10-04. Package: `herdr-relay@0.1.0-dev.0`.
 ## Start here
 
 Current full-spec progress is tracked in [implementation status](implementation-status.md).
+Bounded questions and automatic Paperclip continuation are verified. Read
+[questions and continuation](questions-v1.md). The suite currently contains 33 tests.
 Reserved Hermes delivery is implemented and live-model verified. Read
 [the Hermes contract](native-hermes-v1.md), particularly terminal replay limits.
 Real Paperclip host restart and explicit replacement-run recovery are verified.

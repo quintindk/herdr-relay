@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-04",
+  "backend": "Paperclip 2026.1001.0",
+  "nativeHarness": false,
+  "questionCount": 1,
+  "boundedWaitingRun": true,
+  "automaticContinuation": true,
+  "sameConversation": true,
+  "answerReadThroughRelay": true
+}

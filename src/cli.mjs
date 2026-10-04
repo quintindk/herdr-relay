@@ -9,12 +9,15 @@ const help = `herdr-relay (development)
   service --paperclip-url URL [--state-dir DIR]
   status
   agent list
+  agent discover
   agent register --file binding.json --context-out worker.json
   work list
   work inspect RUN
   work read RUN
   work acknowledge RUN
   work submit RUN --key KEY --summary-file FILE --candidate ID
+  work ask RUN --key KEY --question-file FILE
+  work interactions RUN
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
   operator-context --context-out FILE
@@ -26,7 +29,7 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'candidate', 'outcome', 'evidence']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
@@ -57,6 +60,7 @@ export async function main(args) {
     writeContext(connection);
     result = { written: values['context-out'] };
   } else if (group === 'agent' && action === 'list') result = await call(connection, 'GET', '/bindings');
+  else if (group === 'agent' && action === 'discover') result = await call(connection, 'GET', '/peers');
   else if (group === 'agent' && action === 'register') {
     requireValue(values.file && values['context-out'], 'invalid_request', '--file and --context-out are required');
     // A lost registration response is recoverable by repeating identical input.
@@ -77,6 +81,13 @@ export async function main(args) {
     task: await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/task`),
   };
   else if (group === 'work' && action === 'acknowledge' && id) result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/acknowledge`, {});
+  else if (group === 'work' && action === 'interactions' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/interactions`);
+  else if (group === 'work' && action === 'ask' && id) {
+    requireValue(values['question-file'], 'invalid_request', '--question-file is required');
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/ask`, {
+      key: values.key, question: readFileSync(values['question-file'], 'utf8'),
+    });
+  }
   else if (group === 'work' && action === 'submit' && id) {
     requireValue(values['summary-file'], 'invalid_request', '--summary-file is required');
     result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/submit`, {

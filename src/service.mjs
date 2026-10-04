@@ -9,6 +9,7 @@ import { paperclipClient, publish, verifyRecovery } from './paperclip.mjs';
 import { nativeConfig, OpenCode } from './opencode.mjs';
 import { hermesConfig, Hermes } from './hermes.mjs';
 import { supervise } from './supervisor.mjs';
+import { publishQuestion } from './work.mjs';
 
 async function body(req) {
   let size = 0;
@@ -68,6 +69,12 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       let result;
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 3 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
+      else if (req.method === 'GET' && path === '/peers') {
+        const company = bindingId ? store.binding(bindingId).config.companyId : null;
+        result = store.bindings().filter(binding => !company || binding.config.companyId === company)
+          .map(binding => ({ id: binding.id, revision: binding.revision, agentId: binding.config.agentId,
+            harness: binding.config.harness, delivery: binding.config.delivery }));
+      }
       else if (req.method === 'POST' && path === '/bindings') {
         adminOnly();
         if (input.delivery === 'opencode') await new OpenCode({ ...input, opencode: nativeConfig(input.opencode) }).verify();
@@ -77,7 +84,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -95,6 +102,11 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         }
         else if (req.method === 'POST' && action === 'acknowledge') result = store.acknowledge(id);
         else if (req.method === 'POST' && action === 'submit') result = store.submit(id, input);
+        else if (req.method === 'POST' && action === 'ask') result = store.ask(id, input);
+        else if (req.method === 'GET' && action === 'interactions') {
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
+          result = await api(run, runTokens.get(id), 'GET', `/api/issues/${encodeURIComponent(run.request.taskId)}/interactions`);
+        }
         else if (req.method === 'POST' && action === 'settle') { adminOnly(); result = store.settle(id, input); }
         else if (req.method === 'POST' && action === 'cancel') { adminOnly(); result = store.cancel(id); }
         else if (req.method === 'POST' && action === 'attach') {
@@ -106,13 +118,14 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
           result = await api(run, runTokens.get(id), 'GET', `/api/issues/${encodeURIComponent(run.request.taskId)}`);
           requireValue(result.companyId === run.request.companyId, 'identity_mismatch', 'Task company does not match binding', 409);
-        } else if (req.method === 'POST' && action === 'publish') {
+        } else if (req.method === 'POST' && ['publish', 'publish-question'].includes(action)) {
           adminOnly();
           requireValue(!run.backendRunId || input.runId === run.backendRunId, 'stale_backend_run', 'Replacement backend run identity required', 409);
-          if (!publications.has(id)) {
-            publications.set(id, publish(store, id, text(input.token, 'token'), api).finally(() => publications.delete(id)));
+          const key = `${id}:${action}`;
+          if (!publications.has(key)) {
+            publications.set(key, (action === 'publish' ? publish : publishQuestion)(store, id, text(input.token, 'token'), api).finally(() => publications.delete(key)));
           }
-          result = await publications.get(id);
+          result = await publications.get(key);
         } else throw new RelayError('not_found', 'Unknown endpoint', 404);
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -53,15 +53,18 @@ export async function execute(ctx) {
       if (run.result && run.publication.state !== 'recorded') {
         run = await call(connection, 'POST', `/runs/${run.id}/publish`, { token: ctx.authToken, runId: ctx.runId });
       }
-      if (run.nativeState === 'settled' && (!run.result || run.publication.state === 'recorded')) {
-        const completed = run.settlement.outcome === 'completed';
+      if (run.waiting && run.waiting.state !== 'recorded') {
+        run = await call(connection, 'POST', `/runs/${run.id}/publish-question`, { token: ctx.authToken, runId: ctx.runId });
+      }
+      if (run.nativeState === 'settled' && (!run.result || run.publication.state === 'recorded') && (!run.waiting || run.waiting.state === 'recorded')) {
+        const completed = ['completed', 'waiting'].includes(run.settlement.outcome);
         return {
           exitCode: completed ? 0 : 1, signal: null, timedOut,
           errorMessage: completed ? null : `Native work ${run.settlement.outcome}`,
           sessionParams: { bindingId: run.request.bindingId, conversationId: run.conversationId },
           sessionDisplayId: run.conversationId,
-          summary: run.result?.summary ?? run.settlement.evidence,
-          resultJson: { relayRunId: run.id, submission: run.result, publication: run.publication, settlement: run.settlement },
+          summary: run.result?.summary ?? run.waiting?.payload.question ?? run.settlement.evidence,
+          resultJson: { relayRunId: run.id, submission: run.result, waiting: run.waiting, publication: run.publication, settlement: run.settlement },
         };
       }
       lastError = undefined;

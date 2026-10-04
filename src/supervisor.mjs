@@ -27,6 +27,8 @@ function promptFor(run, context) {
     `Use the Relay CLI below. Credentials are already in its context file. Do not read or print that file.\n` +
     `1. Read the assigned task: ${cli} work read ${quote(run.id)}\n` +
     `2. Acknowledge before doing the work: ${cli} work acknowledge ${quote(run.id)}\n` +
+    `Read previous questions and answers with: ${cli} work interactions ${quote(run.id)}\n` +
+    `If blocked on clarification, write a question file and run ${cli} work ask ${quote(run.id)} --key question-1 --question-file /absolute/path/question.md, then finish this turn without submitting.\n` +
     `3. Execute the task, write a summary file, then submit using:\n` +
     `${cli} work submit ${quote(run.id)} --key candidate-1 --summary-file /absolute/path/result.md --candidate YOUR_CANDIDATE_ID\n` +
     `Use the task's actual candidate identity. After submission stop editing and finish this turn. Submission is not acceptance.\n` +
