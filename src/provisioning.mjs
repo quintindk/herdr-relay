@@ -18,7 +18,11 @@ export async function provisionAgent(store, directory, api, input) {
   let operation = store.operation(id);
   if (operation) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Provisioning key configuration changed', 409);
-    if (operation.state === 'recorded') return operation;
+    if (operation.state === 'recorded') {
+      const binding = store.binding(operation.bindingId);
+      requireValue(binding.lifecycleState !== 'retired', 'binding_retired', 'Provisioned binding has been retired', 409);
+      return operation;
+    }
   } else operation = store.saveOperation({ id, runId: '', request, state: 'intent' });
   const name = `Relay ${request.bindingId} ${digest(id).slice(0, 12)}`;
   if (!operation.agentId) {
@@ -38,10 +42,17 @@ export async function provisionAgent(store, directory, api, input) {
       'agent_identity_mismatch', 'Provisioning identity does not match expected independent Relay agent', 409);
     operation = store.saveOperation({ ...operation, agentId: agent.id, state: 'agent_created' });
   }
+  // Install before starting the native server so startup skill discovery sees it.
+  const hermes = request.harness === 'hermes';
+  const skillDirectory = join(request.directory, hermes ? '.hermes/skills/relay-work' : '.opencode/skills/relay-work');
+  mkdirSync(skillDirectory, { recursive: true });
+  const skill = readFileSync(fileURLToPath(new URL('../skills/relay-work/SKILL.md', import.meta.url)), 'utf8');
+  const skillPath = join(skillDirectory, 'SKILL.md');
+  if (existsSync(skillPath)) requireValue(readFileSync(skillPath, 'utf8') === skill, 'skill_conflict', 'Existing Relay skill differs. Resolve it explicitly.', 409);
+  else writeFileSync(skillPath, skill, { flag: 'wx' });
   const runtimeKey = `provision-${digest(id).slice(0, 24)}`;
   const runtime = await launchRuntime(store, directory, { key: runtimeKey, directory: request.directory,
     harness: request.harness, executable: request.executable });
-  const hermes = request.harness === 'hermes';
   const nativeConfig = { directory: request.directory, runtimeKey, exclusive: true,
     url: hermes ? `ws://127.0.0.1:${runtime.port}/api/ws` : `http://127.0.0.1:${runtime.port}`,
     authFile: join(runtime.directory, hermes ? 'gateway-token' : 'auth.json'),
@@ -89,12 +100,5 @@ export async function provisionAgent(store, directory, api, input) {
   else requireValue(readFileSync(operatorFile, 'utf8') === context, 'context_conflict', 'Adapter context differs from this service');
   const config = { relayContextFile: operatorFile, bindingId: binding.id, bindingRevision: binding.revision };
   await api('PATCH', `/api/agents/${encodeURIComponent(operation.agentId)}`, { adapterConfig: config });
-  // A local shared skill is installed only into this explicitly provisioned workspace.
-  const skillDirectory = join(request.directory, hermes ? '.hermes/skills/relay-work' : '.opencode/skills/relay-work');
-  mkdirSync(skillDirectory, { recursive: true });
-  const skill = readFileSync(fileURLToPath(new URL('../skills/relay-work/SKILL.md', import.meta.url)), 'utf8');
-  const skillPath = join(skillDirectory, 'SKILL.md');
-  if (existsSync(skillPath)) requireValue(readFileSync(skillPath, 'utf8') === skill, 'skill_conflict', 'Existing Relay skill differs. Resolve it explicitly.', 409);
-  else writeFileSync(skillPath, skill, { flag: 'wx' });
   return store.saveOperation({ ...operation, state: 'recorded', bindingId: binding.id, runtimeKey, skillPath });
 }

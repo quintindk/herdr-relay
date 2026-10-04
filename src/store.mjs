@@ -183,6 +183,8 @@ export class Store {
         return existing;
       }
       requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
+      const decision = this.operation(`review-decision:${digest([request.companyId, request.taskId])}`);
+      requireValue(!decision || decision.state === 'recorded', 'review_decision_uncertain', 'Task has an unresolved candidate decision', 409);
       requireValue(!this.db.prepare('SELECT id FROM runs WHERE binding_id = ? AND active = 1').get(binding.id),
         'conversation_busy', 'Previous native work is not confirmed settled', 409);
       if (binding.config.lifetime === 'task') {
