@@ -18,11 +18,8 @@ servers can be stopped. Pull bindings have no runtime owned by Relay. Shared nat
 servers cannot be retired by this path. Worktree cleanup follows separately and
 preserves dirty or ignored files. Persistent peers are unaffected.
 
-Service lifetime is recorded but does not yet enforce an operating window. Native
-Hermes retirement and automatic correction dispatch remain open work.
-
-Update: service windows are implemented by [bounded schedules](schedules.md), and
-owned Hermes retirement is supported. When `--backend-context` is configured,
+Service windows are implemented by [bounded schedules](schedules.md), and owned
+Hermes retirement is supported. When `--backend-context` is configured,
 Relay polls registered task-candidate reviews and resumes acceptance-driven
 retirement after restart. The original controller binding is preserved. Dirty
 cleanup remains blocked without changing accepted outcome.
@@ -46,5 +43,5 @@ For Hermes, explicitly resume the existing stored session first and supply its n
 runtime ID and gateway replay epoch. Relay never guesses a replacement conversation.
 
 Update Paperclip's `bindingRevision` after rebinding. Old revision dispatches are
-rejected. Managed runtime replacement is intentionally refused until owned-runtime
-restart reconciliation has an explicit contract.
+rejected. Managed bindings use the separate `runtime resume` contract described in
+[managed runtimes](managed-runtimes.md).

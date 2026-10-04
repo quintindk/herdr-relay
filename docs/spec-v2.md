@@ -8,6 +8,7 @@
 - Work backend: Paperclip
 - Implementation progress: [first working slice](build-v1.md)
 - Native progress: [reserved OpenCode delivery](native-opencode-v1.md)
+- Current coverage and remaining limitations: [implementation status](implementation-status.md)
 
 ## 1. Defining principle
 

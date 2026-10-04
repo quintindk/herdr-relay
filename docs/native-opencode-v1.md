@@ -163,5 +163,7 @@ Inspected release commit: `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
 - [Runner state](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/effect/runner.ts):
   `ensureRunning` joins an existing run instead of rejecting concurrent prompt input.
 
-Next work: exact interruption or an enforceable native reservation, real Paperclip
-host-restart policy, Hermes delivery, rebinding, and bounded waiting/question flows.
+Later increments implement [owned-runtime interruption](managed-runtimes.md),
+[Paperclip recovery](paperclip-recovery.md), [Hermes delivery](native-hermes-v1.md),
+[rebinding](lifetimes-and-rebinding.md) and [bounded questions](questions-v1.md).
+Shared-session atomic reservation remains an upstream interface limitation.

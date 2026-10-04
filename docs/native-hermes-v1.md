@@ -40,9 +40,10 @@ conditional on exclusive input, not an invocation-scoped native lock.
 If the native replay evidence is evicted or the gateway restarts before Relay
 observes completion, work can remain unresolved. Idle alone never settles it.
 Relay restart can recover while the same gateway epoch retains terminal evidence.
-Automatic interruption is not implemented. Hermes's general `session.interrupt`
-is session-wide. Its task guard applies to internal hosted-room tasks rather than
-arbitrary external prompt submissions.
+Shared-gateway automatic interruption is not implemented. Hermes's general
+`session.interrupt` is session-wide. Its task guard applies to internal hosted-room
+tasks rather than arbitrary external prompt submissions. Dedicated
+[managed runtimes](managed-runtimes.md) support verified interruption and resume.
 
 ## Verification
 

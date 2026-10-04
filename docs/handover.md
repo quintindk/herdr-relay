@@ -1,354 +1,189 @@
-# Herdr Relay: agent handover
+# Herdr Relay: current handover
 
-Handover date: 2026-10-04. Package: `herdr-relay@0.1.0-dev.0`.
+Updated: 2026-10-04. Package `herdr-relay@0.1.0-dev.0`. SQLite schema 4.
 
 ## Start here
 
-Current full-spec progress is tracked in [implementation status](implementation-status.md).
-Bounded questions and automatic Paperclip continuation are verified. Read
-[questions and continuation](questions-v1.md). The suite currently contains 33 tests.
-Reserved Hermes delivery is implemented and live-model verified. Read
-[the Hermes contract](native-hermes-v1.md), particularly terminal replay limits.
-Real Paperclip host restart and explicit replacement-run recovery are verified.
-See [the recovery procedure](paperclip-recovery.md). Schema is now 3 and the suite
-contains 28 tests. The older sections below describe the earlier native increment.
+The local Linux implementation now covers native OpenCode and Hermes delivery,
+owned runtime interruption/resume, Paperclip host recovery, bounded questions,
+task delegation, candidate review, worktree finalisation, acceptance-driven
+retirement, monitoring schedules, inbox receipts, herdr views and service installation.
 
-**Continue with exact native interruption, Hermes delivery and bounded waiting.**
-Reserved OpenCode delivery now persists a native message ID, delivers
-once, and settles against a matching terminal response plus worker submission.
-Explicit CLI pull remains supported. Read [the native delivery contract](native-opencode-v1.md)
-before changing supervision. OpenCode session-wide abort is deliberately not used.
+**Do not describe the entire v2 specification as complete.** The precise evidence
+and remaining limitations are in [implementation status](implementation-status.md).
+Shared human-controlled native sessions have no atomic input reservation. Remote
+Relay transport and managed runtimes on macOS are not implemented.
 
-- Working directory: `/home/quintin/play/herdr-relay`.
-- Product name: **Herdr Relay**. The user approved `herdr-relay` and explicitly
-  wants it to remain a herdr plugin.
-- The directory now uses the Relay name. Historical evaluation evidence retains
-  paths from the earlier Retinue directory.
-- Git is initialised on `main`. The requested GitHub destination is
-  `quintindk/herdr-relay`. Inspect current Git and remote state before continuing.
-- The repository is public under the MIT licence. The user authorised incremental
-  commits and pushes after verification.
-- Node 24, native ESM JavaScript, built-in SQLite, no npm dependencies or compile step.
-- Read local/inherited instructions before working. Do not delegate to subagents
-  unless the user or applicable instructions explicitly request delegation.
+The user requested continued implementation with verified commits and pushes.
+Do not delegate unless explicitly authorised by the user or applicable instructions.
+The repository is public, MIT-licensed, and tracks `quintindk/herdr-relay` on `main`.
+Inspect Git status before continuing. GitHub DNS failed near the end of this work,
+so check for local commits ahead of `origin/main` and push them when connectivity
+returns. Do not rewrite history.
 
-Read these documents in order:
+## Required reading
 
-1. [Specification v2](spec-v2.md): current architectural contract.
-2. [First working slice](build-v1.md): commands, implementation scope and limitations.
-3. [Scenario baseline](evaluation-baseline-v1.md): intended end-to-end behaviour.
-4. [Native conversation evaluation](native-conversation-evaluation-v1.md): previous
-   real-model continuity experiments and their limits.
-5. [Product evaluation](evaluation-results-v1.md): why Paperclip was selected.
+1. [Specification v2](spec-v2.md) and [implementation status](implementation-status.md).
+2. [Scenario verification](scenario-verification.md).
+3. [Managed runtimes](managed-runtimes.md), [native OpenCode](native-opencode-v1.md),
+   and [native Hermes](native-hermes-v1.md).
+4. [Paperclip recovery](paperclip-recovery.md), [questions](questions-v1.md),
+   [task commands](task-commands.md), and [candidate review](candidate-review.md).
+5. [Provisioning](agent-provisioning.md), [lifetimes](lifetimes-and-rebinding.md),
+   [worktrees](worktree-resources.md), [schedules](schedules.md),
+   [installation/inbox](inbox-and-installation.md), and [placement](placement.md).
 
-[Specification v1](spec-v1.md) is historical. Its standalone task engine and
-one-active-assignment restriction are superseded.
+`build-v1.md`, the earlier evaluation documents and `spec-v1.md` are historical
+milestone records. Their original limitations are superseded by later feature
+documents. Do not copy the historical process-holder bridge into production code.
 
-## Product decisions to preserve
+## Authorities and invariants
 
-> The requirement is lightweight interaction backed by durable state. Structure
-> should appear when work needs it, rather than being something you must configure
-> before asking an agent for help.
-
-The user rejects mandatory teams, job roles and permanent reporting hierarchies.
-Agents primarily have context, repository bindings and optional capabilities.
-
-| Component | Authority |
+| Component | Owns |
 | --- | --- |
-| Paperclip | Tasks, assignments, dependencies, review/acceptance and work-run history |
-| Relay | Agent registration, native bindings, delivery receipts, runtime lifecycle and recovery |
-| Herdr | Machines, workspaces, panes and terminal processes |
-| Harness | Conversations, tools and model execution |
-| Git | Branches, worktrees, changes and commits |
+| Paperclip | Tasks, ownership, dependencies, interactions, review and work-run history |
+| Relay | Bindings, delivery receipts, integration mutations and runtime/resource lifecycle |
+| Herdr | Terminal placement and restoration |
+| Harness | Native conversations and model/tool execution |
+| Git | Candidate bytes, commits, branches and worktrees |
 
-- One Paperclip agent identity per logical agent. Many identities share the Relay
-  adapter implementation. Relay is integration software, not a reasoning manager.
-- Paperclip retains bounded execution-run bookkeeping. Relay owns actual runtime
-  lifecycle. Finishing a Paperclip run must not terminate a persistent conversation.
-- No second task database in Relay. Its SQLite store holds integration state.
-- CLI and a shared skill are the planned initial agent interface. Harness plugins
-  are not a prerequisite. The shared skill has not been implemented yet.
-- Multiple open obligations are allowed, with one executing turn per conversation.
-  Waiting should release execution capacity. Submitted disposable workers remain
-  reserved for corrections until acceptance.
-- Submission, native settlement, acceptance, retirement and Git cleanup are distinct.
-- Exact candidate acceptance is the eventual retirement trigger for task-scoped
-  workers. Commit/merge/push and resource cleanup need their own authority.
-- Gateway design is deferred. The user previously asked to finish the spec before
-  creating a root README. There is still no root README.
-
-### Scenarios driving the design
-
-1. Daily driver starts a day-long inbox/Teams monitor. Relevant events lead to
-   human work, agent work or delegation to an independent project agent.
-2. Demo agent asks an independent landing-zone agent for an Azure subnet, answers
-   clarification and consumes its result. No lifecycle authority is transferred.
-3. Worktree worker updates a graph and submits an exact candidate. Daily driver
-   checks, requests corrections, commits under the human's instruction, accepts
-   and then retires the worker and cleans up eligible resources.
+- Agents are independent identities. No mandatory manager, team or project.
+- One unsettled native turn per binding. Waiting questions release capacity only
+  after native settlement, while the obligation remains in Paperclip.
+- Persist intent before native delivery, interruption, backend mutation and Git effects.
+- Native POSTs are never replayed after uncertain delivery. Absent messages are
+  not proof that a request cannot still arrive.
+- Result comments have no trusted backend idempotency guarantee. Uncertain POSTs
+  are read back using exact body, author and original publication-run attribution.
+- Task/interaction creates use backend idempotency keys plus local changed-payload
+  checks. Assignments and answers reconcile by read-back rather than blind overwrite.
+- A terminal native receipt is persisted and survives backend delay or replay eviction.
+  Idle without a matching receipt is not completion.
+- Submitted work, native completion, accepted candidate, Git commit, runtime stop
+  and worktree removal are separate facts.
+- Candidate acceptance is exact and current. A lost decision blocks new task
+  dispatch until reconciled. Workers cannot accept their own candidates.
+- Task-scoped workers remain reserved for corrections. Controller-authorised
+  acceptance triggers owned-runtime retirement and eligible cleanup. Dirty or
+  ignored files block cleanup without undoing acceptance.
+- Shared servers are never automatically aborted or killed. Owned mode requires
+  a dedicated private native endpoint and verified process identities.
+- The trust boundary is one local Unix user, not isolation from hostile same-user processes.
 
 ## Code map
 
-| File | Purpose |
+| Files | Responsibility |
 | --- | --- |
-| `src/store.mjs` | SQLite bindings, credentials, runs, events, idempotency and native-state transitions |
-| `src/service.mjs` | Authenticated Unix-socket HTTP API, publication serialisation, in-memory backend tokens |
-| `src/client.mjs` | Unix-socket client, context loading, default state directory |
-| `src/cli.mjs` | Service command, registration, work reads/receipts, operator cancellation/settlement |
-| `src/adapter.mjs` | Paperclip external adapter factory, execution loop and environment diagnostics |
-| `src/paperclip.mjs` | Backend API calls and comment publication/reconciliation |
-| `src/protocol.mjs` | Validation, errors, canonical payload hashing and receipt marker |
-| `src/opencode.mjs` | Local native HTTP client, identity checks and message-correlated observation |
-| `src/supervisor.mjs` | Durable delivery intent, scoped worker context and restart reconciliation |
-| `herdr-plugin.toml` | Herdr plugin manifest, currently one service-status action |
-| `test/relay.test.mjs` | Ten persistence, protocol, CLI, service and adapter tests |
-| `test/native.test.mjs` | Eleven native HTTP fault, attribution, process-restart and schema compatibility tests |
-| `test/adapter.test.mjs` | Lost initial dispatch, cancellation ordering and definitive-conflict tests |
-| `scripts/check.mjs` | Syntax checks across source, scripts and tests |
-| `scripts/paperclip-smoke.mjs` | Real Paperclip external-package installation and run-attribution smoke test |
-| `scripts/opencode-smoke.mjs` | Isolated real-model OpenCode test with deterministic Paperclip API |
-| `docs/evidence/relay-build-smoke.json` | Sanitised successful real-backend evidence |
-| `evaluation/` | Earlier investigative product/native fixtures, separate from the new implementation |
+| `store.mjs`, `protocol.mjs` | SQLite state, revisions, idempotency, receipts and validation |
+| `service.mjs`, `service-lock.mjs`, `client.mjs`, `cli.mjs` | Local authenticated API, exclusive service ownership and commands |
+| `adapter.mjs`, `paperclip.mjs`, `backend-recovery.mjs` | External adapter, publication and replacement-run recovery |
+| `opencode.mjs`, `hermes.mjs`, `supervisor.mjs` | Native identity, delivery, observation and scoped worker contexts |
+| `runtime-host.mjs`, `runtimes.mjs`, `resume.mjs` | Detached owned servers, process-group verification, interruption and continuation |
+| `provisioning.mjs`, `lifecycle.mjs`, `resources.mjs` | Agent/worktree provisioning, acceptance retirement and Git finalisation |
+| `work.mjs`, `operations.mjs`, `review.mjs`, `candidate.mjs` | Questions, task mutations, revision-bound review and file-state digests |
+| `inbox.mjs`, `schedules.mjs` | Atomic source checkpoints, notifications and bounded backend wakes |
+| `placement.mjs`, `views.mjs`, `installation.mjs` | Herdr identity reconciliation, interactive overview and Linux service lifecycle |
+| `skills/relay-work/SKILL.md` | Shared agent participation protocol |
+| `scripts/plugin-launch.sh`, `herdr-plugin.toml` | Herdr actions/pane and Node discovery |
 
-The package exports `createServerAdapter` through `src/adapter.mjs`. Its adapter
-type is `herdr_relay`, CLI name is `herdr-relay`, and herdr plugin ID is
-`synthswarm.herdr-relay`. The npm package is private and has not been published.
-Name availability has not been checked.
+All application code is Node 24 native ESM with built-in SQLite. No npm dependencies
+or compilation. The external adapter exports `createServerAdapter`, type
+`herdr_relay`. Plugin ID: `synthswarm.herdr-relay`.
 
-## Current protocol and state
+## State and credentials
 
-Default state lives under `$XDG_STATE_HOME/herdr-relay`, falling back to
-`~/.local/state/herdr-relay`. `RELAY_STATE_DIR` or `--state-dir` overrides it.
+Default state: `$XDG_STATE_HOME/herdr-relay` or `~/.local/state/herdr-relay`.
+`RELAY_STATE_DIR` / `--state-dir` override it.
 
-- `relay.sqlite`: WAL, full synchronous writes, integration records and events.
-- `relay.sock`: local HTTP-over-Unix-socket transport, mode `0600`.
-- `admin-token`: operator credential, mode `0600`.
-- Parent state directory: mode `0700`.
+- `relay.sqlite`: durable integration state, WAL and full synchronous writes.
+- `service-lock.sqlite`: exclusive transaction used only for process ownership.
+- `relay.sock`: local HTTP socket, `0600`.
+- `admin-token`, adapter/worker context files: private local credentials.
+- `runtimes/`: launch configuration, private native credentials, atomic process
+  descriptor and native log. Process IDs are checked with Linux start identities.
+- Optional `--backend-context FILE`: board/operator authority for provisioning,
+  schedules, recovery and background acceptance-retirement reconciliation.
 
-This is a trusted local Unix-user boundary. Binding-scoped credentials prevent
-accidental cross-agent calls through the API, not hostile same-user filesystem
-access. Worker contexts contain Relay credentials, never Paperclip run tokens.
-Binding credentials are retained in the restricted database to support recovery
-of identical registration requests.
+Backend run tokens stay in service memory and are reattached by the adapter.
+Replacement-run recovery fences the old adapter's writes. Token rotation and
+retention policy remain follow-up work. Native credentials never enter prompts.
+Schema 1–3 data is retained when schema 4 tables are opened. Future schemas are refused.
 
-### Dispatch through completion
+## Verification actually performed
 
-1. Paperclip invokes the adapter with a run token, agent identity and task ID.
-2. Adapter persists a dispatch through `POST /runs` and attaches its run token in
-   service memory. It reattaches while polling, including after Relay restarts.
-3. Worker lists and reads its run. Task content is fetched live from Paperclip.
-4. Worker acknowledges before doing work, then submits a stable key, summary and
-   candidate string through the CLI.
-5. Adapter requests publication. Relay writes a marked, correctly attributed
-   Paperclip comment. Submission remains separate from native completion.
-6. Pull mode requires operator-attested settlement. Native OpenCode mode requires
-   a matching terminal assistant response and idle reserved conversation. Only
-   after required publication and settlement does the adapter return its result.
+Latest normal suite: **63 tests passed**, plus `npm run check`. Run the suite again
+after changes, rather than relying on this count as a permanent fact.
 
-There is no automatic task status change, review transition or acceptance yet.
-Candidate strings are recorded, not independently computed or verified.
+| Probe | Evidence |
+| --- | --- |
+| Real Paperclip external adapter | `scripts/paperclip-smoke.mjs` |
+| Real Paperclip crash/restart and operator recovery | `scripts/paperclip-recovery-smoke.mjs` |
+| Real backend questions, continuation, human tasks and review | `scripts/paperclip-question-smoke.mjs` |
+| All three scenario families with real backend/Git, deterministic workers | `scripts/scenario-smoke.mjs` |
+| Real OpenCode model with deterministic backend | `scripts/opencode-smoke.mjs` |
+| Real Hermes model with deterministic backend | `scripts/hermes-smoke.mjs` |
+| Owned native cancellation, shutdown and same-conversation resume | `scripts/managed-opencode-smoke.mjs`, `scripts/managed-hermes-smoke.mjs` |
+| Combined real Paperclip + OpenCode/Hermes questions and continuation | `scripts/live-paperclip-opencode.mjs`, `scripts/live-paperclip-hermes.mjs` |
+| Real model graph edit, independent candidate verification, commit, acceptance and retirement | `scripts/live-worktree-smoke.mjs` |
+| Herdr pane and native placement | Actual temporary pane opened/inspected/closed, `scripts/placement-smoke.mjs` |
+| Real systemd crash/restart | `scripts/service-supervision-smoke.mjs` |
+| Unit generation | `scripts/installation-smoke.mjs` |
 
-### Important invariants
+Sanitised outputs are in `docs/evidence/`. These probes consume model usage when
+marked native. They use isolated homes and copied credentials, which must be
+removed after stopping their owned processes. Production inbox/Azure access was
+not exercised. Azure IDs and source messages in scenarios are explicit fixtures.
 
-- Registration rejects a changed configuration or agent/conversation alias.
-- Binding revision is currently fixed at 1. Dispatch validates it. Rebinding and
-  verified continuation are not implemented.
-- Dispatch identity is `(companyId, Paperclip runId)`. Identical retry returns the
-  original Relay run. Changed request payload conflicts.
-- A SQLite partial unique index prevents two unsettled runs on one binding.
-- Submission requires acknowledged work. Identical retry returns the result.
-  Changed result content conflicts.
-- Submission does not release the conversation. Native settlement does.
-- Cancelling unacknowledged pull work settles it immediately. Cancelling claimed
-  work only records the request, blocks late submission and awaits settlement.
-- Native delivery intent also prevents immediate cancellation settlement before
-  acknowledgement. Once intent is stored, there is no automatic prompt replay.
-- Worker credentials cannot settle, cancel, register peers or access other bindings.
-- Paperclip origin is pinned to a state directory to prevent backend substitution.
+## Important discoveries
 
-### Backend uncertainty
+- OpenCode `prompt_async` can join busy work. Its abort endpoint is session-wide.
+  Only dedicated owned mode authorises automated interruption. Shared mode detects
+  visible conflicting input but cannot prevent a concurrent human request.
+- OpenCode commits message metadata before text parts. Missing parts are pending
+  evidence, not an immediate payload conflict.
+- Hermes runtime IDs differ from stored session IDs. Replay epochs identify gateway
+  incarnations. Some terminal events omit `persisted_turn`, requiring the documented
+  reserved-segment fallback. Interrupted partial output proves failure, never success.
+- Paperclip marks orphaned external runs `failed/process_lost` after a 60-second
+  controller lease. It requires execution reconciliation before a replacement run.
+  Relay's operator recovery preserves the original native invocation and attribution.
+- OpenCode creates ignored `.opencode` dependency files. Worktree retirement blocks
+  on these. The live fixture explicitly removed its own disposable dependencies
+  before retrying. Do not add blanket ignored-file deletion.
+- systemd uses `KillMode=process` so coordinator restart does not kill managed native
+  runtimes. Runtime stop separately verifies the entire owned process group is gone.
+- Herdr server PATH can omit NVM Node. The plugin launcher resolves `RELAY_NODE`,
+  PATH or local NVM. `HERDR_CONFIG_PATH` does not isolate the plugin registry.
 
-Before posting a result comment, Relay persists publication state `uncertain`.
-The comment embeds the Relay run ID and result digest. A later read reconciles
-only a matching body, agent ID and Paperclip run ID.
+## Pinned integration sources
 
-**An absent matching comment does not permit another POST.** The first request
-could still commit. Such a run remains unresolved. There is no operator override
-or durable idempotent backend mutation mechanism for this case yet.
+- Paperclip package `2026.1001.0`, inspected source
+  `/tmp/opencode/retinue-paperclip`, commit `8f8a0ab7effbd6a0584107d8038736c134ee5047`.
+- OpenCode `1.18.34`, `/tmp/opencode/relay-opencode`, commit
+  `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
+- Hermes `0.21.5+2164.gfdec926`, `/home/quintin/.hermes/hermes-agent`, commit
+  `fdec926ef54391edcf6caad5f7f6761fdcccdaa2`.
+- Herdr `0.9.3`, protocol 22. Recheck current client/server before control operations.
 
-Do not weaken this into blind retries. The original prototype's `clientRequestId`
-was not retained by Paperclip's comment endpoint.
+## Retained environment
 
-## What has actually been verified
+Evaluation image: `retinue-evaluation:2026-10-03`. Containers are retained for
+evidence but were stopped after probes. `herdr-relay-recovery-v2` contains the
+real-backend scenario state and an installed OpenCode binary. Its mount points at
+the current `herdr-relay` checkout. The older `herdr-relay-build-smoke` mount still
+points at the former `herdr-retinue` path and must not be reused blindly.
 
-The last completed checks were:
+Temporary herdr plugin links/panes and systemd test units were removed. Native
+fixture processes and copied credentials were cleaned up. Inspect live process
+identity before any further cleanup. Never stop the user's regular Hermes or
+OpenCode processes based on executable name alone.
 
-```bash
-npm run check
-npm test
-npm pack --dry-run
-```
+## Next work
 
-- All twenty-four tests passed. Syntax and package checks passed.
-- Tests cover database reopen, service restart while an adapter continues running,
-  changed-payload rejection, duplicate registration, stale/overlapping dispatch,
-  worker credential scope, CLI registration, publication uncertainty, and waiting
-  for settlement after submission/cancellation.
-- Real Paperclip `2026.1001.0` loaded the external package through its install API.
-- Two separate agents, labelled OpenCode and Hermes, each submitted one attributed
-  comment through the new adapter/service protocol.
-- Both backend runs remained active before settlement, then succeeded.
-- Herdr `0.9.3` accepted the manifest through a disabled temporary plugin link.
-
-**The new-build smoke test used deterministic protocol calls, not native model
-turns.** Labels in the evidence do not establish working harness connectors.
-
-Earlier experiments did execute real OpenCode and Hermes model turns in existing
-conversations and write correctly attributed Paperclip comments. Those used a
-process-holder bridge and machine-specific helpers. They established continuity
-and connectivity, not cancellation, delivery safety or a production supervisor.
-
-The new native OpenCode smoke also passed against OpenCode `1.18.34` with
-`github-copilot/gpt-6-astra`. It exercised the actual Relay adapter, service,
-supervisor and CLI with a real model, prior conversation context, one attributed
-result and automatic correlated settlement. Its Paperclip API is deterministic.
-See [native evidence](evidence/native-opencode-smoke.json).
-
-Recovery tests also kill the actual adapter Node process, restart Relay, and launch
-the adapter again with the same backend run. They establish one native prompt,
-one Relay run and one attributed result comment with HTTP fixtures. A dropped
-initial dispatch response is retried under the original immutable backend-run key.
-Cancellation is applied before attaching credentials for new native delivery.
-
-## Immediate next work
-
-### 1. Strengthen native delivery and add Hermes
-
-Reserved server-backed OpenCode delivery is implemented. Hermes remains pull-only.
-Inspect native APIs and earlier fixtures before choosing the Hermes contract.
-
-- Verify exact native instance and conversation before dispatch.
-- Bind credentials through runtime context without placing secrets in prompts.
-- Persist dispatch intent before native effects.
-- Identify the particular native invocation so completion/interruption can be
-  attributed to it, rather than inferring success from general conversation idle.
-- Require a submitted result for success and native observation for settlement.
-- Preserve conversation state after the Paperclip run ends.
-- Handle an already-busy conversation without mixing in unrelated human work.
-
-### 2. Prove cancellation and recovery
-
-- Cancel the assigned invocation and verify it stopped before returning.
-- Keep uncertainty visible if the connection drops around delivery or interruption.
-- Extend the verified Relay/adapter-process restart tests to real Paperclip host
-  restart and its run re-invocation policy. Relay cannot force Paperclip to resume
-  an interrupted adapter under the same run ID.
-- Never convert timeout or bridge exit into proof of native termination.
-- Keep new native work blocked while prior execution is uncertain.
-
-### 3. Add agent participation and backend work semantics
-
-- Shared skill using actual implemented CLI commands.
-- Runtime-context provisioning and verified rebinding/continuation.
-- Questions, waiting and later continuation in bounded runs.
-- Paperclip review-stage and candidate-revision mapping.
-- Then provisioning, acceptance-driven retirement, cleanup and herdr views.
-
-Use the ten acceptance criteria in spec v2 as the milestone checklist. The current
-slice satisfies parts of them, not the complete milestone.
-
-## Areas needing attention during implementation
-
-These are limits visible in the current code, not promises that they are solved:
-
-- Adapter `timeoutSec` requests cancellation but can wait indefinitely for claimed
-  work to settle or for result publication to reconcile.
-- Initial dispatch is inside the recovery loop. Transport/server failures replay
-  its stable backend-run key. Definitive 4xx dispatch rejections fail promptly.
-- OpenCode delivery verifies stored conversation identity and correlates native
-  message IDs. There is no native process incarnation ID or atomic reservation.
-- Schema 2 retains schema-1 pull records and rejects future versions. Native state
-  is stored as optional run JSON fields. Add explicit migrations for later changes.
-- Socket startup probes for an existing listener and removes stale sockets. Test
-  competing process startups before treating supervision as production-ready.
-- Run tokens remain in service memory for attached runs until service exit.
-  Token retirement, rotation and expiry handling need an explicit contract.
-- Backend issue checkout, work ownership transitions and heartbeat continuation
-  policies are not implemented by this adapter.
-- State pinning distinguishes backend origins, not separate backend databases
-  behind the same origin.
-- Service supervision, Windows transport, cross-machine routing and release
-  packaging remain undecided.
-
-## Source references and integration discoveries
-
-Pinned Paperclip source:
-
-- `/tmp/opencode/retinue-paperclip`
-- Release `v2026.1001.0`, commit `8f8a0ab7effbd6a0584107d8038736c134ee5047`.
-- `packages/adapter-utils/src/types.ts`: execution/cancellation contracts.
-- `server/src/adapters/plugin-loader.ts`: external package loading.
-- `server/src/routes/adapters.ts`: actual installation API.
-- `server/src/services/heartbeat.ts`: run credentials and invocation lifecycle.
-- `packages/adapters/hermes/src/gateway/server/execute.ts`: existing external
-  service adapter precedent. Its gateway protocol differs from native Hermes
-  `/api/ws`. Do not conflate them.
-
-Two discoveries from the real build test:
-
-1. Install with `POST /api/adapters/install` and
-   `{"packageName":"/absolute/package/path","isLocalPath":true}`. The pinned
-   external-adapter guide's `POST /api/adapters` example returned 404.
-2. The adapter must declare `supportsLocalAgentJwt: true` to receive
-   `ctx.authToken`. Without it the real run failed with missing authentication.
-
-Earlier native references:
-
-- `evaluation/native-probe.mjs`: OpenCode HTTP and Hermes WebSocket protocol usage.
-- `evaluation/native-host.py`: isolated harness launch, machine-specific paths.
-- `evaluation/native-lease.mjs`: old process run-holder, not a supervisor to copy.
-- `evaluation/native-receipt.mjs`: old CLI result helper.
-- `/home/quintin/.hermes/hermes-agent/tui_gateway/contracts/sessions.py`.
-- `/home/quintin/.hermes/hermes-agent/tui_gateway/contracts/prompt_voice.py`.
-- `/home/quintin/.hermes/hermes-agent/tests/e2e/core/terminal/_gateway_client.py`.
-
-Previously inspected versions: herdr `0.9.3` / API protocol 22, OpenCode `1.18.34`,
-Hermes `0.21.5+2164.gfdec926`. Recheck before relying on exact installed behaviour.
-
-## Retained environment and cleanup state
-
-- Docker image: `retinue-evaluation:2026-10-03`.
-- New-build container: `herdr-relay-build-smoke`, stopped after verification.
-  It retains Paperclip state at `/home/node/relay-paperclip-state` and a read-only
-  bind mount of this repository at `/relay`.
-- Earlier containers `retinue-eval-paperclip` and `retinue-eval-openrig` were also
-  stopped after their evaluations. Recheck state before use.
-- Starting a container alone does not start Paperclip. Its main command is
-  `sleep infinity`. Resume the retained build instance with:
-
-```bash
-docker start herdr-relay-build-smoke
-docker exec -d -e PAPERCLIP_RUNNER_ENABLED=false herdr-relay-build-smoke \
-  paperclipai run --data-dir /home/node/relay-paperclip-state
-# Wait for /api/health, then:
-docker exec herdr-relay-build-smoke node /relay/scripts/paperclip-smoke.mjs
-docker stop herdr-relay-build-smoke
-```
-
-- Smoke reruns create fresh company/agent/task records. Existing failed probes
-  from installation-route and JWT debugging remain in the evaluation database.
-- No new Relay service was left running on the host by the build tests.
-- Herdr's temporary `synthswarm.herdr-relay` link was removed and absence verified.
-  **`HERDR_CONFIG_PATH` did not isolate the plugin registry.** Do not use it as a
-  sandbox for plugin mutations.
-- Earlier native process groups were stopped and copied native credentials removed
-  after the prior evaluations. `/tmp/opencode/retinue-native` retains historical
-  fixture files. Inspect before reusing rather than assuming valid credentials or
-  live conversations.
-
-## Recommended first action
-
-Run `npm run check && npm test`, then continue from the native delivery limitations.
-OpenCode `1.18.34` prompt delivery joins busy execution and its abort is session-wide.
-Do not add automatic abort based on a status check. Keep evidence explicit about
-real model execution versus deterministic fixtures.
+1. Check pending Git pushes after DNS recovers.
+2. Review the explicit limitations in `implementation-status.md` before claiming
+   complete v2 coverage. Resolve supported topology and platform scope with the user.
+3. Tighten unproven race/recovery boundaries through targeted tests, especially
+   shared-session input, provider compaction, and native crash before terminal receipt.
+4. Keep the historical docs clearly separated from the current contracts. Avoid
+   another handover made of contradictory appended status paragraphs.

@@ -29,8 +29,9 @@ previous cursor. Sender and recipient must belong to the same company. An event
 does not automatically create a task. The receiving agent decides what needs work.
 Inbox records are integration notifications, not a second task database.
 
-The connector owns source access and scheduling. Production email/Teams connectors,
-operating-window enforcement and scheduling lifecycle are not implemented yet.
+The connector owns source access. [Bounded schedules](schedules.md) implement
+operating windows and scoped cancellation. Production email/Teams connectors are
+not included in the synthetic fixtures.
 
 ## Herdr actions
 
@@ -53,7 +54,8 @@ herdr plugin pane open --plugin synthswarm.herdr-relay --entrypoint work \
 The launcher resolves Node from `RELAY_NODE`, PATH or a local NVM installation.
 Herdr's server PATH may differ from an interactive shell. The pane was opened,
 its unavailable-service state inspected, and the temporary pane/link removed on
-Herdr `0.9.3`. Runtime placement restoration remains pending.
+Herdr `0.9.3`. [Placement reconciliation](placement.md) validates restored terminal
+and conversation identity without creating replacement panes.
 
 ## Linux user service
 

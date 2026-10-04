@@ -46,7 +46,8 @@ to disappear. Repeated successful stop is a no-op. It preserves the stored nativ
 conversation. There is no force-kill fallback or shared-server shutdown.
 
 The owner survives Relay restart. Its descriptor is reconciled on subsequent
-operations. Automatic runtime relaunch and herdr placement remain pending.
+operations. Runtime relaunch is explicit through the verified resume command below.
+Herdr placement is reconciled separately through [placement commands](placement.md).
 Task-scoped acceptance invokes the controller's retirement path. See
 [lifetimes and rebinding](lifetimes-and-rebinding.md) for prerequisites.
 

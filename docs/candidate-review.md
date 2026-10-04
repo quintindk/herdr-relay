@@ -41,9 +41,10 @@ back backend disposition, retaining only the integration receipt. Native complet
 and result publication must settle before review begins.
 
 Board acceptance was exercised through the real backend and read back through
-Relay. Rejection does not yet automatically create a correction invocation.
-Acceptance is not automatic task completion or runtime retirement. Finalisation,
-retirement and cleanup remain separate implementation work.
+Relay. Corrections run as later backend invocations after ownership is returned to
+the worker. Task-scoped acceptance triggers controller-authorised retirement.
+Finalisation, task completion and cleanup remain distinct operations. See
+[lifetimes](lifetimes-and-rebinding.md) and [worktree resources](worktree-resources.md).
 
 ## Structured evidence
 
