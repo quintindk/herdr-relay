@@ -53,6 +53,10 @@ export async function tickSchedules(store, api, clock = Date.now()) {
     // A stable slot survives a lost invocation response. The backend owns the run.
     schedule = store.saveOperation({ ...schedule, pendingSlot: slot });
     try {
+      if (schedule.lastRunId) {
+        const previous = await api('GET', `/api/heartbeat-runs/${encodeURIComponent(schedule.lastRunId)}`);
+        if (['queued', 'running'].includes(previous.status)) continue;
+      }
       const task = await api('GET', `/api/issues/${encodeURIComponent(schedule.request.taskId)}`);
       requireValue(task.companyId === binding.config.companyId && task.assigneeAgentId === binding.config.agentId,
         'schedule_identity_mismatch', 'Scheduled task must belong to the bound agent', 409);

@@ -177,6 +177,10 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         }
         result = operation;
       }
+      else if (req.method === 'GET' && path === '/operations') {
+        adminOnly();
+        result = store.db.prepare('SELECT data FROM operations ORDER BY rowid DESC').all().map(row => JSON.parse(row.data));
+      }
       else if (req.method === 'POST' && ['/placement/bind', '/placement/reconcile'].includes(path)) {
         adminOnly();
         result = path === '/placement/bind' ? await bindPlacement(store, input) : await reconcilePlacement(store, text(input.bindingId, 'bindingId'));

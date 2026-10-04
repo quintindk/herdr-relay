@@ -6,6 +6,7 @@ import { launchRuntime } from './runtimes.mjs';
 import { OpenCode } from './opencode.mjs';
 import { Hermes } from './hermes.mjs';
 import { provisionWorktree } from './resources.mjs';
+import { randomUUID } from 'node:crypto';
 
 export async function provisionAgent(store, directory, api, input) {
   const key = text(input.key, 'key');
@@ -25,7 +26,7 @@ export async function provisionAgent(store, directory, api, input) {
       requireValue(binding.lifecycleState !== 'retired', 'binding_retired', 'Provisioned binding has been retired', 409);
       return operation;
     }
-  } else operation = store.saveOperation({ id, runId: '', request, state: 'intent' });
+  } else operation = store.saveOperation({ id, runId: '', request, state: 'intent', marker: randomUUID() });
   if (request.worktree) {
     requireValue(request.worktreeKey && resolve(request.worktree.path) === request.directory,
       'worktree_configuration_mismatch', 'Provisioned worktree must match worker directory and have a worktreeKey');
@@ -36,14 +37,14 @@ export async function provisionAgent(store, directory, api, input) {
   const name = `Relay ${request.bindingId} ${digest(id).slice(0, 12)}`;
   if (!operation.agentId) {
     const agents = await api('GET', `/api/companies/${encodeURIComponent(request.companyId)}/agents`);
-    const matches = agents.filter(agent => agent.name === name);
+    const matches = agents.filter(agent => agent.adapterConfig?.relayProvisionMarker === operation.marker);
     requireValue(matches.length <= 1, 'agent_identity_ambiguous', 'Multiple matching provisioning agents', 409);
     let agent = matches[0];
     if (!agent) {
       requireValue(operation.state !== 'agent_uncertain', 'agent_creation_uncertain', 'Agent creation was attempted. Absence does not authorise another create.', 409);
       operation = store.saveOperation({ ...operation, state: 'agent_uncertain' });
       agent = await api('POST', `/api/companies/${encodeURIComponent(request.companyId)}/agents`, {
-        name, adapterType: 'herdr_relay', adapterConfig: {},
+        name, adapterType: 'herdr_relay', adapterConfig: { relayProvisionMarker: operation.marker },
         runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: false, maxConcurrentRuns: 1 } },
       });
     }
@@ -107,7 +108,7 @@ export async function provisionAgent(store, directory, api, input) {
   const context = JSON.stringify({ socketPath: join(directory, 'relay.sock'), token: readFileSync(join(directory, 'admin-token'), 'utf8').trim() });
   if (!existsSync(operatorFile)) writeFileSync(operatorFile, context, { flag: 'wx', mode: 0o600 });
   else requireValue(readFileSync(operatorFile, 'utf8') === context, 'context_conflict', 'Adapter context differs from this service');
-  const config = { relayContextFile: operatorFile, bindingId: binding.id, bindingRevision: binding.revision };
+  const config = { relayContextFile: operatorFile, bindingId: binding.id, bindingRevision: binding.revision, relayProvisionMarker: operation.marker };
   await api('PATCH', `/api/agents/${encodeURIComponent(operation.agentId)}`, { adapterConfig: config });
   return store.saveOperation({ ...operation, state: 'recorded', bindingId: binding.id, runtimeKey, skillPath });
 }

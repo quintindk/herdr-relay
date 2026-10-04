@@ -53,6 +53,8 @@ export async function review(store, caller, token, api, input) {
     requireValue(interaction.status === status, 'review_decision_uncertain', 'Backend did not confirm the requested disposition', 409);
     store.saveOperation({ ...decision, state: 'recorded', interactionId: interaction.id });
   }
+  const latestAfter = store.runs().find(run => run.request.companyId === target.request.companyId && run.request.taskId === target.request.taskId && run.result);
+  requireValue(latestAfter?.id === target.id, 'stale_candidate', 'Candidate changed while observing backend review', 409);
   // This is a backend receipt, not an independent acceptance authority.
   return store.recordReview(target.id, { interactionId: interaction.id, candidate: target.result.candidate,
     status: interaction.status, observedAt: new Date().toISOString() });

@@ -369,6 +369,12 @@ export class Store {
     return this.transaction(() => {
       const run = this.run(id);
       run.review = receipt;
+      const decisionId = `review-decision:${digest([run.request.companyId, run.request.taskId])}`;
+      const decision = this.operation(decisionId);
+      if (decision?.state === 'uncertain' && decision.targetRunId === id &&
+        receipt.status === (decision.action === 'accept' ? 'accepted' : 'rejected')) {
+        this.saveOperation({ ...decision, state: 'recorded', interactionId: receipt.interactionId });
+      }
       return this.save(run, 'review.observed', receipt);
     });
   }

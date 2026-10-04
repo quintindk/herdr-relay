@@ -46,6 +46,7 @@ const help = `herdr-relay (development)
   schedule create|stop --file schedule.json
   placement bind|reconcile --file placement.json
   operation inspect OPERATION_ID
+  operation list
   backend recover RUN
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
@@ -100,6 +101,7 @@ export async function main(args) {
   if (group === 'status') result = await call(connection, 'GET', '/health');
   else if (group === 'backend' && action === 'recover' && id) result = await call(connection, 'POST', '/backend/recover', { runId: id });
   else if (group === 'operation' && action === 'inspect' && id) result = await call(connection, 'POST', '/operations/inspect', { id });
+  else if (group === 'operation' && action === 'list') result = await call(connection, 'GET', '/operations');
   else if (group === 'placement' && ['bind', 'reconcile'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/placement/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));

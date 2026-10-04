@@ -23,6 +23,20 @@ test('uncertain backend agent creation never blindly creates a duplicate', async
   await assert.rejects(provisionAgent(store, '/state', api, { ...input, directory: '/changed' }), { code: 'operation_conflict' });
 });
 
+test('a matching display name never authorises adopting another backend agent', async t => {
+  const store = new Store(':memory:');
+  t.after(() => store.close());
+  let created = false;
+  const api = async (method, path, body) => {
+    if (method === 'GET') return [{ id: 'foreign', name: 'Relay worker', adapterType: 'herdr_relay', companyId: 'company', adapterConfig: {} }];
+    created = Boolean(body.adapterConfig.relayProvisionMarker);
+    throw new Error('Stop before launching runtime');
+  };
+  await assert.rejects(provisionAgent(store, '/state', api, { key: 'worker', companyId: 'company', bindingId: 'worker', harness: 'opencode', directory: '/work' }));
+  assert.equal(created, true);
+  assert.equal(store.operation('provision:worker').agentId, undefined);
+});
+
 test('integrated provisioning retains the same owned worktree across a lost agent-create response', async t => {
   const root = mkdtempSync(join(tmpdir(), 'relay-provision-worktree-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
