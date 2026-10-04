@@ -36,5 +36,13 @@ docker exec ISOLATED_CONTAINER node /relay/scripts/scenario-smoke.mjs
 Each execution creates a fresh company and identities. Worker reasoning, source
 messages and Azure resources are deterministic fixtures. It does not access real
 mail or provision Azure resources. Native OpenCode/Hermes delivery and cancellation
-have separate real-model evidence. A single combined live-model, live-backend
-scenario is still required before claiming the entire acceptance matrix is closed.
+have separate real-model evidence.
+
+`scripts/live-paperclip-opencode.mjs` also passed with real Paperclip, OpenCode and
+`github-copilot/gpt-6-astra` together. It provisioned an independent backend agent
+and native conversation, had the model ask a region question through the CLI,
+observed bounded waiting, answered in Paperclip, and verified automatic native
+continuation in the same conversation. The model used the answer and submitted
+one attributed synthetic subnet result. The owned runtime was then retired.
+This closes the combined native/backend question and provisioning path. The
+monitoring and correction/worktree scenario workers remain deterministic.

@@ -1,0 +1,13 @@
+{
+  "date": "2026-10-04",
+  "backend": "Paperclip 2026.1001.0",
+  "nativeHarness": "OpenCode 1.18.34",
+  "model": "github-copilot/gpt-6-astra",
+  "integratedProvisioning": true,
+  "nativeQuestionTurn": true,
+  "automaticNativeContinuation": true,
+  "sameConversation": true,
+  "answerUsed": true,
+  "attributedResultCount": 1,
+  "ownedRuntimeRetired": true
+}

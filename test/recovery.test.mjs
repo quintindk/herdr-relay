@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { publish, verifyRecovery } from '../src/paperclip.mjs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { startService } from '../src/service.mjs';
+import { call } from '../src/client.mjs';
+import { execute } from '../src/adapter.mjs';
 
 function fixture(t) {
   const store = new Store(':memory:');
@@ -65,4 +71,22 @@ test('pending result publishes with replacement attribution', async t => {
     return { id: 'replacement-receipt' };
   });
   assert.equal(published.publication.backendRunId, 'replacement');
+});
+
+test('replaced adapter cannot cancel the recovered invocation or keep its supervision authority', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'relay-stale-adapter-'));
+  const service = await startService({ directory, paperclipUrl: 'http://paperclip.test' });
+  t.after(async () => { await service.close(); rmSync(directory, { recursive: true, force: true }); });
+  service.store.register({ id: 'driver', companyId: 'company', agentId: 'agent', harness: 'opencode', instanceId: 'instance', conversationId: 'session' });
+  const request = { bindingId: 'driver', bindingRevision: 1, companyId: 'company', agentId: 'agent', runId: 'original', taskId: 'task' };
+  const run = service.store.dispatch(request);
+  service.store.acknowledge(run.id);
+  service.store.recover(run.id, { ...request, runId: 'replacement' });
+  const admin = { socketPath: service.socketPath, token: service.token };
+  await assert.rejects(call(admin, 'POST', `/runs/${run.id}/cancel`, { runId: 'original' }), { code: 'stale_backend_run' });
+  assert.equal(service.store.run(run.id).cancellationRequested, false);
+  const path = join(directory, 'operator.json');
+  writeFileSync(path, JSON.stringify(admin), { mode: 0o600 });
+  await assert.rejects(execute({ agent: { companyId: 'company', id: 'agent' }, runId: 'original', authToken: 'old-token',
+    config: { relayContextFile: path, bindingId: 'driver' }, context: { taskId: 'task' }, onLog: async () => {} }), { code: 'stale_backend_run' });
 });

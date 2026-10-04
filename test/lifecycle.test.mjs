@@ -27,6 +27,7 @@ test('task-scoped acceptance retires only the authorised binding and preserves p
   assert.equal((await retireAccepted(store, caller, run, 'token', api)).state, 'recorded');
   assert.equal(store.binding('worker').lifecycleState, 'retired');
   assert.equal(store.binding('controller').lifecycleState, undefined);
+  assert.equal(store.dispatch(request).id, run.id);
   assert.throws(() => store.dispatch({ ...request, runId: 'another' }), { code: 'binding_retired' });
 });
 

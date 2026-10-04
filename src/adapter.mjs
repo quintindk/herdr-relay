@@ -45,8 +45,10 @@ export async function execute(ctx) {
         await ctx.onLog('stdout', `${JSON.stringify({ relayRunId: run.id, deliveryState: run.deliveryState })}\n`);
       }
       run = await call(connection, 'GET', `/runs/${run.id}`);
+      requireValue((run.backendRunId ?? run.request.runId) === ctx.runId,
+        'stale_backend_run', 'This adapter invocation has been replaced', 409);
       if ((ctx.signal?.aborted || timedOut) && run.nativeState !== 'settled') {
-        run = await call(connection, 'POST', `/runs/${run.id}/cancel`, {});
+        run = await call(connection, 'POST', `/runs/${run.id}/cancel`, { runId: ctx.runId });
       }
       // Apply known cancellation before making a fresh native run deliverable.
       await call(connection, 'POST', `/runs/${run.id}/attach`, { token: ctx.authToken, runId: ctx.runId });
@@ -69,6 +71,7 @@ export async function execute(ctx) {
       }
       lastError = undefined;
     } catch (error) {
+      if (error.code === 'stale_backend_run') throw error;
       // A definitive dispatch rejection needs operator correction, not retries.
       // Once a run exists, loss of access is still not proof that work stopped.
       if (!run && error.status >= 400 && error.status < 500) throw error;

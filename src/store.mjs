@@ -165,7 +165,6 @@ export class Store {
       'invalid_request', 'bindingRevision must be a positive integer');
     request.bindingRevision = input.bindingRevision;
     const binding = this.binding(request.bindingId);
-    requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
     requireValue(!binding.config.taskId || binding.config.taskId === request.taskId, 'task_scope_mismatch', 'Task-scoped binding belongs to another task', 409);
     requireValue(binding.revision === request.bindingRevision, 'stale_binding', 'Binding revision does not match', 409);
     requireValue(binding.config.companyId === request.companyId && binding.config.agentId === request.agentId,
@@ -183,6 +182,7 @@ export class Store {
         requireValue(canonical(existing.request) === canonical(request), 'dispatch_conflict', 'Run replay has changed payload', 409);
         return existing;
       }
+      requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
       requireValue(!this.db.prepare('SELECT id FROM runs WHERE binding_id = ? AND active = 1').get(binding.id),
         'conversation_busy', 'Previous native work is not confirmed settled', 409);
       if (binding.config.lifetime === 'task') {
@@ -381,7 +381,7 @@ export class Store {
       const binding = this.binding(id);
       requireValue(input.revision === binding.revision, 'stale_binding', 'Binding revision changed', 409);
       requireValue(!this.runs(id).some(run => run.nativeState !== 'settled'), 'conversation_busy', 'Unsettled work prevents rebinding', 409);
-      requireValue(binding.lifecycleState !== 'retired', 'binding_retired', 'Retired binding cannot be rebound', 409);
+      requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Retiring or retired binding cannot be rebound', 409);
       const config = binding.config;
       requireValue(input.conversationId === config.conversationId && input.harness === config.harness,
         'continuation_mismatch', 'Rebinding must preserve the exact stored conversation and harness', 409);
