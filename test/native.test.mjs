@@ -234,7 +234,7 @@ test('schema upgrade preserves pull state and rejects future schemas without rew
   store.db.exec('PRAGMA user_version = 1');
   store.close();
   store = new Store(path);
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 3);
   assert.equal(store.authenticate(token), 'native');
   assert.deepEqual(store.run(run.id), run);
   store.db.exec('PRAGMA user_version = 99');

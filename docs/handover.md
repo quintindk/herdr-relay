@@ -4,6 +4,11 @@ Handover date: 2026-10-04. Package: `herdr-relay@0.1.0-dev.0`.
 
 ## Start here
 
+Current full-spec progress is tracked in [implementation status](implementation-status.md).
+Real Paperclip host restart and explicit replacement-run recovery are verified.
+See [the recovery procedure](paperclip-recovery.md). Schema is now 3 and the suite
+contains 28 tests. The older sections below describe the earlier native increment.
+
 **Continue with exact native interruption, Hermes delivery and bounded waiting.**
 Reserved OpenCode delivery now persists a native message ID, delivers
 once, and settles against a matching terminal response plus worker submission.

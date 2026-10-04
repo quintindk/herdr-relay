@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { Store } from './store.mjs';
 import { digest, RelayError, requireValue, text } from './protocol.mjs';
-import { paperclipClient, publish } from './paperclip.mjs';
+import { paperclipClient, publish, verifyRecovery } from './paperclip.mjs';
 import { nativeConfig, OpenCode } from './opencode.mjs';
 import { supervise } from './supervisor.mjs';
 
@@ -65,7 +65,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       const input = req.method === 'POST' ? await body(req) : {};
       const adminOnly = () => requireValue(admin, 'forbidden', 'Operator credentials required', 403);
       let result;
-      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode'], schema: 2 };
+      if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode'], schema: 3 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'POST' && path === '/bindings') {
         adminOnly();
@@ -75,18 +75,29 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
         requireValue(admin || run.request.bindingId === bindingId, 'forbidden', 'Run belongs to another binding', 403);
         if (req.method === 'GET' && !action) result = run;
+        else if (req.method === 'POST' && action === 'recover') {
+          adminOnly();
+          text(input.token, 'token');
+          const previousId = run.backendRunId ?? run.request.runId;
+          if (previousId !== input.runId) await verifyRecovery(run, input, input.token, api);
+          requireValue((store.run(id).backendRunId ?? run.request.runId) === previousId,
+            'recovery_conflict', 'Backend identity changed during verification', 409);
+          result = store.recover(id, input);
+          runTokens.delete(id);
+        }
         else if (req.method === 'POST' && action === 'acknowledge') result = store.acknowledge(id);
         else if (req.method === 'POST' && action === 'submit') result = store.submit(id, input);
         else if (req.method === 'POST' && action === 'settle') { adminOnly(); result = store.settle(id, input); }
         else if (req.method === 'POST' && action === 'cancel') { adminOnly(); result = store.cancel(id); }
         else if (req.method === 'POST' && action === 'attach') {
           adminOnly();
+          requireValue(!run.backendRunId || input.runId === run.backendRunId, 'stale_backend_run', 'Replacement backend run identity required', 409);
           runTokens.set(id, text(input.token, 'token'));
           result = { attached: true };
         } else if (req.method === 'GET' && action === 'task') {
@@ -95,6 +106,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
           requireValue(result.companyId === run.request.companyId, 'identity_mismatch', 'Task company does not match binding', 409);
         } else if (req.method === 'POST' && action === 'publish') {
           adminOnly();
+          requireValue(!run.backendRunId || input.runId === run.backendRunId, 'stale_backend_run', 'Replacement backend run identity required', 409);
           if (!publications.has(id)) {
             publications.set(id, publish(store, id, text(input.token, 'token'), api).finally(() => publications.delete(id)));
           }

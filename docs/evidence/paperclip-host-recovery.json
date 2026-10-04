@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-04",
+  "paperclipVersion": "2026.1001.0",
+  "nativeHarness": false,
+  "statusAfterRestart": "failed",
+  "errorCode": "process_lost",
+  "relayRunCount": 1,
+  "nativeState": "settled",
+  "publicationState": "recorded",
+  "replacementStatus": "succeeded",
+  "resultReceipts": 1,
+  "correctReplacementAttribution": true,
+  "requires": "Verified native settlement and Paperclip recovery-action resolution before replacement invocation"
+}

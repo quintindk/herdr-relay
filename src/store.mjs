@@ -8,7 +8,7 @@ export class Store {
   constructor(path) {
     this.db = new DatabaseSync(path);
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 2) {
+    if (version > 3) {
       this.db.close();
       throw new RelayError('unsupported_schema', 'Database schema is newer than this Relay build');
     }
@@ -31,10 +31,13 @@ export class Store {
         kind TEXT NOT NULL, data TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS backend_recoveries (
+        backend_key TEXT PRIMARY KEY, run_id TEXT NOT NULL, request TEXT NOT NULL
+      );
     `);
-    // Schema 2 adds optional native invocation/observation fields to run JSON.
-    // Existing schema-1 bindings and runs remain explicit pull records.
-    if (version < 2) this.transaction(() => this.db.exec('PRAGMA user_version = 2'));
+    // Schema 2 adds optional native fields. Schema 3 adds replacement backend
+    // run mappings. Existing pull bindings and runs are retained unchanged.
+    if (version < 3) this.transaction(() => this.db.exec('PRAGMA user_version = 3'));
   }
 
   close() { this.db.close(); }
@@ -133,6 +136,11 @@ export class Store {
       'identity_mismatch', 'Paperclip identity does not match binding', 409);
     return this.transaction(() => {
       const key = canonical([request.companyId, request.runId]);
+      const recovery = this.db.prepare('SELECT * FROM backend_recoveries WHERE backend_key = ?').get(key);
+      if (recovery) {
+        requireValue(recovery.request === canonical(request), 'dispatch_conflict', 'Recovery replay has changed payload', 409);
+        return this.run(recovery.run_id);
+      }
       const row = this.db.prepare('SELECT data FROM runs WHERE backend_key = ?').get(key);
       if (row) {
         const existing = JSON.parse(row.data);
@@ -159,6 +167,29 @@ export class Store {
       run.deliveryState = 'acknowledged';
       run.nativeState = 'claimed';
       return this.save(run, 'delivery.acknowledged');
+    });
+  }
+
+  recover(id, input) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      const request = {};
+      for (const key of ['bindingId', 'companyId', 'agentId', 'runId', 'taskId']) request[key] = text(input[key], key);
+      request.bindingRevision = input.bindingRevision;
+      requireValue(['bindingId', 'companyId', 'agentId', 'taskId', 'bindingRevision'].every(key => request[key] === run.request[key]),
+        'recovery_identity_mismatch', 'Recovery must retain binding revision, company, agent and task', 409);
+      requireValue(request.runId !== run.request.runId, 'invalid_recovery', 'Recovery needs a replacement backend run');
+      const backendKey = canonical([request.companyId, request.runId]);
+      const existing = this.db.prepare('SELECT * FROM backend_recoveries WHERE backend_key = ?').get(backendKey);
+      if (existing) {
+        requireValue(existing.run_id === id && existing.request === canonical(request), 'recovery_conflict', 'Replacement run already bound', 409);
+        return run;
+      }
+      requireValue(!this.db.prepare('SELECT id FROM runs WHERE backend_key = ?').get(backendKey), 'recovery_conflict', 'Replacement run already dispatched', 409);
+      this.db.prepare('INSERT INTO backend_recoveries VALUES (?, ?, ?)').run(backendKey, id, canonical(request));
+      run.backendRunId = request.runId;
+      run.recoveries = [...(run.recoveries ?? []), { runId: request.runId, at: now() }];
+      return this.save(run, 'backend.recovered', { runId: request.runId });
     });
   }
 

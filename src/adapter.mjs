@@ -39,7 +39,9 @@ export async function execute(ctx) {
       if (!run) {
         // A lost response may already have persisted the dispatch. Replay only
         // this immutable backend-run key, never manufacture a replacement run.
-        run = await call(connection, 'POST', '/runs', dispatch);
+        run = ctx.config.recoverRelayRunId
+          ? await call(connection, 'POST', `/runs/${encodeURIComponent(ctx.config.recoverRelayRunId)}/recover`, { ...dispatch, token: ctx.authToken })
+          : await call(connection, 'POST', '/runs', dispatch);
         await ctx.onLog('stdout', `${JSON.stringify({ relayRunId: run.id, deliveryState: run.deliveryState })}\n`);
       }
       run = await call(connection, 'GET', `/runs/${run.id}`);
@@ -47,9 +49,9 @@ export async function execute(ctx) {
         run = await call(connection, 'POST', `/runs/${run.id}/cancel`, {});
       }
       // Apply known cancellation before making a fresh native run deliverable.
-      await call(connection, 'POST', `/runs/${run.id}/attach`, { token: ctx.authToken });
+      await call(connection, 'POST', `/runs/${run.id}/attach`, { token: ctx.authToken, runId: ctx.runId });
       if (run.result && run.publication.state !== 'recorded') {
-        run = await call(connection, 'POST', `/runs/${run.id}/publish`, { token: ctx.authToken });
+        run = await call(connection, 'POST', `/runs/${run.id}/publish`, { token: ctx.authToken, runId: ctx.runId });
       }
       if (run.nativeState === 'settled' && (!run.result || run.publication.state === 'recorded')) {
         const completed = run.settlement.outcome === 'completed';
