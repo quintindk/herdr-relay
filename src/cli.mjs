@@ -6,7 +6,7 @@ import { startService } from './service.mjs';
 import { requireValue } from './protocol.mjs';
 import { candidate } from './candidate.mjs';
 import { systemdUnit } from './installation.mjs';
-import { renderOverview } from './views.mjs';
+import { renderOverview, watchOverview } from './views.mjs';
 import { fileURLToPath } from 'node:url';
 
 const help = `herdr-relay (development)
@@ -36,7 +36,7 @@ const help = `herdr-relay (development)
   inbox acknowledge EVENT_ID
   event record --file event.json
   event checkpoint --source SOURCE
-  view
+  view [--watch]
   service-unit --paperclip-url URL [--state-dir DIR]
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
@@ -50,7 +50,7 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
     ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source']
-      .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }]])) });
+      .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
   if (group === 'candidate' && action === 'inspect') {
@@ -76,6 +76,10 @@ export async function main(args) {
     process.once('SIGTERM', stop);
     return;
   }
+  if (group === 'view' && values.watch) {
+    await watchOverview(() => call(credentials(values.context), 'GET', '/overview'));
+    return;
+  }
   const connection = credentials(values.context);
   const writeContext = data => {
     requireValue(values['context-out'], 'invalid_request', '--context-out is required');
@@ -88,7 +92,8 @@ export async function main(args) {
     result = await call(connection, 'POST', `/runtimes/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));
   }
   else if (group === 'view') {
-    console.log(renderOverview(await call(connection, 'GET', '/overview')));
+    if (values.watch) await watchOverview(() => call(connection, 'GET', '/overview'));
+    else console.log(renderOverview(await call(connection, 'GET', '/overview')));
     return;
   }
   else if (group === 'inbox' && action === 'list') result = await call(connection, 'GET', '/inbox');

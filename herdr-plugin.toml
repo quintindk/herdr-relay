@@ -9,16 +9,22 @@ description = "Connect Paperclip work to persistent agents in herdr."
 id = "status"
 title = "Relay: service status"
 contexts = ["global"]
-command = ["node", "src/cli.mjs", "status"]
+command = ["bash", "scripts/plugin-launch.sh", "status"]
 
 [[actions]]
 id = "work"
 title = "Relay: work and agent overview"
 contexts = ["global"]
-command = ["node", "src/cli.mjs", "view"]
+command = ["bash", "scripts/plugin-launch.sh", "view"]
 
 [[actions]]
 id = "agents"
 title = "Relay: discover agents"
 contexts = ["global"]
-command = ["node", "src/cli.mjs", "agent", "discover"]
+command = ["bash", "scripts/plugin-launch.sh", "agent", "discover"]
+
+[[panes]]
+id = "work"
+title = "Relay work"
+placement = "split"
+command = ["bash", "scripts/plugin-launch.sh", "view", "--watch"]

@@ -17,7 +17,7 @@ item requires implementation and evidence before the specification is complete.
 | Result review and acceptance | Working-tree digest and real candidate-bound board acceptance | Correction orchestration, finalisation and retirement |
 | Lifetimes and provisioning | Owned OpenCode runtime launch/stop and worktree provisioning | Lifetime orchestration, Hermes launch and herdr placement |
 | Retirement and cleanup | Controller-scoped acceptance retirement, owned runtime stop and worktree cleanup | Hermes runtime ownership and placement reconciliation |
-| Herdr integration | Status, discovery and terminal work overview actions | Interactive panes and restoration reconciliation |
+| Herdr integration | Live-verified interactive work pane, status and discovery actions | Runtime placement restoration reconciliation |
 | Monitoring workflow | Durable source events, atomic checkpoints and inbox receipts | Connectors and bounded schedule lifecycle |
 | Subnet-request workflow | Historical deterministic evaluation | Peer request, clarification, dependency and result acceptance through Relay |
 | Worktree workflow | Historical deterministic evaluation | Provision, exact candidate, corrections, finalisation, acceptance and cleanup |

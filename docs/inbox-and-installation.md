@@ -42,8 +42,18 @@ herdr-relay view
 herdr plugin action invoke --help
 ```
 
-The overview is a terminal report. Interactive plugin-owned task panes and runtime
-restoration reconciliation remain pending.
+The `work` plugin pane refreshes the report, supports j/k selection and Enter for
+details, and reconnects when Relay is unavailable. Open it with:
+
+```bash
+herdr plugin pane open --plugin synthswarm.herdr-relay --entrypoint work \
+  --placement split --target-pane YOUR_PANE_ID --direction right --no-focus
+```
+
+The launcher resolves Node from `RELAY_NODE`, PATH or a local NVM installation.
+Herdr's server PATH may differ from an interactive shell. The pane was opened,
+its unavailable-service state inspected, and the temporary pane/link removed on
+Herdr `0.9.3`. Runtime placement restoration remains pending.
 
 ## Linux user service
 
