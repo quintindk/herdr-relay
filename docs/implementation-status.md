@@ -14,7 +14,7 @@ item requires implementation and evidence before the specification is complete.
 | Paperclip host recovery | Real host crash/restart and explicit replacement-run recovery | Board-authorised recovery orchestration |
 | Questions and continuation | Real Paperclip interaction and automatic continuation smoke | Agent answer commands and full native question scenario |
 | Agent discovery and work CLI | Scoped discovery, task create/list/assign, answer commands and shared skill | Inbox, uncertain mutation reconciliation and skill provisioning |
-| Result review and acceptance | Submission comments only | Candidate digests, revision-bound review and acceptance |
+| Result review and acceptance | Working-tree digest and real candidate-bound board acceptance | Correction orchestration, finalisation and retirement |
 | Lifetimes and provisioning | Existing bindings only | Persistent/service/task-scoped provisioning and placement |
 | Retirement and cleanup | Not implemented | Acceptance-driven retirement and separately authorised Git/resource operations |
 | Herdr integration | Service status action | Discovery, inbox/task views and restoration reconciliation |

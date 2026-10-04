@@ -8,5 +8,6 @@
   "sameConversation": true,
   "answerReadThroughRelay": true,
   "idempotentTaskCreation": true,
-  "humanOwnedFollowup": true
+  "humanOwnedFollowup": true,
+  "candidateBoundBoardAcceptance": true
 }

@@ -11,6 +11,7 @@ import { hermesConfig, Hermes } from './hermes.mjs';
 import { supervise } from './supervisor.mjs';
 import { publishQuestion } from './work.mjs';
 import { mutate } from './operations.mjs';
+import { review } from './review.mjs';
 
 async function body(req) {
   let size = 0;
@@ -85,7 +86,7 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
       else if (req.method === 'GET' && path === '/runs') result = store.runs(bindingId);
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -104,6 +105,15 @@ export async function startService({ directory, paperclipUrl, api = paperclipCli
         else if (req.method === 'POST' && action === 'acknowledge') result = store.acknowledge(id);
         else if (req.method === 'POST' && action === 'submit') result = store.submit(id, input);
         else if (req.method === 'POST' && action === 'ask') result = store.ask(id, input);
+        else if (req.method === 'POST' && action === 'review') {
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
+          requireValue(run.nativeState === 'claimed' && !run.cancellationRequested, 'work_inactive', 'Review requires active acknowledged work', 409);
+          const key = `review:${text(input.runId, 'runId')}`;
+          requireValue(!publications.has(key), 'operation_busy', 'Review is already in flight', 409);
+          const pending = review(store, run, runTokens.get(id), api, input);
+          publications.set(key, pending);
+          try { result = await pending; } finally { publications.delete(key); }
+        }
         else if (req.method === 'POST' && action === 'mutate') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
           requireValue(run.nativeState === 'claimed' && !run.cancellationRequested, 'work_inactive', 'Acknowledge active work before backend changes', 409);

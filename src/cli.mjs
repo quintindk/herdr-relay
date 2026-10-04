@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { call, credentials, stateDirectory } from './client.mjs';
 import { startService } from './service.mjs';
 import { requireValue } from './protocol.mjs';
+import { candidate } from './candidate.mjs';
 
 const help = `herdr-relay (development)
   service --paperclip-url URL [--state-dir DIR]
@@ -22,6 +23,8 @@ const help = `herdr-relay (development)
   task create RUN --key KEY --file task.json
   task assign RUN --key KEY --file assignment.json
   work answer RUN --key KEY --interaction ID --file answers.json
+  candidate inspect --directory REPOSITORY_ROOT
+  result request|inspect|accept|reject CALLER_RUN --file review.json
   operation cancel RUN
   operation settle RUN --outcome completed|cancelled|failed --evidence TEXT
   operator-context --context-out FILE
@@ -33,10 +36,14 @@ terminal response. Cancellation does not automatically interrupt the harness.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(help); return; }
+  if (group === 'candidate' && action === 'inspect') {
+    console.log(JSON.stringify(candidate(values.directory ?? process.cwd()), null, 2));
+    return;
+  }
   if (values['state-dir']) process.env.RELAY_STATE_DIR = values['state-dir'];
   if (group === 'service') {
     requireValue(values['paperclip-url'], 'invalid_request', '--paperclip-url is required');
@@ -86,6 +93,12 @@ export async function main(args) {
   };
   else if (group === 'work' && action === 'acknowledge' && id) result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/acknowledge`, {});
   else if (group === 'work' && action === 'interactions' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/interactions`);
+  else if (group === 'result' && ['request', 'inspect', 'accept', 'reject'].includes(action) && id) {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/review`, {
+      ...JSON.parse(readFileSync(values.file, 'utf8')), action,
+    });
+  }
   else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);
   else if (id && ((group === 'task' && ['create', 'assign'].includes(action)) || (group === 'work' && action === 'answer'))) {
     requireValue(values.file, 'invalid_request', '--file is required');

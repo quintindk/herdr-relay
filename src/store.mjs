@@ -337,4 +337,12 @@ export class Store {
       return this.save(run, 'question.publication', receipt);
     });
   }
+
+  recordReview(id, receipt) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      run.review = receipt;
+      return this.save(run, 'review.observed', receipt);
+    });
+  }
 }

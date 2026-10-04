@@ -20,7 +20,15 @@ async function until(fn) {
   throw new Error('Question smoke condition did not settle');
 }
 const directory = mkdtempSync(join(tmpdir(), 'relay-questions-'));
-const service = await startService({ directory, paperclipUrl: base });
+const service = await startService({ directory, paperclipUrl: base, api: async (run, token, method, path, body) => {
+  const response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`, 'X-Paperclip-Run-Id': run.backendRunId ?? run.request.runId },
+    body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = await response.json();
+  if (!response.ok) console.error(JSON.stringify({ method, path, status: response.status, error: data }));
+  assert.ok(response.ok, `Paperclip HTTP ${response.status}`);
+  return data;
+} });
 const operator = { socketPath: service.socketPath, token: service.token };
 const contextFile = join(directory, 'operator.json');
 writeFileSync(contextFile, JSON.stringify(operator), { mode: 0o600 });
@@ -66,7 +74,28 @@ try {
   await call(operator, 'POST', `/runs/${continuation.id}/settle`, { outcome: 'completed', evidence: 'Deterministic continuation ended' });
   await until(async () => (await api('GET', `/api/heartbeat-runs/${continuation.request.runId}`)).status === 'succeeded');
   await api('PATCH', `/api/agents/${agent.id}`, { runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: false, maxConcurrentRuns: 1 } } });
+  const reviewer = await api('POST', `/api/companies/${company.id}/agents`, { name: 'Independent reviewer', adapterType: 'herdr_relay',
+    adapterConfig: { relayContextFile: contextFile, bindingId: 'reviewer' },
+    runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: false, maxConcurrentRuns: 1 } } });
+  const reviewRegistration = await call(operator, 'POST', '/bindings', { id: 'reviewer', companyId: company.id, agentId: reviewer.id,
+    harness: 'opencode', instanceId: 'fixture', conversationId: 'review-conversation' });
+  const reviewerContext = { socketPath: service.socketPath, token: reviewRegistration.token };
+  const reviewIssue = await api('PATCH', `/api/issues/${issue.id}`, { assigneeAgentId: reviewer.id });
+  await api('PATCH', `/api/agents/${reviewer.id}`, { runtimeConfig: { heartbeat: { enabled: true, wakeOnDemand: true, intervalSec: 0, maxConcurrentRuns: 1 } } });
+  await api('POST', `/api/agents/${reviewer.id}/heartbeat/invoke`, { payload: { taskId: reviewIssue.id, issueId: reviewIssue.id } });
+  const reviewerRun = await until(() => service.store.runs('reviewer')[0]);
+  await call(reviewerContext, 'POST', `/runs/${reviewerRun.id}/acknowledge`, {});
+  await until(async () => { try { return await call(reviewerContext, 'GET', `/runs/${reviewerRun.id}/task`); } catch { return false; } });
+  const reviewInput = { runId: continuation.id, candidate: 'fixture:region' };
+  const requested = await call(reviewerContext, 'POST', `/runs/${reviewerRun.id}/review`, { ...reviewInput, action: 'request', reviewerUserId: 'local-board' });
+  await api('POST', `/api/issues/${issue.id}/interactions/${requested.review.interactionId}/accept`, {});
+  const accepted = await call(reviewerContext, 'POST', `/runs/${reviewerRun.id}/review`, { ...reviewInput, action: 'inspect' });
+  assert.equal(accepted.review.status, 'accepted');
+  await call(operator, 'POST', `/runs/${reviewerRun.id}/cancel`, {});
+  await call(operator, 'POST', `/runs/${reviewerRun.id}/settle`, { outcome: 'cancelled', evidence: 'Review fixture completed its bounded protocol' });
+  await api('PATCH', `/api/agents/${reviewer.id}`, { runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: false, maxConcurrentRuns: 1 } } });
+  await api('PATCH', `/api/agents/${agent.id}`, { runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: false, maxConcurrentRuns: 1 } } });
   console.log(JSON.stringify({ backend: 'Paperclip 2026.1001.0', nativeHarness: false, questionCount: 1,
     boundedWaitingRun: true, automaticContinuation: true, sameConversation: true, answerReadThroughRelay: true,
-    idempotentTaskCreation: true, humanOwnedFollowup: true }, null, 2));
+    idempotentTaskCreation: true, humanOwnedFollowup: true, candidateBoundBoardAcceptance: true }, null, 2));
 } finally { await service.close(); }

@@ -40,3 +40,9 @@ lifecycle grant. Use `assigneeUserId` for human work. `blockedByIssueIds` expres
 dependencies explicitly. `task list RUN` reads the company backlog under your
 backend authority. Answer an addressed question with `work answer RUN --key KEY
 --interaction ID --file answers.json`, using its exact question and option IDs.
+
+For filesystem work, stop editing and compute the candidate with `candidate inspect
+--directory REPOSITORY_ROOT`. Include that digest in your submission. Reviewers
+independently recapture it, verify the work and use `result request|inspect|accept|reject
+CALLER_RUN --file review.json`. The JSON must identify the submitted run and exact
+candidate. Never accept your own submission or infer acceptance from a comment.
