@@ -263,6 +263,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         else if (req.method === 'POST' && action === 'mutate') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
           requireValue(run.nativeState === 'claimed' && !run.cancellationRequested, 'work_inactive', 'Acknowledge active work before backend changes', 409);
+          requireValue(!run.result && !run.waiting, 'work_disposition_recorded', 'This turn has already submitted or requested clarification', 409);
           const key = digest([run.request.bindingId, input.kind, input.key]);
           requireValue(!publications.has(key), 'operation_busy', 'Operation is already in flight', 409);
           const pending = mutate(store, run, runTokens.get(id), api, input);

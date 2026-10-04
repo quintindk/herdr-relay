@@ -4,7 +4,9 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
-import { ownedRuntime, stopRuntime } from '../src/runtimes.mjs';
+import { ownedRuntime, stopRuntime, processGroupMembers } from '../src/runtimes.mjs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 
 test('owned runtime verification rejects replaced process identity before any stop', async t => {
   const root = mkdtempSync(join(tmpdir(), 'relay-runtime-'));
@@ -21,4 +23,15 @@ test('owned runtime verification rejects replaced process identity before any st
   await assert.rejects(stopRuntime(store, 'owned'), { code: 'runtime_identity_mismatch' });
   store.saveOperation({ id: 'runtime:owned', runId: '', directory: root, nonce: 'nonce', state: 'retired' });
   assert.equal((await stopRuntime(store, 'owned')).state, 'retired');
+});
+
+test('owned process-group inspection sees the exact child and rejects invalid group targets', async t => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+  await once(child, 'spawn');
+  t.after(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = once(child, 'exit'); process.kill(-child.pid, 'SIGTERM'); await exited;
+  });
+  assert.ok(processGroupMembers(child.pid).some(member => member.pid === child.pid));
+  assert.throws(() => processGroupMembers(0), { code: 'runtime_identity_mismatch' });
 });

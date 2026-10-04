@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -13,6 +13,21 @@ function processIdentity(pid) {
     return fields[0] === 'Z' ? null : fields[19];
   }
   catch { return null; }
+}
+
+export function processGroupMembers(groupId) {
+  requireValue(Number.isSafeInteger(groupId) && groupId > 1, 'runtime_identity_mismatch', 'Valid owned process group required');
+  const members = [];
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const fields = readFileSync(`/proc/${entry}/stat`, 'utf8').split(') ')[1].split(' ');
+      if (Number(fields[2]) === groupId && fields[0] !== 'Z') members.push({ pid: Number(entry), start: fields[19] });
+    } catch (error) {
+      if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error;
+    }
+  }
+  return members;
 }
 
 export function ownedRuntime(store, key) {
@@ -88,18 +103,21 @@ export async function stopRuntime(store, key) {
   requireValue(bindings.every(binding => !store.runs(binding.id).some(run => run.nativeState !== 'settled')),
     'runtime_busy', 'Managed runtime still has unsettled work', 409);
   const descriptor = JSON.parse(readFileSync(join(operation.directory, 'runtime.json'), 'utf8'));
-  if (operation.state === 'stopping' && processIdentity(descriptor.childPid) !== descriptor.childStart) {
+  if (operation.state === 'stopping' && processIdentity(descriptor.childPid) !== descriptor.childStart &&
+    processGroupMembers(descriptor.ownerPid).length === 0) {
     return store.saveOperation({ ...operation, state: 'retired' });
   }
   requireValue(descriptor.nonce === operation.nonce && processIdentity(descriptor.ownerPid) === descriptor.ownerStart &&
     processIdentity(descriptor.childPid) === descriptor.childStart,
   'runtime_identity_mismatch', 'Managed process identity changed before shutdown', 409);
-  store.saveOperation({ ...operation, state: 'stopping' });
+  store.saveOperation({ ...operation, state: 'stopping', stopMembers: processGroupMembers(descriptor.ownerPid) });
   // The detached owner is the process-group leader. Signal its owned group so
   // executable wrappers cannot leave the actual native server running.
   process.kill(-descriptor.ownerPid, 'SIGTERM');
   for (let i = 0; i < 100; i++) {
-    if (processIdentity(descriptor.childPid) !== descriptor.childStart) return store.saveOperation({ ...operation, state: 'retired' });
+    if (processIdentity(descriptor.childPid) !== descriptor.childStart && processGroupMembers(descriptor.ownerPid).length === 0) {
+      return store.saveOperation({ ...operation, state: 'retired' });
+    }
     await delay(100);
   }
   requireValue(false, 'runtime_stop_uncertain', 'Native process has not been verified stopped', 409);
