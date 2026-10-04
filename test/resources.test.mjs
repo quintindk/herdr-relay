@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './git-fixture.mjs';
 import { test } from 'node:test';
 import { mkdtempSync, writeFileSync, rmSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';

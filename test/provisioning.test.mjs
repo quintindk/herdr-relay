@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './git-fixture.mjs';
 import { test } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { provisionAgent } from '../src/provisioning.mjs';
