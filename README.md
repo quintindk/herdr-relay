@@ -68,6 +68,7 @@ herdr plugin link /absolute/path/herdr-relay
 ## Documentation
 
 - [Current handover](docs/handover.md) and [specification](docs/spec-v2.md).
+- [Optional local model gateway](docs/model-gateway.md).
 - [Native OpenCode](docs/native-opencode-v1.md), [native Hermes](docs/native-hermes-v1.md)
   and [managed runtimes](docs/managed-runtimes.md).
 - [Task commands](docs/task-commands.md), [questions](docs/questions-v1.md),

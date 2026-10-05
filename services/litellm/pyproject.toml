@@ -1,0 +1,10 @@
+[project]
+name = "herdr-relay-model-gateway"
+version = "0.1.0"
+description = "Local LiteLLM gateway for Herdr Relay workers"
+requires-python = ">=3.12,<3.13"
+# LiteLLM's authentication error handler imports Prisma even without a database.
+dependencies = ["litellm[proxy]==1.104.0", "prisma==0.15.0"]
+
+[tool.uv]
+package = false

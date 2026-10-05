@@ -1,0 +1,8 @@
+# Copy to .litellm/config.yaml and add local model/provider definitions.
+model_list: []
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  request_timeout: 120

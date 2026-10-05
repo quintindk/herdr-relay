@@ -2,3 +2,7 @@ node_modules/
 *.tgz
 .relay/
 coverage/
+.litellm/
+.venv/
+__pycache__/
+.firecrawl/
