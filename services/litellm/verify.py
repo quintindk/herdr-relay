@@ -1,13 +1,17 @@
 """Verify the local gateway. --inference consumes usage for every configured model."""
 import argparse
+import json
+from getpass import getpass
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
+import jwt
 import yaml
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--inference', action='store_true')
+parser.add_argument('--admin', action='store_true', help='Verify dashboard password login and database readiness')
 args = parser.parse_args()
 local = Path(__file__).resolve().parents[2] / '.litellm'
 config = yaml.safe_load((local / 'config.yaml').read_text())
@@ -31,6 +35,40 @@ with httpx.Client(base_url=base, timeout=15) as client:
     assert actual == expected, f'Unexpected model list: {actual ^ expected}'
     assert expected, 'No models configured'
     print(f'PASS: liveness, required authentication, and {len(expected)} configured models')
+    if args.admin:
+        readiness = client.get('/health/readiness/details', headers=headers)
+        readiness.raise_for_status()
+        assert readiness.json().get('db') == 'connected', 'Database is not connected'
+        hardened = config.get('general_settings', {}).get('disable_env_credential_login') is True
+        if hardened:
+            credentials_path = local / 'admin-login.json'
+            credentials = json.loads(credentials_path.read_text()) if credentials_path.exists() else {
+                'username': input('Admin email: '), 'password': getpass('Admin password: '),
+            }
+        else:
+            credentials = {'username': environment['UI_USERNAME'], 'password': environment['UI_PASSWORD']}
+        login = client.post('/v2/login', json={key: credentials[key] for key in ('username', 'password')})
+        login.raise_for_status()
+        assert login.json().get('token'), 'Login did not issue a session token'
+        session = jwt.decode(login.json()['token'], environment['LITELLM_MASTER_KEY'], algorithms=['HS256'])
+        assert session['user_role'] == 'proxy_admin', 'Login is not a proxy administrator'
+        assert not session.get('password_reset_required'), 'Password change is required'
+        admin_access = client.get('/user/list', params={'page_size': 1},
+                                  headers={'Authorization': 'Bearer ' + session['key']})
+        admin_access.raise_for_status()
+        rejected = client.post('/v2/login', json={
+            'username': credentials['username'], 'password': 'incorrect-test-password',
+        })
+        assert rejected.status_code == 401, 'Incorrect dashboard password was not rejected'
+        if hardened:
+            assert readiness.json().get('show_env_credential_login_warning') is False, 'Environment-login warning remains enabled'
+            assert 'UI_USERNAME' not in environment and 'UI_PASSWORD' not in environment
+            rejected = client.post('/v2/login', json={
+                'username': 'admin', 'password': environment['LITELLM_MASTER_KEY'],
+            })
+            assert rejected.status_code == 401, 'Master-key dashboard login was not rejected'
+            print('PASS: personal admin permissions and disabled environment/master-key dashboard login')
+        print('PASS: connected database, dashboard login, and incorrect-password rejection')
 
 
 def infer(model):

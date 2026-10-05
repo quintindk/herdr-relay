@@ -4,6 +4,13 @@ Updated: 2026-10-04. Package `herdr-relay@0.1.0-dev.0`. SQLite schema 4.
 
 ## Start here
 
+The current interactive direction is **Herdr-first launch and registration**.
+See [Herdr agent registration](herdr-agent-registration.md). Relay now subscribes
+to an explicitly configured Herdr session and reconciles native conversations
+into paused Paperclip records. These are observation-only, not deliverable
+bindings. The existing owned-runtime paths below remain an explicit headless
+option, not a requirement for harnesses launched from normal Herdr shortcuts.
+
 The local Linux implementation now covers native OpenCode and Hermes delivery,
 owned runtime interruption/resume, Paperclip host recovery, bounded questions,
 task delegation, candidate review, worktree finalisation, acceptance-driven
@@ -92,7 +99,7 @@ documents. Do not copy the historical process-holder bridge into production code
 
 All application code is Node 24 native ESM with built-in SQLite. No npm dependencies
 or compilation. The external adapter exports `createServerAdapter`, type
-`herdr_relay`. Plugin ID: `synthswarm.herdr-relay`.
+`herdr_relay`. Plugin ID: `quintindk.herdr-relay`.
 
 ## State and credentials
 

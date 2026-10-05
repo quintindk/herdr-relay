@@ -20,8 +20,11 @@ team hierarchy or project to participate.
 - Herdr work/inbox pane, placement reconciliation and Linux systemd installation.
 - Per-node SSH administration and remote adapter attachment.
 
-The automatic-control boundary is a dedicated Relay-owned runtime. Shared
-human-controlled conversations are opt-in and conservative. See
+Interactive harnesses launch normally through Herdr. An explicitly configured
+Relay listener registers their detected conversations in Paperclip without
+launching replacement runtimes. These entries are observation-only until verified
+task delivery is attached. Dedicated Relay-owned runtimes remain an explicit
+headless option for exclusive automatic control. See
 [node topology](docs/node-topology.md) and [verified coverage](docs/implementation-status.md).
 
 ## Requirements
@@ -69,6 +72,8 @@ herdr plugin link /absolute/path/herdr-relay
 
 - [Current handover](docs/handover.md) and [specification](docs/spec-v2.md).
 - [Optional local model gateway](docs/model-gateway.md).
+- [Local Paperclip service](docs/paperclip-service.md).
+- [Herdr-first agent registration](docs/herdr-agent-registration.md).
 - [Native OpenCode](docs/native-opencode-v1.md), [native Hermes](docs/native-hermes-v1.md)
   and [managed runtimes](docs/managed-runtimes.md).
 - [Task commands](docs/task-commands.md), [questions](docs/questions-v1.md),

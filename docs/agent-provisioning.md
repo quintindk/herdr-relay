@@ -1,5 +1,46 @@
 # Integrated agent provisioning
 
+Normal interactive launch and registration follows the
+[Herdr-first agent lifecycle](herdr-agent-registration.md). Start harnesses using
+Herdr shortcuts or manually in panes; the configured Relay observer registers
+their native conversations without creating another runtime. These registrations
+are visibility-only until verified delivery is attached.
+
+## Organisation Bootstrap
+
+Paperclip calls organisations "companies" in its API. Relay can provision one
+before any agents exist, using operator credentials and `--backend-context`:
+
+```json
+{
+  "key": "default",
+  "name": "Default",
+  "description": "Default organisation for local Herdr Relay work."
+}
+```
+
+```bash
+herdr-relay company provision --file .relay/default-company.json
+herdr-relay operation inspect company:default
+```
+
+The provisioning key persists the exact request and resulting company ID.
+Identical retries return the same receipt, including after restart. A changed
+request conflicts. A matching name does not authorise adoption of an existing
+company. Paperclip has no company-create idempotency field, so Relay appends a
+unique marker to the description and records uncertainty before posting. A lost
+reply is reconciled by that marker; absence never triggers another create.
+Do not remove the marker while a creation is unresolved.
+
+This creates only the organisation. It does not create agents, issue work or
+select a default organisation for every user's browser. Workers cannot call
+this operator-only endpoint.
+
+## Agent Provisioning
+
+The command below is the explicit **headless, Relay-owned** provisioning path.
+It remains available for exclusive runtimes, not required for Herdr registration.
+
 `agent provision --file agent.json` is operator-only and requires Relay's
 `--backend-context` configuration. Install the external Relay adapter in Paperclip
 first. The command creates an independent Paperclip agent with automatic wakes

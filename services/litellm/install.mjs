@@ -66,7 +66,7 @@ execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
 execFileSync('systemctl', ['--user', 'enable', unitName], { stdio: 'inherit' });
 execFileSync('systemctl', ['--user', 'restart', unitName], { stdio: 'inherit' });
 let ready = false;
-for (let attempt = 0; attempt < 60; attempt++) {
+for (let attempt = 0; attempt < 240; attempt++) {
   try {
     const response = await fetch('http://127.0.0.1:4000/health/liveliness', { signal: AbortSignal.timeout(1000) });
     ready = response.ok;

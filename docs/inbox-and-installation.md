@@ -47,7 +47,7 @@ The `work` plugin pane refreshes the report, supports j/k selection and Enter fo
 details, and reconnects when Relay is unavailable. Open it with:
 
 ```bash
-herdr plugin pane open --plugin synthswarm.herdr-relay --entrypoint work \
+herdr plugin pane open --plugin quintindk.herdr-relay --entrypoint work \
   --placement split --target-pane YOUR_PANE_ID --direction right --no-focus
 ```
 
@@ -58,6 +58,11 @@ Herdr `0.9.3`. [Placement reconciliation](placement.md) validates restored termi
 and conversation identity without creating replacement panes.
 
 ## Linux user service
+
+For automatic registration of harnesses launched normally in Herdr, add
+`--herdr-config /absolute/private/herdr.json` alongside `--backend-context`.
+See [Herdr-first registration](herdr-agent-registration.md) for the source scope,
+reconnection rules and observation-only delivery boundary.
 
 Install or remove the owned user service directly:
 

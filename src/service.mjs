@@ -23,6 +23,8 @@ import { bindPlacement, reconcilePlacement } from './placement.mjs';
 import { recoverBackend } from './backend-recovery.mjs';
 import { serviceLock } from './service-lock.mjs';
 import { resumeRuntime } from './resume.mjs';
+import { provisionCompany } from './companies.mjs';
+import { herdrConfig, observedAgents, watchHerdrAgents } from './herdr-agents.mjs';
 
 async function body(req) {
   let size = 0;
@@ -54,18 +56,20 @@ async function socketAvailable(path) {
   try { unlinkSync(path); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
-export async function startService({ directory, paperclipUrl, api = paperclipClient(paperclipUrl), backendContextFile }) {
+export async function startService({ directory, paperclipUrl, api = paperclipClient(paperclipUrl), backendContextFile, herdrConfigFile }) {
+  const observationConfig = herdrConfigFile ? herdrConfig(JSON.parse(readFileSync(herdrConfigFile, 'utf8'))) : null;
+  requireValue(!observationConfig || backendContextFile, 'operator_backend_unavailable', 'Herdr registration requires a backend operator context');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   const unlock = serviceLock(directory);
   try {
-    const service = await startLockedService({ directory, paperclipUrl, api, backendContextFile });
+    const service = await startLockedService({ directory, paperclipUrl, api, backendContextFile, observationConfig });
     let closing;
     return { ...service, close: () => closing ??= service.close().finally(unlock) };
   } catch (error) { unlock(); throw error; }
 }
 
-async function startLockedService({ directory, paperclipUrl, api, backendContextFile }) {
+async function startLockedService({ directory, paperclipUrl, api, backendContextFile, observationConfig }) {
   const socketPath = join(directory, 'relay.sock');
   await socketAvailable(socketPath);
   const tokenPath = join(directory, 'admin-token');
@@ -95,6 +99,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       let result;
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
+      else if (req.method === 'GET' && path === '/herdr/agents') { adminOnly(); result = { source: observer?.status() ?? null, agents: observedAgents(store) }; }
       else if (req.method === 'GET' && path === '/overview') {
         adminOnly();
         result = overview(store.bindings(), store.runs(), inbox(store));
@@ -165,6 +170,14 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         const key = `provision:${text(input.key, 'key')}`;
         requireValue(!publications.has(key), 'operation_busy', 'Agent provisioning in progress', 409);
         const pending = provisionAgent(store, directory, operatorApi, input);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); }
+      }
+      else if (req.method === 'POST' && path === '/companies/provision') {
+        adminOnly();
+        const key = 'company-provision';
+        requireValue(!publications.has(key), 'operation_busy', 'Company provisioning in progress', 409);
+        const pending = provisionCompany(store, operatorApi, input);
         publications.set(key, pending);
         try { result = await pending; } finally { publications.delete(key); }
       }
@@ -338,9 +351,11 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   const supervisor = supervise({ store, directory, socketPath, ready: id => runTokens.has(id) });
   const scheduler = scheduleRunner(store, operatorApi);
   const lifecycle = backendContextFile ? lifecycleRunner(store, operatorApi, publications) : null;
+  const observer = observationConfig ? watchHerdrAgents(store, operatorApi, observationConfig) : null;
   return {
     socketPath, token, store,
     close: async () => {
+      await observer?.close();
       await scheduler.close();
       await lifecycle?.close();
       await supervisor.close();

@@ -11,10 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const help = `herdr-relay (development)
-  service --paperclip-url URL [--state-dir DIR] [--backend-context FILE]
+  service --paperclip-url URL [--state-dir DIR] [--backend-context FILE] [--herdr-config FILE]
   status
+  company provision --file company.json
   agent list
   agent discover
+  agent observed
   agent register --file binding.json --context-out worker.json
   agent rebind --file continuation.json
   agent provision --file agent.json
@@ -48,7 +50,7 @@ const help = `herdr-relay (development)
   event checkpoint --source SOURCE
   view [--watch]
   service-unit --paperclip-url URL [--state-dir DIR]
-  install --paperclip-url URL [--state-dir DIR] [--backend-context FILE]
+  install --paperclip-url URL [--state-dir DIR] [--backend-context FILE] [--herdr-config FILE]
   uninstall [--state-dir DIR]
   schedule create|stop --file schedule.json
   placement bind|reconcile --file placement.json
@@ -67,7 +69,7 @@ terminal response. Automatic interruption requires a dedicated owned runtime.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'task', 'timeout']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (group === 'adapter-stdio') {
@@ -83,13 +85,13 @@ export async function main(args) {
   if (values['state-dir']) process.env.RELAY_STATE_DIR = values['state-dir'];
   if (['service-unit', 'install', 'uninstall'].includes(group)) {
     const config = { node: process.execPath, cli: fileURLToPath(import.meta.url), stateDirectory: stateDirectory(),
-      paperclipUrl: values['paperclip-url'], backendContextFile: values['backend-context'] };
+      paperclipUrl: values['paperclip-url'], backendContextFile: values['backend-context'], herdrConfigFile: values['herdr-config'] };
     console.log(group === 'service-unit' ? systemdUnit(config) : JSON.stringify(group === 'install' ? installService(config) : uninstallService(stateDirectory())));
     return;
   }
   if (group === 'service') {
     requireValue(values['paperclip-url'], 'invalid_request', '--paperclip-url is required');
-    const service = await startService({ directory: stateDirectory(), paperclipUrl: values['paperclip-url'], backendContextFile: values['backend-context'] });
+    const service = await startService({ directory: stateDirectory(), paperclipUrl: values['paperclip-url'], backendContextFile: values['backend-context'], herdrConfigFile: values['herdr-config'] });
     console.log(JSON.stringify({ listening: service.socketPath }));
     let stopping = false;
     const stop = async () => {
@@ -112,6 +114,10 @@ export async function main(args) {
   };
   let result;
   if (group === 'status') result = await call(connection, 'GET', '/health');
+  else if (group === 'company' && action === 'provision') {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', '/companies/provision', JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'backend' && action === 'recover' && id) result = await call(connection, 'POST', '/backend/recover', { runId: id });
   else if (group === 'operation' && action === 'inspect' && id) result = await call(connection, 'POST', '/operations/inspect', { id });
   else if (group === 'operation' && action === 'list') result = await call(connection, 'GET', '/operations');
@@ -163,6 +169,7 @@ export async function main(args) {
     result = { written: values['context-out'] };
   } else if (group === 'agent' && action === 'list') result = await call(connection, 'GET', '/bindings');
   else if (group === 'agent' && action === 'discover') result = await call(connection, 'GET', '/peers');
+  else if (group === 'agent' && action === 'observed') result = await call(connection, 'GET', '/herdr/agents');
   else if (group === 'agent' && action === 'rebind') {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', '/bindings/rebind', JSON.parse(readFileSync(values.file, 'utf8')));

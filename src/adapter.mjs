@@ -14,6 +14,7 @@ Invocations require a Paperclip task. Submission records a result comment.
 Questions, review and acceptance use separate commands and backend interactions.`;
 
 export async function execute(ctx) {
+  requireValue(!ctx.config.observationOnly, 'agent_observation_only', 'This Herdr agent is registered for visibility only. Verified task delivery is not configured.', 409);
   if (ctx.config.relayNodeFile) {
     const { executeRemote } = await import('./remote-adapter.mjs');
     return executeRemote(ctx);
@@ -102,6 +103,9 @@ export function createServerAdapter() {
     async testEnvironment(ctx) {
       const checks = [];
       try {
+        if (ctx.config.observationOnly) return { adapterType: type, status: 'warn',
+          checks: [{ level: 'warn', code: 'agent_observation_only', message: 'Existing Herdr conversation registered. Dispatch and lifecycle control remain disabled.' }],
+          testedAt: new Date().toISOString() };
         if (ctx.config.relayNodeFile) {
           const { readFileSync } = await import('node:fs');
           const { remoteCommand } = await import('./remote.mjs');
