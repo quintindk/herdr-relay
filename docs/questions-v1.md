@@ -36,3 +36,24 @@ into native harness skill paths remains a separate provisioning step.
 creation, a board response, automatic continuation and one final result through
 the installed adapter. Workers are deterministic in this test. The separate live
 native tests establish each harness's CLI participation and terminal settlement.
+
+## Live Existing-Conversation Verification
+
+On 2026-10-05, DEF-11 verified the clarification flow through the in-process
+OpenCode bridge in the existing scriptorium conversation:
+
+- The assignment turn created exactly one city-choice question and settled as
+  `waiting`, without submitting a candidate or retaining an active execution.
+- The user answered `Johannesburg` in Paperclip interaction
+  `c1bdc205-d647-4da9-89ca-99663a55925d`.
+- Paperclip automatically started a continuation run in the same native
+  conversation. The worker read the answered interaction through its scoped
+  Relay CLI and used `Africa/Johannesburg` for the local time observation.
+- The continuation submitted one result, settled from correlated native evidence,
+  and created a review confirmation. Both backend runs succeeded.
+- The user accepted the result. Relay recorded completion and marked DEF-11 Done
+  at `2026-10-05T12:33:18.646Z`, with no missing-disposition handoff, execution
+  blocker or active recovery action.
+
+No manual answer injection, continuation prompt, settlement or status repair was
+needed. The original Herdr pane, terminal and OpenCode conversation were retained.
