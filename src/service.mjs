@@ -27,13 +27,14 @@ import { provisionCompany } from './companies.mjs';
 import { herdrConfig, observedAgents, watchHerdrAgents } from './herdr-agents.mjs';
 import { prepareObservedPull, releaseObservedPull } from './observed-delivery.mjs';
 import { requestReviewDisposition } from './disposition.mjs';
+import { bridgeForToken, bridgeRequest, configureBridge, armBridge, disarmBridge } from './opencode-bridge.mjs';
 
-async function body(req) {
+async function body(req, limit = 128 * 1024) {
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    requireValue(size <= 128 * 1024, 'request_too_large', 'Request exceeds 128 KiB', 413);
+    requireValue(size <= limit, 'request_too_large', 'Request exceeds allowed size', 413);
     chunks.push(chunk);
   }
   let parsed;
@@ -91,9 +92,16 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const bearer = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
       const admin = digest(bearer) === digest(token);
       const bindingId = admin ? null : store.authenticate(bearer);
-      requireValue(admin || bindingId, 'unauthorised', 'Valid Relay credentials required', 401);
+      const bridge = !admin && !bindingId ? bridgeForToken(store, bearer) : null;
+      requireValue(admin || bindingId || bridge, 'unauthorised', 'Valid Relay credentials required', 401);
       const path = new URL(req.url, 'http://relay').pathname;
-      const input = req.method === 'POST' ? await body(req) : {};
+      const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
+      if (bridge) {
+        requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe'].includes(path),
+          'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
+        const result = bridgeRequest(store, bridge.id, path.split('/').at(-1), input, id => runTokens.has(id));
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
       if (bindingId && req.method === 'POST') {
         requireValue(!store.binding(bindingId).lifecycleState, 'binding_inactive', 'Retiring or retired bindings cannot initiate writes', 403);
       }
@@ -102,6 +110,14 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'GET' && path === '/herdr/agents') { adminOnly(); result = { source: observer?.status() ?? null, agents: observedAgents(store) }; }
+      else if (req.method === 'POST' && ['/herdr/configure-bridge', '/herdr/arm-bridge', '/herdr/disarm-bridge'].includes(path)) {
+        adminOnly();
+        requireValue(!publications.has('observed-delivery'), 'operation_busy', 'Observed agent configuration in progress', 409);
+        const pending = path.endsWith('/configure-bridge') ? configureBridge(store, directory, operatorApi, input)
+          : path.endsWith('/disarm-bridge') ? disarmBridge(store, operatorApi, input) : armBridge(store, directory, operatorApi, input);
+        publications.set('observed-delivery', pending);
+        try { result = await pending; } finally { publications.delete('observed-delivery'); }
+      }
       else if (req.method === 'POST' && ['/herdr/prepare-pull', '/herdr/release-pull'].includes(path)) {
         adminOnly();
         requireValue(!publications.has('observed-delivery'), 'operation_busy', 'Observed delivery configuration in progress', 409);

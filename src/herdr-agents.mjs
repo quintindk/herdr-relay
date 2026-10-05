@@ -74,9 +74,12 @@ export async function reconcileHerdrAgents(store, api, config, snapshot, current
         state: agent?.agent_status ?? 'unknown', dispatch: 'unavailable', lifecycleAuthority: 'observe_only' };
       const bindingId = `observed-${digest(operation.id).slice(0, 24)}`;
       const permit = store.operation(`observed-pull:${bindingId}`);
+      const bridge = store.operation(`opencode-bridge:${bindingId}`);
       const reserved = permit?.state === 'active' && permit.request.observedId === operation.id &&
         (Date.parse(permit.expiresAt) > Date.now() || store.runs(bindingId).some(run => run.nativeState !== 'settled'));
       if (reserved) observation.dispatch = 'operator_reserved_pull';
+      const bridged = bridge?.state === 'armed';
+      if (bridge) observation.dispatch = bridged && Date.now() - Date.parse(bridge.lastSeen) < 10000 ? 'opencode_bridge' : 'bridge_unavailable';
       operation = store.saveOperation({ ...operation, availability, placement, observation, error: null });
       const backendMatches = companiesAgents.filter(item => item.adapterConfig?.relayObservationMarker === operation.marker);
       requireValue(backendMatches.length <= 1, 'agent_identity_ambiguous', 'Multiple agents match observed identity', 409);
@@ -95,7 +98,7 @@ export async function reconcileHerdrAgents(store, api, config, snapshot, current
       }
       requireValue(typeof backend.id === 'string' && backend.companyId === config.companyId &&
         backend.adapterType === 'herdr_relay' && backend.adapterConfig?.relayObservationMarker === operation.marker &&
-        (backend.adapterConfig?.observationOnly === true || (permit && backend.adapterConfig?.bindingId === bindingId)),
+        (backend.adapterConfig?.observationOnly === true || ((permit || bridge) && backend.adapterConfig?.bindingId === bindingId)),
       'observed_agent_conflict', 'Paperclip agent ownership or delivery configuration changed', 409);
       operation = store.saveOperation({ ...operation, agentId: backend.id, state: 'recorded' });
       if (!current()) return;
@@ -104,11 +107,11 @@ export async function reconcileHerdrAgents(store, api, config, snapshot, current
       const previousObservation = backend.metadata?.relayObservation;
       const { observedAt, ...previousFields } = previousObservation ?? {};
       const displayChanged = agent && (backend.name !== display.name || backend.title !== display.title);
-      if (displayChanged || (!reserved && backend.status !== 'paused') || canonical(previousFields) !== canonical(observation) ||
+      if (displayChanged || (!reserved && !bridged && backend.status !== 'paused') || canonical(previousFields) !== canonical(observation) ||
         !observedAt || Date.now() - Date.parse(observedAt) > 60000) {
         await api('PATCH', `/api/agents/${encodeURIComponent(backend.id)}`, {
           ...(agent ? { name: display.name, title: display.title } : {}),
-          ...(!reserved ? { status: 'paused' } : {}), metadata: { ...backend.metadata, relayObservation: { ...observation, observedAt: new Date().toISOString() } },
+          ...(!reserved && !bridged ? { status: 'paused' } : {}), metadata: { ...backend.metadata, relayObservation: { ...observation, observedAt: new Date().toISOString() } },
         });
       }
     } catch (error) {

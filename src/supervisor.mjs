@@ -30,7 +30,7 @@ export function workerContext(directory, socketPath, store, binding) {
   return path;
 }
 
-function promptFor(run, context) {
+export function promptFor(run, context) {
   const cli = `${quote(process.execPath)} ${quote(fileURLToPath(new URL('./cli.mjs', import.meta.url)))} --context ${quote(context)}`;
   return `Herdr Relay work invocation ${run.id}. Continue in this existing conversation.\n` +
     `Use the Relay CLI below. Credentials are already in its context file. Do not read or print that file.\n` +

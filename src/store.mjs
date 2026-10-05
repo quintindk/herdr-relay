@@ -223,7 +223,13 @@ export class Store {
       }
       requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
       const observedPermit = this.operation(`observed-pull:${binding.id}`);
-      if (observedPermit) {
+      const bridge = this.operation(`opencode-bridge:${binding.id}`);
+      if (bridge) {
+        const observed = this.operation(bridge.identity.observedId);
+        requireValue(bridge.state === 'armed' && Date.now() - Date.parse(bridge.lastSeen) < 10000 &&
+          observed?.availability === 'present' && !observed.error && Date.now() - Date.parse(observed.updatedAt) < 15000,
+          'bridge_unavailable', 'A live armed bridge is required for dispatch', 409);
+      } else if (observedPermit) {
         const observed = this.operation(observedPermit.request.observedId);
         requireValue(observedPermit.state === 'active' && Date.parse(observedPermit.expiresAt) > Date.now() &&
           observedPermit.request.taskId === request.taskId && !this.runs(binding.id).some(run => run.request.taskId === request.taskId),
@@ -370,7 +376,8 @@ export class Store {
     return this.transaction(() => {
       const run = this.run(id);
       if (run.invocation || run.cancellationRequested || run.nativeState === 'settled') return run;
-      requireValue(['opencode', 'hermes'].includes(this.binding(run.request.bindingId).config.delivery), 'invalid_delivery', 'Native binding required');
+      requireValue(['opencode', 'hermes'].includes(this.binding(run.request.bindingId).config.delivery) ||
+        this.operation(`opencode-bridge:${run.request.bindingId}`)?.state === 'armed', 'invalid_delivery', 'Native binding required');
       const prefix = (BigInt(Date.now()) * 4096n).toString(16).padStart(12, '0').slice(-12);
       run.invocation = { messageId: `msg_${prefix}${randomBytes(7).toString('hex')}`, prompt, priorUserIds, createdAt: now() };
       if (eventCursor !== undefined) run.invocation.eventCursor = eventCursor;

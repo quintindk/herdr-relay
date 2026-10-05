@@ -16,6 +16,7 @@ export async function prepareObservedPull(store, directory, api, input) {
   requireValue(task.companyId === observed.identity.companyId && (!task.assigneeAgentId || task.assigneeAgentId === observed.agentId) &&
     !task.executionRunId && !['done', 'cancelled'].includes(task.status), 'task_conflict', 'Task must be available in this company', 409);
   const bindingId = `observed-${digest(observed.id).slice(0, 24)}`;
+  requireValue(!store.operation(`opencode-bridge:${bindingId}`), 'bridge_configured', 'Bridge bindings cannot also be armed for manual pull', 409);
   const id = `observed-pull:${bindingId}`;
   const request = { observedId: observed.id, taskId, agentId: observed.agentId };
   let permit = store.operation(id);

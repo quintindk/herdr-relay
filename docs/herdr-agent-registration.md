@@ -54,6 +54,10 @@ display details. Other metadata, capabilities, role and instructions are preserv
 
 ## Registration Is Not Dispatch
 
+An opt-in [in-process OpenCode bridge](opencode-bridge.md) now provides automatic
+delivery and correlated settlement for an explicitly reserved conversation.
+It does not enable delivery for other observed agents or make human input atomic.
+
 Automatically observed agents use the `herdr_relay` adapter with
 `observationOnly: true`. They are paused in Paperclip and created with heartbeats
 and on-demand wakes disabled. The adapter rejects invocation even if someone
