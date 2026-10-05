@@ -113,3 +113,157 @@ Disabling the listener stops synchronisation but preserves Paperclip history.
 The listener does not delete agents, modify their instructions, or change
 non-Relay metadata. It synchronises names/titles from Herdr and keeps its own
 observation-only agents paused until explicit delivery support exists.
+
+## Operator-Reserved Pull Pilot
+
+For a bounded integration test, an operator can reserve an existing idle OpenCode
+conversation for one Paperclip task without launching another runtime:
+
+```json
+{
+  "observedId": "herdr-agent:EXACT_OBSERVATION_ID",
+  "taskId": "EXACT_PAPERCLIP_ISSUE_ID",
+  "reserved": true
+}
+```
+
+```bash
+herdr-relay agent prepare-pull --file /private/reservation.json
+```
+
+This verifies a recent unique idle observation and the backend agent/task,
+creates a pull binding with a private worker context, and configures the existing
+Paperclip agent's adapter. It does not launch a process, send a prompt, assign
+the issue or enable automatic wakes. The reservation admits one backend run of
+that exact task within 15 minutes. The same run can reconnect, but a second run
+or another task is rejected. A consumed/closed reservation cannot be silently
+rearmed. To explicitly reserve a different task on the same binding, pass
+`previousTaskId` identifying the closed reservation's task. The previous issue
+must be Done/Cancelled and all binding runs settled. Previous reservations are
+retained in history, and a previously attempted task cannot be rearmed. Release
+of a subsequent reservation must include its exact `taskId`, preventing a stale
+release from closing newer work. This pilot is not general automatic task delivery.
+
+The operator then assigns the issue, explicitly enables one manual heartbeat and
+records the returned backend/Relay run IDs. The current OpenCode TUI's detected
+listener may not be a public native API. Do not start another server against its
+conversation as a substitute. An already-installed harness-side queue, such as
+OpenCode-Herdr, can deliver the scoped CLI instructions to that exact conversation.
+Persist its request/generation/delivery identity and do not blindly resend.
+
+The recipient reads and acknowledges the real issue through Relay and submits
+its result with the worker context. The Paperclip adapter publishes the result
+under the recipient agent and backend run. A correlated queue handback is
+operator evidence, not a native terminal receipt; settlement must be explicitly
+recorded as operator-attested using `operation settle`, never inferred from idle.
+Prepared adapters set `requireReviewDisposition: true`: before returning success,
+the adapter creates/reuses an idempotent candidate confirmation addressed to the
+responsible user, moves the issue to `in_review`, and reads that status back.
+Publication alone is not a valid Paperclip disposition. Terminal issues are not
+reopened, and a changed assignee/execution or already-decided review requires
+reconciliation rather than overwriting the board's decision.
+Human input must stay out of the reserved conversation during the test.
+
+After settlement, restore observation-only mode:
+
+```json
+{"bindingId":"EXACT_PREPARED_BINDING_ID"}
+```
+
+```bash
+herdr-relay agent release-pull --file /private/release.json
+```
+
+Release refuses unsettled work, closes the dispatch reservation, pauses the
+backend agent and disables its heartbeat/wake settings. It does not abort or
+close the harness. Issue acceptance remains a separate board action; Relay then
+reconciles accepted review dispositions to issue completion as described below.
+If the coordinator stops mid-test, inspect the persisted reservation, Relay run,
+Paperclip run and queue request before taking another action. Request timeouts
+do not establish that the worker stopped.
+
+### Verified Pilot
+
+On 2026-10-05, DEF-1 (Alaska date/time) ran in the existing `scriptorium`
+conversation through this operator-reserved pull path. The worker retrieved the
+actual Paperclip issue, acknowledged it, measured Anchorage and Adak from one
+system-clock instant, and submitted with scoped Relay credentials. Paperclip
+recorded exactly one comment attributed to that agent and backend run. The
+OpenCode-Herdr queue returned a correlated completed handback. Operator-attested
+settlement made the backend run succeed, and release restored the agent's paused
+observation-only configuration. No new runtime, pane or conversation was created.
+
+This proves the scoped worker/result round trip and existing-conversation queue
+delivery. It does not prove unattended task acceptance, automatic native terminal
+settlement, or atomic protection against concurrent human input. The issue itself
+remains separate from run success and requires board review/completion.
+
+The initial pilot omitted that review disposition and left DEF-1 in progress.
+Paperclip consequently launched a `finish_successful_run_handoff` corrective run,
+which the one-run reservation correctly rejected. Paperclip then blocked the
+issue. The published result was preserved. Operator repair added a pending review
+confirmation and moved DEF-1 to `in_review` without rerunning the task. The failed
+corrective run remains historical evidence, not a failed Alaska calculation.
+This finding led to the `requireReviewDisposition` gate above. Its retry/conflict
+behaviour is unit-tested; the original pilot did not exercise that new gate.
+
+## Accepted Review Completion
+
+When `requireReviewDisposition` creates a review, Relay persists a
+`review-disposition:RUN_ID` operation. The lifecycle worker polls these operations
+with backend operator authority, including after restart. A Paperclip acceptance
+must match the interaction, run, candidate and result digest. Pending, rejected,
+superseded or malformed reviews never mark work done and never trigger new work.
+
+Completion requires the latest submitted candidate, settled/published Relay work,
+a successful matching Paperclip run, the same assignee and company, and an issue
+still `in_review` with no active execution, checkout or recovery blocker. Paperclip
+may return an accepted confirmation to `todo` even with continuation disabled.
+That state is also eligible only when the latest issue-update audit identifies
+`request_confirmation_accept` for the exact review, from `in_review`, with the
+same assignee and no newer issue modification. Ordinary Todo states, manual
+reopens, ambiguous audit ordering and recovery blockers remain refused. Relay
+checks the issue again immediately before writing. Then it persists completion
+intent, PATCHes only `status: done`, and reads the status back. It does not wake,
+unpause, retire or close a persistent agent.
+
+`completion:RUN_ID` records completion separately from review acceptance. If a
+reply is lost, a later `done` read reconciles it. A nonterminal read after an
+uncertain write never authorises another PATCH, and new Relay dispatch for the
+task is blocked pending operator reconciliation. A recorded completion never
+undoes a later board reopen. Existing Done/Cancelled issues are not reopened.
+
+Inspect failures with `herdr-relay operation list` or
+`herdr-relay operation inspect completion:RUN_ID`. The installed Paperclip PATCH
+API has no documented conditional-update contract: the final read narrows but
+does not eliminate a race with a simultaneous board edit. Do not claim atomic
+cross-system completion. Do not edit/reassign an issue while accepting its result.
+
+Only reviews registered through the disposition path opt into automatic completion.
+DEF-1 was repaired and completed manually before this path was installed; it is
+not retroactively used as proof. The subsequent live tests below distinguish
+operator repair from automatic acceptance completion.
+
+DEF-2 subsequently verified the new pre-exit review gate against real Paperclip:
+the existing scriptorium conversation submitted one UTC observation, the adapter
+created a pending confirmation and moved the issue to `in_review` before its run
+finished `succeeded`. No missing-disposition handoff or execution blocker was
+present. The reservation was released without closing the harness. Human
+acceptance exposed Paperclip's `in_review` to `todo` confirmation behaviour.
+Before the reconciler understood that transition, Paperclip raised a stranded-task
+recovery action. The operator resolved that specific recovery to `in_review` using
+the existing acceptance and successful run as evidence, without rerunning the
+worker or directly marking the issue Done. Relay then completed DEF-2 automatically
+and persisted its completion receipt. This verifies automatic completion after
+recovery, not an entirely intervention-free acceptance flow.
+
+DEF-3 verified the corrected acceptance path on 2026-10-05. The existing
+scriptorium conversation submitted its result, the adapter established review,
+and the user accepted interaction `9f7110f1-edca-4da3-98bc-281a0dd3b27a`.
+Relay automatically marked the issue Done at `2026-10-05T11:06:14.216Z` and
+recorded `completion:81c56906-ea08-42a2-a388-2a5170329f49` for candidate
+`def-3:utc-clock-observation`. Readback confirmed no execution run, missing-
+disposition handoff, execution blocker or active recovery action. No manual
+status repair was performed after acceptance. Initial delivery and worker
+settlement still used the operator-assisted pull pilot; this result verifies
+automatic review-to-completion, not unattended end-to-end task execution.

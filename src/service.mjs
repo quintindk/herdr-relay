@@ -25,6 +25,8 @@ import { serviceLock } from './service-lock.mjs';
 import { resumeRuntime } from './resume.mjs';
 import { provisionCompany } from './companies.mjs';
 import { herdrConfig, observedAgents, watchHerdrAgents } from './herdr-agents.mjs';
+import { prepareObservedPull, releaseObservedPull } from './observed-delivery.mjs';
+import { requestReviewDisposition } from './disposition.mjs';
 
 async function body(req) {
   let size = 0;
@@ -100,6 +102,13 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'GET' && path === '/herdr/agents') { adminOnly(); result = { source: observer?.status() ?? null, agents: observedAgents(store) }; }
+      else if (req.method === 'POST' && ['/herdr/prepare-pull', '/herdr/release-pull'].includes(path)) {
+        adminOnly();
+        requireValue(!publications.has('observed-delivery'), 'operation_busy', 'Observed delivery configuration in progress', 409);
+        const pending = path === '/herdr/prepare-pull' ? prepareObservedPull(store, directory, operatorApi, input) : releaseObservedPull(store, operatorApi, input);
+        publications.set('observed-delivery', pending);
+        try { result = await pending; } finally { publications.delete('observed-delivery'); }
+      }
       else if (req.method === 'GET' && path === '/overview') {
         adminOnly();
         result = overview(store.bindings(), store.runs(), inbox(store));
@@ -246,7 +255,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       }
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check|disposition))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -315,6 +324,16 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         else if (req.method === 'GET' && action === 'interactions') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
           result = await api(run, runTokens.get(id), 'GET', `/api/issues/${encodeURIComponent(run.request.taskId)}/interactions`);
+        }
+        else if (req.method === 'POST' && action === 'disposition') {
+          adminOnly();
+          requireValue((run.backendRunId ?? run.request.runId) === input.runId, 'stale_backend_run', 'Current backend run required', 409);
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials required', 503);
+          const key = `review:${id}`;
+          requireValue(!publications.has(key), 'operation_busy', 'Review disposition is in progress', 409);
+          const pending = requestReviewDisposition(store, id, runTokens.get(id), api);
+          publications.set(key, pending);
+          try { result = await pending; } finally { publications.delete(key); }
         }
         else if (req.method === 'POST' && action === 'settle') { adminOnly(); result = store.settle(id, input); }
         else if (req.method === 'POST' && action === 'cancel') { adminOnly(); result = store.cancel(id); }

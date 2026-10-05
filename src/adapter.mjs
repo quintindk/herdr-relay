@@ -66,6 +66,9 @@ export async function execute(ctx) {
         run = await call(connection, 'POST', `/runs/${run.id}/publish-question`, { token: ctx.authToken, runId: ctx.runId });
       }
       if (run.nativeState === 'settled' && (!run.result || run.publication.state === 'recorded') && (!run.waiting || run.waiting.state === 'recorded')) {
+        if (ctx.config.requireReviewDisposition === true && run.settlement.outcome === 'completed') {
+          await call(connection, 'POST', `/runs/${run.id}/disposition`, { runId: ctx.runId });
+        }
         const completed = ['completed', 'waiting'].includes(run.settlement.outcome);
         return {
           exitCode: completed ? 0 : 1, signal: null, timedOut,

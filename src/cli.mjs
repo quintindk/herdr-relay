@@ -17,6 +17,7 @@ const help = `herdr-relay (development)
   agent list
   agent discover
   agent observed
+  agent prepare-pull|release-pull --file reservation.json
   agent register --file binding.json --context-out worker.json
   agent rebind --file continuation.json
   agent provision --file agent.json
@@ -170,6 +171,10 @@ export async function main(args) {
   } else if (group === 'agent' && action === 'list') result = await call(connection, 'GET', '/bindings');
   else if (group === 'agent' && action === 'discover') result = await call(connection, 'GET', '/peers');
   else if (group === 'agent' && action === 'observed') result = await call(connection, 'GET', '/herdr/agents');
+  else if (group === 'agent' && ['prepare-pull', 'release-pull'].includes(action)) {
+    requireValue(values.file, 'invalid_request', '--file is required');
+    result = await call(connection, 'POST', `/herdr/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));
+  }
   else if (group === 'agent' && action === 'rebind') {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', '/bindings/rebind', JSON.parse(readFileSync(values.file, 'utf8')));

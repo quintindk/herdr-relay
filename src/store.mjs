@@ -209,6 +209,10 @@ export class Store {
         return existing;
       }
       // Paperclip filters custom wake payload fields in some adapter contexts.
+      const uncertainCompletion = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion:%'").all()
+        .map(row => JSON.parse(row.data)).some(operation => operation.state === 'uncertain' &&
+          operation.companyId === request.companyId && operation.taskId === request.taskId);
+      requireValue(!uncertainCompletion, 'completion_uncertain', 'Task completion requires reconciliation before new work', 409);
       // Registered service schedules are therefore also resolved by exact
       // binding/task identity, rather than depending on that field surviving.
       const scheduled = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'schedule:%' ORDER BY rowid DESC").all()
@@ -218,6 +222,15 @@ export class Store {
           Date.now() < Date.parse(scheduled.request.endsAt), 'schedule_inactive', 'Registered monitoring window is not active', 409);
       }
       requireValue(!['retired', 'retiring'].includes(binding.lifecycleState), 'binding_retired', 'Binding is retiring or retired', 409);
+      const observedPermit = this.operation(`observed-pull:${binding.id}`);
+      if (observedPermit) {
+        const observed = this.operation(observedPermit.request.observedId);
+        requireValue(observedPermit.state === 'active' && Date.parse(observedPermit.expiresAt) > Date.now() &&
+          observedPermit.request.taskId === request.taskId && !this.runs(binding.id).some(run => run.request.taskId === request.taskId),
+        'observed_reservation_closed', 'Observed delivery is restricted to one run of the reserved task', 409);
+        requireValue(observed?.availability === 'present' && !observed.error && Date.now() - Date.parse(observed.updatedAt) < 15000,
+          'observed_agent_unavailable', 'A recent unique Herdr observation is required for dispatch', 409);
+      }
       if (request.scheduleId) {
         const schedule = this.operation(request.scheduleId);
         requireValue(schedule?.request?.bindingId === binding.id && schedule.request.taskId === request.taskId,
