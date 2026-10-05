@@ -29,6 +29,8 @@ import { prepareObservedPull, releaseObservedPull } from './observed-delivery.mj
 import { requestReviewDisposition, checkReviewWake } from './disposition.mjs';
 import { bridgeForToken, bridgeRequest, configureBridge, armBridge, disarmBridge } from './opencode-bridge.mjs';
 import { harnessQuestion, harnessReview } from './harness-answers.mjs';
+import { waitForChild } from './dependencies.mjs';
+import { taskPolicy } from './task-policy.mjs';
 
 async function body(req, limit = 128 * 1024) {
   let size = 0;
@@ -297,7 +299,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       }
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check|disposition))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check|disposition|wait-child|child))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -352,12 +354,28 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         else if (req.method === 'POST' && action === 'mutate') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
           requireValue(run.nativeState === 'claimed' && !run.cancellationRequested, 'work_inactive', 'Acknowledge active work before backend changes', 409);
-          requireValue(!run.result && !run.waiting, 'work_disposition_recorded', 'This turn has already submitted or requested clarification', 409);
+          requireValue(!run.result && !run.waiting && !run.dependency, 'work_disposition_recorded', 'This turn has already submitted or is waiting', 409);
           const key = digest([run.request.bindingId, input.kind, input.key]);
           requireValue(!publications.has(key), 'operation_busy', 'Operation is already in flight', 409);
           const pending = mutate(store, run, runTokens.get(id), api, input);
           publications.set(key, pending);
           try { result = await pending; } finally { publications.delete(key); }
+        }
+        else if (req.method === 'POST' && ['wait-child', 'child'].includes(action)) {
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials required', 503);
+          if (action === 'wait-child') {
+            const key = `dependency:${id}`;
+            requireValue(!publications.has(key), 'operation_busy', 'Dependency update in progress', 409);
+            const pending = waitForChild(store, run, runTokens.get(id), api, input);
+            publications.set(key, pending);
+            try { result = await pending; } finally { publications.delete(key); }
+          } else {
+            const target = `/api/issues/${encodeURIComponent(text(input.taskId, 'taskId'))}`;
+            const task = await api(run, runTokens.get(id), 'GET', target);
+            requireValue(task.companyId === run.request.companyId && task.parentId === run.request.taskId,
+              'forbidden', 'Only children of this run task may be inspected', 403);
+            result = { task, comments: await api(run, runTokens.get(id), 'GET', `${target}/comments`) };
+          }
         }
         else if (req.method === 'GET' && action === 'tasks') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
@@ -388,6 +406,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
           result = await api(run, runTokens.get(id), 'GET', `/api/issues/${encodeURIComponent(run.request.taskId)}`);
           requireValue(result.companyId === run.request.companyId, 'identity_mismatch', 'Task company does not match binding', 409);
+          result = { ...result, relayReviewPolicy: taskPolicy(store, run.request.companyId, run.request.taskId) };
         } else if (req.method === 'POST' && ['publish', 'publish-question'].includes(action)) {
           adminOnly();
           requireValue(!run.backendRunId || input.runId === run.backendRunId, 'stale_backend_run', 'Replacement backend run identity required', 409);

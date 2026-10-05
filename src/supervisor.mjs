@@ -41,7 +41,9 @@ export function promptFor(run, context) {
     `3. Execute the task, write a summary file, then submit using:\n` +
     `${cli} work submit ${quote(run.id)} --key candidate-1 --summary-file /absolute/path/result.md --candidate YOUR_CANDIDATE_ID\n` +
     `Use the task's actual candidate identity. After submission stop editing and finish this turn. Submission is not acceptance.\n` +
-    `If cancellation is reported, stop working and finish the turn without submitting. Do not delegate this invocation.\n`;
+    `work read reports relayReviewPolicy: human requires approval; none completes after verified publication/settlement; agent_decides requires a JSON submission with reviewDecision {mode: "none" or "human", reason: "why"}, via work submit RUN --file FILE. Honour any creator requirement; tool/action permissions remain separate. At delegation choose relayReviewPolicy explicitly on task create payloads.\n` +
+    `If the task explicitly authorises delegation, create a child through task create, then work wait-child RUN --task CHILD_ID and finish without submitting. On continuation use task inspect RUN --task CHILD_ID for its result. Do not delegate otherwise.\n` +
+    `If cancellation is reported, stop working and finish the turn without submitting.\n`;
 }
 
 export function supervise({ store, directory, socketPath, ready, interval = 250 }) {

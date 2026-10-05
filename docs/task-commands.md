@@ -42,6 +42,64 @@ separate namespace from worker task mutations. Creating a human-only task does
 not ask Relay to run a harness. Creating an agent-owned task can trigger its
 configured Paperclip assignment wake.
 
+## Task Review Policy
+
+Operator and worker `task create` payloads may include `relayReviewPolicy`:
+
+| Value | Completion |
+| --- | --- |
+| `human` | Published/settled result creates a review card; acceptance completes the issue. Default for existing and unspecified tasks. |
+| `none` | Published/settled result completes the issue with no acceptance card. |
+| `agent_decides` | Worker chooses `none` or `human` in its submission and records a reason. |
+
+The delegating agent sets the policy for each child it creates. The responding
+agent can choose only when the creator selected `agent_decides`. The policy is
+stored with the immutable Relay creation receipt, scoped to the exact company and
+task ID, and exposed by `work read` as `task.relayReviewPolicy`. It is not inferred
+from prose and is not sent as an unsupported Paperclip field. Paperclip's native
+`reviewPolicy` is a reviewer-eligibility restriction, not this completion policy;
+an explicit native restriction prevents no-review completion.
+
+Example child creation field: `"relayReviewPolicy": "none"`. To exercise worker
+judgement, create with `"relayReviewPolicy": "agent_decides"`, then submit via
+`work submit RUN --file submission.json`:
+
+```json
+{
+  "key": "result-1",
+  "candidate": "calculation:v1",
+  "summary": "Verified informational result",
+  "reviewDecision": {
+    "mode": "none",
+    "reason": "Deterministic calculation with checked inputs; no external changes."
+  }
+}
+```
+
+A fixed creator policy cannot be overridden by submission. Missing/invalid
+decisions are rejected before recording a result. Identical creation/submission
+retries retain their policy, and changed retries conflict. `none` still requires
+a published result, verified terminal settlement, current assignee/execution,
+latest candidate and no pending interactions or recovery blockers. Completion
+intent is persisted before mutation, and an uncertain write is never blindly
+repeated. Tool approvals, permissions and external-action authorisation are
+unchanged. No-review completion is not represented as a fabricated acceptance.
+
+Task policies currently require Relay creation. Tasks created directly in the
+Paperclip UI retain human review. Requesting-agent review is not implemented by
+this policy field yet; use explicit existing independent-review commands for that
+workflow. The installed adapter's disposition gate must be enabled (the bridge
+sets it automatically).
+
+Live verification on 2026-10-05: DEF-16 was created with `agent_decides`.
+scriptorium verified `17 * 23 = 391` using `expr`, selected `none` with a recorded
+reason, and submitted through the bridge. Native settlement and publication were
+confirmed, then Relay completed the issue with a recorded no-review receipt.
+Paperclip readback showed Done, a succeeded run, zero interaction/review cards,
+and no recovery blocker or missing-disposition handoff. No human acceptance was
+requested. Fixed no-review child creation and policy-override refusal are covered
+by automated tests; the earlier two-agent test still used human review.
+
 ## Worker Commands
 
 Worker commands require an acknowledged, active Relay run and its attached backend
@@ -49,6 +107,8 @@ credentials. They execute under that agent's Paperclip permissions:
 
 ```bash
 herdr-relay task list RUN
+herdr-relay task inspect RUN --task CHILD_ID
+herdr-relay work wait-child RUN --task CHILD_ID
 herdr-relay task create RUN --key subnet-request --file task.json
 herdr-relay task assign RUN --key handoff --file assignment.json
 herdr-relay task update RUN --key complete --file changes.json
@@ -98,6 +158,43 @@ Task updates support title, description, priority, dependencies and status. Sett
 `status: "done"` requires the latest Relay candidate to be settled and accepted,
 and refreshes the matching Paperclip review disposition before writing completion.
 The worktree scenario verifies actual backend completion after accepted cleanup.
+
+## Waiting For Another Agent
+
+When explicitly authorised to delegate, create one child assigned to a peer, then
+call `work wait-child RUN --task CHILD_ID` and end the turn without submitting a
+candidate. Relay validates the same-company parent/child relationship and distinct
+agent assignment, records mutation intent, marks the parent blocked on that child,
+and reads the dependency back. Lost PATCH replies are read back, never blindly
+repeated. Native terminal evidence settles the parent turn as `waiting`.
+
+The child follows its normal result/review flow. Once accepted and marked Done,
+Paperclip owns the dependency-unblock/continuation wake. On that new run,
+`task inspect RUN --task CHILD_ID` returns the exact child and its comments under
+the caller's backend authority. The parent uses the actual attributed result,
+not a coordinator-pasted answer. A child already terminal at wait time is refused
+with `dependency_already_terminal` so the worker can inspect it instead.
+
+This is distinct from a human clarification and does not create a question card.
+It does not grant peer process ownership or bypass child review. Do not delegate
+through the separate OpenCode-Herdr queue for a Paperclip dependency test.
+
+### Live Two-Agent Verification
+
+On 2026-10-05, scriptorium created DEF-15 under parent DEF-14, assigning the
+Johannesburg/London working-hour calculation to the existing tmp agent. The parent
+recorded a first-class blocked dependency and its initial turn settled as waiting.
+tmp submitted its independently calculated result from a distinct native
+conversation. Human acceptance completed DEF-15 at `2026-10-05T13:59:38.760Z`.
+
+Paperclip automatically resumed the parent's original scriptorium conversation.
+It read the child's result through scoped `task inspect`, cited tmp's exact result
+comment and candidate, and submitted a recommendation without rerunning the
+delegated calculation. Human acceptance completed DEF-14 at
+`2026-10-05T14:03:35.537Z`. Both completion receipts were recorded, both issues
+were Done, and neither had an active execution, recovery blocker or
+missing-disposition handoff. No coordinator-pasted answer, replacement runtime
+or manual settlement was used. The child and parent each retained human review.
 
 ## Live Human-Task Verification
 

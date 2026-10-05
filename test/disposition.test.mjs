@@ -14,6 +14,7 @@ test('published result obtains idempotent review interaction before confirmed is
   const interactions = []; const calls = [];
   const operations = new Map();
   const store = { run: () => run, runs: () => [run], recordReview: (_, review) => (run = { ...run, review }),
+    db: { prepare: () => ({ all: () => [] }) },
     operation: id => operations.get(id), saveOperation: value => { operations.set(value.id, value); return value; } };
   let lost = true;
   const api = async (_, token, method, path, body) => {

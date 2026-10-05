@@ -34,6 +34,8 @@ const help = `herdr-relay (development)
   work ask RUN --key KEY --question-file FILE
   work interactions RUN
   task list RUN
+  task inspect RUN --task CHILD_ID
+  work wait-child RUN --task CHILD_ID
   task create RUN --key KEY --file task.json
   task create --company COMPANY_ID --key KEY --file task.json
   task assign RUN --key KEY --file assignment.json
@@ -237,6 +239,10 @@ export async function main(args) {
     });
   }
   else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);
+  else if (id && ((group === 'task' && action === 'inspect') || (group === 'work' && action === 'wait-child'))) {
+    requireValue(values.task, 'invalid_request', '--task CHILD_ID is required');
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/${action === 'inspect' ? 'child' : 'wait-child'}`, { taskId: values.task });
+  }
   else if (group === 'task' && action === 'create' && !id) {
     requireValue(values.company && values.key && values.file, 'invalid_request', '--company, --key and --file are required without RUN_ID');
     result = await call(connection, 'POST', '/tasks', {

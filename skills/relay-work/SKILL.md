@@ -24,7 +24,15 @@ the runtime. The context file holds credentials. Do not print or copy its conten
    deliverables and checks. Submit with
    `work submit RUN --key SUBMISSION_KEY --summary-file FILE --candidate CANDIDATE_ID`.
 8. Stop editing the candidate after submission and finish your turn. Submission is
-   not acceptance, commit authority or permission to terminate a runtime.
+    not acceptance, commit authority or permission to terminate a runtime.
+
+`work read` includes `task.relayReviewPolicy`. Respect fixed `human` or `none`
+policy. For `agent_decides`, submit via `--file` with a `reviewDecision` object
+containing `mode: "none"` or `mode: "human"` and a specific `reason`. Use judgement
+based on the task and consequences. No-review still requires verified completion
+and publication; it does not bypass tool permissions or authorise external effects.
+When creating a delegated child, choose its `relayReviewPolicy` explicitly.
+Missing policy retains human review. The worker cannot downgrade a fixed policy.
 
 Retry identical requests with the same key. A changed payload requires a distinct
 attempt, not reuse of an old key. If a request is uncertain, inspect the exact run

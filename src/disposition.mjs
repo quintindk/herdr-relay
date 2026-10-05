@@ -1,5 +1,6 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { review } from './review.mjs';
+import { resultPolicy } from './task-policy.mjs';
 
 export async function checkReviewWake(store, input, api) {
   const request = {};
@@ -56,10 +57,39 @@ export async function requestReviewDisposition(store, id, token, api) {
   const issue = await api(run, token, 'GET', path);
   requireValue(issue.companyId === run.request.companyId, 'identity_mismatch', 'Issue company changed', 409);
   // Never reopen a task or overwrite a disposition that changed after our run.
-  if (['done', 'cancelled'].includes(issue.status)) return { status: issue.status };
+  if (['done', 'cancelled'].includes(issue.status)) {
+    const previous = store.operation(`no-review-completion:${id}`);
+    if (previous?.state === 'uncertain') store.saveOperation({ ...previous,
+      state: issue.status === 'done' ? 'recorded' : 'skipped', status: issue.status, reconciled: true });
+    return { status: issue.status };
+  }
   requireValue(issue.assigneeAgentId === run.request.agentId &&
     (!issue.executionRunId || issue.executionRunId === (run.backendRunId ?? run.request.runId)),
   'disposition_conflict', 'Issue belongs to another assignee or execution', 409);
+  const policy = resultPolicy(store, run, run.result);
+  if (policy === 'none') {
+    requireValue(!issue.reviewPolicy, 'review_policy_locked', 'Explicit Paperclip review requirements cannot be waived', 403);
+    const latest = store.runs().find(item => item.request.companyId === run.request.companyId && item.request.taskId === run.request.taskId && item.result);
+    requireValue(latest?.id === run.id && !store.runs().some(item => item.id !== run.id && item.request.companyId === run.request.companyId &&
+      item.request.taskId === run.request.taskId && item.nativeState !== 'settled'), 'stale_candidate', 'Newer or unsettled work prevents no-review completion', 409);
+    requireValue(['in_progress', 'todo'].includes(issue.status), 'disposition_conflict', 'Cannot override a blocked or review disposition', 409);
+    requireValue(!issue.activeRecoveryAction && !issue.executionBlocker &&
+      (!issue.checkoutRunId || issue.checkoutRunId === (run.backendRunId ?? run.request.runId)), 'disposition_conflict', 'Task has another execution or recovery owner', 409);
+    const interactions = await api(run, token, 'GET', `${path}/interactions`);
+    requireValue(Array.isArray(interactions) && !interactions.some(item => item.status === 'pending'), 'review_required', 'Pending interaction prevents no-review completion', 409);
+    const id = `no-review-completion:${run.id}`;
+    requireValue(!store.operation(id), 'completion_uncertain', 'Completion attempted but not confirmed; no replay authorised', 409);
+    const fresh = await api(run, token, 'GET', path);
+    requireValue(fresh.status === issue.status && fresh.updatedAt === issue.updatedAt && fresh.assigneeAgentId === issue.assigneeAgentId,
+      'disposition_conflict', 'Issue changed while checking completion', 409);
+    const operation = store.saveOperation({ id, runId: run.id, companyId: run.request.companyId, taskId: run.request.taskId,
+      state: 'uncertain', policy, candidate: run.result.candidate, decision: run.result.reviewDecision ?? null });
+    await api(run, token, 'PATCH', path, { status: 'done' });
+    const receipt = await api(run, token, 'GET', path);
+    requireValue(receipt.companyId === run.request.companyId && receipt.status === 'done', 'completion_uncertain', 'Backend did not confirm no-review completion', 409);
+    store.saveOperation({ ...operation, state: 'recorded', status: 'done' });
+    return { status: 'done', policy: 'none' };
+  }
   const operationId = `review-disposition:${id}`;
   let disposition = store.operation(operationId) ?? store.saveOperation({ id: operationId, runId: id,
     candidate: run.result.candidate, state: 'waiting' });

@@ -80,6 +80,14 @@ entries (absolute paths required):
 ]
 ```
 
+For multiple enrolled agents, use one plugin entry with
+`{"configFiles":["/private/first.json","/private/second.json"]}` instead.
+The plugin selects the matching directory and, when several bindings share it,
+the calling Herdr pane's exact terminal/session identity. Ambiguity fails closed.
+Each newly enrolled harness must restart after its configuration is added;
+restarting before enrolment does not load a future credential. Existing running
+plugins keep their already-loaded binding until their own restart.
+
 Quit and restart **the target OpenCode process**, resuming the same conversation.
 If that recreates its Herdr terminal rather than only the harness process, setup
 must be reconciled explicitly. Other conversations do not match the plugin's

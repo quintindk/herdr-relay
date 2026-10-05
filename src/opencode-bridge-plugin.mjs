@@ -7,9 +7,23 @@ import { tool } from '@opencode-ai/plugin';
 
 // Loaded by OpenCode, with a binding-scoped credential. Never uses Relay admin auth.
 export default async function relayBridge({ client, directory }, options = {}) {
-  if (!options.configFile) return {};
-  const config = JSON.parse(readFileSync(options.configFile, 'utf8'));
-  if (directory !== config.directory || process.env.HERDR_ENV !== '1') return {};
+  if (process.env.HERDR_ENV !== '1') return {};
+  const files = options.configFiles ?? (options.configFile ? [options.configFile] : []);
+  if (!Array.isArray(files) || files.some(file => typeof file !== 'string')) throw new Error('Bridge configFiles must be an array of paths');
+  const candidates = files.map(file => JSON.parse(readFileSync(file, 'utf8'))).filter(config => config.directory === directory);
+  if (!candidates.length) return {};
+  // Multiple enrolled conversations may share a directory. Select by the live
+  // calling pane's terminal/session, never by array order or directory alone.
+  const { stdout } = await promisify(execFile)('herdr', ['agent', 'list'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+  const agents = JSON.parse(stdout).result?.agents;
+  if (!Array.isArray(agents)) throw new Error('Invalid Herdr inventory');
+  const own = agents.filter(agent => agent.pane_id === process.env.HERDR_PANE_ID);
+  // On initial startup Herdr may not have the native session yet. A unique
+  // directory candidate can initialise, but every action still verifies ownPane.
+  const matching = candidates.length === 1 ? candidates : candidates.filter(config => own.length === 1 &&
+    own[0].terminal_id === config.terminalId && own[0].agent_session?.value === config.conversationId);
+  if (matching.length !== 1) throw new Error('No unique bridge configuration for this Herdr conversation');
+  const config = matching[0];
   const epoch = randomUUID();
   let stopped = false, active, started = false, pinnedCreation, invocation, conflict = false, answering = false;
   const sdkOptions = () => ({ query: { directory }, signal: AbortSignal.timeout(5000), throwOnError: true });

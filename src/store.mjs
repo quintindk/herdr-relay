@@ -5,6 +5,7 @@ import { canonical, digest, now, RelayError, requireValue, text } from './protoc
 import { nativeConfig } from './opencode.mjs';
 import { hermesConfig } from './hermes.mjs';
 import { questionPayload } from './work.mjs';
+import { resultPolicy } from './task-policy.mjs';
 
 export class Store {
   constructor(path) {
@@ -209,7 +210,7 @@ export class Store {
         return existing;
       }
       // Paperclip filters custom wake payload fields in some adapter contexts.
-      const uncertainCompletion = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion:%'").all()
+      const uncertainCompletion = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion:%' OR id LIKE 'no-review-completion:%'").all()
         .map(row => JSON.parse(row.data)).some(operation => operation.state === 'uncertain' &&
           operation.companyId === request.companyId && operation.taskId === request.taskId);
       requireValue(!uncertainCompletion, 'completion_uncertain', 'Task completion requires reconciliation before new work', 409);
@@ -301,6 +302,10 @@ export class Store {
 
   submit(id, input) {
     const result = { key: text(input.key, 'key'), summary: text(input.summary, 'summary'), candidate: text(input.candidate, 'candidate') };
+    if (input.reviewDecision !== undefined) {
+      resultPolicy(this, this.run(id), input);
+      result.reviewDecision = { mode: input.reviewDecision.mode, reason: input.reviewDecision.reason };
+    }
     if (input.deliverables !== undefined) {
       requireValue(Array.isArray(input.deliverables) && input.deliverables.length <= 128, 'invalid_evidence', 'Deliverables must be an array of at most 128 references');
       result.deliverables = input.deliverables.map(value => text(value, 'deliverable'));
@@ -321,7 +326,8 @@ export class Store {
       }
       requireValue(run.nativeState === 'claimed' && !run.cancellationRequested,
         'invalid_submission', 'Acknowledge active work before submitting', 409);
-      requireValue(!run.waiting, 'work_waiting', 'This turn has already requested clarification', 409);
+      requireValue(!run.waiting && !run.dependency, 'work_waiting', 'This turn is already waiting', 409);
+      resultPolicy(this, run, result);
       run.result = result;
       run.publication = { state: 'pending' };
       return this.save(run, 'result.submitted', { digest: digest(result) });
@@ -404,10 +410,10 @@ export class Store {
       requireValue(run.invocation && observation.state === 'finished' && canonical(run.native) === canonical(observation),
         'native_observation_required', 'Persisted terminal native response required');
       // An idle/finished turn without a submitted result remains unresolved.
-      if (!run.cancellationRequested && !observation.error && !run.result && run.waiting?.state !== 'recorded') return run;
+      if (!run.cancellationRequested && !observation.error && !run.result && run.waiting?.state !== 'recorded' && !run.dependency) return run;
       run.nativeState = 'settled';
       run.settlement = {
-        outcome: run.cancellationRequested ? 'cancelled' : observation.error ? 'failed' : run.waiting ? 'waiting' : 'completed',
+        outcome: run.cancellationRequested ? 'cancelled' : observation.error ? 'failed' : run.waiting || run.dependency ? 'waiting' : 'completed',
         evidence: `${this.binding(run.request.bindingId).config.harness} response ${observation.messageId} to ${run.invocation.messageId} is terminal and the reserved session is idle`,
       };
       return this.save(run, 'native.settled', run.settlement);
@@ -422,11 +428,20 @@ export class Store {
         requireValue(canonical(run.waiting.payload) === canonical(payload), 'question_conflict', 'Turn already has a different question', 409);
         return run;
       }
-      requireValue(run.nativeState === 'claimed' && !run.result && !run.cancellationRequested,
+      requireValue(run.nativeState === 'claimed' && !run.result && !run.dependency && !run.cancellationRequested,
         'invalid_question', 'Only acknowledged active work can ask before submission', 409);
       run.waiting = { payload, request: payload.request, state: 'pending' };
       return this.save(run, 'question.requested', { key: payload.key });
     });
+  }
+
+  waitForDependency(id, childId) {
+    const run = this.run(id);
+    requireValue(run.nativeState === 'claimed' && !run.result && !run.waiting && !run.cancellationRequested,
+      'work_inactive', 'Active acknowledged turn required', 409);
+    requireValue(!run.dependency || run.dependency.childId === childId, 'operation_conflict', 'Dependency changed', 409);
+    run.dependency = { childId, state: 'recorded' };
+    return this.save(run, 'dependency.waiting', run.dependency);
   }
 
   progress(id, input) {

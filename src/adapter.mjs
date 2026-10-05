@@ -86,8 +86,8 @@ export async function execute(ctx) {
           errorMessage: completed ? null : `Native work ${run.settlement.outcome}`,
           sessionParams: { bindingId: run.request.bindingId, conversationId: run.conversationId },
           sessionDisplayId: run.conversationId,
-          summary: run.result?.summary ?? run.waiting?.payload.question ?? run.settlement.evidence,
-          resultJson: { relayRunId: run.id, submission: run.result, waiting: run.waiting, publication: run.publication, settlement: run.settlement },
+          summary: run.result?.summary ?? run.waiting?.payload.question ?? (run.dependency ? `Waiting for child task ${run.dependency.childId}` : run.settlement.evidence),
+          resultJson: { relayRunId: run.id, submission: run.result, waiting: run.waiting, dependency: run.dependency, publication: run.publication, settlement: run.settlement },
         };
       }
       lastError = undefined;

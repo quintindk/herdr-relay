@@ -1,8 +1,9 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
+import { validateTaskPolicy } from './task-policy.mjs';
 
 function taskPayload(value, idempotencyKey) {
   requireValue(value && typeof value === 'object' && !Array.isArray(value), 'invalid_request', 'Task payload required');
-  const allowed = ['title', 'description', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'status', 'priority'];
+  const allowed = ['title', 'description', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'status', 'priority', 'relayReviewPolicy'];
   requireValue(Object.keys(value).every(key => allowed.includes(key)), 'invalid_request', 'Unsupported task creation field');
   requireValue(!(value.assigneeAgentId && value.assigneeUserId), 'invalid_request', 'Choose a human or agent assignee, not both');
   requireValue(value.description === undefined || typeof value.description === 'string', 'invalid_request', 'Description must be a string');
@@ -16,7 +17,9 @@ function taskPayload(value, idempotencyKey) {
   requireValue(value.status === undefined || ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'].includes(value.status),
     'invalid_status', 'Unsupported task status');
   requireValue(value.priority === undefined || ['critical', 'high', 'medium', 'low'].includes(value.priority), 'invalid_request', 'Unsupported task priority');
-  return { ...value, title: text(value.title, 'title'), description: value.description ?? '', idempotencyKey };
+  if (value.relayReviewPolicy !== undefined) validateTaskPolicy(value.relayReviewPolicy);
+  const { relayReviewPolicy, ...fields } = value;
+  return { ...fields, title: text(value.title, 'title'), description: value.description ?? '', idempotencyKey };
 }
 
 export async function createOperatorTask(store, api, input) {
@@ -24,6 +27,7 @@ export async function createOperatorTask(store, api, input) {
   const key = text(input.key, 'key');
   const id = `operator-task:${digest([companyId, key])}`;
   const request = { companyId, body: taskPayload(input.payload, `relay-operator:${digest([companyId, key])}`) };
+  if (input.payload.relayReviewPolicy !== undefined) request.relayReviewPolicy = input.payload.relayReviewPolicy;
   let operation = store.operation(id);
   if (operation) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Task creation key has a different payload', 409);
@@ -113,6 +117,7 @@ export async function mutate(store, run, token, api, input) {
   }
   const operationId = digest([run.request.companyId, run.request.bindingId, kind, key]);
   const request = { kind, method, path, body };
+  if (kind === 'task.create' && input.payload.relayReviewPolicy !== undefined) request.relayReviewPolicy = input.payload.relayReviewPolicy;
   let operation = store.operation(operationId);
   if (operation) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Operation key has a different payload', 409);

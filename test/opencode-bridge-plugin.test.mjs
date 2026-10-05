@@ -50,7 +50,12 @@ test('in-process plugin delivers and settles through the authenticated Relay bri
       throw new Error('Response lost after provider accepted delivery');
     },
   } };
-  hooks = await plugin({ client, directory: '/work' }, { configFile: configured.bridgeConfigFile });
+  const otherConfig = join(root, 'other-bridge.json');
+  writeFileSync(otherConfig, JSON.stringify({ directory: '/other', conversationId: 'other', terminalId: 'other' }));
+  const sameDirectory = join(root, 'same-directory.json');
+  writeFileSync(sameDirectory, JSON.stringify({ directory: '/work', conversationId: 'other', terminalId: 'other' }));
+  await assert.rejects(plugin({ client, directory: '/work' }, { configFiles: [configured.bridgeConfigFile, configured.bridgeConfigFile] }), /No unique bridge/);
+  hooks = await plugin({ client, directory: '/work' }, { configFiles: [otherConfig, sameDirectory, configured.bridgeConfigFile] });
   await hooks.config();
   const until = async predicate => { for (let i = 0; i < 100; i++) { if (predicate()) return; await delay(50); } assert.fail('Bridge did not settle'); };
   await until(() => service.store.operation(`opencode-bridge:${configured.bindingId}`).ready);
