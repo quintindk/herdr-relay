@@ -138,5 +138,14 @@ not trusted solely from the adapter's context. No token is stored in the receipt
 
 Paperclip still records the child-completion heartbeat. Suppression prevents the
 extra worker turn, comment and replacement review; it does not erase the backend
-event. The change is covered by unit and real-Relay-socket adapter tests. It has
-not been re-exercised with another human-completed child in the live instance.
+event. The change is covered by unit and real-Relay-socket adapter tests.
+
+The live regression passed on 2026-10-05: completing human child DEF-10 triggered
+the child-completion heartbeat for parent DEF-9. Paperclip recorded that heartbeat
+as succeeded, while Relay recorded `candidate_review_pending` suppression. The
+parent retained exactly one Relay worker run and its original pending review
+`51a82a6e-775e-4039-9096-938a9747d46a`. No replacement review, missing-disposition
+handoff, execution blocker or active recovery action appeared. DEF-9 remained
+In Review until the user accepted that original candidate. Relay then marked
+DEF-9 Done automatically at `2026-10-05T12:26:50.009Z`, with a recorded completion
+receipt and the same sole accepted review. No manual status repair was needed.
