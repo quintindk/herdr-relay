@@ -34,12 +34,14 @@ headless option for exclusive automatic control. See
 - OpenCode or Hermes installed and authenticated on the native worker node.
 - Herdr 0.9.3+ for plugin actions and panes.
 
-No npm dependencies or compilation step are required. The package is a development
-build and is not published to npm.
+The Relay coordinator needs no compilation step. Run `npm ci` to install the
+pinned OpenCode plugin SDK used by the optional in-process bridge tools. The
+package is a development build and is not published to npm.
 
 ## Start
 
 ```bash
+npm ci
 npm run check
 npm test
 node src/cli.mjs service --paperclip-url http://127.0.0.1:3100

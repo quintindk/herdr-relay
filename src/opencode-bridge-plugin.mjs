@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { call } from './client.mjs';
+import { tool } from '@opencode-ai/plugin';
 
 // Loaded by OpenCode, with a binding-scoped credential. Never uses Relay admin auth.
 export default async function relayBridge({ client, directory }, options = {}) {
@@ -10,7 +11,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
   const config = JSON.parse(readFileSync(options.configFile, 'utf8'));
   if (directory !== config.directory || process.env.HERDR_ENV !== '1') return {};
   const epoch = randomUUID();
-  let stopped = false, active, started = false, pinnedCreation, invocation, conflict = false;
+  let stopped = false, active, started = false, pinnedCreation, invocation, conflict = false, answering = false;
   const sdkOptions = () => ({ query: { directory }, signal: AbortSignal.timeout(5000), throwOnError: true });
   const ownPane = async () => {
     const { stdout } = await promisify(execFile)('herdr', ['agent', 'list'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
@@ -36,8 +37,35 @@ export default async function relayBridge({ client, directory }, options = {}) {
     epoch, conversationId: config.conversationId, terminalId: config.terminalId,
     sessionCreatedAt: snap.session.time.created, idle: snap.idle, ...fields,
   });
+  const relayDecision = async (action, args, context) => {
+    if (context.sessionID !== config.conversationId || answering) throw new Error('Tool requires the enrolled conversation');
+    answering = true;
+    try {
+      await active;
+      const snap = await snapshot();
+      const toolMessage = snap.messages.find(message => message.info.id === context.messageID);
+      const sourceId = toolMessage?.info.role === 'assistant' ? toolMessage.info.parentID : toolMessage?.info.role === 'user' ? toolMessage.info.id : null;
+      const source = [...snap.messages].reverse().find(message => message.info.role === 'user');
+      if (!source || source.info.id !== sourceId) throw new Error('Current native user message could not be verified');
+      const content = source.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
+      if (!content.trim()) throw new Error('No current user text found');
+      const list = action === 'answer' ? 'questions' : 'reviews';
+      const candidates = (await rpc(list, snap))[list];
+      const selected = args.interactionId ? candidates.find(item => item.interactionId === args.interactionId)
+        : candidates.length === 1 ? candidates[0] : null;
+      if (!selected) throw new Error('No unique pending item. List Relay questions/reviews and ask which issue the user means; never ask them to type an internal ID.');
+      await context.ask({ permission: action === 'answer' ? 'relay_answer' : 'relay_review', patterns: [selected.interactionId], always: [],
+        metadata: { ...selected, ...args, interactionId: selected.interactionId, sourceMessageId: sourceId, sourceText: content } });
+      const fresh = await snapshot();
+      const current = [...fresh.messages].reverse().find(message => message.info.role === 'user');
+      const currentText = current?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
+      if (current?.info.id !== sourceId || currentText !== content) throw new Error('The user message changed; nothing was sent');
+      return JSON.stringify(await rpc(action, fresh, { ...args, interactionId: selected.interactionId,
+        source: { id: sourceId, text: content, createdAt: source.info.time.created } }));
+    } finally { answering = false; }
+  };
   const tick = () => {
-    if (stopped || active) return;
+    if (stopped || active || answering) return;
     active = (async () => {
       let snap = await snapshot();
       const response = await rpc('poll', snap);
@@ -85,6 +113,33 @@ export default async function relayBridge({ client, directory }, options = {}) {
   };
   let timer;
   return {
+    tool: {
+      relay_questions: {
+        description: 'List pending Relay clarification questions for this conversation. Resolve internal IDs yourself; do not ask the user to copy them. Read-only.',
+        args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool is scoped to the enrolled conversation');
+          return JSON.stringify(await rpc('questions', await snapshot()));
+        },
+      },
+      relay_answer: tool({
+        description: 'Record the human\'s answer to a pending Relay clarification. Interpret natural language and minor typos, not hypothetical discussion. Omit interactionId when exactly one question is pending; otherwise resolve it with relay_questions. Never require a command or UUID from the user. Permission-check the proposed answer, then end this turn and let Paperclip continue the task.',
+        args: { answer: tool.schema.string().min(1).max(4000), interactionId: tool.schema.string().optional() },
+        execute: (args, context) => relayDecision('answer', args, context),
+      }),
+      relay_reviews: {
+        description: 'List pending exact candidate reviews for this enrolled conversation. Read-only; resolve internal IDs without asking the user to type them.', args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool is scoped to the enrolled conversation');
+          return JSON.stringify(await rpc('reviews', await snapshot()));
+        },
+      },
+      relay_review: tool({
+        description: 'Relay an explicit human accept/reject decision (including obvious typos such as accpeted) for the current result. Never approve your own work or interpret hypothetical discussion as approval. Omit interactionId for one pending review; otherwise resolve with relay_reviews and clarify by issue name. Permission-check the exact candidate and decision, then end this turn; Relay owns issue completion.',
+        args: { decision: tool.schema.enum(['accept', 'reject']), interactionId: tool.schema.string().optional(), reason: tool.schema.string().max(4000).optional() },
+        execute: (args, context) => relayDecision('review', args, context),
+      }),
+    },
     async config() { if (!started) { started = true; timer = setInterval(tick, 1000); timer.unref(); tick(); } },
     async 'chat.message'(input, output) {
       if (input.sessionID === config.conversationId && invocation && (input.messageID ?? output.message.id) !== invocation.messageId) conflict = true;

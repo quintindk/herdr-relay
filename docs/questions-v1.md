@@ -57,3 +57,95 @@ OpenCode bridge in the existing scriptorium conversation:
 
 No manual answer injection, continuation prompt, settlement or status repair was
 needed. The original Herdr pane, terminal and OpenCode conversation were retained.
+
+## Reply From The Harness
+
+The OpenCode bridge provides explicit, permission-checked tools:
+
+- `relay_questions`: list pending Relay clarification questions for the enrolled
+  conversation. Internal IDs are resolved by the agent, not typed by the user.
+- `relay_answer`: proposes an answer grounded in the current user turn. It selects
+  the single pending question automatically, or accepts an agent-resolved exact
+  interaction ID when multiple questions exist.
+- `relay_reviews` and `relay_review`: list exact pending candidate reviews and
+  relay an explicit human accept/reject decision. Rejection requires a reason.
+
+After the question turn ends, respond naturally, for example:
+
+```text
+Use South African Standard Time please.
+```
+
+The tool verifies its executing session and assistant-parent user message through
+the native SDK, requires that source to be the most recent user message, and calls
+OpenCode's `context.ask` permission mechanism with the proposed answer/decision,
+source text and exact issue/question/candidate
+before posting. Permission behaviour follows the user's configured policy; no
+automatic permission grant is installed. The agent must distinguish an actual
+answer or decision from hypothetical discussion and handle ordinary typos. When
+ambiguous, clarify the issue in human terms. Synthetic source text, older turns
+and another conversation are refused. Nothing is posted merely by typing a
+message: a deliberate tool call and the configured permission check are required.
+
+The bridge endpoint is authorised only for its own settled waiting run and exact
+recorded `ask_user_questions` interaction. It works after the original backend
+run token has expired by using the connector's configured operator backend
+authority, never exposing that credential to the agent. Only Relay's single
+free-text clarification shape is supported initially. The separate review path
+only targets the latest exact settled/published candidate and refuses unrelated
+confirmations. It never approves a candidate during its own worker turn.
+
+### Attribution And Retries
+
+Paperclip's authenticated resolver is the **operator connector account**. The
+answer summary identifies the originating native conversation and user-message
+ID and explicitly says this was a harness-relayed answer, not a separate
+authenticated Paperclip human session. Relay retains the source digest and exact
+answer in its private operation receipt. A native `user` role is not cryptographic
+proof of a human: other automation can create user messages. The permission check
+and same-user trusted plugin are the current authority boundary. If permissions
+are globally auto-approved, this is not an independent human approval guarantee.
+Paperclip's review-accept endpoint has no provenance field, so review source and
+decision evidence are kept in Relay's private `harness-review` receipt instead of
+posting a comment that might supersede the review. The backend resolver remains
+the operator connector, not the worker agent impersonating a reviewer.
+
+One durable `harness-answer` operation exists per interaction. Identical retries
+return its receipt. A different answer conflicts rather than overwriting the
+first one. An identical answer already recorded in Paperclip is read back with
+no new POST. A conflicting dashboard answer or closed question is refused.
+A lost POST response is reconciled from the question; if still pending, Relay
+does not blindly resend or manufacture a new idempotency key.
+
+After successful relay, the agent must end its current turn, not solve the task
+inline. Paperclip's existing `wake_assignee` continuation starts the next Relay
+run, and the bridge waits for native idle before delivering it. The plugin holds
+delivery polling during the answer tool itself. This does not make concurrent
+human input atomic; do not keep typing while the task continuation is running.
+
+### Installation And Verification
+
+This ships in the existing `opencode-bridge-plugin.mjs`. Run `npm ci` in the Relay
+checkout for its pinned `@opencode-ai/plugin` tool-schema dependency. No additional
+MCP server or credentials are needed. Restart the enrolled OpenCode process and
+resume the same conversation in the same Herdr terminal to load the new tools.
+Do not restart while a Relay invocation is unsettled.
+
+Automated tests cover the source-message/permission path through a real Relay
+socket, natural answers, denied permissions, scope, identical/conflicting dashboard
+answers and lost responses. Review decision and retry handling are unit-tested.
+The original explicit-command variant was live-tested in DEF-12: the answer was
+recorded, the same conversation continued and the issue completed after dashboard
+acceptance. That test also exposed the unacceptable UUID-copying experience and
+missing harness review action. Old loaded plugins retain their explicit command
+until restarted; the server accepts that shipped shape during transition.
+
+DEF-13 verified the revised natural-language flow on 2026-10-05. The user answered
+in the existing scriptorium conversation, and `relay_answer` recorded `SAST` against
+the exact pending clarification with source-message attribution. Paperclip woke
+the same native conversation for the result turn. The user approved in the harness,
+`relay_review` recorded acceptance of that exact candidate, and Relay marked the
+issue Done automatically at `2026-10-05T13:25:04.551Z`. Readback confirmed recorded
+`harness-answer`, `harness-review` and completion receipts, one answered question,
+one accepted review, and no missing-disposition handoff, execution blocker or
+active recovery action. No UUID copying or manual dashboard repair was required.

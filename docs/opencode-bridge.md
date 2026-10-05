@@ -46,6 +46,9 @@ submit results, settle arbitrary runs or use operator APIs. The normal worker
 credential cannot report bridge evidence. Both remain within the existing trusted
 Unix-user boundary: they are not isolation against malicious same-user processes.
 Evidence comes from the trusted plugin's SDK reads, not cryptographic attestation.
+The bridge also has narrowly scoped [harness question tools](questions-v1.md#reply-from-the-harness)
+to relay an explicit source-bound answer after a clarification turn has settled.
+These use the connector's operator authority and preserve that attribution.
 Bridge observations have a 4 MiB limit, restricted to authenticated bridge
 credentials on `/bridge/observe`; other requests retain the 128 KiB limit.
 Evidence includes user-message identities for conflict detection and assistant

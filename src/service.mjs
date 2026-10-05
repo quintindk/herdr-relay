@@ -28,6 +28,7 @@ import { herdrConfig, observedAgents, watchHerdrAgents } from './herdr-agents.mj
 import { prepareObservedPull, releaseObservedPull } from './observed-delivery.mjs';
 import { requestReviewDisposition, checkReviewWake } from './disposition.mjs';
 import { bridgeForToken, bridgeRequest, configureBridge, armBridge, disarmBridge } from './opencode-bridge.mjs';
+import { harnessQuestion, harnessReview } from './harness-answers.mjs';
 
 async function body(req, limit = 128 * 1024) {
   let size = 0;
@@ -97,9 +98,18 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const path = new URL(req.url, 'http://relay').pathname;
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
-        requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe'].includes(path),
+        requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
-        const result = bridgeRequest(store, bridge.id, path.split('/').at(-1), input, id => runTokens.has(id));
+        const action = path.split('/').at(-1);
+        let result;
+        if (['questions', 'answer', 'reviews', 'review'].includes(action)) {
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          const key = `harness-answer:${bridge.identity.bindingId}`;
+          requireValue(!publications.has(key), 'operation_busy', 'Harness question operation in progress', 409);
+          const pending = (['reviews', 'review'].includes(action) ? harnessReview : harnessQuestion)(store, store.operation(bridge.id), action, input, operatorApi);
+          publications.set(key, pending);
+          try { result = await pending; } finally { publications.delete(key); }
+        } else result = bridgeRequest(store, bridge.id, action, input, id => runTokens.has(id));
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
       if (bindingId && req.method === 'POST') {

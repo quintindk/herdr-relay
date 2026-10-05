@@ -5,13 +5,30 @@
   "license": "MIT",
   "description": "Connect Paperclip work to agents in herdr",
   "type": "module",
-  "exports": { ".": "./src/adapter.mjs", "./server": "./src/adapter.mjs" },
-  "bin": { "herdr-relay": "./src/cli.mjs", "herdr-relay-remote": "./src/remote.mjs" },
-  "files": ["src", "skills", "scripts/plugin-launch.sh", "herdr-plugin.toml", "docs/*.md"],
-  "engines": { "node": ">=24.0.0" },
+  "exports": {
+    ".": "./src/adapter.mjs",
+    "./server": "./src/adapter.mjs"
+  },
+  "bin": {
+    "herdr-relay": "./src/cli.mjs",
+    "herdr-relay-remote": "./src/remote.mjs"
+  },
+  "files": [
+    "src",
+    "skills",
+    "scripts/plugin-launch.sh",
+    "herdr-plugin.toml",
+    "docs/*.md"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "start": "node src/cli.mjs service",
     "check": "node scripts/check.mjs",
     "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.27"
   }
 }
