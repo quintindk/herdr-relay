@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { requestReviewDisposition, reconcileCompletions } from '../src/disposition.mjs';
+import { requestReviewDisposition, reconcileCompletions, checkReviewWake } from '../src/disposition.mjs';
 import { Store } from '../src/store.mjs';
 import { digest } from '../src/protocol.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -175,5 +175,43 @@ test('Paperclip acceptance-driven todo completes only with the exact latest audi
     if (scenario === 'ambiguous-time') events.push({ ...event });
     await reconcileCompletions(store, (...args) => args[1].endsWith('/activity') ? events : f.api(...args));
     assert.equal(f.writes.length, scenario === 'accepted' ? 1 : 0, scenario);
+  }
+});
+
+test('child-completion wakes preserve an exact pending review without creating another Relay run', async t => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const f = fixture(store);
+  f.interaction.status = 'pending'; f.interaction.kind = 'request_confirmation';
+  store.recordReview(f.run.id, { interactionId: 'review', status: 'pending', candidate: 'candidate' });
+  Object.assign(f.backend, { id: 'child-wake', status: 'running', invocationSource: 'automation', contextSnapshot: {
+    wakeReason: 'issue_children_completed', taskId: 'task',
+  } });
+  const input = { ...f.run.request, runId: 'child-wake', token: 'scoped' };
+  let reads = 0;
+  const api = async (_, token, method, path, body) => { assert.equal(token, 'scoped'); reads++; return f.api(method, path, body); };
+  const decision = await checkReviewWake(store, input, api);
+  assert.equal(decision.skip, true); assert.equal(decision.interactionId, 'review');
+  assert.equal(store.runs().length, 1); assert.equal(f.writes.length, 0);
+  const before = reads;
+  assert.deepEqual(await checkReviewWake(store, input, api), decision);
+  assert.equal(reads, before, 'Persisted no-op receipt replays without new effects');
+  await assert.rejects(checkReviewWake(store, { ...input, taskId: 'other' }, api), { code: 'dispatch_conflict' });
+});
+
+test('child-wake check does not suppress ordinary work, resolved reviews or admitted runs', async t => {
+  for (const variant of ['manual', 'rejected', 'expired', 'wrong-candidate', 'todo', 'already-admitted']) {
+    const store = new Store(':memory:'); t.after(() => store.close());
+    const f = fixture(store);
+    f.interaction.status = 'pending'; f.interaction.kind = 'request_confirmation';
+    store.recordReview(f.run.id, { interactionId: 'review', status: 'pending', candidate: 'candidate' });
+    Object.assign(f.backend, { id: 'wake', status: 'running', invocationSource: 'automation',
+      contextSnapshot: { wakeReason: 'issue_children_completed', taskId: 'task' } });
+    if (variant === 'manual') f.backend.invocationSource = 'on_demand';
+    if (['rejected', 'expired'].includes(variant)) f.interaction.status = variant;
+    if (variant === 'wrong-candidate') f.interaction.payload.target.revisionId = 'wrong';
+    if (variant === 'todo') f.issue.status = 'todo';
+    if (variant === 'already-admitted') store.dispatch({ ...f.run.request, runId: 'wake' });
+    assert.deepEqual(await checkReviewWake(store, { ...f.run.request, runId: 'wake', token: 'scoped' },
+      (_, __, method, path, body) => f.api(method, path, body)), { skip: false }, variant);
   }
 });

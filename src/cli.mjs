@@ -35,6 +35,7 @@ const help = `herdr-relay (development)
   work interactions RUN
   task list RUN
   task create RUN --key KEY --file task.json
+  task create --company COMPANY_ID --key KEY --file task.json
   task assign RUN --key KEY --file assignment.json
   task update RUN --key KEY --file changes.json [--task TARGET_TASK_ID]
   work answer RUN --key KEY --interaction ID --file answers.json
@@ -71,9 +72,11 @@ terminal response. Automatic interruption requires a dedicated owned runtime.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'company', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
+  if (values.company !== undefined) requireValue(group === 'task' && action === 'create' && !id,
+    'invalid_request', '--company is only valid for operator task creation without RUN_ID');
   if (group === 'adapter-stdio') {
     const { serveAdapterStdio } = await import('./remote-adapter.mjs');
     await serveAdapterStdio();
@@ -234,6 +237,12 @@ export async function main(args) {
     });
   }
   else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);
+  else if (group === 'task' && action === 'create' && !id) {
+    requireValue(values.company && values.key && values.file, 'invalid_request', '--company, --key and --file are required without RUN_ID');
+    result = await call(connection, 'POST', '/tasks', {
+      companyId: values.company, key: values.key, payload: JSON.parse(readFileSync(values.file, 'utf8')),
+    });
+  }
   else if (id && ((group === 'task' && ['create', 'assign', 'update'].includes(action)) || (group === 'work' && action === 'answer'))) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/mutate`, {

@@ -44,6 +44,17 @@ export async function execute(ctx) {
     timedOut ||= Date.now() - started >= timeoutSec * 1000;
     try {
       if (!run) {
+        if (!ctx.config.recoverRelayRunId && (ctx.context.wakeReason ?? ctx.context.paperclipWake?.reason) === 'issue_children_completed') {
+          const decision = await call(connection, 'POST', '/review-wake', { ...dispatch, token: ctx.authToken });
+          if (decision.skip) {
+            await ctx.onLog('stdout', `${JSON.stringify({ event: 'relay.wake_suppressed', ...decision })}\n`);
+            return { exitCode: 0, signal: null, timedOut: false,
+              summary: 'Child completion recorded. The existing submitted candidate is still awaiting review; no additional worker turn was started.',
+              sessionParams: { bindingId: dispatch.bindingId, conversationId: decision.conversationId },
+              sessionDisplayId: decision.conversationId,
+              resultJson: { skipped: true, reason: decision.reason, relayRunId: decision.relayRunId, reviewInteractionId: decision.interactionId } };
+          }
+        }
         // A lost response may already have persisted the dispatch. Replay only
         // this immutable backend-run key, never manufacture a replacement run.
         run = ctx.config.recoverRelayRunId

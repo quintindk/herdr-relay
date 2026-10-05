@@ -3,7 +3,48 @@
 Tasks remain in Paperclip. Relay records mutation intent, request identity and
 receipts in schema 4, preserving prior schemas.
 
-Commands require an acknowledged, active Relay run and its attached backend
+## Operator Creation
+
+Create a task without a worker run using the operator credential:
+
+```bash
+herdr-relay task create --company COMPANY_ID --key human-follow-up --file task.json
+```
+
+```json
+{
+  "title": "Review the proposed change",
+  "description": "Confirm the result, then mark this human task Done.",
+  "assigneeUserId": "HUMAN_USER_ID",
+  "assigneeAgentId": null,
+  "status": "todo",
+  "priority": "low"
+}
+```
+
+The service must have a `--backend-context` configured. It uses that board/operator
+authority, not an agent's credentials. Worker and bridge credentials cannot call
+the operator `/tasks` endpoint. On this loopback local-trusted installation, the
+human account is `local-board` (displayed as Board), not the LiteLLM admin email.
+Use the actual Paperclip company member ID on other installations.
+
+`--company`, `--key` and `--file` are required without a run ID. Do not combine
+`--company` with a worker run. Human/agent assignees are mutually exclusive, and
+unknown payload fields are rejected rather than silently dropped. Parent,
+project, agent and blocker references must belong to the selected company.
+Paperclip validates human membership and assignment permissions.
+
+The response contains the persisted operation and backend task receipt. Repeat
+the identical command/key to retrieve the same receipt. Changed input under that
+company/key conflicts. The intent is durable before POST, and a lost response
+reuses the same backend idempotency key across restart. Operator keys have a
+separate namespace from worker task mutations. Creating a human-only task does
+not ask Relay to run a harness. Creating an agent-owned task can trigger its
+configured Paperclip assignment wake.
+
+## Worker Commands
+
+Worker commands require an acknowledged, active Relay run and its attached backend
 credentials. They execute under that agent's Paperclip permissions:
 
 ```bash
@@ -26,6 +67,9 @@ Example delegated task:
 ```
 
 Use `assigneeUserId` for human ownership, or omit both assignees for backlog work.
+The same human-task JSON above works with
+`herdr-relay --context WORKER_CONTEXT task create RUN --key KEY --file task.json`.
+Add `parentId` to link a follow-up to the worker's current issue when appropriate.
 Optional `blockedByIssueIds` expresses dependencies. Parentage does not itself
 imply a dependency. Tasks need no project or manager. `task assign` changes the
   task associated with the supplied Relay run, not an arbitrary guessed task.
@@ -54,3 +98,45 @@ Task updates support title, description, priority, dependencies and status. Sett
 `status: "done"` requires the latest Relay candidate to be settled and accepted,
 and refreshes the matching Paperclip review disposition before writing completion.
 The worktree scenario verifies actual backend completion after accepted cleanup.
+
+## Live Human-Task Verification
+
+On 2026-10-05, the standalone operator CLI created DEF-6 assigned to the local
+Board user. Repeating the identical CLI command returned the same persisted
+receipt and issue ID. The user subsequently marked it Done. No agent was assigned
+and its runs list was empty.
+
+The operator CLI also created DEF-7 assigned to the armed scriptorium bridge.
+That existing conversation used its scoped worker CLI to create human-owned child
+DEF-8, then repeated the same creation command and verified the same receipt.
+Backend readback confirmed one child, the correct human owner, parent issue,
+creator agent and originating backend run. Its creation audit recorded
+`assignmentWakeSkipped: true` with `no_agent_assignee`. Paperclip may list the
+originating creation run under the child's runs view; that does not mean the human
+task was assigned to an agent. The parent run settled automatically and reached
+In Review. Human completion of DEF-8 and acceptance of DEF-7 are separate actions.
+Subsequent readback confirmed both issues Done with no active recovery blocker.
+DEF-8 retained human ownership. DEF-7's original review expired and a later run's
+review was accepted; Relay recorded completion for that later run. This is not
+evidence of a single-run review lifecycle for the parent task.
+
+Investigation confirmed the second backend run was an automation wake with
+`wakeReason: issue_children_completed`, caused by completing DEF-8. The original
+DEF-7 result was already awaiting review. The worker created no duplicate child,
+but submitted a new verification result, and Paperclip expired the original
+confirmation as `superseded_by_newer_request`. This was not a retry of the original
+creation command, an adapter crash, or a user-requested rerun.
+
+Relay now checks child-completion wakes before dispatch. When the current issue
+is still In Review with the same agent and the exact latest settled/published
+Relay candidate has a pending confirmation, it returns a durable successful
+no-op receipt instead of starting another native turn. The original review and
+candidate remain authoritative. Other wake reasons and resolved/rejected reviews
+use the normal dispatch path. Already-admitted runs cannot turn into a no-op on
+retry. Backend run identity and wake reason are read using the current run token,
+not trusted solely from the adapter's context. No token is stored in the receipt.
+
+Paperclip still records the child-completion heartbeat. Suppression prevents the
+extra worker turn, comment and replacement review; it does not erase the backend
+event. The change is covered by unit and real-Relay-socket adapter tests. It has
+not been re-exercised with another human-completed child in the live instance.

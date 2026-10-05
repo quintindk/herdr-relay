@@ -1,5 +1,52 @@
-import { requireValue } from './protocol.mjs';
+import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { review } from './review.mjs';
+
+export async function checkReviewWake(store, input, api) {
+  const request = {};
+  for (const field of ['bindingId', 'companyId', 'agentId', 'runId', 'taskId']) request[field] = text(input[field], field);
+  request.bindingRevision = input.bindingRevision;
+  const binding = store.binding(request.bindingId);
+  requireValue(binding.revision === request.bindingRevision && binding.config.companyId === request.companyId &&
+    binding.config.agentId === request.agentId, 'identity_mismatch', 'Wake does not match binding', 409);
+  const id = `review-wake:${digest([request.companyId, request.runId])}`;
+  const previous = store.operation(id);
+  if (previous) {
+    requireValue(canonical(previous.request) === canonical(request), 'dispatch_conflict', 'Wake retry changed identity', 409);
+    return previous.receipt;
+  }
+  const runs = store.runs().filter(run => run.request.companyId === request.companyId && run.request.taskId === request.taskId);
+  // Never turn a previously admitted/attempted invocation into a no-op on retry.
+  if (runs.some(run => (run.backendRunId ?? run.request.runId) === request.runId || run.nativeState !== 'settled')) return { skip: false };
+  const latest = runs.find(run => run.result);
+  if (!latest || latest.request.bindingId !== binding.id || latest.nativeState !== 'settled' ||
+    latest.settlement?.outcome !== 'completed' || latest.publication.state !== 'recorded' || !latest.review) return { skip: false };
+  const caller = { request, backendRunId: request.runId };
+  const token = text(input.token, 'token');
+  const backend = await api(caller, token, 'GET', `/api/heartbeat-runs/${encodeURIComponent(request.runId)}`);
+  requireValue(backend.id === request.runId && backend.companyId === request.companyId && backend.agentId === request.agentId,
+    'identity_mismatch', 'Backend wake identity changed', 409);
+  if (backend.status !== 'running' || backend.invocationSource !== 'automation' ||
+    backend.contextSnapshot?.wakeReason !== 'issue_children_completed' ||
+    (backend.contextSnapshot.taskId ?? backend.contextSnapshot.issueId) !== request.taskId) return { skip: false };
+  const path = `/api/issues/${encodeURIComponent(request.taskId)}`;
+  const issue = await api(caller, token, 'GET', path);
+  if (issue.id !== request.taskId || issue.companyId !== request.companyId || issue.status !== 'in_review' ||
+    issue.assigneeAgentId !== request.agentId || (issue.executionRunId && issue.executionRunId !== request.runId)) return { skip: false };
+  const interactions = await api(caller, token, 'GET', `${path}/interactions`);
+  requireValue(Array.isArray(interactions), 'invalid_backend_response', 'Expected review interactions', 502);
+  const expected = { type: 'custom', key: 'herdr-relay-candidate', revisionId: latest.result.candidate, label: latest.id };
+  const pending = interactions.find(item => item.id === latest.review.interactionId && item.status === 'pending' &&
+    item.kind === 'request_confirmation' && item.idempotencyKey === `relay-review:${latest.id}:${digest(latest.result)}` &&
+    canonical(item.payload?.target) === canonical(expected));
+  if (!pending) return { skip: false };
+  const currentRuns = store.runs().filter(run => run.request.companyId === request.companyId && run.request.taskId === request.taskId);
+  if (currentRuns.some(run => run.nativeState !== 'settled' || (run.backendRunId ?? run.request.runId) === request.runId) ||
+    currentRuns.find(run => run.result)?.id !== latest.id) return { skip: false };
+  const receipt = { skip: true, reason: 'candidate_review_pending', relayRunId: latest.id,
+    interactionId: pending.id, conversationId: binding.config.conversationId };
+  store.saveOperation({ id, runId: latest.id, request, state: 'recorded', receipt });
+  return receipt;
+}
 
 export async function requestReviewDisposition(store, id, token, api) {
   const run = store.run(id);

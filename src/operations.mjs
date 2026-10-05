@@ -1,5 +1,56 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 
+function taskPayload(value, idempotencyKey) {
+  requireValue(value && typeof value === 'object' && !Array.isArray(value), 'invalid_request', 'Task payload required');
+  const allowed = ['title', 'description', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'status', 'priority'];
+  requireValue(Object.keys(value).every(key => allowed.includes(key)), 'invalid_request', 'Unsupported task creation field');
+  requireValue(!(value.assigneeAgentId && value.assigneeUserId), 'invalid_request', 'Choose a human or agent assignee, not both');
+  requireValue(value.description === undefined || typeof value.description === 'string', 'invalid_request', 'Description must be a string');
+  for (const key of ['assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId']) {
+    if (value[key] !== undefined && value[key] !== null) text(value[key], key);
+  }
+  if (value.blockedByIssueIds !== undefined) {
+    requireValue(Array.isArray(value.blockedByIssueIds), 'invalid_request', 'blockedByIssueIds must be an array');
+    value.blockedByIssueIds.forEach(id => text(id, 'blockedByIssueId'));
+  }
+  requireValue(value.status === undefined || ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'].includes(value.status),
+    'invalid_status', 'Unsupported task status');
+  requireValue(value.priority === undefined || ['critical', 'high', 'medium', 'low'].includes(value.priority), 'invalid_request', 'Unsupported task priority');
+  return { ...value, title: text(value.title, 'title'), description: value.description ?? '', idempotencyKey };
+}
+
+export async function createOperatorTask(store, api, input) {
+  const companyId = text(input.companyId, 'companyId');
+  const key = text(input.key, 'key');
+  const id = `operator-task:${digest([companyId, key])}`;
+  const request = { companyId, body: taskPayload(input.payload, `relay-operator:${digest([companyId, key])}`) };
+  let operation = store.operation(id);
+  if (operation) {
+    requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Task creation key has a different payload', 409);
+    if (operation.state === 'recorded') return operation;
+  }
+  // Validate explicit resource scope before creating. Paperclip remains authority
+  // for membership/assignment permissions and validates the mutation itself.
+  const company = await api('GET', `/api/companies/${encodeURIComponent(companyId)}`);
+  requireValue(company.id === companyId, 'identity_mismatch', 'Company identity changed', 409);
+  const checks = [
+    ...(request.body.parentId ? [['issues', request.body.parentId]] : []),
+    ...(request.body.projectId ? [['projects', request.body.projectId]] : []),
+    ...(request.body.assigneeAgentId ? [['agents', request.body.assigneeAgentId]] : []),
+    ...(request.body.blockedByIssueIds ?? []).map(id => ['issues', id]),
+  ];
+  for (const [collection, resourceId] of checks) {
+    const resource = await api('GET', `/api/${collection}/${encodeURIComponent(resourceId)}`);
+    requireValue(resource.id === resourceId && resource.companyId === companyId, 'forbidden', 'Task resource belongs to another company', 403);
+  }
+  if (!operation) operation = store.saveOperation({ id, runId: '', request, state: 'uncertain' });
+  // This endpoint supports idempotency keys; uncertainty reuses the exact key/body.
+  const receipt = await api('POST', `/api/companies/${encodeURIComponent(companyId)}/issues`, request.body);
+  requireValue(typeof receipt.id === 'string' && receipt.id && receipt.companyId === companyId,
+    'invalid_backend_response', 'Task receipt must identify the requested company', 502);
+  return store.saveOperation({ ...operation, state: 'recorded', receipt });
+}
+
 // Persist integration mutation intent and response, not a second task store.
 export async function mutate(store, run, token, api, input) {
   const key = text(input.key, 'key');
@@ -16,13 +67,7 @@ export async function mutate(store, run, token, api, input) {
   let body;
   let replaySafe = false;
   if (kind === 'task.create') {
-    const value = input.payload;
-    requireValue(value && typeof value === 'object', 'invalid_request', 'Task payload required');
-    body = { title: text(value.title, 'title'), description: value.description ?? '',
-      idempotencyKey: `relay:${run.request.bindingId}:${digest(key)}` };
-    for (const field of ['assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'status', 'priority']) {
-      if (value[field] !== undefined) body[field] = value[field];
-    }
+    body = taskPayload(input.payload, `relay:${run.request.bindingId}:${digest(key)}`);
     path = `/api/companies/${encodeURIComponent(run.request.companyId)}/issues`;
     replaySafe = true;
   } else if (kind === 'task.assign') {

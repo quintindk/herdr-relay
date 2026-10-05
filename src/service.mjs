@@ -10,7 +10,7 @@ import { nativeConfig, OpenCode } from './opencode.mjs';
 import { hermesConfig, Hermes } from './hermes.mjs';
 import { supervise, workerContext } from './supervisor.mjs';
 import { publishQuestion } from './work.mjs';
-import { mutate } from './operations.mjs';
+import { mutate, createOperatorTask } from './operations.mjs';
 import { review } from './review.mjs';
 import { provisionWorktree, finaliseWorktree, retireWorktree, reconcileWorktree } from './resources.mjs';
 import { recordEvent, inbox, acknowledgeEvent } from './inbox.mjs';
@@ -26,7 +26,7 @@ import { resumeRuntime } from './resume.mjs';
 import { provisionCompany } from './companies.mjs';
 import { herdrConfig, observedAgents, watchHerdrAgents } from './herdr-agents.mjs';
 import { prepareObservedPull, releaseObservedPull } from './observed-delivery.mjs';
-import { requestReviewDisposition } from './disposition.mjs';
+import { requestReviewDisposition, checkReviewWake } from './disposition.mjs';
 import { bridgeForToken, bridgeRequest, configureBridge, armBridge, disarmBridge } from './opencode-bridge.mjs';
 
 async function body(req, limit = 128 * 1024) {
@@ -109,6 +109,14 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       let result;
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
+      else if (req.method === 'POST' && path === '/tasks') {
+        adminOnly();
+        const key = `operator-task:${digest([text(input.companyId, 'companyId'), text(input.key, 'key')])}`;
+        requireValue(!publications.has(key), 'operation_busy', 'Operator task creation is in progress', 409);
+        const pending = createOperatorTask(store, operatorApi, input);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); }
+      }
       else if (req.method === 'GET' && path === '/herdr/agents') { adminOnly(); result = { source: observer?.status() ?? null, agents: observedAgents(store) }; }
       else if (req.method === 'POST' && ['/herdr/configure-bridge', '/herdr/arm-bridge', '/herdr/disarm-bridge'].includes(path)) {
         adminOnly();
@@ -268,6 +276,14 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
             requireValue(observed.review.status === 'accepted', 'acceptance_required', 'Paperclip has not accepted this candidate', 409);
           });
         }
+      }
+      else if (req.method === 'POST' && path === '/review-wake') {
+        adminOnly();
+        const key = `review-wake:${text(input.runId, 'runId')}`;
+        requireValue(!publications.has(key), 'operation_busy', 'Wake check in progress', 409);
+        const pending = checkReviewWake(store, input, api);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); }
       }
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
