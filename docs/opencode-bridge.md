@@ -180,6 +180,27 @@ for later enrolment; no native resources are removed.
 
 ## Verification
 
+### Chat Return Path
+
+DEF-18 verified the live chat-origin round trip on 2026-10-06. The originating
+OpenCode conversation used `relay_agents` and `relay_delegate` to assign a read-only
+readiness check to scriptorium with human review required. The worker acknowledged
+the task, submitted its working directory and readiness report, and reached
+verified native settlement. The submitted report stated that no workspace files
+were changed and no packages, commits or other agents were created.
+
+After acceptance, Relay recorded completion and announced the origin-bound toast
+at `2026-10-06T12:23:23.444Z`. A subsequent `relay_delegations` read returned the
+settled result, accepted review and durable notification in `announced` state,
+targeting the original conversation. The user reported seeing a toast. This
+confirms the live return path without requiring the Paperclip UI or another model
+turn. It does not turn toast API acceptance into proof of human readership.
+
+The implementation checkpoint passed 213 automated tests, syntax checks and diff
+whitespace checks before deployment. The earlier DEF-17 operator task completed
+successfully but had no recorded origin, so it correctly has no retrospective
+return notification.
+
 ### Polling Cost
 
 Idle/configured bridges perform a lightweight identity/status/Relay poll every
