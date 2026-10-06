@@ -8,7 +8,7 @@ function validOrigin(origin) {
 }
 
 function notifications(store) {
-  return store.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion-notification:%' ORDER BY rowid").all()
+  return store.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion-notification:%' OR id LIKE 'review-notification:%' ORDER BY rowid").all()
     .map(row => JSON.parse(row.data));
 }
 
@@ -18,12 +18,51 @@ function owns(bridge, notification) {
     origin.conversationId === bridge.identity.conversationId && origin.sessionCreatedAt === bridge.sessionCreatedAt;
 }
 
-// Only persisted task origins and exact completion receipts can create notifications.
+function recordedTasks(store) {
+  return store.db.prepare("SELECT data FROM operations WHERE id LIKE 'operator-task:%'").all()
+    .map(row => JSON.parse(row.data)).filter(task => task.state === 'recorded' && validOrigin(task.request?.origin) &&
+      ['id', 'title', 'identifier'].every(key => typeof task.receipt?.[key] === 'string' && task.receipt[key].trim()));
+}
+
+function pendingReviews(store, tasks = recordedTasks(store)) {
+  const runs = store.runs();
+  const reviews = [];
+  for (const task of tasks) {
+    const { companyId, origin: { bindingId, conversationId, sessionCreatedAt } } = task.request;
+    const taskId = task.receipt.id;
+    const taskRuns = runs.filter(run => run.request.companyId === companyId && run.request.taskId === taskId);
+    const run = taskRuns.find(run => run.result);
+    if (!run || taskRuns.some(item => item.nativeState !== 'settled') ||
+      run.settlement?.outcome !== 'completed' || run.publication?.state !== 'recorded' ||
+      task.request.body?.assigneeAgentId !== run.request.agentId ||
+      (task.receipt.companyId !== undefined && task.receipt.companyId !== companyId) ||
+      typeof run.result.candidate !== 'string' || !run.result.candidate.trim() || typeof run.result.summary !== 'string' ||
+      run.review?.status !== 'pending' || run.review.candidate !== run.result.candidate ||
+      typeof run.review.interactionId !== 'string' || !run.review.interactionId.trim()) continue;
+    const { candidate, interactionId } = run.review;
+    const disposition = store.operation(`review-disposition:${run.id}`);
+    if (disposition?.runId !== run.id || disposition.state !== 'waiting' || disposition.candidate !== candidate ||
+      disposition.interactionId !== interactionId) continue;
+    // Review observations are cached backend receipts, not a fresh backend check.
+    // A confirmed completion takes precedence even when the cached review is pending.
+    if ([`completion:${run.id}`, `no-review-completion:${run.id}`].some(id => {
+      const completion = store.operation(id);
+      return completion?.state === 'recorded' && completion.status === 'done' && completion.runId === run.id &&
+        completion.candidate === candidate && (completion.companyId === undefined || completion.companyId === companyId) &&
+        (completion.taskId === undefined || completion.taskId === taskId);
+    })) continue;
+    const origin = { bindingId, conversationId, sessionCreatedAt };
+    reviews.push({ id: `review-notification:${digest([origin, companyId, taskId, run.id, candidate, interactionId])}`,
+      runId: run.id, origin, companyId, taskId, kind: 'review', state: 'pending', candidate, interactionId,
+      identifier: task.receipt.identifier.slice(0, 128), title: task.receipt.title.slice(0, 512), summary: run.result.summary.slice(0, 4000) });
+  }
+  return reviews;
+}
+
+// Reconcile persisted local evidence only. Review-ready is not task completion.
 export function reconcileNotifications(store) {
   return store.transaction(() => {
-    const tasks = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'operator-task:%'").all()
-      .map(row => JSON.parse(row.data)).filter(task => task.state === 'recorded' && validOrigin(task.request?.origin) &&
-        ['id', 'title', 'identifier'].every(key => typeof task.receipt?.[key] === 'string' && task.receipt[key].trim()));
+    const tasks = recordedTasks(store);
     const completions = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion:%' OR id LIKE 'no-review-completion:%'").all()
       .map(row => JSON.parse(row.data));
     const created = [];
@@ -61,6 +100,16 @@ export function reconcileNotifications(store) {
             JSON.stringify({ status: 'done', identifier, title, summary }) }));
       }
     }
+    const reviews = pendingReviews(store, tasks);
+    const currentReviews = new Set(reviews.map(item => item.id));
+    for (const notification of notifications(store)) {
+      if (notification.id.startsWith('review-notification:') && notification.state === 'pending' && !currentReviews.has(notification.id)) {
+        store.saveOperation({ ...notification, state: 'superseded' });
+      }
+    }
+    for (const notification of reviews) {
+      if (!store.operation(notification.id)) created.push(store.saveOperation(notification));
+    }
     return created;
   });
 }
@@ -89,12 +138,15 @@ export function notificationRequest(store, bridge, action, input) {
     }
     requireValue(['notification-begin', 'notification-observe'].includes(action), 'invalid_bridge_action', 'Unknown notification action');
     const notification = store.operation(text(input.id, 'id'));
-    requireValue(notification?.id.startsWith('completion-notification:') && owns(bridge, notification) &&
+    requireValue((notification?.id.startsWith('completion-notification:') || notification?.id.startsWith('review-notification:')) && owns(bridge, notification) &&
       notification.companyId === binding.config.companyId,
     'notification_not_found', 'No notification belongs to this exact origin', 404);
     if (action === 'notification-begin') {
       // Uncertainty survives lost replies, plugin epochs and service restarts.
       if (notification.state !== 'pending') return { notification, dispatch: false };
+      if (notification.id.startsWith('review-notification:') && !pendingReviews(store).some(item => item.id === notification.id)) {
+        return { notification: store.saveOperation({ ...notification, state: 'superseded' }), dispatch: false };
+      }
       requireValue(input.idle === true, 'native_busy', 'Validated idle snapshot required', 409);
       requireValue(store.runs(bridge.identity.bindingId).every(run => run.nativeState === 'settled'),
         'conversation_busy', 'Unsettled Relay work prevents notification delivery', 409);

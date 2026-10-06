@@ -39,6 +39,16 @@ function fixture(t) {
   return f;
 }
 
+function reviewFixture(t) {
+  const f = fixture(t);
+  f.store.db.prepare('DELETE FROM operations WHERE id = ?').run(f.completion.id);
+  f.task = f.store.saveOperation({ ...f.task, request: { ...f.task.request, body: { assigneeAgentId: 'worker' } } });
+  f.run = f.store.recordReview(f.run.id, { status: 'pending', candidate: 'candidate', interactionId: 'review' });
+  f.disposition = f.store.saveOperation({ id: `review-disposition:${f.run.id}`, runId: f.run.id,
+    state: 'waiting', candidate: 'candidate', interactionId: 'review' });
+  return f;
+}
+
 test('reconciliation joins completion runs to recorded operator tasks and survives restart without duplicates', t => {
   const f = fixture(t);
   const [notification] = reconcileNotifications(f.store);
@@ -284,4 +294,182 @@ test('reserved notification sources never become human authority, including hist
   assert.equal(isNotificationSource(f.store, { ...f.bridge, sessionCreatedAt: 124 }, notification.messageId), false);
   assert.equal(isNotificationSource(f.store, { ...f.bridge, identity: { ...f.bridge.identity, bindingId: 'other' } }, notification.messageId), false);
   assert.equal(isNotificationSource(f.store, { ...f.bridge, identity: { ...f.bridge.identity, conversationId: 'fresh' } }, notification.messageId), false);
+});
+
+test('pending review is durable once per exact origin and remains separate from later completion', t => {
+  const f = reviewFixture(t);
+  const [notification] = reconcileNotifications(f.store);
+  assert.match(notification.id, /^review-notification:[a-f0-9]{64}$/);
+  assert.equal(notification.kind, 'review');
+  assert.equal(notification.state, 'pending');
+  assert.deepEqual(notification.origin, f.origin);
+  assert.equal(notification.companyId, 'company');
+  assert.equal(notification.taskId, 'task');
+  assert.equal(notification.runId, f.run.id);
+  assert.equal(notification.identifier, 'TEST-1');
+  assert.equal(notification.title, 'A task');
+  assert.equal(notification.summary, f.run.result.summary);
+  assert.equal(notification.candidate, 'candidate');
+  assert.equal(notification.interactionId, 'review');
+  f.store.saveOperation({ ...f.task, id: 'operator-task:duplicate' });
+  f.restart();
+  assert.deepEqual(reconcileNotifications(f.store), []);
+  assert.deepEqual(f.list(), [notification]);
+  assert.equal(f.begin(notification.id).dispatch, true);
+  const announced = f.observe(notification.id, true);
+  assert.equal(announced.state, 'announced');
+  f.store.saveOperation(f.completion);
+  const [completion] = reconcileNotifications(f.store);
+  assert.match(completion.id, /^completion-notification:/);
+  assert.notEqual(completion.id, notification.id);
+  assert.deepEqual(f.list(), [completion]);
+  assert.deepEqual(f.history(), [completion, announced]);
+  f.restart();
+  assert.deepEqual(reconcileNotifications(f.store), []);
+  assert.equal(f.begin(notification.id).dispatch, false);
+  assert.equal(f.begin(completion.id).dispatch, true);
+});
+
+for (const [name, change] of [
+  ['unrecorded task', f => f.store.saveOperation({ ...f.task, state: 'uncertain' })],
+  ['missing origin', f => f.store.saveOperation({ ...f.task, request: { ...f.task.request, origin: null } })],
+  ['missing assignment', f => f.store.saveOperation({ ...f.task, request: { ...f.task.request, body: {} } })],
+  ['other assignee', f => f.store.saveOperation({ ...f.task, request: { ...f.task.request, body: { assigneeAgentId: 'other' } } })],
+  ['other company', f => f.store.saveOperation({ ...f.task, request: { ...f.task.request, companyId: 'other-company' } })],
+  ['wrong receipt company', f => f.store.saveOperation({ ...f.task, receipt: { ...f.task.receipt, companyId: 'other-company' } })],
+  ['unsettled run', f => f.store.save({ ...f.run, nativeState: 'claimed' }, 'test.changed')],
+  ['failed run', f => f.store.save({ ...f.run, settlement: { outcome: 'failed' } }, 'test.changed')],
+  ['unpublished run', f => f.store.save({ ...f.run, publication: { state: 'uncertain' } }, 'test.changed')],
+  ['missing result', f => f.store.save({ ...f.run, result: null }, 'test.changed')],
+  ['missing review', f => f.store.save({ ...f.run, review: null }, 'test.changed')],
+  ['accepted review', f => f.store.recordReview(f.run.id, { ...f.run.review, status: 'accepted' })],
+  ['rejected review', f => f.store.recordReview(f.run.id, { ...f.run.review, status: 'rejected' })],
+  ['wrong review candidate', f => f.store.recordReview(f.run.id, { ...f.run.review, candidate: 'other' })],
+  ['missing interaction', f => f.store.recordReview(f.run.id, { ...f.run.review, interactionId: '' })],
+  ['missing disposition', f => f.store.db.prepare('DELETE FROM operations WHERE id = ?').run(f.disposition.id)],
+  ['wrong disposition run', f => f.store.saveOperation({ ...f.disposition, runId: 'other' })],
+  ['wrong disposition candidate', f => f.store.saveOperation({ ...f.disposition, candidate: 'other' })],
+  ['wrong disposition interaction', f => f.store.saveOperation({ ...f.disposition, interactionId: 'other' })],
+  ['nonwaiting disposition', f => f.store.saveOperation({ ...f.disposition, state: 'skipped' })],
+  ['confirmed completion', f => f.store.saveOperation(f.completion)],
+  ['confirmed no-review completion', f => f.store.saveOperation({ ...f.completion, id: `no-review-completion:${f.run.id}` })],
+  ['newer candidate', f => {
+    const run = f.store.dispatch({ ...f.run.request, runId: 'newer' });
+    f.store.acknowledge(run.id);
+    f.store.submit(run.id, { key: 'new', candidate: 'new-candidate', summary: 'New result' });
+    f.store.settle(run.id, { outcome: 'completed', evidence: 'Finished' });
+  }],
+  ['unsettled task work', f => f.store.dispatch({ ...f.run.request, runId: 'newer' })],
+]) {
+  test(`review reconciliation and begin suppress ${name} using only local evidence`, t => {
+    const f = reviewFixture(t);
+    const notification = f.create();
+    change(f);
+    // Begin must recheck without waiting for a reconciliation pass or requiring idle.
+    const begun = f.invoke('notification-begin', { id: notification.id, idle: false });
+    assert.equal(begun.dispatch, false);
+    assert.equal(begun.notification.state, 'superseded');
+    assert.throws(() => f.observe(notification.id, true), { code: 'notification_not_started' });
+    // Also exercise the independent reconciliation suppression path.
+    f.store.saveOperation(notification);
+    assert.ok(reconcileNotifications(f.store).every(item => item.kind !== 'review'));
+    assert.equal(f.store.operation(notification.id).state, 'superseded');
+    assert.ok(f.list().every(item => item.kind !== 'review'));
+    f.restart();
+    assert.equal(f.begin(notification.id).dispatch, false);
+  });
+}
+
+test('new candidates and interactions get distinct review notices without reviving superseded ones', t => {
+  const f = reviewFixture(t);
+  const first = f.create();
+  f.store.recordReview(f.run.id, { ...f.run.review, interactionId: 'second-review' });
+  f.store.saveOperation({ ...f.disposition, interactionId: 'second-review' });
+  const [second] = reconcileNotifications(f.store);
+  assert.notEqual(second.id, first.id);
+  assert.equal(f.store.operation(first.id).state, 'superseded');
+  const run = f.store.dispatch({ ...f.run.request, runId: 'newer' });
+  f.store.acknowledge(run.id);
+  f.store.submit(run.id, { key: 'new', candidate: 'new-candidate', summary: 'New result' });
+  f.store.publication(run.id, { state: 'recorded', commentId: 'new-comment' });
+  f.store.settle(run.id, { outcome: 'completed', evidence: 'Finished' });
+  f.store.recordReview(run.id, { status: 'pending', candidate: 'new-candidate', interactionId: 'new-review' });
+  f.store.saveOperation({ ...f.disposition, id: `review-disposition:${run.id}`, runId: run.id, candidate: 'new-candidate', interactionId: 'new-review' });
+  const [third] = reconcileNotifications(f.store);
+  assert.notEqual(third.id, second.id);
+  assert.equal(third.candidate, 'new-candidate');
+  assert.equal(f.store.operation(second.id).state, 'superseded');
+  assert.deepEqual(f.list(), [third]);
+  f.store.recordReview(run.id, { ...f.store.run(run.id).review, status: 'accepted' });
+  reconcileNotifications(f.store);
+  f.store.recordReview(run.id, { ...f.store.run(run.id).review, status: 'pending' });
+  assert.deepEqual(reconcileNotifications(f.store), []);
+  assert.equal(f.begin(third.id).dispatch, false);
+});
+
+for (const state of ['uncertain', 'announced']) {
+  test(`stale ${state} review delivery survives restarts and epochs without resend`, t => {
+    const f = reviewFixture(t);
+    const notification = f.create();
+    f.begin(notification.id);
+    if (state === 'announced') f.observe(notification.id, true);
+    const attempted = f.store.operation(notification.id);
+    f.store.saveOperation(f.completion);
+    reconcileNotifications(f.store);
+    assert.deepEqual(f.store.operation(notification.id), attempted);
+    f.restart();
+    f.bridge = f.store.saveOperation({ ...f.bridge, epoch: 'epoch-two' });
+    assert.equal(f.begin(notification.id).dispatch, false);
+    assert.throws(() => f.observe(notification.id, true), { code: 'notification_epoch_mismatch' });
+    f.store.db.prepare('DELETE FROM operations WHERE id = ?').run(f.completion.id);
+    assert.deepEqual(reconcileNotifications(f.store), []);
+    assert.deepEqual(f.store.operation(notification.id), attempted);
+  });
+}
+
+test('review notification actions enforce exact origin and company scope and reject unknown IDs', t => {
+  const f = reviewFixture(t);
+  const notification = f.create();
+  for (const [index, change] of [
+    { origin: { ...f.origin, bindingId: 'other' } },
+    { origin: { ...f.origin, conversationId: 'fresh-chat' } },
+    { origin: { ...f.origin, sessionCreatedAt: 124 } },
+    { companyId: 'other-company' },
+  ].entries()) {
+    const foreign = f.store.saveOperation({ ...notification, id: `review-notification:foreign-${index}`, ...change });
+    for (const action of ['notification-begin', 'notification-observe']) {
+      assert.throws(() => f.invoke(action, { id: foreign.id, idle: true }), { code: 'notification_not_found' });
+    }
+  }
+  assert.deepEqual(f.list(), [notification]);
+  assert.deepEqual(f.history(), [notification]);
+  for (const action of ['notification-begin', 'notification-observe']) {
+    for (const id of ['review-notification:unknown', f.disposition.id]) {
+      assert.throws(() => f.invoke(action, { id, idle: true }), { code: 'notification_not_found' });
+    }
+  }
+  assert.throws(() => f.invoke('unknown'), { code: 'invalid_bridge_action' });
+  assert.throws(() => f.invoke('notification-begin', { id: notification.id }), { code: 'native_busy' });
+  assert.equal(f.begin(notification.id).dispatch, true);
+  assert.equal(f.observe(notification.id, false).state, 'uncertain');
+  assert.equal(f.observe(notification.id, true).state, 'announced');
+  // Source detection must cover both prefixes, even historical review records.
+  f.store.saveOperation({ ...f.store.operation(notification.id), messageId: 'reserved-review-source', state: 'superseded' });
+  assert.equal(isNotificationSource(f.store, f.bridge, 'reserved-review-source'), true);
+});
+
+test('review identities include exact origin and ignore newer results from other companies', t => {
+  const f = reviewFixture(t);
+  const origin = { bindingId: 'other', conversationId: 'session-other', sessionCreatedAt: 456 };
+  f.store.saveOperation({ ...f.task, id: 'operator-task:second', request: { ...f.task.request, origin } });
+  f.store.register({ id: 'foreign', companyId: 'foreign-company', agentId: 'worker', harness: 'opencode', instanceId: 'instance', conversationId: 'session-foreign' });
+  const foreign = f.store.dispatch({ ...f.run.request, bindingId: 'foreign', companyId: 'foreign-company', runId: 'foreign' });
+  f.store.acknowledge(foreign.id);
+  f.store.submit(foreign.id, { key: 'foreign', candidate: 'foreign', summary: 'Other company' });
+  const created = reconcileNotifications(f.store);
+  assert.equal(created.length, 2);
+  assert.notEqual(created[0].id, created[1].id);
+  assert.deepEqual(created.map(item => item.origin), [f.origin, origin]);
+  assert.deepEqual(f.list(), [created[0]]);
+  assert.equal(f.begin(created[0].id).dispatch, true);
 });
