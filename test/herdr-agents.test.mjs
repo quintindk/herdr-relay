@@ -119,6 +119,22 @@ test('display falls back to pane label or directory and remains bounded', async 
   assert.equal(b.agents[0].name.length, 240);
 });
 
+test('Paperclip allocated names are retained while observation metadata keeps updating', async t => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const b = backend();
+  const api = async (method, path, body) => {
+    if (method === 'PATCH') assert.equal(body.name, undefined, 'Do not restore a conflicting name');
+    const result = await b.api(method, path, body);
+    if (method === 'POST') { b.agents.at(-1).name = 'work 2'; result.name = 'work 2'; }
+    return result;
+  };
+  await reconcileHerdrAgents(store, api, config, { agents: [agent()] });
+  await reconcileHerdrAgents(store, api, config, { agents: [agent('one', { agent_status: 'working' })] });
+  assert.equal(b.agents[0].name, 'work 2');
+  assert.equal(observedAgents(store)[0].error, null);
+  assert.equal(b.agents[0].metadata.relayObservation.state, 'working');
+});
+
 test('duplicate identities, excluded workspaces, stale snapshots and changed backend ownership fail closed', async t => {
   const store = new Store(':memory:'); t.after(() => store.close());
   const b = backend();
@@ -142,9 +158,10 @@ test('observer subscribes before snapshot, handles delayed session identity and 
   const root = mkdtempSync(join(tmpdir(), 'relay-herdr-socket-'));
   const socketPath = join(root, 'herdr.sock');
   const store = new Store(':memory:'); const b = backend();
-  let agents = [], connections = 0, subscriptionSeen = false; const sockets = new Set();
+  let agents = [], connections = 0, subscriptionSeen = false; const sockets = new Set(), subscriptions = new Set();
   const server = createServer(socket => {
-    sockets.add(socket); socket.on('close', () => sockets.delete(socket));
+    sockets.add(socket); socket.on('close', () => { sockets.delete(socket); subscriptions.delete(socket); });
+    socket.on('error', error => { if (!['EPIPE', 'ECONNRESET'].includes(error.code)) throw error; });
     let buffer = '', subscribed = false;
     socket.setEncoding('utf8');
     socket.on('data', data => {
@@ -152,7 +169,7 @@ test('observer subscribes before snapshot, handles delayed session identity and 
       while ((end = buffer.indexOf('\n')) >= 0) {
         const request = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
         if (request.method === 'events.subscribe') {
-          subscribed = true; subscriptionSeen = true; connections++;
+          subscribed = true; subscriptionSeen = true; connections++; subscriptions.add(socket);
           socket.write(JSON.stringify({ id: request.id, result: { type: 'subscription_started' } }) + '\n');
         } else {
           assert.ok(subscriptionSeen);
@@ -163,14 +180,22 @@ test('observer subscribes before snapshot, handles delayed session identity and 
     });
   });
   await new Promise(resolve => server.listen(socketPath, resolve));
-  const watcher = watchHerdrAgents(store, b.api, { ...config, socketPath }, { intervalMs: 50, reconnectMs: 100 });
+  let slowPassCurrent;
+  const watcher = watchHerdrAgents(store, b.api, { ...config, socketPath }, { intervalMs: 50, reconnectMs: 100,
+    afterReconcile: async current => {
+      if (slowPassCurrent !== undefined) return;
+      await delay(150);
+      slowPassCurrent = current();
+    },
+  });
   t.after(async () => { await watcher.close(); await new Promise(resolve => server.close(resolve)); store.close(); rmSync(root, { recursive: true, force: true }); });
   await until(() => watcher.status()?.state === 'connected');
+  assert.equal(slowPassCurrent, true, 'Periodic ticks must not invalidate a slow enrolment pass without inventory events');
   agents = [agent('one', { agent_session: null })];
-  for (const socket of sockets) socket.write('{"event":"pane.agent_detected","data":{}}\n');
+  for (const socket of subscriptions) socket.write('{"event":"pane.agent_detected","data":{}}\n');
   await delay(100); assert.equal(b.agents.length, 0);
   agents = [agent()];
-  for (const socket of sockets) socket.write('{"event":"pane.updated","data":{}}\n');
+  for (const socket of subscriptions) socket.write('{"event":"pane.updated","data":{}}\n');
   await until(() => b.agents.length === 1 && b.agents[0].status === 'paused');
   for (const socket of sockets) socket.destroy();
   await until(() => observedAgents(store)[0].availability === 'unknown');
@@ -181,6 +206,8 @@ test('observer subscribes before snapshot, handles delayed session identity and 
 test('Herdr source config requires an explicit scoped socket and company', () => {
   assert.deepEqual(herdrConfig(config), config);
   assert.throws(() => herdrConfig({ ...config, socketPath: 'relative' }), { code: 'invalid_herdr_config' });
+  assert.throws(() => herdrConfig({ ...config, bridgeDirectories: ['relative'] }), { code: 'invalid_herdr_config' });
+  assert.deepEqual(herdrConfig({ ...config, bridgeDirectories: ['/work'] }).bridgeDirectories, ['/work']);
   const installation = { node: '/usr/bin/node', cli: '/app/cli.mjs', stateDirectory: '/state', paperclipUrl: 'http://127.0.0.1:3100',
     backendContextFile: '/state/backend.json', herdrConfigFile: '/state/herdr config.json' };
   assert.match(systemdUnit(installation), /"--herdr-config" "\/state\/herdr config.json"/);

@@ -3,6 +3,7 @@ import { retireWorktree } from './resources.mjs';
 import { review } from './review.mjs';
 import { digest, requireValue } from './protocol.mjs';
 import { reconcileCompletions } from './disposition.mjs';
+import { reconcileNotifications } from './completion-notifications.mjs';
 
 export async function retireAccepted(store, caller, target, token, api) {
   const binding = store.binding(target.request.bindingId);
@@ -79,7 +80,10 @@ export function lifecycleRunner(store, operatorApi, locks) {
   const schedule = () => {
     if (stopped) return;
     timer = setTimeout(() => {
-      pending = reconcileCompletions(store, operatorApi, locks).then(() => reconcileRetirements(store, operatorApi, locks)).catch(error => {
+      pending = reconcileCompletions(store, operatorApi, locks).then(() => {
+        reconcileNotifications(store);
+        return reconcileRetirements(store, operatorApi, locks);
+      }).catch(error => {
         console.error(JSON.stringify({ code: error.code ?? 'lifecycle_reconciliation_failed' }));
       }).finally(schedule);
     }, 1000);

@@ -31,6 +31,9 @@ import { bridgeForToken, bridgeRequest, configureBridge, armBridge, disarmBridge
 import { harnessQuestion, harnessReview } from './harness-answers.mjs';
 import { waitForChild } from './dependencies.mjs';
 import { taskPolicy } from './task-policy.mjs';
+import { reconcileBridgeEnrolment } from './bridge-enrolment.mjs';
+import { notificationRequest, isNotificationSource } from './completion-notifications.mjs';
+import { harnessDelegation } from './harness-delegation.mjs';
 
 async function body(req, limit = 128 * 1024) {
   let size = 0;
@@ -100,12 +103,25 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const path = new URL(req.url, 'http://relay').pathname;
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
-        requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review'].includes(path),
+        requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
+          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
         const action = path.split('/').at(-1);
         let result;
-        if (['questions', 'answer', 'reviews', 'review'].includes(action)) {
+        if (['agents', 'delegate', 'delegation-status'].includes(action)) {
           bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          const key = `harness-delegation:${bridge.identity.bindingId}`;
+          requireValue(!publications.has(key), 'operation_busy', 'Delegation operation in progress', 409);
+          const pending = harnessDelegation(store, store.operation(bridge.id), action, input, operatorApi);
+          publications.set(key, pending);
+          try { result = await pending; } finally { publications.delete(key); }
+        } else if (action.startsWith('notification-')) {
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          result = notificationRequest(store, store.operation(bridge.id), action, input);
+        } else if (['questions', 'answer', 'reviews', 'review'].includes(action)) {
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          requireValue(!input.source || !isNotificationSource(store, bridge, input.source.id),
+            'invalid_answer_source', 'A Relay notification is not human authorisation', 409);
           const key = `harness-answer:${bridge.identity.bindingId}`;
           requireValue(!publications.has(key), 'operation_busy', 'Harness question operation in progress', 409);
           const pending = (['reviews', 'review'].includes(action) ? harnessReview : harnessQuestion)(store, store.operation(bridge.id), action, input, operatorApi);
@@ -431,7 +447,18 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   const supervisor = supervise({ store, directory, socketPath, ready: id => runTokens.has(id) });
   const scheduler = scheduleRunner(store, operatorApi);
   const lifecycle = backendContextFile ? lifecycleRunner(store, operatorApi, publications) : null;
-  const observer = observationConfig ? watchHerdrAgents(store, operatorApi, observationConfig) : null;
+  const observer = observationConfig ? watchHerdrAgents(store, operatorApi, observationConfig, {
+    afterReconcile: async current => {
+      if (!observationConfig.bridgeDirectories?.length || publications.has('observed-delivery')) return;
+      const pending = reconcileBridgeEnrolment(store, directory, operatorApi, {
+        ...observationConfig, directories: observationConfig.bridgeDirectories, current,
+      });
+      publications.set('observed-delivery', pending);
+      try {
+        store.saveOperation({ id: 'bridge-enrolment', runId: '', results: await pending });
+      } finally { publications.delete('observed-delivery'); }
+    },
+  }) : null;
   return {
     socketPath, token, store,
     close: async () => {

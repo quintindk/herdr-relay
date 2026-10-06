@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
-import { configureBridge, armBridge, disarmBridge, bridgeRequest, bridgeForToken } from '../src/opencode-bridge.mjs';
+import { configureBridge, armBridge, disarmBridge, refreshBridge, bridgeRequest, bridgeForToken } from '../src/opencode-bridge.mjs';
 import { startService } from '../src/service.mjs';
 import { call } from '../src/client.mjs';
 import { digest } from '../src/protocol.mjs';
@@ -97,3 +97,86 @@ test('bridge credentials cannot access worker results or operator routes', async
   await assert.rejects(call(connection, 'POST', '/bridge/observe', large), { code: 'bridge_identity_mismatch' });
   await assert.rejects(call(connection, 'POST', '/bridge/observe', { padding: 'x'.repeat(4 * 1024 * 1024) }), { code: 'request_too_large' });
 });
+
+test('explicit configure still refuses terminal replacement and refresh cannot change conversation directory', async t => {
+  const f = await fixture(t);
+  const observed = f.store.operation('herdr-agent:test');
+  f.store.saveOperation({ ...observed, placement: { ...observed.placement, terminalId: 'replacement' } });
+  await assert.rejects(configureBridge(f.store, f.directory, f.api, { observedId: observed.id, reserved: true }), { code: 'bridge_conflict' });
+  await assert.rejects(refreshBridge(f.store, f.directory, f.api, { observedId: observed.id }), { code: 'reservation_required' });
+  f.store.saveOperation({ ...observed, placement: { directory: '/another', terminalId: 'replacement' } });
+  await assert.rejects(refreshBridge(f.store, f.directory, f.api, { observedId: observed.id, reserved: true }), { code: 'bridge_conflict' });
+});
+
+test('arm rechecks exact placement and plugin readiness after backend lookup', async t => {
+  const f = await fixture(t);
+  f.invoke('poll');
+  const api = async (...args) => {
+    assert.equal(args[0], 'GET', 'Changed readiness must prevent PATCH');
+    const response = await f.api(...args);
+    f.invoke('poll', { idle: false });
+    return response;
+  };
+  await assert.rejects(armBridge(f.store, f.directory, api, { bindingId: f.configured.bindingId }), { code: 'bridge_unavailable' });
+  assert.equal(f.store.operation(f.id).state, 'configured');
+  f.invoke('poll');
+  const observed = f.store.operation('herdr-agent:test');
+  f.store.saveOperation({ ...observed, placement: { ...observed.placement, directory: '/another' } });
+  await assert.rejects(armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId }), { code: 'bridge_identity_mismatch' });
+});
+
+test('refresh retains native session creation identity and refuses an intervening observation change', async t => {
+  const f = await fixture(t);
+  f.invoke('poll');
+  const observed = f.store.operation('herdr-agent:test');
+  f.store.saveOperation({ ...observed, placement: { ...observed.placement, terminalId: 'replacement' } });
+  const input = { observedId: observed.id, reserved: true };
+  await refreshBridge(f.store, f.directory, f.api, input);
+  assert.throws(() => f.invoke('poll', { terminalId: 'replacement', sessionCreatedAt: 124 }), { code: 'bridge_identity_mismatch' });
+  f.invoke('poll', { terminalId: 'replacement' });
+  const tokenHash = f.store.operation(f.id).tokenHash;
+  f.store.saveOperation({ ...observed, placement: { ...observed.placement, terminalId: 'third' } });
+  const api = async (...args) => {
+    const result = await f.api(...args);
+    f.store.saveOperation({ ...observed, availability: 'offline' });
+    return result;
+  };
+  await assert.rejects(refreshBridge(f.store, f.directory, api, input), { code: 'agent_not_ready' });
+  assert.equal(f.store.operation(f.id).tokenHash, tokenHash);
+  assert.equal(f.store.operation(f.id).identity.terminalId, 'replacement');
+});
+
+test('explicit configure rechecks unsettled work after backend lookup', async t => {
+  const f = await fixture(t);
+  f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });
+  const before = f.store.operation(f.id);
+  const api = async (...args) => { const response = await f.api(...args); f.dispatch(); return response; };
+  await assert.rejects(configureBridge(f.store, f.directory, api, { observedId: 'herdr-agent:test', reserved: true }), { code: 'work_unsettled' });
+  assert.deepEqual(f.store.operation(f.id), before);
+});
+
+for (const [name, drift] of [
+  ['missing relayContextFile', backend => { delete backend.adapterConfig.relayContextFile; }],
+  ['requireReviewDisposition false', backend => { backend.adapterConfig.requireReviewDisposition = false; }],
+  ['heartbeat enabled false', backend => { backend.runtimeConfig.heartbeat.enabled = false; }],
+  ['heartbeat wakeOnDemand false', backend => { backend.runtimeConfig.heartbeat.wakeOnDemand = false; }],
+]) {
+  test(`arming repairs ${name} on an already armed bridge`, async t => {
+    const f = await fixture(t);
+    const input = { bindingId: f.configured.bindingId };
+    f.invoke('poll'); await armBridge(f.store, f.directory, f.api, input);
+    const expected = structuredClone(f.backend);
+    drift(f.backend);
+    let patches = 0;
+    const api = async (...args) => {
+      if (args[0] === 'PATCH') patches++;
+      return f.api(...args);
+    };
+    assert.deepEqual(await armBridge(f.store, f.directory, api, input), { ...input, state: 'armed' });
+    assert.equal(patches, 1, 'Backend drift must bypass the armed fast path');
+    assert.deepEqual(f.backend, expected);
+    assert.equal(f.store.operation(f.id).state, 'armed');
+    await armBridge(f.store, f.directory, api, input);
+    assert.equal(patches, 1, 'Repaired configuration must not trigger another PATCH');
+  });
+}

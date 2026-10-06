@@ -228,7 +228,9 @@ export class Store {
       if (bridge) {
         const observed = this.operation(bridge.identity.observedId);
         requireValue(bridge.state === 'armed' && Date.now() - Date.parse(bridge.lastSeen) < 10000 &&
-          observed?.availability === 'present' && !observed.error && Date.now() - Date.parse(observed.updatedAt) < 15000,
+          observed?.availability === 'present' && !observed.error && Date.now() - Date.parse(observed.updatedAt) < 15000 &&
+          observed.placement?.terminalId === bridge.identity.terminalId && observed.placement?.directory === bridge.identity.directory &&
+          observed.identity.conversationId === bridge.identity.conversationId,
           'bridge_unavailable', 'A live armed bridge is required for dispatch', 409);
       } else if (observedPermit) {
         const observed = this.operation(observedPermit.request.observedId);

@@ -28,6 +28,20 @@ export async function createOperatorTask(store, api, input) {
   const id = `operator-task:${digest([companyId, key])}`;
   const request = { companyId, body: taskPayload(input.payload, `relay-operator:${digest([companyId, key])}`) };
   if (input.payload.relayReviewPolicy !== undefined) request.relayReviewPolicy = input.payload.relayReviewPolicy;
+  if (input.origin !== undefined) {
+    const origin = input.origin;
+    requireValue(origin && Object.keys(origin).every(key => ['bindingId', 'conversationId', 'sessionCreatedAt', 'sourceMessageId', 'sourceDigest'].includes(key)),
+      'invalid_origin', 'Unsupported task origin fields');
+    const binding = store.binding(text(origin.bindingId, 'origin.bindingId'));
+    const bridge = store.operation(`opencode-bridge:${binding.id}`);
+    requireValue(binding.config.companyId === companyId && binding.config.conversationId === origin.conversationId &&
+      bridge?.identity.conversationId === origin.conversationId && bridge.sessionCreatedAt === origin.sessionCreatedAt &&
+      Number.isSafeInteger(origin.sessionCreatedAt) && origin.sessionCreatedAt > 0,
+    'invalid_origin', 'Task origin must identify an enrolled conversation in this company', 409);
+    request.origin = { bindingId: binding.id, conversationId: text(origin.conversationId, 'origin.conversationId'),
+      sessionCreatedAt: origin.sessionCreatedAt, sourceMessageId: text(origin.sourceMessageId, 'origin.sourceMessageId'),
+      sourceDigest: text(origin.sourceDigest, 'origin.sourceDigest') };
+  }
   let operation = store.operation(id);
   if (operation) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Task creation key has a different payload', 409);

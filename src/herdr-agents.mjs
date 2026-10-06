@@ -7,10 +7,14 @@ import { canonical, digest, requireValue, text } from './protocol.mjs';
 export function herdrConfig(input) {
   const config = { socketPath: text(input.socketPath, 'socketPath'),
     machineId: text(input.machineId, 'machineId'), session: text(input.session, 'session'),
-    companyId: text(input.companyId, 'companyId'), excludedWorkspaces: input.excludedWorkspaces ?? [] };
+    companyId: text(input.companyId, 'companyId'), excludedWorkspaces: input.excludedWorkspaces ?? [],
+    ...(input.bridgeDirectories === undefined ? {} : { bridgeDirectories: input.bridgeDirectories }) };
   requireValue(isAbsolute(config.socketPath), 'invalid_herdr_config', 'Herdr socket path must be absolute');
   requireValue(Array.isArray(config.excludedWorkspaces) && config.excludedWorkspaces.every(id => typeof id === 'string' && id.length),
     'invalid_herdr_config', 'excludedWorkspaces must contain workspace IDs');
+  requireValue(config.bridgeDirectories === undefined || (Array.isArray(config.bridgeDirectories) &&
+    config.bridgeDirectories.every(path => typeof path === 'string' && isAbsolute(path))),
+  'invalid_herdr_config', 'bridgeDirectories must contain absolute directory paths');
   return config;
 }
 
@@ -106,11 +110,14 @@ export async function reconcileHerdrAgents(store, api, config, snapshot, current
       // detected terminal's idle/done status into Paperclip task completion.
       const previousObservation = backend.metadata?.relayObservation;
       const { observedAt, ...previousFields } = previousObservation ?? {};
-      const displayChanged = agent && (backend.name !== display.name || backend.title !== display.title);
+      // Paperclip may allocate a unique suffix. Do not repeatedly restore a taken name.
+      const nameChanged = agent && previousObservation?.display?.name !== display.name && backend.name !== display.name;
+      const titleChanged = agent && backend.title !== display.title;
+      const displayChanged = nameChanged || titleChanged;
       if (displayChanged || (!reserved && !bridged && backend.status !== 'paused') || canonical(previousFields) !== canonical(observation) ||
         !observedAt || Date.now() - Date.parse(observedAt) > 60000) {
         await api('PATCH', `/api/agents/${encodeURIComponent(backend.id)}`, {
-          ...(agent ? { name: display.name, title: display.title } : {}),
+          ...(nameChanged ? { name: display.name } : {}), ...(titleChanged ? { title: display.title } : {}),
           ...(!reserved && !bridged ? { status: 'paused' } : {}), metadata: { ...backend.metadata, relayObservation: { ...observation, observedAt: new Date().toISOString() } },
         });
       }
@@ -120,8 +127,8 @@ export async function reconcileHerdrAgents(store, api, config, snapshot, current
   }
 }
 
-export function watchHerdrAgents(store, api, config, { intervalMs = 5000, reconnectMs = 1000 } = {}) {
-  let socket, timer, retry, pending, buffer = '', sequence = 0, closed = false, subscribed = false, busy, dirty = false;
+export function watchHerdrAgents(store, api, config, { intervalMs = 5000, reconnectMs = 1000, afterReconcile = async () => {} } = {}) {
+  let socket, timer, retry, pending, buffer = '', sequence = 0, closed = false, subscribed = false, busy, dirty = false, lastStarted = 0;
   const sourceId = `herdr-source:${digest([config.machineId, config.session, config.companyId])}`;
   const status = (state, error = null) => store.saveOperation({ id: sourceId, runId: '',
     state, error, machineId: config.machineId, session: config.session, companyId: config.companyId, socketPath: config.socketPath });
@@ -162,17 +169,18 @@ export function watchHerdrAgents(store, api, config, { intervalMs = 5000, reconn
   });
   const reconcile = () => {
     if (closed || !subscribed) return;
-    if (busy) { dirty = true; return; }
+    if (busy) return;
+    if (Date.now() - lastStarted < Math.min(intervalMs, 1000)) return;
+    lastStarted = Date.now();
     busy = (async () => {
-      do {
-        dirty = false;
-        try {
-          const snapshot = await request();
+      dirty = false;
+      try {
+        const snapshot = await request();
           await reconcileHerdrAgents(store, api, config, snapshot, () => subscribed && !closed && !dirty);
-          if (subscribed) status('connected');
-        } catch (error) { status(subscribed ? 'error' : 'disconnected', error.code ?? 'reconciliation_failed'); }
-        if (!subscribed) unknown();
-      } while (dirty && subscribed && !closed);
+          if (subscribed && !closed && !dirty) await afterReconcile(() => subscribed && !closed && !dirty);
+        if (subscribed) status('connected');
+      } catch (error) { status(subscribed ? 'error' : 'disconnected', error.code ?? 'reconciliation_failed'); }
+      if (!subscribed) unknown();
     })().finally(() => { busy = null; });
   };
   const open = () => {

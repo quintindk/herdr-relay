@@ -1,13 +1,24 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { call } from './client.mjs';
 import { tool } from '@opencode-ai/plugin';
 
+const delegationArgs = {
+  key: tool.schema.string().min(1), targetBindingId: tool.schema.string().min(1),
+  title: tool.schema.string().min(1), description: tool.schema.string().min(1),
+  relayReviewPolicy: tool.schema.enum(['human', 'none', 'agent_decides']).optional(),
+};
+
 // Loaded by OpenCode, with a binding-scoped credential. Never uses Relay admin auth.
 export default async function relayBridge({ client, directory }, options = {}) {
   if (process.env.HERDR_ENV !== '1') return {};
+  if (options.configDirectory !== undefined) {
+    if (!isAbsolute(options.configDirectory)) throw new Error('Bridge configDirectory must be absolute');
+    return discoverBridge({ client, directory }, options.configDirectory);
+  }
   const files = options.configFiles ?? (options.configFile ? [options.configFile] : []);
   if (!Array.isArray(files) || files.some(file => typeof file !== 'string')) throw new Error('Bridge configFiles must be an array of paths');
   const candidates = files.map(file => JSON.parse(readFileSync(file, 'utf8'))).filter(config => config.directory === directory);
@@ -26,6 +37,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
   const config = matching[0];
   const epoch = randomUUID();
   let stopped = false, active, started = false, pinnedCreation, invocation, conflict = false, answering = false;
+  let timer, nextDelay = 3000, failureDelay = 1000;
   const sdkOptions = () => ({ query: { directory }, signal: AbortSignal.timeout(5000), throwOnError: true });
   const ownPane = async () => {
     const { stdout } = await promisify(execFile)('herdr', ['agent', 'list'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
@@ -36,13 +48,13 @@ export default async function relayBridge({ client, directory }, options = {}) {
     if (matches.length !== 1 || pane.agent !== 'opencode' || pane.agent_session.kind !== 'id' ||
       pane.terminal_id !== config.terminalId || pane.pane_id !== process.env.HERDR_PANE_ID || pane.cwd !== directory) throw new Error('Bridge placement changed');
   };
-  const snapshot = async () => {
+  const snapshot = async (includeMessages = true) => {
     await ownPane();
     const session = (await client.session.get({ ...sdkOptions(), path: { id: config.conversationId } })).data;
     if (session?.id !== config.conversationId || session.directory !== directory || session.time?.archived || session.revert ||
       !session.time?.created || (pinnedCreation && pinnedCreation !== session.time.created)) throw new Error('Native identity changed');
     pinnedCreation = session.time.created;
-    const messages = (await client.session.messages({ ...sdkOptions(), path: { id: config.conversationId } })).data;
+    const messages = includeMessages ? (await client.session.messages({ ...sdkOptions(), path: { id: config.conversationId } })).data : [];
     const statuses = (await client.session.status(sdkOptions())).data;
     if (!Array.isArray(messages) || !statuses || messages.some(m => m.info.sessionID !== config.conversationId)) throw new Error('Native snapshot unavailable');
     return { session, messages, idle: !statuses[config.conversationId] || statuses[config.conversationId].type === 'idle' };
@@ -78,16 +90,61 @@ export default async function relayBridge({ client, directory }, options = {}) {
         source: { id: sourceId, text: content, createdAt: source.info.time.created } }));
     } finally { answering = false; }
   };
+  const delegate = async (args, context) => {
+    if (context.sessionID !== config.conversationId || answering) throw new Error('Tool requires the enrolled conversation');
+    answering = true;
+    try {
+      await active;
+      const snap = await snapshot();
+      const message = snap.messages.find(item => item.info.id === context.messageID);
+      const sourceId = message?.info.role === 'assistant' ? message.info.parentID : message?.info.role === 'user' ? message.info.id : null;
+      const source = [...snap.messages].reverse().find(item => item.info.role === 'user');
+      const content = source?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
+      if (!source || source.info.id !== sourceId || !content?.trim()) throw new Error('Current native user message could not be verified');
+      await context.ask({ permission: 'relay_delegate', patterns: [args.targetBindingId], always: [],
+        metadata: { ...args, sourceMessageId: sourceId, sourceText: content } });
+      const fresh = await snapshot();
+      const latest = [...fresh.messages].reverse().find(item => item.info.role === 'user');
+      const latestText = latest?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
+      if (latest?.info.id !== sourceId || latestText !== content) throw new Error('User message changed; no delegation sent');
+      return JSON.stringify(await rpc('delegate', fresh, { ...args, source: { id: sourceId, text: content, createdAt: source.info.time.created } }));
+    } finally { answering = false; }
+  };
+  const notify = async snap => {
+    const { notifications } = await rpc('notification-list', snap);
+    const notification = notifications.find(item => item.state === 'pending');
+    if (!notification) return;
+    const fresh = await snapshot(false);
+    if (!fresh.idle || answering || stopped) return;
+    const begun = await rpc('notification-begin', fresh, { id: notification.id });
+    if (!begun.dispatch) return;
+    // UI-only: never append to model history or start a new model turn.
+    await client.tui.showToast({ ...sdkOptions(), body: {
+      title: `${notification.identifier} completed`,
+      message: `${notification.title}\n${notification.summary.slice(0, 500)}\nFull result: relay_delegations`,
+      variant: 'success', duration: 15000,
+    } });
+    await rpc('notification-observe', fresh, { id: notification.id, announced: true });
+  };
   const tick = () => {
-    if (stopped || active || answering) return;
+    if (stopped || active) return;
+    if (answering) { schedule(); return; }
     active = (async () => {
-      let snap = await snapshot();
+      nextDelay = 3000;
+      let snap = await snapshot(false);
       const response = await rpc('poll', snap);
       let run = response.run;
-      if (!run) { invocation = null; conflict = false; return; }
+      if (!run) {
+        invocation = null; conflict = false;
+        if (response.state === 'armed' && snap.idle) await notify(snap);
+        return;
+      }
       if (response.state !== 'armed') return;
+      nextDelay = 1000;
       if (!run.invocation) {
         if (!snap.idle || run.cancellationRequested) return;
+        snap = await snapshot();
+        if (!snap.idle) return;
         const latest = [...snap.messages].reverse().find(message => message.info.role === 'user')?.info;
         const model = snap.session.model ? { providerID: snap.session.model.providerID, modelID: snap.session.model.id } : latest?.model;
         const agent = snap.session.agent ?? latest?.agent;
@@ -122,18 +179,39 @@ export default async function relayBridge({ client, directory }, options = {}) {
             : { type: 'tool', state: { status: part.state?.status }, metadata: { providerExecuted: part.metadata?.providerExecuted } }) : [],
       }));
       await rpc('observe', snap, { runId: run.id, conflict, snapshot: { idle: snap.idle, messages } });
-    })().catch(() => { /* Lost replies leave persisted intent. The next tick only observes. */ })
-      .finally(() => { active = null; });
+    })().then(() => { failureDelay = 1000; }).catch(() => {
+      // Lost replies retain durable intent. Back off unavailable/stale hosts
+      // rather than repeatedly loading history and spawning discovery processes.
+      failureDelay = Math.min(failureDelay * 2, 30000);
+      nextDelay = failureDelay;
+    }).finally(() => { active = null; schedule(); });
   };
-  let timer;
+  const schedule = () => {
+    if (stopped) return;
+    clearTimeout(timer);
+    timer = setTimeout(tick, nextDelay); timer.unref();
+  };
   return {
     tool: {
+      relay_agents: tool({ description: 'List ready Relay agents available for delegation. Resolve target binding IDs from this list, not from the user.', args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+          return JSON.stringify(await rpc('agents', await snapshot(false)));
+        } }),
+      relay_delegate: tool({ description: 'Create a task for another ready Relay agent and return completion to this chat. Before calling, state the exact target, task and review policy visibly in chat; the permission popup does not show these fields. Use a stable key per requested task and reuse it on retries. Human review is the default. Do not approve your own work.',
+        args: delegationArgs, execute: delegate }),
+      relay_delegations: tool({ description: 'Read tasks delegated from this exact chat and their current Relay results. Does not delegate again.', args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+          const snap = await snapshot(false);
+          return JSON.stringify({ ...await rpc('delegation-status', snap), ...await rpc('notification-history', snap) });
+        } }),
       relay_questions: {
         description: 'List pending Relay clarification questions for this conversation. Resolve internal IDs yourself; do not ask the user to copy them. Read-only.',
         args: {},
         async execute(_, context) {
           if (context.sessionID !== config.conversationId) throw new Error('Tool is scoped to the enrolled conversation');
-          return JSON.stringify(await rpc('questions', await snapshot()));
+          return JSON.stringify(await rpc('questions', await snapshot(false)));
         },
       },
       relay_answer: tool({
@@ -145,7 +223,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
         description: 'List pending exact candidate reviews for this enrolled conversation. Read-only; resolve internal IDs without asking the user to type them.', args: {},
         async execute(_, context) {
           if (context.sessionID !== config.conversationId) throw new Error('Tool is scoped to the enrolled conversation');
-          return JSON.stringify(await rpc('reviews', await snapshot()));
+          return JSON.stringify(await rpc('reviews', await snapshot(false)));
         },
       },
       relay_review: tool({
@@ -154,10 +232,72 @@ export default async function relayBridge({ client, directory }, options = {}) {
         execute: (args, context) => relayDecision('review', args, context),
       }),
     },
-    async config() { if (!started) { started = true; timer = setInterval(tick, 1000); timer.unref(); tick(); } },
+    async config() { if (!started) { started = true; tick(); } },
     async 'chat.message'(input, output) {
       if (input.sessionID === config.conversationId && invocation && (input.messageID ?? output.message.id) !== invocation.messageId) conflict = true;
     },
-    async dispose() { stopped = true; clearInterval(timer); await active; },
+    async dispose() { stopped = true; clearTimeout(timer); await active; },
+  };
+}
+
+// Keep one exact-conversation plugin alive. Discovery never grants enrolment authority.
+async function discoverBridge(input, configDirectory) {
+  let hooks, selected, timer, pending, stopped = false;
+  const refresh = async () => {
+    if (stopped) return;
+    const { stdout } = await promisify(execFile)('herdr', ['agent', 'list'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+    const agents = JSON.parse(stdout).result?.agents;
+    if (!Array.isArray(agents)) throw new Error('Invalid Herdr inventory');
+    const matches = agents.filter(agent => agent.pane_id === process.env.HERDR_PANE_ID && agent.agent === 'opencode' &&
+      agent.cwd === input.directory && agent.agent_session?.kind === 'id');
+    let files = [];
+    try { files = readdirSync(configDirectory).filter(name => name.endsWith('.json')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const configs = matches.length === 1 ? files.map(name => {
+      const path = join(configDirectory, name);
+      return { path, config: JSON.parse(readFileSync(path, 'utf8')) };
+    }).filter(({ config }) => config.directory === input.directory && config.terminalId === matches[0].terminal_id &&
+      config.conversationId === matches[0].agent_session.value) : [];
+    const next = configs.length === 1 ? configs[0] : null;
+    // Missing discovery is not replacement proof. Preserve the epoch so an
+    // in-flight invocation can settle when the same placement reappears.
+    if (!next) return;
+    const identity = next && JSON.stringify(next.config);
+    if (identity === selected) return;
+    await hooks?.dispose(); hooks = undefined; selected = undefined;
+    if (stopped) return;
+    const loaded = await relayBridge(input, { configFile: next.path });
+    if (stopped) { await loaded.dispose(); return; }
+    hooks = loaded; selected = identity;
+    await hooks.config();
+  };
+  const tick = () => {
+    if (stopped || pending) return;
+    pending = refresh().catch(() => {}).finally(() => {
+      pending = undefined;
+      if (!stopped) { timer = setTimeout(tick, 5000); timer.unref(); }
+    });
+  };
+  const execute = name => async (args, context) => {
+    await pending;
+    if (!hooks) throw new Error('Relay bridge is not enrolled for this chat yet. Check Relay agent readiness.');
+    return hooks.tool[name].execute(args, context);
+  };
+  return {
+    tool: {
+      relay_agents: tool({ description: 'List ready Relay agents available for delegation.', args: {}, execute: execute('relay_agents') }),
+      relay_delegate: tool({ description: 'Delegate a task to another ready Relay agent, with completion returned to this chat. Before calling, state the exact target, task and review policy visibly in chat; the permission popup does not show these fields. Resolve targetBindingId using relay_agents. Reuse the same key for retries. Human review is the default.',
+        args: delegationArgs, execute: execute('relay_delegate') }),
+      relay_delegations: tool({ description: 'Read tasks delegated from this exact chat and their results.', args: {}, execute: execute('relay_delegations') }),
+      relay_questions: tool({ description: 'List pending Relay clarification questions for this chat.', args: {}, execute: execute('relay_questions') }),
+      relay_reviews: tool({ description: 'List pending exact candidate reviews for this chat.', args: {}, execute: execute('relay_reviews') }),
+      relay_answer: tool({ description: 'Record an explicit human answer to a pending Relay clarification, with permission and native source checks.',
+        args: { answer: tool.schema.string().min(1).max(4000), interactionId: tool.schema.string().optional() }, execute: execute('relay_answer') }),
+      relay_review: tool({ description: 'Record an explicit human accept/reject decision for a Relay candidate. Never approve your own work.',
+        args: { decision: tool.schema.enum(['accept', 'reject']), interactionId: tool.schema.string().optional(), reason: tool.schema.string().max(4000).optional() }, execute: execute('relay_review') }),
+    },
+    async config() { tick(); },
+    async 'chat.message'(input, output) { await hooks?.['chat.message'](input, output); },
+    async dispose() { stopped = true; clearTimeout(timer); await pending; await hooks?.dispose(); },
   };
 }

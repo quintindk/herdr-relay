@@ -56,6 +56,67 @@ messages belonging to the exact invocation, not unrelated assistant history.
 
 ## Configure
 
+### Daily Use
+
+To opt folders into automatic enrolment, set `bridgeDirectories` to their absolute
+paths in the service's Herdr configuration. This authorises Relay to reserve the
+unique observed OpenCode chat in each listed folder. Other folders remain
+observation-only. Configure the global OpenCode plugin with:
+
+```json
+["file:///absolute/path/herdr-relay/src/opencode-bridge-plugin.mjs",
+ {"configDirectory":"/absolute/state/herdr-relay/bridges"}]
+```
+
+Restart OpenCode once after installing this mode. The plugin discovers matching
+credentials every five seconds and follows fresh chats without another config
+edit or restart. It matches the exact current pane, terminal and conversation,
+not just the folder. Tools remain visible while enrolment is pending.
+
+The observer configures each unique current chat and arms it only after an idle
+plugin readiness report. A fresh conversation retains its own observed Paperclip
+registration and gets a new binding. Old bridges are disarmed, not deleted or
+retargeted. Any unsettled old delivery in that folder blocks replacement. Duplicate
+live chats in a folder block enrolment. A terminal replacement for the same chat
+rotates its bridge credential and requires fresh readiness. History is never
+replayed into a new conversation.
+
+Inspect `herdr-relay operation inspect bridge-enrolment` for per-folder results.
+`configured` means awaiting the plugin, not ready to delegate. Removing a folder
+from the allowlist does not revoke an existing reservation; disarm it explicitly.
+Do not type into an agent while its delegated task is executing. Automatic
+enrolment does not make simultaneous human and agent input atomic.
+
+### Delegate From Chat
+
+`relay_agents` lists ready peers in the same company. `relay_delegate` creates an
+operator task after checking the current native user message and requesting tool
+permission. The company and return address come from the authenticated bridge,
+not caller-supplied routing. Use a stable key for retries. Human review is the
+default. Before invoking the tool, state the proposed target, task and review
+policy in the chat: OpenCode's generic permission popup does not render custom
+metadata. Active Relay workers must use their worker-scoped child-task protocol.
+
+Each created task records its exact originating binding, conversation, native
+creation time and user-message attribution. Once Relay confirms accepted or
+no-review completion, it queues one durable return notice. The origin plugin
+waits until idle and shows a 15-second completion toast. `relay_delegations`
+returns task results and notification history, including missed or uncertain
+announcements. Notifications never append to model history, change model settings,
+start a model turn or count as human approval.
+
+The outbox survives service restarts and does not follow replacement chats.
+`announced` means the TUI API accepted the toast, not that a human read it. A lost
+send or acknowledgement remains `uncertain` and is not resent automatically.
+Later notices are still attempted. Legacy tasks created without an origin are
+not retrospectively assigned a return address. CLI/operator callers must include
+an explicit validated origin through the task API to receive return notices.
+
+Installing these tools requires one restart of each originating OpenCode process.
+Worker processes do not need a restart merely to execute a delegated task.
+
+### Explicit Enrolment
+
 Write a private input file with the exact ID from `herdr-relay agent observed`:
 
 ```json
@@ -118,6 +179,31 @@ Disarming refuses active/unsettled work. Credentials and history remain availabl
 for later enrolment; no native resources are removed.
 
 ## Verification
+
+### Polling Cost
+
+Idle/configured bridges perform a lightweight identity/status/Relay poll every
+three seconds after the previous poll finishes. They do not fetch conversation
+history when Relay has no active run. Work-bearing polls retain full history and
+correlation checks at a one-second cadence. Answer/review tools load history only
+when invoked; read-only pending-item lists use lightweight snapshots.
+
+Discovery, identity and transport failures back off from two seconds up to thirty
+seconds, resetting after a successful poll. No overlapping ticks or retries after
+plugin disposal are allowed. Herdr event-triggered reconciliation is capped at
+one pass per second, retaining the five-second periodic inventory repair.
+
+CPU investigation found that the old plugin loaded full history every second even
+without a task, and stale terminal bindings retried discovery at that same rate.
+Regression tests assert zero idle history reads and bounded failure retries.
+Existing OpenCode processes must restart to load these changes. Relay service
+restart alone cannot replace their plugin code. Stale terminal identities remain
+refused; performance changes do not silently rebind a restored pane.
+
+The investigation also measured high CPU in OpenCode processes not enrolled in
+this bridge. These optimisations do not establish that all OpenCode CPU use comes
+from Relay. Measure per-process CPU deltas over a fixed interval, distinguishing
+active model turns and other plugins from idle bridge overhead.
 
 Automated tests cover explicit arming, wrong credentials/identity, one-shot
 delivery, lost responses, changed plugin epoch, concurrent input, result-required
