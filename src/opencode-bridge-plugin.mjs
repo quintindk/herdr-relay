@@ -5,11 +5,19 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { call } from './client.mjs';
 import { tool } from '@opencode-ai/plugin';
+import { digest } from './protocol.mjs';
 
 const delegationArgs = {
   key: tool.schema.string().min(1), targetBindingId: tool.schema.string().min(1),
   title: tool.schema.string().min(1), description: tool.schema.string().min(1),
   relayReviewPolicy: tool.schema.enum(['human', 'none', 'agent_decides']).optional(),
+  parentTaskId: tool.schema.string().min(1).optional(),
+};
+const workerArgs = {
+  key: tool.schema.string().min(1), mode: tool.schema.enum(['create', 'adopt']),
+  repository: tool.schema.string().min(1), branch: tool.schema.string().optional(), base: tool.schema.string().optional(),
+  label: tool.schema.string().optional(), directory: tool.schema.string().optional(), observedId: tool.schema.string().optional(),
+  trustRepository: tool.schema.boolean().optional(),
 };
 
 // Loaded by OpenCode, with a binding-scoped credential. Never uses Relay admin auth.
@@ -76,7 +84,11 @@ export default async function relayBridge({ client, directory }, options = {}) {
       const content = source.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (!content.trim()) throw new Error('No current user text found');
       const list = action === 'answer' ? 'questions' : 'reviews';
-      const candidates = (await rpc(list, snap))[list];
+      const pending = await rpc(list, snap);
+      const retries = action === 'review' ? (pending.decisions ?? []).filter(item => item.sourceMessageId === sourceId &&
+        item.sourceDigest === digest(content) && item.decision === args.decision &&
+        (!args.interactionId || item.interactionId === args.interactionId)) : [];
+      const candidates = retries.length ? retries : pending[list];
       const selected = args.interactionId ? candidates.find(item => item.interactionId === args.interactionId)
         : candidates.length === 1 ? candidates[0] : null;
       if (!selected) throw new Error('No unique pending item. List Relay questions/reviews and ask which issue the user means; never ask them to type an internal ID.');
@@ -87,10 +99,11 @@ export default async function relayBridge({ client, directory }, options = {}) {
       const currentText = current?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (current?.info.id !== sourceId || currentText !== content) throw new Error('The user message changed; nothing was sent');
       return JSON.stringify(await rpc(action, fresh, { ...args, interactionId: selected.interactionId,
+        ...(action === 'review' ? { candidate: selected.candidate } : {}),
         source: { id: sourceId, text: content, createdAt: source.info.time.created } }));
     } finally { answering = false; }
   };
-  const delegate = async (args, context) => {
+  const delegate = async (args, context, action = 'delegate') => {
     if (context.sessionID !== config.conversationId || answering) throw new Error('Tool requires the enrolled conversation');
     answering = true;
     try {
@@ -101,28 +114,29 @@ export default async function relayBridge({ client, directory }, options = {}) {
       const source = [...snap.messages].reverse().find(item => item.info.role === 'user');
       const content = source?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (!source || source.info.id !== sourceId || !content?.trim()) throw new Error('Current native user message could not be verified');
-      await context.ask({ permission: 'relay_delegate', patterns: [args.targetBindingId], always: [],
+      await context.ask({ permission: action === 'delegate' ? 'relay_delegate' : 'relay_worker_prepare',
+        patterns: [action === 'delegate' ? args.targetBindingId : args.repository], always: [],
         metadata: { ...args, sourceMessageId: sourceId, sourceText: content } });
       const fresh = await snapshot();
       const latest = [...fresh.messages].reverse().find(item => item.info.role === 'user');
       const latestText = latest?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (latest?.info.id !== sourceId || latestText !== content) throw new Error('User message changed; no delegation sent');
-      return JSON.stringify(await rpc('delegate', fresh, { ...args, source: { id: sourceId, text: content, createdAt: source.info.time.created } }));
+      return JSON.stringify(await rpc(action, fresh, { ...args, source: { id: sourceId, text: content, createdAt: source.info.time.created } }));
     } finally { answering = false; }
   };
   const notify = async snap => {
-    const { notifications } = await rpc('notification-list', snap);
+    const { notifications } = await rpc('notification-list', snap, { includeReviews: true });
     const notification = notifications.find(item => item.state === 'pending');
     if (!notification) return;
     const fresh = await snapshot(false);
     if (!fresh.idle || answering || stopped) return;
-    const begun = await rpc('notification-begin', fresh, { id: notification.id });
+    const begun = await rpc('notification-begin', fresh, { id: notification.id, includeReviews: true });
     if (!begun.dispatch) return;
     // UI-only: never append to model history or start a new model turn.
     await client.tui.showToast({ ...sdkOptions(), body: {
-      title: `${notification.identifier} completed`,
-      message: `${notification.title}\n${notification.summary.slice(0, 500)}\nFull result: relay_delegations`,
-      variant: 'success', duration: 15000,
+      title: `${notification.identifier} ${notification.kind === 'review' ? 'awaiting your review' : 'completed'}`,
+      message: `${notification.title}\n${notification.summary.slice(0, 500)}\n${notification.kind === 'review' ? 'Review here: relay_reviews' : 'Full result: relay_delegations'}`,
+      variant: notification.kind === 'review' ? 'info' : 'success', duration: 15000,
     } });
     await rpc('notification-observe', fresh, { id: notification.id, announced: true });
   };
@@ -193,6 +207,13 @@ export default async function relayBridge({ client, directory }, options = {}) {
   };
   return {
     tool: {
+      relay_workers: tool({ description: 'List this chat\'s worker preparation receipts and verified adoption candidates in its authorised repository. Read-only.', args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+          return JSON.stringify(await rpc('workers', await snapshot(false)));
+        } }),
+      relay_worker_prepare: tool({ description: 'Prepare an isolated interactive Herdr worker or adopt an exact existing worker. State repository, mode, branch/base or exact adoption target and any trust request visibly before calling. Requires an operator-configured repository scope. Preparation does not assign work or grant cleanup rights. Reuse the key on retries; inspect relay_workers until ready before relay_delegate.',
+        args: workerArgs, execute: (args, context) => delegate(args, context, 'prepare-worker') }),
       relay_agents: tool({ description: 'List ready Relay agents available for delegation. Resolve target binding IDs from this list, not from the user.', args: {},
         async execute(_, context) {
           if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
@@ -285,6 +306,9 @@ async function discoverBridge(input, configDirectory) {
   };
   return {
     tool: {
+      relay_workers: tool({ description: 'List scoped worker preparations and verified worktree adoption candidates. Read-only.', args: {}, execute: execute('relay_workers') }),
+      relay_worker_prepare: tool({ description: 'Create an isolated interactive Herdr worker or adopt an exact existing worktree agent. State repository, mode, branch/base or exact adoption target and any trust request before calling. Preparation is not task assignment or cleanup authority. Reuse the key on retries and inspect relay_workers for readiness.',
+        args: workerArgs, execute: execute('relay_worker_prepare') }),
       relay_agents: tool({ description: 'List ready Relay agents available for delegation.', args: {}, execute: execute('relay_agents') }),
       relay_delegate: tool({ description: 'Delegate a task to another ready Relay agent, with completion returned to this chat. Before calling, state the exact target, task and review policy visibly in chat; the permission popup does not show these fields. Resolve targetBindingId using relay_agents. Reuse the same key for retries. Human review is the default.',
         args: delegationArgs, execute: execute('relay_delegate') }),

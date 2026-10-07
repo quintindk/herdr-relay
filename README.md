@@ -72,11 +72,18 @@ herdr plugin link /absolute/path/herdr-relay
 
 ## Documentation
 
+- [Herdr Relay skill](skills/herdr-relay/SKILL.md) replaces the former envoy skill.
+  Install it as `~/.config/opencode/skills/herdr-relay/SKILL.md`, then restart
+  OpenCode. It teaches the Relay chat tools, origin-bound human review and safe
+  recovery. [Relay work](skills/relay-work/SKILL.md) remains the worker CLI protocol.
 - [Current handover](docs/handover.md) and [specification](docs/spec-v2.md).
 - [Optional local model gateway](docs/model-gateway.md).
 - [Local Paperclip service](docs/paperclip-service.md).
 - [Herdr-first agent registration](docs/herdr-agent-registration.md).
 - [Opt-in OpenCode delivery bridge](docs/opencode-bridge.md).
+- [Interactive workers](docs/interactive-workers.md): scoped create/adopt tools,
+  asynchronous readiness, child-task waits and origin-bound human review.
+  Fixture-verified implementation, not live certification of worker provisioning.
 - [Native OpenCode](docs/native-opencode-v1.md), [native Hermes](docs/native-hermes-v1.md)
   and [managed runtimes](docs/managed-runtimes.md).
 - [Task commands](docs/task-commands.md), [questions](docs/questions-v1.md),

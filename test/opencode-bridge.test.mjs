@@ -70,6 +70,129 @@ test('bridge persists one native message, verifies its terminal parent and settl
   assert.throws(() => f.store.dispatch({ ...run.request, runId: 'next' }), { code: 'bridge_unavailable' });
 });
 
+for (const lookup of ['bindingId', 'observedId']) {
+  test(`pending worker revocation by ${lookup} blocks new dispatch and queued begin but preserves replay`, async t => {
+    const f = await fixture(t);
+    f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });
+    const target = { ...f.store.operation(f.id).identity };
+    if (lookup === 'bindingId') target.observedId = 'herdr-agent:previous';
+    const grant = f.store.saveOperation({ id: 'herdr-worker:test', runId: '', state: 'armed', target,
+      ...(lookup === 'bindingId' ? { bindingId: f.configured.bindingId } : {}) });
+    const run = f.dispatch();
+    f.store.saveOperation({ ...grant, state: 'blocked', blocker: 'disarm_pending', disarmed: false });
+    assert.equal(f.store.operation(f.id).state, 'armed', 'The bridge stays armed until existing work settles');
+    assert.throws(() => f.store.dispatch({ ...run.request, runId: 'next' }), { code: 'worker_grant_inactive' });
+    assert.deepEqual(f.dispatch(), run, 'An exact dispatch replay must bypass admission');
+    assert.throws(() => f.invoke('begin', { runId: run.id, priorUserIds: [] }), { code: 'worker_grant_inactive' });
+    assert.deepEqual(f.store.run(run.id), run, 'Refused begin must not persist a native invocation');
+    assert.equal(f.store.runs().length, 1);
+    assert.throws(() => f.store.dispatch({ ...run.request, taskId: 'changed' }), { code: 'dispatch_conflict' });
+  });
+}
+
+test('explicit armed replacement admits dispatch and begin while retaining the superseded grant', async t => {
+  const f = await fixture(t);
+  f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });
+  const old = f.store.saveOperation({ id: 'herdr-worker:old', runId: '', state: 'blocked', blocker: 'grant_revoked',
+    disarmed: true, bindingId: f.configured.bindingId, target: { ...f.store.operation(f.id).identity } });
+  assert.throws(f.dispatch, { code: 'worker_grant_inactive' });
+  f.store.saveOperation({ id: 'herdr-worker:replacement', runId: '', state: 'armed',
+    bindingId: f.configured.bindingId, target: { ...old.target }, supersedes: [old.id] });
+  assert.doesNotThrow(() => f.store.assertWorkerAdmission(f.configured.bindingId));
+  const run = f.dispatch();
+  assert.equal(run.nativeState, 'unclaimed');
+  assert.equal(f.invoke('begin', { runId: run.id, priorUserIds: [] }).dispatch, true);
+  assert.deepEqual(f.store.operation(old.id), old);
+});
+
+for (const scenario of ['old-only', 'no-supersedes', 'wrong-id', 'disarm_pending', 'old-not-blocked',
+  'replacement-prepared', 'replacement-configured', 'replacement-blocked', 'conflicting-armed', 'conflicting-blocked',
+  ...['observedId', 'conversationId', 'terminalId', 'directory', 'paneId', 'workspaceId', 'tabId'].map(field => `wrong-${field}`)]) {
+  test(`worker supersession rejects ${scenario} for admission, dispatch and queued begin`, async t => {
+    const f = await fixture(t);
+    f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });
+    const run = f.dispatch(), target = { ...f.store.operation(f.id).identity };
+    const old = { id: 'herdr-worker:old', runId: '', state: 'blocked', blocker: 'grant_revoked', disarmed: true,
+      bindingId: f.configured.bindingId, target: { ...target } };
+    const replacement = { id: 'herdr-worker:replacement', runId: '', state: 'armed',
+      bindingId: f.configured.bindingId, target, supersedes: [old.id] };
+    if (scenario === 'no-supersedes') delete replacement.supersedes;
+    if (scenario === 'wrong-id') replacement.supersedes = ['herdr-worker:unrelated'];
+    if (scenario === 'disarm_pending') { old.disarmed = false; old.blocker = 'disarm_pending'; }
+    if (scenario === 'old-not-blocked') old.state = 'armed';
+    if (scenario.startsWith('replacement-')) replacement.state = scenario.slice('replacement-'.length);
+    if (scenario.startsWith('wrong-') && scenario !== 'wrong-id') old.target[scenario.slice('wrong-'.length)] = 'previous';
+    f.store.saveOperation(old);
+    if (scenario !== 'old-only') f.store.saveOperation(replacement);
+    if (scenario.startsWith('conflicting-')) f.store.saveOperation({ ...replacement, id: 'herdr-worker:conflict',
+      state: scenario.slice('conflicting-'.length) });
+    const records = f.store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%' ORDER BY id").all();
+    assert.throws(() => f.store.assertWorkerAdmission(f.configured.bindingId), { code: 'worker_grant_inactive' });
+    assert.throws(() => f.store.dispatch({ ...run.request, runId: 'next' }), { code: 'worker_grant_inactive' });
+    assert.throws(() => f.invoke('begin', { runId: run.id, priorUserIds: [] }), { code: 'worker_grant_inactive' });
+    assert.deepEqual(f.store.run(run.id), run);
+    assert.equal(f.store.runs().length, 1);
+    assert.deepEqual(f.store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%' ORDER BY id").all(), records);
+  });
+}
+
+test('pending worker revocation allows existing invocation replay, observation and settlement', async t => {
+  const f = await fixture(t);
+  f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });
+  const grant = f.store.saveOperation({ id: 'herdr-worker:test', runId: '', state: 'armed',
+    bindingId: f.configured.bindingId, target: { ...f.store.operation(f.id).identity } });
+  const run = f.dispatch();
+  const started = f.invoke('begin', { runId: run.id, priorUserIds: [] });
+  assert.equal(started.dispatch, true);
+  f.store.saveOperation({ ...grant, state: 'blocked', blocker: 'disarm_pending', disarmed: false });
+  const replay = f.invoke('begin', { runId: run.id, priorUserIds: [] });
+  assert.equal(replay.dispatch, false);
+  assert.deepEqual(replay.run.invocation, started.run.invocation);
+  assert.deepEqual(f.dispatch(), f.store.run(run.id));
+  const { messageId, prompt } = started.run.invocation;
+  const messages = [{ info: { id: messageId, role: 'user', sessionID: 'conversation' }, parts: [{ type: 'text', text: prompt }] },
+    { info: { id: 'assistant', role: 'assistant', sessionID: 'conversation', parentID: messageId,
+      time: { created: 1, completed: 2 }, finish: 'stop' }, parts: [] }];
+  f.invoke('observe', { runId: run.id, snapshot: { messages, idle: true } });
+  assert.notEqual(f.store.run(run.id).nativeState, 'settled');
+  f.store.acknowledge(run.id);
+  f.store.submit(run.id, { key: 'one', candidate: 'result', summary: 'Answer' });
+  const settled = f.invoke('observe', { runId: run.id, snapshot: { messages, idle: true } }).run;
+  assert.equal(settled.nativeState, 'settled');
+  assert.equal(settled.settlement.outcome, 'completed');
+  assert.deepEqual(f.dispatch(), settled, 'Settled dispatch replay must also bypass admission');
+  assert.throws(() => f.store.dispatch({ ...run.request, runId: 'next' }), { code: 'worker_grant_inactive' });
+});
+
+test('pending worker revocation does not turn cancellation into a fresh begin', async t => {
+  const f = await fixture(t);
+  f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });
+  const run = f.dispatch();
+  f.store.acknowledge(run.id);
+  f.store.cancel(run.id);
+  f.store.saveOperation({ id: 'herdr-worker:test', runId: '', bindingId: f.configured.bindingId,
+    target: { ...f.store.operation(f.id).identity }, state: 'blocked', blocker: 'disarm_pending', disarmed: false });
+  const cancelled = f.store.run(run.id);
+  assert.equal(cancelled.cancellationRequested, true);
+  assert.equal(cancelled.invocation, undefined);
+  assert.deepEqual(f.invoke('begin', { runId: run.id, priorUserIds: [] }), { run: cancelled, dispatch: false });
+  assert.deepEqual(f.store.run(run.id), cancelled);
+});
+
+for (const field of ['conversationId', 'terminalId', 'directory']) {
+  test(`armed worker grant rejects changed ${field} for dispatch and queued begin`, async t => {
+    const f = await fixture(t);
+    f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });
+    const grant = f.store.saveOperation({ id: 'herdr-worker:test', runId: '', state: 'armed',
+      bindingId: f.configured.bindingId, target: { ...f.store.operation(f.id).identity } });
+    const run = f.dispatch();
+    f.store.saveOperation({ ...grant, target: { ...grant.target, [field]: 'replacement' } });
+    assert.throws(() => f.store.dispatch({ ...run.request, runId: 'next' }), { code: 'worker_grant_inactive' });
+    assert.throws(() => f.invoke('begin', { runId: run.id, priorUserIds: [] }), { code: 'worker_grant_inactive' });
+    assert.deepEqual(f.store.run(run.id), run);
+  });
+}
+
 test('concurrent user input and changed terminal identity fail closed', async t => {
   const f = await fixture(t);
   f.invoke('poll'); await armBridge(f.store, f.directory, f.api, { bindingId: f.configured.bindingId });

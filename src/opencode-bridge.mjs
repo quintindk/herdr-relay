@@ -226,6 +226,7 @@ export function bridgeRequest(store, bridgeId, action, input, ready) {
     requireValue(input.idle === true && Array.isArray(input.priorUserIds) && input.priorUserIds.length <= 4000 &&
       input.priorUserIds.every(id => typeof id === 'string'), 'native_busy', 'Validated idle snapshot required', 409);
     if (active.invocation || active.cancellationRequested) return { run: active, dispatch: false };
+    store.assertWorkerAdmission(identity.bindingId);
     const run = store.beginNative(active.id, promptFor(active, bridge.workerContext).trim(), input.priorUserIds);
     store.saveOperation({ ...bridge, ready: false });
     return { run, dispatch: Boolean(run.invocation) };

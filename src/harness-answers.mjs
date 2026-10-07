@@ -1,4 +1,6 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
+import { taskOrigins } from './task-origin.mjs';
+import { isNotificationSource } from './completion-notifications.mjs';
 
 export function parseRelayAnswer(value) {
   const match = typeof value === 'string' && value.match(/^Relay answer ([a-zA-Z0-9-]+):\s*([\s\S]+)$/i);
@@ -86,61 +88,165 @@ export async function harnessQuestion(store, bridge, action, input, api) {
 }
 
 export async function harnessReview(store, bridge, action, input, api) {
-  requireValue(bridge.state === 'armed', 'bridge_unavailable', 'Review relay requires an armed bridge', 409);
-  const runs = store.runs(bridge.identity.bindingId);
+  const caller = store.binding(bridge.identity.bindingId);
+  const checkCaller = () => {
+    const current = store.operation(bridge.id);
+    requireValue(current?.state === 'armed', 'bridge_unavailable', 'Review relay requires an armed bridge', 409);
+    requireValue(canonical(current.identity) === canonical(bridge.identity) && current.tokenHash === bridge.tokenHash &&
+      current.epoch === bridge.epoch && current.sessionCreatedAt === bridge.sessionCreatedAt &&
+      current.controlRevision === bridge.controlRevision && canonical(store.binding(caller.id)) === canonical(caller) &&
+      Number.isSafeInteger(bridge.sessionCreatedAt) && bridge.sessionCreatedAt > 0 &&
+      !caller.lifecycleState && caller.config.conversationId === bridge.identity.conversationId,
+    'bridge_identity_mismatch', 'Review caller identity or session changed', 409);
+    requireValue(store.runs(caller.id).every(run => run.nativeState === 'settled'),
+      'conversation_busy', 'Another Relay turn is active in this conversation', 409);
+  };
+  const scope = run => {
+    if (run.request.companyId !== caller.config.companyId) return null;
+    if (run.request.bindingId === caller.id && run.conversationId === bridge.identity.conversationId) return 'local';
+    const tasks = taskOrigins(store);
+    return tasks.some(task => task.state === 'recorded' && task.request?.companyId === caller.config.companyId &&
+      task.receipt?.companyId === caller.config.companyId && task.receipt.id === run.request.taskId &&
+      task.request.body?.assigneeAgentId === run.request.agentId && task.request.origin?.bindingId === caller.id &&
+      task.request.origin.conversationId === bridge.identity.conversationId &&
+      task.request.origin.sessionCreatedAt === bridge.sessionCreatedAt) ? 'delegated' : null;
+  };
+  const currentScope = run => {
+    checkCaller();
+    const taskRuns = store.runs().filter(item => item.request.companyId === run.request.companyId && item.request.taskId === run.request.taskId);
+    const latest = taskRuns.find(item => item.result);
+    if (taskRuns.some(item => item.nativeState !== 'settled') || latest?.id !== run.id ||
+      latest.settlement?.outcome !== 'completed' || latest.publication?.state !== 'recorded' ||
+      !latest.review || latest.review.candidate !== latest.result.candidate ||
+      latest.review.interactionId !== run.review?.interactionId || canonical(latest.result) !== canonical(run.result) ||
+      canonical(latest.request) !== canonical(run.request)) return null;
+    return scope(latest);
+  };
+  checkCaller();
+  const listing = action === 'reviews';
+  if (!listing) requireValue(['accept', 'reject'].includes(input.decision), 'invalid_review_action', 'Choose accept or reject');
+  const interactionId = listing ? null : text(input.interactionId, 'interactionId');
+  const reviewOperation = run => {
+    const operation = store.operation(`harness-review:${digest([run.request.companyId, run.review.interactionId])}`);
+    return operation?.runId === run.id && operation.request?.candidate === run.result.candidate &&
+      operation.request.interactionId === run.review.interactionId &&
+      (operation.request.companyId === undefined || operation.request.companyId === run.request.companyId) &&
+      (operation.request.taskId === undefined || operation.request.taskId === run.request.taskId) ? operation : null;
+  };
   const reviews = [];
-  for (const run of runs.filter(run => run.nativeState === 'settled' && run.settlement?.outcome === 'completed' &&
-    run.publication.state === 'recorded' && run.review)) {
-    const latest = store.runs().find(item => item.request.companyId === run.request.companyId && item.request.taskId === run.request.taskId && item.result);
-    if (latest?.id !== run.id) continue;
+  for (const run of store.runs().filter(run => run.result && run.review && (listing || run.review.interactionId === interactionId))) {
+    const reviewScope = currentScope(run);
+    if (!reviewScope) continue;
+    if (!listing) requireValue(input.candidate === undefined || input.candidate === run.result.candidate,
+      'stale_candidate', 'The permission-selected candidate is no longer current', 409);
     const path = `/api/issues/${encodeURIComponent(run.request.taskId)}`;
     const issue = await api('GET', path);
+    if (currentScope(run) !== reviewScope) continue;
+    const operation = reviewOperation(run);
     if (issue.id !== run.request.taskId || issue.companyId !== run.request.companyId ||
-      issue.assigneeAgentId !== run.request.agentId || ['done', 'cancelled'].includes(issue.status)) continue;
-    const item = (await api('GET', `${path}/interactions`)).find(item => item.id === run.review.interactionId &&
+      issue.assigneeAgentId !== run.request.agentId || issue.executionRunId || issue.status === 'cancelled' ||
+      (issue.status === 'done' && operation?.request.decision !== 'accept')) continue;
+    const interactions = await api('GET', `${path}/interactions`);
+    if (currentScope(run) !== reviewScope) continue;
+    const item = interactions.find(item => item.id === run.review.interactionId &&
       item.kind === 'request_confirmation' && item.idempotencyKey === `relay-review:${run.id}:${digest(run.result)}` &&
       canonical(item.payload?.target) === canonical({ type: 'custom', key: 'herdr-relay-candidate', revisionId: run.result.candidate, label: run.id }));
-    if (item) reviews.push({ run, item, issue });
+    if (item && (issue.status !== 'done' || item.status === 'accepted')) reviews.push({ run, item, issue, scope: reviewScope });
   }
-  if (action === 'reviews') return { reviews: reviews.filter(({ item }) => item.status === 'pending').map(({ run, item, issue }) => ({
-    taskId: issue.id, identifier: issue.identifier, interactionId: item.id, candidate: run.result.candidate, summary: run.result.summary,
-  })) };
-  requireValue(['accept', 'reject'].includes(input.decision), 'invalid_review_action', 'Choose accept or reject');
-  const interactionId = text(input.interactionId, 'interactionId');
+  if (listing) {
+    const decisions = store.runs().filter(run => run.result && run.review && currentScope(run)).flatMap(run => {
+      const operation = reviewOperation(run);
+      const request = operation?.request;
+      if (!request || request.bindingId !== caller.id || request.conversationId !== bridge.identity.conversationId ||
+        (request.sessionCreatedAt !== undefined && request.sessionCreatedAt !== bridge.sessionCreatedAt) ||
+        !['accept', 'reject'].includes(request.decision) || !['uncertain', 'recorded'].includes(operation.state)) return [];
+      const { interactionId, candidate, decision, sourceMessageId, sourceDigest } = request;
+      const receipt = operation.receipt;
+      return [{ interactionId, candidate, decision, sourceMessageId, sourceDigest, state: operation.state,
+        ...(operation.state === 'recorded' && receipt?.interactionId === interactionId &&
+          receipt.status === (decision === 'accept' ? 'accepted' : 'rejected') ? { receipt: {
+            interactionId, status: receipt.status, attribution: receipt.attribution, continuation: receipt.continuation,
+          } } : {}) }];
+    });
+    return { reviews: reviews.filter(({ run, item, scope }) => item.status === 'pending' && currentScope(run) === scope).map(({ run, item, issue, scope }) => ({
+      scope, runId: run.id, taskId: issue.id, identifier: typeof issue.identifier === 'string' ? issue.identifier.slice(0, 128) : null,
+      title: typeof issue.title === 'string' ? issue.title.slice(0, 512) : null,
+      interactionId: item.id, candidate: run.result.candidate, summary: run.result.summary,
+    })), ...(decisions.length ? { decisions } : {}) };
+  }
   const selected = reviews.find(({ item }) => item.id === interactionId);
   requireValue(selected, 'review_not_found', 'No current exact candidate review in this conversation', 404);
   const { run, item, issue } = selected;
   const source = input.source;
-  requireValue(source && typeof source.text === 'string' && source.text.trim() && source.text.length <= 16000 &&
-    Number.isSafeInteger(source.createdAt) && source.createdAt > Date.parse(item.createdAt ?? run.createdAt) &&
-    typeof source.id === 'string' && !runs.some(item => item.invocation?.messageId === source.id) && !run.invocation?.priorUserIds.includes(source.id),
-  'invalid_answer_source', 'A later native user message, not the worker prompt, is required');
+  const check = () => {
+    requireValue(currentScope(run) === selected.scope, 'stale_candidate', 'Candidate or review scope changed', 409);
+    requireValue(source && typeof source.text === 'string' && source.text.trim() && source.text.length <= 16000 &&
+      Number.isSafeInteger(source.createdAt) && source.createdAt > Date.parse(item.createdAt ?? run.createdAt) &&
+      source.createdAt >= bridge.sessionCreatedAt && source.createdAt <= Date.now() &&
+      typeof source.id === 'string' && source.id.trim() && source.id.length <= 65536 &&
+      source.synthetic !== true && source.ignored !== true && (source.role === undefined || source.role === 'user') &&
+      !isNotificationSource(store, bridge, source.id) &&
+      !store.runs().some(item => item.invocation?.messageId === source.id) &&
+      !store.run(run.id).invocation?.priorUserIds?.includes(source.id),
+    'invalid_answer_source', 'A later native human message, not a notification or worker prompt, is required');
+  };
+  check();
   const reason = input.decision === 'reject' ? text(input.reason, 'reason') : null;
   requireValue(!reason || reason.length <= 4000, 'invalid_request', 'Review reason exceeds 4000 characters');
+  const checkIssue = (value, readingDecision = false) => requireValue(value.id === run.request.taskId && value.companyId === run.request.companyId &&
+    value.assigneeAgentId === run.request.agentId && !value.executionRunId && value.status !== 'cancelled' &&
+    (value.status !== 'done' || (operation && input.decision === 'accept' && (readingDecision || item.status === 'accepted'))),
+  'review_scope_changed', 'Task is no longer available for this exact candidate review', 409);
+  const freshIssue = await api('GET', `/api/issues/${encodeURIComponent(run.request.taskId)}`);
+  check();
   const id = `harness-review:${digest([issue.companyId, interactionId])}`;
   const request = { bindingId: bridge.identity.bindingId, conversationId: bridge.identity.conversationId,
+    companyId: run.request.companyId, taskId: run.request.taskId, sessionCreatedAt: bridge.sessionCreatedAt,
     interactionId, candidate: run.result.candidate, sourceMessageId: source.id, sourceDigest: digest(source.text), decision: input.decision, reason };
+  // No await between the shared company/interaction intent check and persistence:
+  // origin and worker chats must not race through separate binding-level locks.
   let operation = store.operation(id);
   if (operation) {
-    requireValue(canonical(operation.request) === canonical(request), 'review_conflict', 'Another harness decision was already recorded', 409);
-    if (operation.state === 'recorded') return operation.receipt;
+    requireValue(operation.runId === run.id && canonical({ companyId: run.request.companyId, taskId: run.request.taskId,
+      sessionCreatedAt: bridge.sessionCreatedAt, ...operation.request }) === canonical(request),
+    'review_conflict', 'Another harness decision was already recorded', 409);
   }
+  checkIssue(freshIssue);
   const targetStatus = input.decision === 'accept' ? 'accepted' : 'rejected';
   const receipt = { interactionId, status: targetStatus, attribution: 'Relay operator connector; native source recorded in private harness-review receipt.',
     continuation: 'End this turn. Relay/Paperclip own subsequent completion; do not mark the issue Done yourself.' };
+  if (operation?.state === 'recorded') {
+    requireValue(operation.receipt?.interactionId === interactionId && operation.receipt.status === targetStatus,
+      'review_conflict', 'Recorded receipt does not match this decision', 409);
+    if (item.status === targetStatus) store.recordReview(run.id, { interactionId, candidate: run.result.candidate,
+      status: targetStatus, observedAt: new Date().toISOString() });
+    return operation.receipt;
+  }
   if (item.status === targetStatus) {
+    store.recordReview(run.id, { interactionId, candidate: run.result.candidate, status: targetStatus, observedAt: new Date().toISOString() });
     store.saveOperation({ id, runId: run.id, request, state: 'recorded', receipt }); return receipt;
   }
   requireValue(item.status === 'pending', 'review_conflict', 'Paperclip review already has another decision', 409);
   requireValue(!operation, 'review_uncertain', 'Review was attempted but is not confirmed; no repost is authorised', 409);
-  requireValue(!runs.some(item => item.nativeState !== 'settled') && !issue.executionRunId, 'conversation_busy', 'Task or conversation has active work', 409);
   // The accept endpoint has no provenance field. Retain it locally rather than
   // posting a comment that could expire this review or wake another worker.
   operation = store.saveOperation({ id, runId: run.id, request, state: 'uncertain' });
   const path = `/api/issues/${encodeURIComponent(issue.id)}/interactions`;
   await api('POST', `${path}/${encodeURIComponent(item.id)}/${input.decision}`, reason ? { reason } : {});
-  const updated = (await api('GET', path)).find(row => row.id === item.id);
-  requireValue(updated?.status === targetStatus, 'review_uncertain', 'Backend has not confirmed the decision', 409);
+  check();
+  const updatedIssue = await api('GET', `/api/issues/${encodeURIComponent(run.request.taskId)}`);
+  check();
+  // Done can race the readback. Only this persisted acceptance may reconcile it,
+  // and the following interaction read must still confirm the exact candidate.
+  checkIssue(updatedIssue, true);
+  const interactions = await api('GET', path);
+  check();
+  const updated = interactions.find(row => row.id === item.id);
+  requireValue(updated?.status === targetStatus && updated.kind === 'request_confirmation' &&
+    updated.idempotencyKey === `relay-review:${run.id}:${digest(run.result)}` &&
+    canonical(updated.payload?.target) === canonical({ type: 'custom', key: 'herdr-relay-candidate', revisionId: run.result.candidate, label: run.id }),
+  'review_uncertain', 'Backend has not confirmed the exact candidate decision', 409);
+  store.recordReview(run.id, { interactionId, candidate: run.result.candidate, status: targetStatus, observedAt: new Date().toISOString() });
   store.saveOperation({ ...operation, state: 'recorded', receipt });
   return receipt;
 }

@@ -8,13 +8,18 @@ export function herdrConfig(input) {
   const config = { socketPath: text(input.socketPath, 'socketPath'),
     machineId: text(input.machineId, 'machineId'), session: text(input.session, 'session'),
     companyId: text(input.companyId, 'companyId'), excludedWorkspaces: input.excludedWorkspaces ?? [],
-    ...(input.bridgeDirectories === undefined ? {} : { bridgeDirectories: input.bridgeDirectories }) };
+    ...(input.bridgeDirectories === undefined ? {} : { bridgeDirectories: input.bridgeDirectories }),
+    ...(input.workerRepositories === undefined ? {} : { workerRepositories: input.workerRepositories }) };
   requireValue(isAbsolute(config.socketPath), 'invalid_herdr_config', 'Herdr socket path must be absolute');
   requireValue(Array.isArray(config.excludedWorkspaces) && config.excludedWorkspaces.every(id => typeof id === 'string' && id.length),
     'invalid_herdr_config', 'excludedWorkspaces must contain workspace IDs');
   requireValue(config.bridgeDirectories === undefined || (Array.isArray(config.bridgeDirectories) &&
     config.bridgeDirectories.every(path => typeof path === 'string' && isAbsolute(path))),
   'invalid_herdr_config', 'bridgeDirectories must contain absolute directory paths');
+  requireValue(config.workerRepositories === undefined || (Array.isArray(config.workerRepositories) &&
+    config.workerRepositories.every(item => item && Object.keys(item).every(key => ['repository', 'worktreeRoot'].includes(key)) &&
+      typeof item.repository === 'string' && isAbsolute(item.repository) && typeof item.worktreeRoot === 'string' && isAbsolute(item.worktreeRoot))),
+  'invalid_herdr_config', 'workerRepositories requires exact absolute repository and worktreeRoot pairs');
   return config;
 }
 

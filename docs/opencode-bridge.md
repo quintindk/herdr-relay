@@ -115,6 +115,30 @@ an explicit validated origin through the task API to receive return notices.
 Installing these tools requires one restart of each originating OpenCode process.
 Worker processes do not need a restart merely to execute a delegated task.
 
+### Review From Origin
+
+`relay_reviews` includes both human reviews local to this conversation and results
+of tasks delegated from this exact originating chat. Each delegated entry is
+matched against its recorded company, assignee, native conversation and creation
+time. A new chat in the same folder does not inherit review authority.
+
+After a published result reaches a pending review, Relay queues a distinct
+"awaiting your review" toast. Inspect the result here, then explicitly accept or
+reject it using `relay_review`; rejection requires a reason. The plugin retains
+the permission-selected candidate and the current human message as attribution.
+Neither worker output nor a notification is human approval. Human approval from
+the worker's own chat remains supported, but it competes for the same durable
+decision intent as approval from the origin.
+
+An unresolved decision prevents new dispatch for that task. Lost replies never
+authorise another acceptance POST. An exact retry from the same user message can
+reconcile the recorded decision even if completion already moved the task to
+Done. Review receipts appear in `relay_reviews` separately from pending items.
+New candidates, changed assignment and different originating chats cannot reuse
+the decision. Old plugin processes do not receive review-ready toasts until they
+restart with support for the new notification kind, preventing false completion
+labels. Completion toasts continue to work unchanged.
+
 ### Explicit Enrolment
 
 Write a private input file with the exact ID from `herdr-relay agent observed`:

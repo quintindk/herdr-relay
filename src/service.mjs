@@ -34,6 +34,7 @@ import { taskPolicy } from './task-policy.mjs';
 import { reconcileBridgeEnrolment } from './bridge-enrolment.mjs';
 import { notificationRequest, isNotificationSource } from './completion-notifications.mjs';
 import { harnessDelegation } from './harness-delegation.mjs';
+import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers } from './herdr-workers.mjs';
 
 async function body(req, limit = 128 * 1024) {
   let size = 0;
@@ -87,6 +88,16 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   chmodSync(tokenPath, 0o600);
   const token = readFileSync(tokenPath, 'utf8').trim();
   const store = new Store(join(directory, 'relay.sqlite'));
+  // Fence persisted grants before accepting requests, even when all provisioning
+  // permissions or the Herdr source were removed while the service was stopped.
+  for (const row of store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%'").all()) {
+    const grant = JSON.parse(row.data);
+    if (!observationConfig || ['companyId', 'machineId', 'session', 'socketPath'].some(key => grant.scope?.[key] !== observationConfig[key]) ||
+      !observationConfig.workerRepositories?.some(item => item.repository === grant.allowed?.allowed?.repository &&
+        item.worktreeRoot === grant.allowed?.allowed?.worktreeRoot)) {
+      store.saveOperation({ ...grant, state: 'blocked', blocker: 'grant_revoked', disarmed: false });
+    }
+  }
   try { store.pinBackend(new URL(paperclipUrl).origin); }
   catch (error) { store.close(); throw error; }
   const publications = new Map();
@@ -104,11 +115,21 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
-          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
+          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/workers', '/bridge/prepare-worker',
+          '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
         const action = path.split('/').at(-1);
         let result;
-        if (['agents', 'delegate', 'delegation-status'].includes(action)) {
+        if (['workers', 'prepare-worker'].includes(action)) {
+          requireValue(observationConfig, 'worker_repository_forbidden', 'A configured Herdr source is required', 409);
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          const live = store.operation(bridge.id);
+          if (action === 'workers') result = await inspectHerdrWorkers(store, live, observationConfig);
+          else {
+            const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...fields } = input;
+            result = await prepareHerdrWorker(store, live, fields, observationConfig);
+          }
+        } else if (['agents', 'delegate', 'delegation-status'].includes(action)) {
           bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
           const key = `harness-delegation:${bridge.identity.bindingId}`;
           requireValue(!publications.has(key), 'operation_busy', 'Delegation operation in progress', 409);
@@ -131,6 +152,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
       if (bindingId && req.method === 'POST') {
+        requireValue(!path.startsWith('/bridge/'), 'forbidden', 'Bridge credentials required', 403);
         requireValue(!store.binding(bindingId).lifecycleState, 'binding_inactive', 'Retiring or retired bindings cannot initiate writes', 403);
       }
       const adminOnly = () => requireValue(admin, 'forbidden', 'Operator credentials required', 403);
@@ -315,7 +337,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       }
       else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check|disposition|wait-child|child))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check|disposition|wait-child|wait-children|child))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -377,9 +399,9 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           publications.set(key, pending);
           try { result = await pending; } finally { publications.delete(key); }
         }
-        else if (req.method === 'POST' && ['wait-child', 'child'].includes(action)) {
+        else if (req.method === 'POST' && ['wait-child', 'wait-children', 'child'].includes(action)) {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials required', 503);
-          if (action === 'wait-child') {
+          if (action !== 'child') {
             const key = `dependency:${id}`;
             requireValue(!publications.has(key), 'operation_busy', 'Dependency update in progress', 409);
             const pending = waitForChild(store, run, runTokens.get(id), api, input);
@@ -459,9 +481,20 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       } finally { publications.delete('observed-delivery'); }
     },
   }) : null;
+  let workersStopped = false, workerTimer, workerPending = Promise.resolve();
+  const scheduleWorkers = () => {
+    if (workersStopped || !observationConfig) return;
+    workerTimer = setTimeout(() => {
+      workerPending = reconcileHerdrWorkers(store, directory, operatorApi, observationConfig, publications)
+        .catch(error => console.error(JSON.stringify({ code: error.code ?? 'worker_reconciliation_failed' })))
+        .finally(scheduleWorkers);
+    }, 3000);
+  };
+  scheduleWorkers();
   return {
     socketPath, token, store,
     close: async () => {
+      workersStopped = true; clearTimeout(workerTimer); await workerPending;
       await observer?.close();
       await scheduler.close();
       await lifecycle?.close();

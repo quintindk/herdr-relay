@@ -7,6 +7,7 @@ import { Store } from '../src/store.mjs';
 import { digest } from '../src/protocol.mjs';
 import { harnessDelegation } from '../src/harness-delegation.mjs';
 import { reconcileNotifications } from '../src/completion-notifications.mjs';
+import { mutate } from '../src/operations.mjs';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'relay-delegation-'));
@@ -263,7 +264,7 @@ test('status is restricted to operator task origin identity and company with all
     ['binding', { companyId: 'company', origin: { ...origin, bindingId: 'worker' } }],
     ['conversation', { companyId: 'company', origin: { ...origin, conversationId: 'fresh' } }],
     ['creation', { companyId: 'company', origin: { ...origin, sessionCreatedAt: 124 } }],
-  ]) f.store.saveOperation({ ...task, id: `operator-task:${id}`, request });
+  ]) f.store.saveOperation({ ...task, id: `operator-task:${id}`, request, receipt: { ...task.receipt, id } });
   f.store.saveOperation({ ...task, id: 'worker-task:not-operator' });
   f.store.saveOperation({ ...task, id: 'operator-task:wrong-receipt', receipt: { id: 'task-1', companyId: 'other' } });
   f.store.saveOperation({ ...task, id: 'operator-task:uncertain', state: 'uncertain', receipt: undefined });
@@ -282,6 +283,81 @@ test('status is restricted to operator task origin identity and company with all
   const replacement = f.store.saveOperation({ ...f.bridge, sessionCreatedAt: 999 });
   assert.deepEqual(await f.invoke('delegation-status', {}, replacement), { delegations: [] });
   assert.equal(f.calls.length, 0);
+});
+
+test('uncertain creation status is scoped intent only, even with a receipt claiming another root', async t => {
+  const f = fixture(t);
+  const delegated = await f.invoke();
+  const root = f.store.operation(delegated.id);
+  const run = f.run();
+  f.store.save({ ...run, nativeState: 'settled', result: { candidate: 'private-candidate', summary: 'Private result' } }, 'test.result');
+  const other = f.add('other');
+  const origin = { ...root.request.origin, bindingId: 'other', conversationId: 'session-other' };
+  const intent = f.store.saveOperation({ ...root, id: 'operator-task:uncertain', state: 'uncertain',
+    request: { ...root.request, origin }, receipt: { ...root.receipt, title: 'Private title' } });
+  for (const [id, request] of [
+    ['company', { companyId: 'foreign', origin }],
+    ['conversation', { companyId: 'company', origin: { ...origin, conversationId: 'fresh' } }],
+    ['session', { companyId: 'company', origin: { ...origin, sessionCreatedAt: 124 } }],
+    ['binding', root.request],
+  ]) f.store.saveOperation({ ...intent, id: `operator-task:uncertain-${id}`, request });
+  f.restart();
+  assert.deepEqual(await f.invoke('delegation-status', {}, other), {
+    delegations: [{ id: intent.id, state: 'uncertain', receipt: null, runs: [] }],
+  });
+  const owned = await f.invoke('delegation-status');
+  assert.equal(owned.delegations.find(item => item.id === root.id).runs[0].summary, 'Private result');
+});
+
+test('conflicting recorded roots cannot expose results through status or a recorded delegate retry', async t => {
+  const f = fixture(t);
+  const delegated = await f.invoke();
+  const root = f.store.operation(delegated.id);
+  const run = f.run();
+  f.store.save({ ...run, nativeState: 'settled', result: { candidate: 'private', summary: 'Private result' } }, 'test.result');
+  const other = f.add('other');
+  f.store.saveOperation({ ...root, id: 'operator-task:conflict', request: { ...root.request,
+    origin: { ...root.request.origin, bindingId: 'other', conversationId: 'session-other' } } });
+  f.restart();
+  assert.deepEqual(await f.invoke('delegation-status'), { delegations: [] });
+  assert.deepEqual(await f.invoke('delegation-status', {}, other), { delegations: [] });
+  const calls = f.calls.length;
+  assert.deepEqual(await f.invoke(), { id: root.id, state: 'recorded', receipt: null, runs: [] });
+  assert.equal(f.calls.length, calls);
+});
+
+test('status inherits child and grandchild results only through verified recorded lineage', async t => {
+  const f = fixture(t);
+  const delegated = await f.invoke();
+  const root = f.store.operation(delegated.id);
+  const entries = [root];
+  let parentRun = f.run();
+  for (const id of ['child', 'grandchild']) {
+    const child = await mutate(f.store, parentRun, 'worker-token', async (_run, _token, method, _path, body) => {
+      assert.equal(method, 'POST');
+      return { ...body, id, companyId: 'company', identifier: `TEST-${id}` };
+    }, { key: id, kind: 'task.create', payload: { title: id, parentId: parentRun.request.taskId, assigneeAgentId: 'agent-worker' } });
+    entries.push(child);
+    f.store.cancel(parentRun.id);
+    parentRun = f.run('worker', id);
+    f.store.save({ ...parentRun, result: { summary: `${id} result`, candidate: `${id} candidate` } }, 'test.result');
+  }
+  const other = f.add('other');
+  f.restart();
+  const status = await f.invoke('delegation-status');
+  assert.equal(status.delegations.length, 3);
+  for (const entry of entries) {
+    const item = status.delegations.find(item => item.id === entry.id);
+    assert.equal(item.receipt.id, entry.receipt.id);
+    assert.equal(item.runs.length, 1);
+    if (entry !== root) assert.equal(item.runs[0].summary, `${entry.receipt.id} result`);
+  }
+  assert.deepEqual(await f.invoke('delegation-status', {}, other), { delegations: [] });
+  assert.deepEqual(await f.invoke('delegation-status', {}, f.target), { delegations: [] });
+  f.store.saveOperation({ ...root, id: 'operator-task:conflict', request: { ...root.request,
+    origin: { ...root.request.origin, bindingId: 'other', conversationId: 'session-other' } } });
+  assert.deepEqual(await f.invoke('delegation-status'), { delegations: [] });
+  assert.deepEqual(await f.invoke('delegation-status', {}, other), { delegations: [] });
 });
 
 test('recorded delegation origin returns completion only to its exact original native session', async t => {

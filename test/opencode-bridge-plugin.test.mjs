@@ -106,7 +106,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   } };
   hooks = await plugin({ client, directory: '/work' }, { configDirectory });
   const tools = hooks.tool;
-  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_delegate', 'relay_delegations', 'relay_questions', 'relay_review', 'relay_reviews']);
+  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_delegate', 'relay_delegations', 'relay_questions', 'relay_review', 'relay_reviews', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();
   for (const tool of Object.values(tools)) {
     assert.equal(typeof tool.execute, 'function');
@@ -290,7 +290,8 @@ test('stale placement backs off discovery and disposal prevents further retries'
   assert.equal(calls(), stoppedAt, 'No background retry after dispose');
 });
 
-test('discovery delegates verified native user requests and announces UI-only completions without retrying uncertain toasts', async t => {
+for (const loseAcceptanceResponse of [false, true]) {
+test(`discovery delegates native requests, announces UI-only results and accepts exact reviews from the origin chat (lost acceptance response: ${loseAcceptanceResponse})`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'relay-plugin-delegation-'));
   const bin = join(root, 'bin'); mkdirSync(bin);
   const directory = join(root, 'relay');
@@ -300,6 +301,7 @@ test('discovery delegates verified native user requests and announces UI-only co
   const prior = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
   Object.assign(process.env, { PATH: `${bin}:${prior.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: 'pane' });
   const requests = [];
+  let reviewItem, reviewIssue;
   const backend = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : undefined;
@@ -309,6 +311,22 @@ test('discovery delegates verified native user requests and announces UI-only co
     else if (req.method === 'GET' && req.url === '/api/agents/worker') res.end(JSON.stringify({ id: 'worker', companyId: 'company' }));
     else if (req.method === 'POST' && req.url === '/api/companies/company/issues') {
       res.end(JSON.stringify({ ...body, id: 'task', identifier: 'TEST-1', companyId: 'company' }));
+    } else if (req.method === 'GET' && req.url === '/api/issues/task') {
+      res.end(JSON.stringify(reviewIssue));
+    } else if (req.method === 'GET' && req.url === '/api/issues/task/interactions') {
+      res.end(JSON.stringify([reviewItem]));
+    } else if (req.method === 'POST' && req.url === '/api/issues/task/interactions/review/accept') {
+      reviewItem.status = 'accepted';
+      if (loseAcceptanceResponse) {
+        reviewIssue.status = 'done';
+        res.statusCode = 502;
+        res.end(JSON.stringify({ message: 'Response lost after backend accepted the review' }));
+      } else res.end(JSON.stringify(reviewItem));
+    } else if (req.method === 'GET' && req.url === '/api/heartbeat-runs/backend-worker-review') {
+      res.end(JSON.stringify({ id: 'backend-worker-review', companyId: 'company', agentId: 'worker', status: 'succeeded' }));
+    } else if (req.method === 'PATCH' && req.url === '/api/issues/task') {
+      Object.assign(reviewIssue, body);
+      res.end(JSON.stringify(reviewIssue));
     } else { res.statusCode = 404; res.end(JSON.stringify({ message: 'Unexpected backend request' })); }
   });
   let hooks, service;
@@ -336,7 +354,7 @@ test('discovery delegates verified native user requests and announces UI-only co
       ...(agentId === 'worker' ? { ready: true, epoch: 'worker-epoch', sessionCreatedAt: 456 } : {}) });
   }
   const bridge = () => store.operation(`opencode-bridge:${configured.origin.bindingId}`);
-  const notifications = () => store.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion-notification:%' ORDER BY rowid").all()
+  const notifications = () => store.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion-notification:%' OR id LIKE 'review-notification:%' ORDER BY rowid").all()
     .map(row => JSON.parse(row.data));
   const until = async (predicate, message) => {
     // The fixture has no Herdr observer. Refresh its unchanged placement before waiting for native polls.
@@ -494,12 +512,278 @@ test('discovery delegates verified native user requests and announces UI-only co
   assert.deepEqual(status.delegations[0].runs.find(item => item.id === nextRun.id), { id: nextRun.id, deliveryState: 'acknowledged', nativeState: 'settled',
     outcome: 'completed', publicationState: 'recorded', reviewStatus: null, candidate: 'next-revision', summary: 'Follow-up checks passed' });
   assert.equal(status.delegations[0].runs.length, 2);
-  await hooks.dispose();
-  assert.deepEqual(prompts, [], 'UI-only completion must never call the native prompt endpoint, even with noReply');
-  assert.deepEqual(normalPrompts, [], 'UI-only completion must never start a promptAsync model turn');
   assert.deepEqual(messages, historyBeforeNotifications, 'Completion toasts must not alter native conversation history');
-  assert.deepEqual(nativeSession, sessionBeforeNotifications, 'Completion toasts must not alter the native model, variant or agent');
   assert.equal(requests.length, 3, 'Status reads and notifications must not create more backend work');
+
+  // A published worker result awaiting human review is not a completed task.
+  store.saveOperation({ ...store.operation(`opencode-bridge:${configured.worker.bindingId}`), lastSeen: new Date().toISOString() });
+  const reviewRun = store.dispatch({ ...run.request, runId: 'backend-worker-review' });
+  store.acknowledge(reviewRun.id);
+  store.submit(reviewRun.id, { key: 'review-result', candidate: 'review-revision', summary: 'Ready for human review' });
+  store.publication(reviewRun.id, { state: 'recorded' });
+  store.settle(reviewRun.id, { outcome: 'completed', evidence: 'Fixture review candidate finished' });
+  store.recordReview(reviewRun.id, { interactionId: 'review', status: 'pending', candidate: 'review-revision' });
+  reviewIssue = { ...delegated.receipt, status: 'in_review' };
+  reviewItem = { id: 'review', kind: 'request_confirmation', status: 'pending', createdAt: new Date().toISOString(),
+    idempotencyKey: `relay-review:${reviewRun.id}:${digest(store.run(reviewRun.id).result)}`,
+    payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: 'review-revision', label: reviewRun.id } } };
+  store.saveOperation({ id: `review-disposition:${reviewRun.id}`, runId: reviewRun.id, state: 'waiting',
+    candidate: 'review-revision', interactionId: 'review' });
+  const reviewNotifications = () => notifications().filter(item => item.runId === reviewRun.id);
+  const reviewWrites = () => requests.slice(3).filter(item => item.method !== 'GET');
+  const readsBeforeReviewToast = historyReads;
+  await until(() => reviewNotifications()[0]?.state === 'announced', 'Origin did not receive its review-ready toast');
+  const reviewNotification = reviewNotifications()[0];
+  assert.equal(reviewNotification.kind, 'review');
+  assert.equal(reviewNotification.candidate, 'review-revision');
+  assert.equal(reviewNotification.interactionId, 'review');
+  assert.deepEqual(reviewNotification.origin, notification.origin);
+  assert.equal(toasts.length, 3);
+  assert.deepEqual(toasts[2].query, { directory: '/work' });
+  assert.equal(toasts[2].path, undefined);
+  assert.deepEqual(toasts[2].body, { title: 'TEST-1 awaiting your review',
+    message: `${args.title}\nReady for human review\nReview here: relay_reviews`, variant: 'info', duration: 15000 });
+  assert.equal(deliveryIntents[2].find(item => item.id === reviewNotification.id).state, 'uncertain');
+  assert.equal(historyReads, readsBeforeReviewToast, 'Review toasts must not load native history');
+  assert.deepEqual(messages, historyBeforeNotifications, 'Review toasts must not append native messages');
+  assert.equal(approvals.length, 2, 'Review-ready notification must not request permission or accept the candidate');
+  assert.deepEqual(reviewNotifications(), [reviewNotification], 'No completion notification before acceptance');
+  assert.equal(store.operation(`completion:${reviewRun.id}`), null);
+  assert.equal(reviewIssue.status, 'in_review');
+  assert.deepEqual(reviewWrites(), []);
+
+  const selected = { scope: 'delegated', runId: reviewRun.id, taskId: 'task', identifier: 'TEST-1', title: args.title,
+    interactionId: 'review', candidate: 'review-revision', summary: 'Ready for human review' };
+  assert.deepEqual(JSON.parse(await tools.relay_reviews.execute({}, context)), { reviews: [selected] });
+  const reviewSource = { info: { id: 'review-human', role: 'user', sessionID: 'conversation', time: { created: Date.now() } },
+    parts: [{ type: 'text', text: 'Accept this result please' }] };
+  assert.ok(reviewSource.info.time.created > Date.parse(reviewItem.createdAt));
+  assert.ok(reviewSource.info.time.created <= Date.now());
+  messages.push(reviewSource, { info: { id: 'review-turn', role: 'assistant', sessionID: 'conversation', parentID: 'review-human' }, parts: [] });
+  const reviewContext = { ...context, messageID: 'review-turn' };
+  await assert.rejects(tools.relay_review.execute({ decision: 'accept' }, { ...reviewContext,
+    ask: async () => { throw new Error('Permission denied'); } }), /Permission denied/);
+  for (const change of ['text', 'id']) {
+    await assert.rejects(tools.relay_review.execute({ decision: 'accept' }, { ...reviewContext, ask: async () => {
+      if (change === 'text') reviewSource.parts[0].text = 'Do not accept this result';
+      else reviewSource.info.id = 'changed-human';
+    } }), /user message changed; nothing was sent/);
+    reviewSource.parts[0].text = 'Accept this result please'; reviewSource.info.id = 'review-human';
+  }
+
+  // Reusing the interaction ID must not authorise a candidate replaced during permission.
+  const originalRun = store.run(reviewRun.id), originalReview = structuredClone(reviewItem);
+  try {
+    await assert.rejects(tools.relay_review.execute({ decision: 'accept' }, { ...reviewContext, ask: async permission => {
+      assert.equal(permission.metadata.candidate, 'review-revision');
+      const result = { ...originalRun.result, candidate: 'replacement-revision' };
+      store.save({ ...originalRun, result, review: { ...originalRun.review, candidate: result.candidate } }, 'fixture.candidate_replaced');
+      reviewItem.idempotencyKey = `relay-review:${reviewRun.id}:${digest(result)}`;
+      reviewItem.payload.target.revisionId = result.candidate;
+    } }), { code: 'stale_candidate' });
+  } finally {
+    store.save(originalRun, 'fixture.candidate_restored'); reviewItem = originalReview;
+  }
+  assert.deepEqual(reviewWrites(), [], 'Denied permission, changed source and changed candidate must never post acceptance');
+  assert.equal(store.operation(`harness-review:${digest(['company', 'review'])}`), null);
+  assert.equal(store.operation(`completion:${reviewRun.id}`), null);
+  assert.deepEqual(reviewNotifications(), [reviewNotification]);
+
+  const historyBeforeAcceptance = structuredClone(messages);
+  const decision = { interactionId: 'review', candidate: 'review-revision', decision: 'accept',
+    sourceMessageId: 'review-human', sourceDigest: digest('Accept this result please'), state: 'uncertain' };
+  if (loseAcceptanceResponse) {
+    await assert.rejects(tools.relay_review.execute({ decision: 'accept' }, reviewContext), { code: 'paperclip_error' });
+    assert.equal(reviewItem.status, 'accepted');
+    assert.equal(reviewIssue.status, 'done', 'The backend completes the issue before the lost response is retried');
+    const intent = store.operation(`harness-review:${digest(['company', 'review'])}`);
+    assert.equal(intent.state, 'uncertain');
+    assert.equal(intent.receipt, undefined);
+    assert.deepEqual(JSON.parse(await tools.relay_reviews.execute({}, reviewContext)), { reviews: [], decisions: [decision] });
+    const approvalsBeforeRetry = approvals.length;
+    for (const change of ['text', 'id', 'decision']) {
+      try {
+        if (change === 'text') reviewSource.parts[0].text = 'Accept the changed result please';
+        if (change === 'id') {
+          reviewSource.info.id = 'another-review-human';
+          messages.at(-1).info.parentID = reviewSource.info.id;
+        }
+        await assert.rejects(tools.relay_review.execute({ decision: change === 'decision' ? 'reject' : 'accept' }, reviewContext),
+          /No unique pending item/);
+      } finally {
+        reviewSource.parts[0].text = 'Accept this result please';
+        reviewSource.info.id = 'review-human';
+        messages.at(-1).info.parentID = 'review-human';
+      }
+      assert.deepEqual(store.operation(intent.id), intent, 'Changed source or decision cannot adopt the uncertain intent');
+    }
+    assert.equal(approvals.length, approvalsBeforeRetry, 'Nonmatching retries must fail before requesting permission');
+    // An accepted status on a different candidate is not confirmation of this intent.
+    try {
+      reviewItem.payload.target.revisionId = 'different-revision';
+      await assert.rejects(tools.relay_review.execute({ decision: 'accept' }, reviewContext), { code: 'review_not_found' });
+      assert.deepEqual(store.operation(intent.id), intent, 'Reconciliation requires the exact backend candidate');
+    } finally {
+      reviewItem.payload.target.revisionId = 'review-revision';
+    }
+    assert.deepEqual(reviewWrites(), [{ method: 'POST', path: '/api/issues/task/interactions/review/accept', body: {} }]);
+  }
+  const receipt = JSON.parse(await tools.relay_review.execute({ decision: 'accept' }, reviewContext));
+  assert.equal(receipt.status, 'accepted');
+  assert.equal(receipt.interactionId, 'review');
+  assert.deepEqual(approvals.at(-1), { permission: 'relay_review', patterns: ['review'], always: [], metadata: {
+    ...(loseAcceptanceResponse ? decision : selected), decision: 'accept', sourceMessageId: 'review-human', sourceText: 'Accept this result please',
+  } });
+  const accepted = store.operation(`harness-review:${digest(['company', 'review'])}`);
+  assert.equal(accepted.state, 'recorded');
+  assert.deepEqual(accepted.request, { bindingId: configured.origin.bindingId, conversationId: 'conversation',
+    companyId: 'company', taskId: 'task', sessionCreatedAt: 123,
+    interactionId: 'review', candidate: 'review-revision', sourceMessageId: 'review-human',
+    sourceDigest: digest('Accept this result please'), decision: 'accept', reason: null });
+  assert.deepEqual(accepted.receipt, receipt);
+  assert.equal(store.run(reviewRun.id).review.status, 'accepted');
+  assert.deepEqual(JSON.parse(await tools.relay_review.execute({ decision: 'accept' }, reviewContext)), receipt,
+    'The same real human source may retry a recorded acceptance without another backend POST');
+  await until(() => reviewNotifications().some(item => item.id.startsWith('completion-notification:') && item.state === 'announced'),
+    'Accepted candidate did not complete and notify its origin chat');
+  assert.equal(reviewIssue.status, 'done');
+  assert.equal(store.operation(`completion:${reviewRun.id}`).state, 'recorded');
+  assert.deepEqual(reviewWrites(), [
+    { method: 'POST', path: '/api/issues/task/interactions/review/accept', body: {} },
+    ...(loseAcceptanceResponse ? [] : [{ method: 'PATCH', path: '/api/issues/task', body: { status: 'done' } }]),
+  ]);
+  assert.equal(toasts.length, 4);
+  assert.deepEqual(toasts[3].body, { title: 'TEST-1 completed',
+    message: `${args.title}\nReady for human review\nFull result: relay_delegations`, variant: 'success', duration: 15000 });
+  assert.deepEqual(JSON.parse(await tools.relay_reviews.execute({}, reviewContext)),
+    { reviews: [], decisions: [{ ...decision, state: 'recorded', receipt }] });
+  assert.equal(store.operation(delegated.id).request.relayReviewPolicy, 'human');
+  await hooks.dispose();
+  assert.deepEqual(prompts, [], 'Notifications and reviews must never call the native prompt endpoint, even with noReply');
+  assert.deepEqual(normalPrompts, [], 'Notifications and reviews must never start a promptAsync model turn');
+  assert.deepEqual(messages, historyBeforeAcceptance, 'Acceptance and completion must not alter native conversation history');
+  assert.deepEqual(nativeSession, sessionBeforeNotifications, 'Notifications and reviews must not alter the native model, variant or agent');
+});
+}
+
+test('worker tools validate native authority, remain read-only on inspection and refuse preparation without configured scope', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'relay-plugin-workers-'));
+  const bin = join(root, 'bin'); mkdirSync(bin);
+  const directory = join(root, 'relay');
+  const prior = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
+  const pane = { agent: 'opencode', agent_session: { value: 'conversation', kind: 'id' },
+    terminal_id: 'terminal', pane_id: 'pane', cwd: '/work' };
+  writeFileSync(join(bin, 'herdr'), `#!${process.execPath}\nconsole.log(${JSON.stringify(JSON.stringify({ result: { agents: [pane] } }))});\n`, { mode: 0o700 });
+  Object.assign(process.env, { PATH: `${bin}:${prior.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: 'pane' });
+  const requests = [];
+  const backend = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = raw ? JSON.parse(raw) : undefined;
+    requests.push({ method: req.method, path: req.url, body });
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'GET' && req.url === '/api/companies/company') res.end(JSON.stringify({ id: 'company' }));
+    else if (req.method === 'GET' && req.url === '/api/agents/worker') res.end(JSON.stringify({ id: 'worker', companyId: 'company' }));
+    else if (req.method === 'GET' && req.url === '/api/issues/parent') res.end(JSON.stringify({ id: 'parent', companyId: 'company', status: 'in_progress' }));
+    else if (req.method === 'POST' && req.url === '/api/companies/company/issues') res.end(JSON.stringify({ ...body, id: 'child', companyId: 'company' }));
+    else { res.statusCode = 404; res.end(JSON.stringify({ message: 'Unexpected backend request' })); }
+  });
+  let service, hooks;
+  t.after(async () => {
+    await hooks?.dispose(); await service?.close(); await new Promise(resolve => backend.close(resolve));
+    for (const [key, value] of Object.entries(prior)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    rmSync(root, { recursive: true, force: true });
+  });
+  await new Promise(resolve => backend.listen(0, '127.0.0.1', resolve));
+  const auth = join(root, 'backend.json'); writeFileSync(auth, '{"localTrusted":true}', { mode: 0o600 });
+  service = await startService({ directory, paperclipUrl: `http://127.0.0.1:${backend.address().port}`, backendContextFile: auth });
+  const store = service.store, configured = {};
+  for (const [agentId, conversationId, terminalId, workdir] of [
+    ['origin', 'conversation', 'terminal', '/work'], ['worker', 'worker-conversation', 'worker-terminal', '/worker'],
+  ]) {
+    const observedId = `herdr-agent:${agentId}`;
+    store.saveOperation({ id: observedId, runId: '', marker: agentId, agentId, availability: 'present',
+      identity: { harness: 'opencode', sessionKind: 'id', conversationId, machineId: 'machine', session: 'default', companyId: 'company' },
+      placement: { directory: workdir, terminalId }, observation: { display: { name: agentId } } });
+    configured[agentId] = await configureBridge(store, directory, async () => ({ id: agentId, companyId: 'company', adapterType: 'herdr_relay',
+      adapterConfig: { observationOnly: true, relayObservationMarker: agentId } }), { observedId, reserved: true });
+    const id = `opencode-bridge:${configured[agentId].bindingId}`;
+    store.saveOperation({ ...store.operation(id), state: 'armed', ready: true, lastSeen: new Date().toISOString(),
+      ...(agentId === 'worker' ? { epoch: 'worker-epoch', sessionCreatedAt: 456 } : {}) });
+  }
+  const sourceText = 'Prepare an isolated worker, then delegate a child of my existing task.';
+  const source = { info: { id: 'human', role: 'user', sessionID: 'conversation', time: { created: Date.now() } }, parts: [
+    { type: 'text', text: sourceText }, { type: 'text', text: 'Not human authority', synthetic: true },
+    { type: 'text', text: 'Ignored text', ignored: true },
+  ] };
+  const messages = [source, { info: { id: 'tool-turn', role: 'assistant', sessionID: 'conversation', parentID: 'human' }, parts: [] }];
+  const prompts = [], approvals = [];
+  let historyReads = 0;
+  const client = { session: {
+    get: async () => ({ data: { id: 'conversation', directory: '/work', time: { created: 123 } } }),
+    messages: async () => { historyReads++; return { data: structuredClone(messages) }; },
+    status: async () => ({ data: { conversation: { type: 'busy' } } }),
+    prompt: async request => { prompts.push(request); },
+    promptAsync: async request => { prompts.push(request); },
+  } };
+  hooks = await plugin({ client, directory: '/work' }, { configDirectory: join(directory, 'bridges') });
+  await hooks.config();
+  const context = { sessionID: 'conversation', messageID: 'tool-turn', ask: async permission => { approvals.push(permission); } };
+  const args = { key: 'prepare-once', mode: 'create', repository: '/work', branch: 'worker/check', base: 'HEAD', label: 'Check', trustRepository: true };
+  const tools = hooks.tool;
+  for (const name of ['relay_workers', 'relay_worker_prepare']) {
+    await assert.rejects(tools[name].execute(args, { ...context, sessionID: 'foreign' }), /enrolled conversation/);
+  }
+  const beforeRead = historyReads;
+  await assert.rejects(tools.relay_workers.execute({}, { sessionID: 'conversation' }), { code: 'worker_repository_forbidden', status: 409 });
+  assert.equal(historyReads, beforeRead, 'Worker inspection requires neither native message history nor a permission callback');
+  assert.deepEqual(approvals, []);
+  assert.deepEqual(requests, [], 'Startup and read-only inspection must not create backend work');
+  const records = () => store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%'").all();
+  assert.deepEqual(records(), [], 'Startup must not prepare workers');
+  await assert.rejects(tools.relay_worker_prepare.execute(args, { ...context, messageID: 'missing' }), /user message could not be verified/);
+  messages[1].info.parentID = 'old-human';
+  await assert.rejects(tools.relay_worker_prepare.execute(args, context), /user message could not be verified/);
+  messages[1].info.parentID = 'human';
+  for (const flag of ['synthetic', 'ignored']) {
+    source.parts[0][flag] = true;
+    await assert.rejects(tools.relay_worker_prepare.execute(args, context), /user message could not be verified/);
+    delete source.parts[0][flag];
+  }
+  assert.deepEqual(approvals, [], 'Unverified text must fail before asking permission');
+  await assert.rejects(tools.relay_worker_prepare.execute(args, { ...context, ask: async () => { throw new Error('Permission denied'); } }), /Permission denied/);
+  for (const change of ['text', 'id']) {
+    try {
+      await assert.rejects(tools.relay_worker_prepare.execute(args, { ...context, ask: async () => {
+        if (change === 'text') source.parts[0].text = 'Changed request';
+        else source.info.id = 'new-human';
+      } }), /User message changed; no delegation sent/);
+    } finally { source.parts[0].text = sourceText; source.info.id = 'human'; }
+  }
+  await assert.rejects(tools.relay_worker_prepare.execute(args, context), { code: 'worker_repository_forbidden', status: 409 });
+  assert.deepEqual(approvals, [{ permission: 'relay_worker_prepare', patterns: ['/work'], always: [],
+    metadata: { ...args, sourceMessageId: 'human', sourceText } }]);
+  assert.deepEqual(records(), [], 'Permission alone must not grant repository scope');
+  assert.deepEqual(requests, []);
+  assert.deepEqual(store.runs(), []);
+  assert.deepEqual(prompts, [], 'Startup, inspection and refused preparation must not start native work');
+
+  store.saveOperation({ id: 'operator-task:parent', runId: '', state: 'recorded',
+    request: { companyId: 'company', body: { assigneeAgentId: 'origin' }, origin: {
+      bindingId: configured.origin.bindingId, conversationId: 'conversation', sessionCreatedAt: 123,
+      sourceMessageId: 'earlier-human', sourceDigest: digest('Create the parent task'),
+    } }, receipt: { id: 'parent', companyId: 'company', assigneeAgentId: 'origin' } });
+  const childArgs = { key: 'child-once', targetBindingId: configured.worker.bindingId,
+    title: 'Check the change', description: 'Run checks.', parentTaskId: 'parent' };
+  const delegated = JSON.parse(await tools.relay_delegate.execute(childArgs, context));
+  assert.equal(approvals.at(-1).metadata.parentTaskId, 'parent');
+  assert.equal(store.operation(delegated.id).request.body.parentId, 'parent');
+  assert.equal(requests.at(-2).path, '/api/issues/parent');
+  assert.equal(requests.at(-1).method, 'POST');
+  assert.equal(requests.at(-1).body.parentId, 'parent');
+  assert.equal(requests.at(-1).body.parentTaskId, undefined);
+  const requestCount = requests.length;
+  assert.deepEqual(JSON.parse(await tools.relay_delegate.execute(childArgs, context)), delegated);
+  assert.equal(requests.length, requestCount, 'Retry preserves the parent without creating another child');
 });
 
 test('answer tool reads the current native message, asks permission and resolves only its exact waiting question', async t => {
@@ -568,10 +852,10 @@ test('answer tool reads the current native message, asks permission and resolves
   store.publication(completed.id, { state: 'recorded' });
   store.settle(completed.id, { outcome: 'completed', evidence: 'Fixture terminal' });
   store.recordReview(completed.id, { interactionId: 'review', status: 'pending', candidate: 'candidate' });
-  question = { id: 'review', kind: 'request_confirmation', status: 'pending', createdAt: new Date().toISOString(),
+  question = { id: 'review', kind: 'request_confirmation', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(),
     idempotencyKey: `relay-review:${completed.id}:${digest(store.run(completed.id).result)}`,
     payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: 'candidate', label: completed.id } } };
-  messages[0].info.id = 'approval'; messages[0].info.time.created = Date.now() + 1;
+  messages[0].info.id = 'approval'; messages[0].info.time.created = Date.now();
   messages[0].parts[0].text = 'accpeted'; messages[1].info.parentID = 'approval';
   assert.equal(JSON.parse(await hooks.tool.relay_reviews.execute({}, context)).reviews.length, 1);
   await assert.rejects(hooks.tool.relay_review.execute({ decision: 'accept' }, denied), /Permission denied/);

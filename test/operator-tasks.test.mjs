@@ -85,3 +85,21 @@ test('worker human follow-up uses its own credential and separate idempotency na
   assert.equal(op.receipt.assigneeUserId, 'human'); assert.equal(body.parentId, 'parent');
   assert.ok(body.idempotencyKey.startsWith('relay:worker:'));
 });
+
+test('generic operator and worker creation preserve optional and unrelated parent support', async t => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const api = async (method, path, body) => method === 'POST'
+    ? { id: body.idempotencyKey, companyId: 'company', ...body }
+    : { id: path.split('/').at(-1), companyId: 'company', status: 'done' };
+  const run = { id: 'run', request: { companyId: 'company', bindingId: 'worker', taskId: 'current' } };
+  for (const parentId of [undefined, null, 'unrelated']) {
+    const payload = { ...input.payload, ...(parentId === undefined ? {} : { parentId }) };
+    const key = `parent-${parentId}`;
+    const operator = await createOperatorTask(store, api, { ...input, key, payload });
+    const worker = await mutate(store, run, 'token', (_run, _token, ...args) => api(...args),
+      { key, kind: 'task.create', payload });
+    assert.equal(operator.receipt.parentId, parentId);
+    assert.equal(worker.receipt.parentId, parentId);
+    assert.equal(worker.request.origin, undefined);
+  }
+});

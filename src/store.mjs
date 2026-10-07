@@ -184,6 +184,20 @@ export class Store {
     return run;
   }
 
+  assertWorkerAdmission(bindingId) {
+    const bridge = this.operation(`opencode-bridge:${bindingId}`);
+    const grants = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%'").all()
+      .map(row => JSON.parse(row.data)).filter(item => item.bindingId === bindingId ||
+        (bridge && item.target?.observedId === bridge.identity.observedId));
+    const current = grants.filter(item => !grants.some(next => next.id !== item.id &&
+      next.supersedes?.includes(item.id) && item.state === 'blocked' && item.disarmed === true &&
+      canonical(next.target) === canonical(item.target)));
+    requireValue((!grants.length || current.length === 1) && current.every(item => item.state === 'armed' && bridge &&
+      item.target?.conversationId === bridge.identity.conversationId &&
+      item.target?.terminalId === bridge.identity.terminalId && item.target?.directory === bridge.identity.directory),
+    'worker_grant_inactive', 'Worker preparation grant is not active for this exact conversation', 409);
+  }
+
   dispatch(input) {
     const request = {};
     for (const key of ['bindingId', 'companyId', 'agentId', 'runId', 'taskId']) request[key] = text(input[key], key);
@@ -209,6 +223,15 @@ export class Store {
         requireValue(canonical(existing.request) === canonical(request), 'dispatch_conflict', 'Run replay has changed payload', 409);
         return existing;
       }
+      const unresolvedReview = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'harness-review:%'").all()
+        .map(row => JSON.parse(row.data)).some(operation => {
+          if (operation.state === 'recorded') return false;
+          // Older persisted harness intents carry task identity only through runId.
+          const scope = operation.request?.companyId && operation.request?.taskId
+            ? operation.request : this.run(operation.runId).request;
+          return scope.companyId === request.companyId && scope.taskId === request.taskId;
+        });
+      requireValue(!unresolvedReview, 'review_decision_uncertain', 'Task has an unresolved harness review decision', 409);
       // Paperclip filters custom wake payload fields in some adapter contexts.
       const uncertainCompletion = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'completion:%' OR id LIKE 'no-review-completion:%'").all()
         .map(row => JSON.parse(row.data)).some(operation => operation.state === 'uncertain' &&
@@ -226,6 +249,7 @@ export class Store {
       const observedPermit = this.operation(`observed-pull:${binding.id}`);
       const bridge = this.operation(`opencode-bridge:${binding.id}`);
       if (bridge) {
+        this.assertWorkerAdmission(binding.id);
         const observed = this.operation(bridge.identity.observedId);
         requireValue(bridge.state === 'armed' && Date.now() - Date.parse(bridge.lastSeen) < 10000 &&
           observed?.availability === 'present' && !observed.error && Date.now() - Date.parse(observed.updatedAt) < 15000 &&
@@ -437,12 +461,20 @@ export class Store {
     });
   }
 
-  waitForDependency(id, childId) {
+  waitForDependency(id, children) {
+    const ids = typeof children === 'string' ? [children] : children;
+    requireValue(Array.isArray(ids) && ids.length > 0 && ids.length <= 64,
+      'invalid_request', 'Dependencies must contain between 1 and 64 task IDs');
+    const taskIds = ids.map(value => text(value, 'taskId')).sort();
+    requireValue(new Set(taskIds).size === taskIds.length && taskIds.every(value => value === value.trim()),
+      'invalid_request', 'Task IDs must be unique and have no surrounding whitespace');
     const run = this.run(id);
     requireValue(run.nativeState === 'claimed' && !run.result && !run.waiting && !run.cancellationRequested,
       'work_inactive', 'Active acknowledged turn required', 409);
-    requireValue(!run.dependency || run.dependency.childId === childId, 'operation_conflict', 'Dependency changed', 409);
-    run.dependency = { childId, state: 'recorded' };
+    requireValue(!run.dependency || canonical([...(run.dependency.taskIds ?? [run.dependency.childId])].sort()) === canonical(taskIds),
+      'operation_conflict', 'Dependency changed', 409);
+    if (run.dependency) return run;
+    run.dependency = { ...(taskIds.length === 1 ? { childId: taskIds[0] } : { taskIds }), state: 'recorded' };
     return this.save(run, 'dependency.waiting', run.dependency);
   }
 

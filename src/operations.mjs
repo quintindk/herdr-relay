@@ -1,5 +1,6 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { validateTaskPolicy } from './task-policy.mjs';
+import { taskOrigins } from './task-origin.mjs';
 
 function taskPayload(value, idempotencyKey) {
   requireValue(value && typeof value === 'object' && !Array.isArray(value), 'invalid_request', 'Task payload required');
@@ -47,12 +48,20 @@ export async function createOperatorTask(store, api, input) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Task creation key has a different payload', 409);
     if (operation.state === 'recorded') return operation;
   }
+  const parentOrigin = () => {
+    const parent = taskOrigins(store).find(task => task.request.companyId === companyId && task.receipt.id === request.body.parentId);
+    requireValue(parent && ['bindingId', 'conversationId', 'sessionCreatedAt'].every(field =>
+      parent.request.origin[field] === request.origin[field]),
+    'forbidden', 'Parent task must have a recorded origin in this exact native conversation', 403);
+    return parent;
+  };
+  const ownedParent = request.origin && request.body.parentId ? parentOrigin() : null;
   // Validate explicit resource scope before creating. Paperclip remains authority
   // for membership/assignment permissions and validates the mutation itself.
   const company = await api('GET', `/api/companies/${encodeURIComponent(companyId)}`);
   requireValue(company.id === companyId, 'identity_mismatch', 'Company identity changed', 409);
   const checks = [
-    ...(request.body.parentId ? [['issues', request.body.parentId]] : []),
+    ...(request.body.parentId && !ownedParent ? [['issues', request.body.parentId]] : []),
     ...(request.body.projectId ? [['projects', request.body.projectId]] : []),
     ...(request.body.assigneeAgentId ? [['agents', request.body.assigneeAgentId]] : []),
     ...(request.body.blockedByIssueIds ?? []).map(id => ['issues', id]),
@@ -60,6 +69,15 @@ export async function createOperatorTask(store, api, input) {
   for (const [collection, resourceId] of checks) {
     const resource = await api('GET', `/api/${collection}/${encodeURIComponent(resourceId)}`);
     requireValue(resource.id === resourceId && resource.companyId === companyId, 'forbidden', 'Task resource belongs to another company', 403);
+  }
+  if (ownedParent) {
+    const parent = await api('GET', `/api/issues/${encodeURIComponent(request.body.parentId)}`);
+    requireValue(parent.id === request.body.parentId && parent.companyId === companyId,
+      'forbidden', 'Parent task belongs to another company', 403);
+    requireValue(['backlog', 'todo', 'in_progress', 'blocked', 'in_review'].includes(parent.status),
+      'parent_unavailable', 'Parent task must be nonterminal', 409);
+    requireValue(canonical(parentOrigin()) === canonical(ownedParent),
+      'parent_scope_changed', 'Recorded parent origin changed during task creation', 409);
   }
   if (!operation) operation = store.saveOperation({ id, runId: '', request, state: 'uncertain' });
   // This endpoint supports idempotency keys; uncertainty reuses the exact key/body.

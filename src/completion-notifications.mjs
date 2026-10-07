@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { canonical, digest, now, requireValue, text } from './protocol.mjs';
+import { taskOrigins } from './task-origin.mjs';
 
 function validOrigin(origin) {
   return origin && typeof origin.bindingId === 'string' && origin.bindingId.trim() &&
@@ -19,9 +20,13 @@ function owns(bridge, notification) {
 }
 
 function recordedTasks(store) {
-  return store.db.prepare("SELECT data FROM operations WHERE id LIKE 'operator-task:%'").all()
-    .map(row => JSON.parse(row.data)).filter(task => task.state === 'recorded' && validOrigin(task.request?.origin) &&
-      ['id', 'title', 'identifier'].every(key => typeof task.receipt?.[key] === 'string' && task.receipt[key].trim()));
+  return taskOrigins(store).filter(task =>
+    ['id', 'title', 'identifier'].every(key => typeof task.receipt?.[key] === 'string' && task.receipt[key].trim()));
+}
+
+function hasRecordedOrigin(tasks, notification) {
+  return tasks.some(task => task.request.companyId === notification.companyId && task.receipt.id === notification.taskId &&
+    ['bindingId', 'conversationId', 'sessionCreatedAt'].every(key => task.request.origin[key] === notification.origin?.[key]));
 }
 
 function pendingReviews(store, tasks = recordedTasks(store)) {
@@ -32,7 +37,7 @@ function pendingReviews(store, tasks = recordedTasks(store)) {
     const taskId = task.receipt.id;
     const taskRuns = runs.filter(run => run.request.companyId === companyId && run.request.taskId === taskId);
     const run = taskRuns.find(run => run.result);
-    if (!run || taskRuns.some(item => item.nativeState !== 'settled') ||
+    if (!run || run.nativeState !== 'settled' ||
       run.settlement?.outcome !== 'completed' || run.publication?.state !== 'recorded' ||
       task.request.body?.assigneeAgentId !== run.request.agentId ||
       (task.receipt.companyId !== undefined && task.receipt.companyId !== companyId) ||
@@ -103,7 +108,8 @@ export function reconcileNotifications(store) {
     const reviews = pendingReviews(store, tasks);
     const currentReviews = new Set(reviews.map(item => item.id));
     for (const notification of notifications(store)) {
-      if (notification.id.startsWith('review-notification:') && notification.state === 'pending' && !currentReviews.has(notification.id)) {
+      if (notification.state === 'pending' && (!hasRecordedOrigin(tasks, notification) ||
+        (notification.id.startsWith('review-notification:') && !currentReviews.has(notification.id)))) {
         store.saveOperation({ ...notification, state: 'superseded' });
       }
     }
@@ -131,21 +137,31 @@ export function notificationRequest(store, bridge, action, input) {
     const binding = store.binding(bridge.identity.bindingId);
     requireValue(binding.config.conversationId === bridge.identity.conversationId && !binding.lifecycleState,
       'bridge_identity_mismatch', 'Notification binding is no longer active in this conversation', 409);
+    const tasks = recordedTasks(store);
     if (action === 'notification-list' || action === 'notification-history') {
-      const entries = notifications(store).filter(item => owns(bridge, item) && item.companyId === binding.config.companyId);
+      const entries = notifications(store).filter(item => owns(bridge, item) && item.companyId === binding.config.companyId &&
+        hasRecordedOrigin(tasks, item));
       return { notifications: action === 'notification-history' ? entries.slice(-50).reverse() :
-        entries.filter(item => ['pending', 'uncertain'].includes(item.state)).slice(0, 50) };
+        entries.filter(item => ['pending', 'uncertain'].includes(item.state) &&
+          (item.kind !== 'review' || input.includeReviews === true)).slice(0, 50) };
     }
     requireValue(['notification-begin', 'notification-observe'].includes(action), 'invalid_bridge_action', 'Unknown notification action');
     const notification = store.operation(text(input.id, 'id'));
     requireValue((notification?.id.startsWith('completion-notification:') || notification?.id.startsWith('review-notification:')) && owns(bridge, notification) &&
-      notification.companyId === binding.config.companyId,
+      notification.companyId === binding.config.companyId && hasRecordedOrigin(tasks, notification),
     'notification_not_found', 'No notification belongs to this exact origin', 404);
     if (action === 'notification-begin') {
+      requireValue(notification.kind !== 'review' || input.includeReviews === true,
+        'notification_unsupported', 'Plugin must support review-ready notifications', 409);
       // Uncertainty survives lost replies, plugin epochs and service restarts.
       if (notification.state !== 'pending') return { notification, dispatch: false };
-      if (notification.id.startsWith('review-notification:') && !pendingReviews(store).some(item => item.id === notification.id)) {
-        return { notification: store.saveOperation({ ...notification, state: 'superseded' }), dispatch: false };
+      if (notification.id.startsWith('review-notification:')) {
+        if (!pendingReviews(store, tasks).some(item => item.id === notification.id)) {
+          return { notification: store.saveOperation({ ...notification, state: 'superseded' }), dispatch: false };
+        }
+        // Active task work delays delivery without invalidating the latest candidate.
+        if (store.runs().some(run => run.request.companyId === notification.companyId &&
+          run.request.taskId === notification.taskId && run.nativeState !== 'settled')) return { notification, dispatch: false };
       }
       requireValue(input.idle === true, 'native_busy', 'Validated idle snapshot required', 409);
       requireValue(store.runs(bridge.identity.bindingId).every(run => run.nativeState === 'settled'),

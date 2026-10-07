@@ -2,6 +2,7 @@ import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { createOperatorTask } from './operations.mjs';
 import { isNotificationSource } from './completion-notifications.mjs';
 import { validateTaskPolicy } from './task-policy.mjs';
+import { taskOrigins } from './task-origin.mjs';
 
 function fresh(value, limit) {
   const age = Date.now() - Date.parse(value);
@@ -32,12 +33,13 @@ function availableAgent(store, binding, companyId) {
     directory: identity.directory };
 }
 
-function summary(store, operation) {
-  const receipt = operation.receipt;
+function summary(store, operation, resolved = null) {
+  // Creation intent alone never authorises receipt or result access.
+  const receipt = resolved?.receipt;
   return { id: operation.id, state: operation.state,
     receipt: receipt ? Object.fromEntries(['id', 'identifier', 'title', 'status', 'companyId', 'assigneeAgentId']
       .filter(key => typeof receipt[key] === 'string').map(key => [key, receipt[key]])) : null,
-    runs: receipt?.id ? store.runs().filter(run => run.request.companyId === operation.request.companyId &&
+    runs: receipt?.id ? store.runs().filter(run => run.request.companyId === resolved.request.companyId &&
       run.request.taskId === receipt.id).map(run => ({ id: run.id, deliveryState: run.deliveryState,
       nativeState: run.nativeState, outcome: run.settlement?.outcome ?? null,
       publicationState: run.publication?.state ?? null, reviewStatus: run.review?.status ?? null,
@@ -69,13 +71,17 @@ export async function harnessDelegation(store, bridge, action, input, api) {
       .map(binding => availableAgent(store, binding, companyId)).filter(Boolean) };
   }
   if (action === 'delegation-status') {
-    const operations = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'operator-task:%' ORDER BY rowid DESC").all()
-      .map(row => JSON.parse(row.data));
+    const intents = store.db.prepare("SELECT id, run_id, data FROM operations WHERE id LIKE 'operator-task:%' ORDER BY rowid DESC").all()
+      .flatMap(row => {
+        const operation = JSON.parse(row.data);
+        return operation.id === row.id && operation.runId === row.run_id && operation.state === 'uncertain' ? [operation] : [];
+      });
+    const operations = [...intents, ...taskOrigins(store)];
     return { delegations: operations.filter(operation => operation.request?.companyId === companyId &&
       operation.request.origin?.bindingId === caller.id &&
       operation.request.origin.conversationId === bridge.identity.conversationId &&
-      operation.request.origin.sessionCreatedAt === bridge.sessionCreatedAt &&
-      (!operation.receipt?.companyId || operation.receipt.companyId === companyId)).map(operation => summary(store, operation)) };
+      operation.request.origin.sessionCreatedAt === bridge.sessionCreatedAt)
+      .map(operation => summary(store, operation, operation.state === 'recorded' ? operation : null)) };
   }
   requireValue(action === 'delegate', 'invalid_bridge_action', 'Unknown delegation action');
   requireValue(input.origin === undefined && input.companyId === undefined,
@@ -103,6 +109,7 @@ export async function harnessDelegation(store, bridge, action, input, api) {
   const payload = { title: text(input.title, 'title'), description: text(input.description, 'description'),
     assigneeAgentId: target.config.agentId, status: 'todo',
     relayReviewPolicy: validateTaskPolicy(input.relayReviewPolicy === undefined ? 'human' : input.relayReviewPolicy) };
+  if (input.parentTaskId !== undefined) payload.parentId = text(input.parentTaskId, 'parentTaskId');
   // Recorded retries still pass through createOperatorTask's exact-payload check,
   // but never depend on the worker remaining idle after the original dispatch.
   const result = await createOperatorTask(store, (method, path, body) => {
@@ -122,5 +129,7 @@ export async function harnessDelegation(store, bridge, action, input, api) {
       'agent_not_ready', 'Target requires a fresh, ready, armed bridge and matching Herdr placement', 409);
     return api(method, path, body);
   }, { companyId, key, origin, payload });
-  return summary(store, result);
+  const resolved = taskOrigins(store).find(task => task.request.companyId === companyId &&
+    task.receipt.id === result.receipt?.id && canonical(task.request.origin) === canonical(origin));
+  return summary(store, result, resolved);
 }
