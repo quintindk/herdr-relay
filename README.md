@@ -14,6 +14,8 @@ team hierarchy or project to participate.
 - Durable dispatch, progress, submission, questions and bounded continuation.
 - Peer task delegation, human-owned tasks, dependencies and receipt-only inbox events.
 - Exact candidate digests, independent review evidence and Paperclip acceptance.
+- Experimental explicit human grants for coordinator review of opted-in direct
+  children. The root parent's final review remains human.
 - Owned worktree provisioning, idempotent commit finalisation and guarded cleanup.
 - Acceptance-driven retirement and recovery after Relay or Paperclip restart.
 - Bounded monitoring schedules and atomic source checkpoints.
@@ -84,6 +86,11 @@ herdr plugin link /absolute/path/herdr-relay
 - [Interactive workers](docs/interactive-workers.md): scoped create/adopt tools,
   asynchronous readiness, child-task waits and origin-bound human review.
   Fixture-verified implementation, not live certification of worker provisioning.
+- [Coordinator review](docs/coordinator-review.md): explicit root-origin human
+  grant/revoke, immutable child opt-in and exact parent-run reviewer proof.
+  Offline-tested, with live tests deferred by the user. A recorded candidate-ready
+  comment is not wake admission, and rejection needs explicit follow-up. No fully
+  verified final workflow or complete autonomous recovery is claimed.
 - [Native OpenCode](docs/native-opencode-v1.md), [native Hermes](docs/native-hermes-v1.md)
   and [managed runtimes](docs/managed-runtimes.md).
 - [Task commands](docs/task-commands.md), [questions](docs/questions-v1.md),

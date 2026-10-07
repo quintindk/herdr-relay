@@ -35,6 +35,7 @@ import { reconcileBridgeEnrolment } from './bridge-enrolment.mjs';
 import { notificationRequest, isNotificationSource } from './completion-notifications.mjs';
 import { harnessDelegation } from './harness-delegation.mjs';
 import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers } from './herdr-workers.mjs';
+import { coordinatorGrant, coordinatorReviewGrant, validateCoordinatorGrant } from './coordinator-review.mjs';
 
 async function body(req, limit = 128 * 1024) {
   let size = 0;
@@ -115,12 +116,15 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
-          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/workers', '/bridge/prepare-worker',
+          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
           '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
         const action = path.split('/').at(-1);
         let result;
-        if (['workers', 'prepare-worker'].includes(action)) {
+        if (['grant-review', 'revoke-review'].includes(action)) {
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          result = await coordinatorGrant(store, store.operation(bridge.id), action, input, operatorApi);
+        } else if (['workers', 'prepare-worker'].includes(action)) {
           requireValue(observationConfig, 'worker_repository_forbidden', 'A configured Herdr source is required', 409);
           bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
           const live = store.operation(bridge.id);
@@ -412,7 +416,13 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
             const task = await api(run, runTokens.get(id), 'GET', target);
             requireValue(task.companyId === run.request.companyId && task.parentId === run.request.taskId,
               'forbidden', 'Only children of this run task may be inspected', 403);
-            result = { task, comments: await api(run, runTokens.get(id), 'GET', `${target}/comments`) };
+            const childRuns = store.runs().filter(item => item.request.companyId === run.request.companyId && item.request.taskId === task.id);
+            const candidate = childRuns.find(item => item.result);
+            const grant = coordinatorReviewGrant(store, run.request.companyId, task.id);
+            result = { task, comments: await api(run, runTokens.get(id), 'GET', `${target}/comments`),
+              relayReview: candidate ? { runId: candidate.id, candidate: candidate.result.candidate, summary: candidate.result.summary,
+                state: candidate.review?.status ?? null, interactionId: candidate.review?.interactionId ?? null,
+                grantId: grant?.request.reviewerBindingId === run.request.bindingId ? grant.id : null } : null };
           }
         }
         else if (req.method === 'GET' && action === 'tasks') {
@@ -445,6 +455,17 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           result = await api(run, runTokens.get(id), 'GET', `/api/issues/${encodeURIComponent(run.request.taskId)}`);
           requireValue(result.companyId === run.request.companyId, 'identity_mismatch', 'Task company does not match binding', 409);
           result = { ...result, relayReviewPolicy: taskPolicy(store, run.request.companyId, run.request.taskId) };
+          const grants = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'coordinator-review-grant:%'").all()
+            .map(row => JSON.parse(row.data)).filter(grant => grant.state === 'active' &&
+              grant.request.companyId === run.request.companyId && grant.request.parentTaskId === run.request.taskId &&
+              grant.request.reviewerBindingId === run.request.bindingId).flatMap(grant => {
+              try {
+                validateCoordinatorGrant(store, grant.id, { companyId: run.request.companyId,
+                  parentTaskId: run.request.taskId, reviewerBindingId: run.request.bindingId });
+                return [{ grantId: grant.id, scope: 'direct_children', parentTaskId: run.request.taskId }];
+              } catch { return []; }
+            });
+          if (grants.length) result.coordinatorReviewGrants = grants;
         } else if (req.method === 'POST' && ['publish', 'publish-question'].includes(action)) {
           adminOnly();
           requireValue(!run.backendRunId || input.runId === run.backendRunId, 'stale_backend_run', 'Replacement backend run identity required', 409);

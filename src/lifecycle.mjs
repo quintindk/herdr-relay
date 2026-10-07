@@ -4,6 +4,8 @@ import { review } from './review.mjs';
 import { digest, requireValue } from './protocol.mjs';
 import { reconcileCompletions } from './disposition.mjs';
 import { reconcileNotifications } from './completion-notifications.mjs';
+import { reconcileCoordinatorNotices } from './coordinator-notices.mjs';
+import { reconcileHarnessReviews } from './harness-review-reconciliation.mjs';
 
 export async function retireAccepted(store, caller, target, token, api) {
   const binding = store.binding(target.request.bindingId);
@@ -80,7 +82,8 @@ export function lifecycleRunner(store, operatorApi, locks) {
   const schedule = () => {
     if (stopped) return;
     timer = setTimeout(() => {
-      pending = reconcileCompletions(store, operatorApi, locks).then(() => {
+      pending = reconcileHarnessReviews(store, operatorApi, locks).then(() => reconcileCompletions(store, operatorApi, locks)).then(async () => {
+        await reconcileCoordinatorNotices(store, operatorApi, locks);
         reconcileNotifications(store);
         return reconcileRetirements(store, operatorApi, locks);
       }).catch(error => {

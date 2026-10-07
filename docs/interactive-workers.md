@@ -229,12 +229,36 @@ Toasts are UI-only and do not start model turns. Use `relay_delegations` and
 Human review is the default, including when a child's policy is omitted. `none`
 requires intentional authorisation. `agent_decides` permits a worker to choose
 human/no-review with a recorded reason, not to approve its own candidate.
-**Coordinator-agent review is not implemented in this increment.** A parent may
-inspect and summarise children, but cannot turn that inspection into human
-approval. `relay_review` requires an explicit human decision about the exact
-presented candidate. Review never grants commit, merge or cleanup authority.
+
+Experimental [coordinator review](coordinator-review.md) is implemented and
+offline-tested. Only an explicit human `relay_coordinator_grant` from the recorded
+root parent's exact origin chat authorises its assigned parent reviewer. The
+parent's final review remains human. Never silently grant authority. Each direct
+child must opt in at creation with `relayReviewPolicy: "coordinator"` and `grantId`
+on `relay_delegate`, or `relayReviewGrantId` on worker `task create`. Policy and grant
+reference are immutable. Existing child policies are unchanged. Omission stays human.
+
+The parent reads `task.coordinatorReviewGrants` through `work read RUN` and obtains
+child submission/candidate/interaction IDs through `task inspect RUN --task ID`.
+Only its exact active acknowledged parent run may decide, with a reason and verified
+backend resolver proof. Inspection is not human approval. `relay_review` remains
+the explicit human override. `relay_coordinator_revoke` removes future agent
+authority, retaining confirmed decisions. Revocation before disposition can recover
+to `human_only` under the original exact scope. Legacy `anyone` cards still require
+explicit human review and recorded human proof, not agent acceptance.
+
+Candidate-ready parent comments use the backend's standard wake path, unlike
+UI-only origin toasts. A `recorded` comment does not prove turn admission:
+`awaiting_admission` / `continuation_unconfirmed` remains pending, without automatic
+repost. Rejection requires explicit follow-up. No automatic rework wake is
+implemented. Review never grants commit, merge or cleanup authority.
 
 ## Verification Boundary
+
+Coordinator review has offline fixture coverage only. Live tests are deferred at
+the user's request. Neither the final workflow nor complete autonomous recovery is
+claimed verified. The historical preparation checks below do not certify this new
+feature, and this documentation update makes no global installation changes.
 
 The fixture workflow covers preparation, raw asynchronous launch receipts,
 readiness, retries, worker-scoped child waits and inherited origin/review scope.

@@ -69,9 +69,38 @@ Default to `relayReviewPolicy: "human"`. Use `none` only when the user authorise
 completion without human review. `agent_decides` lets the worker choose with a
 recorded reason and must also be an intentional choice. Neither policy grants
 tool permissions, commit authority or permission to approve a worker's own result.
-Coordinator-agent review is not implemented in this increment.
+`coordinator` is a separate experimental opt-in, not an `agent_decides` choice.
 
-Example tool arguments after resolving the live binding:
+### Coordinator Grants
+
+- Never silently grant agent review. State the recorded root parent, its assigned
+  reviewer and direct-child scope, then obtain explicit human authorisation.
+- Only the exact parent origin chat may call `relay_coordinator_grant` with `key`,
+  `parentTaskId` and `reviewerBindingId`. The root parent's final policy must remain
+  human. The reviewer must be its separate, armed native OpenCode conversation.
+- Retain the returned `grantId`. Each new child must explicitly use
+  `relayReviewPolicy: "coordinator"`, `parentTaskId` and `grantId` on
+  `relay_delegate`. Worker creation uses `parentId` and `relayReviewGrantId` instead.
+  Policy and grant reference are immutable. Existing policies are unchanged, and
+  omission stays human. A grant never implies provisioning, fan-out or commit authority.
+- Grant retries retain the exact key, request and human source. Revoke only on a
+  later explicit human instruction with `relay_coordinator_revoke({grantId})` in
+  the same origin chat. Revocation preserves confirmed decisions and cannot be undone
+  by retrying the grant. Active workers cannot grant themselves authority.
+- The parent learns grants through `work read RUN` at `task.coordinatorReviewGrants`.
+  It inspects child IDs with `task inspect`, then decides only from its exact active
+  acknowledged parent run. Both accept and reject require a reason. Backend resolver
+  proof must match that coordinator agent and run, not merely an accepted status.
+- Candidate-ready comments use the standard backend wake path. `recorded` proves
+  the comment receipt, not admission: `awaiting_admission` / `continuation_unconfirmed`
+  stays pending without automatic repost. Rejection needs explicit follow-up, with
+  no automatic rework wake implemented.
+
+See `docs/coordinator-review.md`. This feature is offline-tested, with live tests
+deferred by the user. Do not claim a fully verified final workflow or complete
+autonomous recovery. If the tools are absent, report that rather than using raw APIs.
+
+Example human-reviewed delegation after resolving the live binding:
 
 ```json
 {
@@ -104,10 +133,16 @@ Example tool arguments after resolving the live binding:
 - Never approve on the user's behalf merely because tests pass or the result looks
   correct. The reviewer tool relays human authority; it is not autonomous review.
 - After the review receipt, end the turn. Relay/Paperclip own completion and any
-  continuation. Do not mark the issue Done yourself or resubmit the task.
+  continuation. Rejection needs explicit follow-up, not an assumed automatic rework
+  wake. Do not mark the issue Done yourself or resubmit the task.
 - An uncertain decision must not be reposted. Exact retries from the same source
   message can reconcile a committed decision. Inspect pending reviews and decision
   receipts before acting; do not bypass a conflict with new keys or raw API calls.
+- Human override remains available for exact pending coordinator candidates, unless
+  a coordinator decision intent already owns the candidate. Revocation before
+  disposition can yield `human_only` recovery under the exact original scope, not
+  a rewrite of existing cards. Legacy `anyone` cards still require explicit human
+  review with recorded source/candidate proof. They never authorise agent approval.
 
 Reuse the peer's check evidence with attribution. Perform a focused handover
 review, not a duplicate investigation. Rerun checks when files changed, evidence

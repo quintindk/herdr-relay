@@ -1,5 +1,5 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
-import { review } from './review.mjs';
+import { review, reviewAuthority } from './review.mjs';
 import { resultPolicy } from './task-policy.mjs';
 
 export async function checkReviewWake(store, input, api) {
@@ -50,9 +50,24 @@ export async function checkReviewWake(store, input, api) {
 }
 
 export async function requestReviewDisposition(store, id, token, api) {
-  const run = store.run(id);
+  const run = structuredClone(store.run(id));
   requireValue(run.nativeState === 'settled' && run.settlement?.outcome === 'completed' && run.publication.state === 'recorded',
     'result_not_ready', 'A settled, published result is required for review disposition', 409);
+  const authority = reviewAuthority(store, run);
+  const check = () => {
+    const current = reviewAuthority(store, run);
+    requireValue(current.policy === authority.policy && (authority.policy !== 'coordinator' ||
+      (authority.humanOnlyRecovery ? current.humanOnlyRecovery && canonical(current.expectedGrant) === canonical(authority.expectedGrant) :
+        current.grant && canonical(current.grant) === canonical(authority.grant))),
+    'review_scope_changed', 'Disposition authority changed', 409);
+  };
+  const send = api;
+  api = async (...args) => {
+    check();
+    const response = await send(...args);
+    check();
+    return response;
+  };
   const path = `/api/issues/${encodeURIComponent(run.request.taskId)}`;
   const issue = await api(run, token, 'GET', path);
   requireValue(issue.companyId === run.request.companyId, 'identity_mismatch', 'Issue company changed', 409);
@@ -91,13 +106,18 @@ export async function requestReviewDisposition(store, id, token, api) {
     return { status: 'done', policy: 'none' };
   }
   const operationId = `review-disposition:${id}`;
-  let disposition = store.operation(operationId) ?? store.saveOperation({ id: operationId, runId: id,
+  if (!store.operation(operationId)) store.saveOperation({ id: operationId, runId: id,
     candidate: run.result.candidate, state: 'waiting' });
   const reviewed = await review(store, run, token, api, { runId: id, candidate: run.result.candidate,
-    action: 'request', ...(issue.responsibleUserId ? { reviewerUserId: issue.responsibleUserId } : {}) });
+    action: 'request', ...(policy === 'human' && issue.responsibleUserId ? { reviewerUserId: issue.responsibleUserId } : {}) });
+  check();
   requireValue(['pending', 'accepted', 'rejected'].includes(reviewed.review.status), 'review_already_decided', 'Review is no longer actionable', 409);
-  disposition = store.saveOperation({ ...disposition, interactionId: reviewed.review.interactionId });
+  store.saveOperation({ ...store.operation(operationId), policy, interactionId: reviewed.review.interactionId });
   if (issue.status !== 'in_review') {
+    const fresh = await api(run, token, 'GET', path);
+    requireValue(fresh.companyId === issue.companyId && fresh.status === issue.status && fresh.updatedAt === issue.updatedAt &&
+      fresh.assigneeAgentId === issue.assigneeAgentId && fresh.executionRunId === issue.executionRunId && fresh.parentId === issue.parentId,
+    'disposition_conflict', 'Issue changed while requesting review', 409);
     await api(run, token, 'PATCH', path, { status: 'in_review', reviewInteractionId: reviewed.review.interactionId });
   }
   const observed = await api(run, token, 'GET', path);
@@ -116,15 +136,33 @@ export async function reconcileCompletions(store, operatorApi, locks = new Map()
     if (locks.has(lock)) continue;
     const pending = (async () => {
       try {
-        const run = store.run(disposition.runId);
+        const run = structuredClone(store.run(disposition.runId));
         requireValue(run.result?.candidate === disposition.candidate, 'stale_candidate', 'Disposition candidate changed', 409);
-        const api = (_, __, method, path, body) => operatorApi(method, path, body);
+        const policy = resultPolicy(store, run, run.result);
+        let accepted = false;
+        const check = () => {
+          const authority = reviewAuthority(store, run);
+          requireValue(authority.policy === policy, 'review_scope_changed', 'Completion policy changed', 409);
+          requireValue(!accepted || authority.policy !== 'coordinator' ||
+            (authority.recorded && authority.decision.action === 'accept' && authority.decision.interactionId === disposition.interactionId) ||
+            (authority.humanRecorded && authority.humanDecision.receipt.interactionId === disposition.interactionId),
+          'review_decision_uncertain', 'Exact verified acceptance is required for completion', 409);
+        };
+        const checkedApi = async (...args) => {
+          check();
+          const response = await operatorApi(...args);
+          check();
+          return response;
+        };
+        const api = (_, __, method, path, body) => checkedApi(method, path, body);
         const observed = await review(store, run, undefined, api, { action: 'inspect', runId: run.id, candidate: disposition.candidate });
         if (observed.review.status !== 'accepted') return;
+        accepted = true;
+        check();
         requireValue(!disposition.interactionId || observed.review.interactionId === disposition.interactionId,
           'review_conflict', 'Disposition interaction changed', 409);
         const path = `/api/issues/${encodeURIComponent(run.request.taskId)}`;
-        const issue = await operatorApi('GET', path);
+        const issue = await checkedApi('GET', path);
         requireValue(issue.id === run.request.taskId && issue.companyId === run.request.companyId,
           'identity_mismatch', 'Issue identity changed', 409);
         if (['done', 'cancelled'].includes(issue.status)) {
@@ -137,7 +175,7 @@ export async function reconcileCompletions(store, operatorApi, locks = new Map()
         if (issue.status === 'todo') {
           // Paperclip confirmations can return in_review tasks to todo even with
           // continuationPolicy=none. Only the exact acceptance audit authorises it.
-          const activity = await operatorApi('GET', `${path}/activity`);
+          const activity = await checkedApi('GET', `${path}/activity`);
           requireValue(Array.isArray(activity), 'invalid_backend_response', 'Expected issue activity array', 502);
           const updates = activity.filter(item => item.entityId === issue.id && item.companyId === issue.companyId && item.action === 'issue.updated')
             .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -152,11 +190,11 @@ export async function reconcileCompletions(store, operatorApi, locks = new Map()
         requireValue((issue.status === 'in_review' || acceptedTodo) && issue.assigneeAgentId === run.request.agentId &&
           !issue.executionRunId && !issue.checkoutRunId && !issue.activeRecoveryAction && !issue.executionBlocker,
           'completion_conflict', 'Issue is not available for accepted-result completion', 409);
-        const backend = await operatorApi('GET', `/api/heartbeat-runs/${encodeURIComponent(run.backendRunId ?? run.request.runId)}`);
+        const backend = await checkedApi('GET', `/api/heartbeat-runs/${encodeURIComponent(run.backendRunId ?? run.request.runId)}`);
         requireValue(backend.id === (run.backendRunId ?? run.request.runId) && backend.companyId === run.request.companyId &&
           backend.agentId === run.request.agentId && backend.status === 'succeeded',
           'backend_run_not_succeeded', 'Wait for the exact successful Paperclip run', 409);
-        const fresh = await operatorApi('GET', path);
+        const fresh = await checkedApi('GET', path);
         requireValue(fresh.id === issue.id && fresh.companyId === issue.companyId && fresh.status === issue.status &&
           fresh.updatedAt === issue.updatedAt && fresh.assigneeAgentId === issue.assigneeAgentId &&
           !fresh.executionRunId && !fresh.checkoutRunId && !fresh.activeRecoveryAction && !fresh.executionBlocker,
@@ -168,14 +206,14 @@ export async function reconcileCompletions(store, operatorApi, locks = new Map()
           interactionId: observed.review.interactionId, taskId: run.request.taskId, companyId: run.request.companyId });
         // The backend PATCH has no conditional-write contract. Record intent first
         // and never repeat it after uncertainty; readback can confirm a lost reply.
-        await operatorApi('PATCH', path, { status: 'done' });
-        const receipt = await operatorApi('GET', path);
+        await checkedApi('PATCH', path, { status: 'done' });
+        const receipt = await checkedApi('GET', path);
         requireValue(receipt.id === issue.id && receipt.companyId === issue.companyId && receipt.status === 'done',
           'completion_uncertain', 'Backend did not confirm completion', 409);
         store.saveOperation({ ...completion, state: 'recorded', status: 'done' });
       } catch (error) {
         if (completion) store.saveOperation({ ...completion, reason: error.code ?? 'backend_unavailable' });
-        store.saveOperation({ ...disposition, reason: error.code ?? 'backend_unavailable' });
+        store.saveOperation({ ...store.operation(disposition.id), reason: error.code ?? 'backend_unavailable' });
       }
     })();
     locks.set(lock, pending);

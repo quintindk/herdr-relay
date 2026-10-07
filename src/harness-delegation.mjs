@@ -110,6 +110,7 @@ export async function harnessDelegation(store, bridge, action, input, api) {
     assigneeAgentId: target.config.agentId, status: 'todo',
     relayReviewPolicy: validateTaskPolicy(input.relayReviewPolicy === undefined ? 'human' : input.relayReviewPolicy) };
   if (input.parentTaskId !== undefined) payload.parentId = text(input.parentTaskId, 'parentTaskId');
+  if (input.grantId !== undefined) payload.relayReviewGrantId = text(input.grantId, 'grantId');
   // Recorded retries still pass through createOperatorTask's exact-payload check,
   // but never depend on the worker remaining idle after the original dispatch.
   const result = await createOperatorTask(store, (method, path, body) => {

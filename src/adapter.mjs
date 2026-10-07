@@ -38,10 +38,22 @@ export async function execute(ctx) {
       ? { scheduleId: ctx.context.relayScheduleId ?? ctx.context.paperclipWake.relayScheduleId } : {}),
   };
   let run;
+  let dispatchMayExist = Boolean(ctx.config.recoverRelayRunId);
   let timedOut = false;
   let lastError;
   while (true) {
     timedOut ||= Date.now() - started >= timeoutSec * 1000;
+    if (!run && !dispatchMayExist && (ctx.signal?.aborted || timedOut)) {
+      // A reconnect can arrive already cancelled. Look up existing work without
+      // creating it, but a rejected review dispatch needs no reconciliation.
+      if (!lastError) {
+        const runs = await call(connection, 'GET', '/runs');
+        dispatchMayExist = runs.some(existing => existing.request.companyId === dispatch.companyId &&
+          (existing.backendRunId ?? existing.request.runId) === dispatch.runId);
+      }
+      if (!dispatchMayExist) return { exitCode: 1, signal: null, timedOut,
+        errorMessage: `Relay dispatch ${timedOut ? 'timed out' : 'cancelled'} before a run was created` };
+    }
     try {
       if (!run) {
         if (!ctx.config.recoverRelayRunId && (ctx.context.wakeReason ?? ctx.context.paperclipWake?.reason) === 'issue_children_completed') {
@@ -55,8 +67,10 @@ export async function execute(ctx) {
               resultJson: { skipped: true, reason: decision.reason, relayRunId: decision.relayRunId, reviewInteractionId: decision.interactionId } };
           }
         }
+        if (!dispatchMayExist && (ctx.signal?.aborted || Date.now() - started >= timeoutSec * 1000)) continue;
         // A lost response may already have persisted the dispatch. Replay only
         // this immutable backend-run key, never manufacture a replacement run.
+        dispatchMayExist = true;
         run = ctx.config.recoverRelayRunId
           ? await call(connection, 'POST', `/runs/${encodeURIComponent(ctx.config.recoverRelayRunId)}/recover`, { ...dispatch, token: ctx.authToken })
           : await call(connection, 'POST', '/runs', dispatch);
@@ -65,6 +79,7 @@ export async function execute(ctx) {
       run = await call(connection, 'GET', `/runs/${run.id}`);
       requireValue((run.backendRunId ?? run.request.runId) === ctx.runId,
         'stale_backend_run', 'This adapter invocation has been replaced', 409);
+      timedOut ||= Date.now() - started >= timeoutSec * 1000;
       if ((ctx.signal?.aborted || timedOut) && run.nativeState !== 'settled') {
         run = await call(connection, 'POST', `/runs/${run.id}/cancel`, { runId: ctx.runId });
       }
@@ -95,14 +110,18 @@ export async function execute(ctx) {
       if (error.code === 'stale_backend_run') throw error;
       // A definitive dispatch rejection needs operator correction, not retries.
       // Once a run exists, loss of access is still not proof that work stopped.
-      if (!run && error.status >= 400 && error.status < 500) throw error;
+      if (!run && error.code === 'review_decision_uncertain') dispatchMayExist = false;
+      else if (!run && error.status >= 400 && error.status < 500) throw error;
       // A transport failure is not proof of native termination. Keep the run
       // supervised until Relay can reconcile it, without exposing credentials.
       const code = error.code ?? 'relay_unavailable';
       if (code !== lastError) await ctx.onLog('stderr', `${JSON.stringify({ code, relayRunId: run?.id, reconciliationPending: true })}\n`);
       lastError = code;
     }
-    await delay(250);
+    if (!run && !dispatchMayExist) {
+      await delay(Math.max(0, Math.min(250, timeoutSec * 1000 - (Date.now() - started))), undefined,
+        { signal: ctx.signal }).catch(error => { if (error.name !== 'AbortError') throw error; });
+    } else await delay(250);
   }
 }
 

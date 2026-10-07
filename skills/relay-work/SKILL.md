@@ -26,15 +26,17 @@ the runtime. The context file holds credentials. Do not print or copy its conten
 8. Stop editing the candidate after submission and finish your turn. Submission is
     not acceptance, commit authority or permission to terminate a runtime.
 
-`work read` includes `task.relayReviewPolicy`. Respect fixed `human` or `none`
-policy. For `agent_decides`, submit via `--file` with a `reviewDecision` object
+`work read` includes `task.relayReviewPolicy`. Respect fixed `human`, `none` or
+`coordinator` policy. For `agent_decides`, submit via `--file` with a `reviewDecision` object
 containing `mode: "none"` or `mode: "human"` and a specific `reason`. Use judgement
 based on the task and consequences. No-review still requires verified completion
 and publication; it does not bypass tool permissions or authorise external effects.
 When creating a delegated child, choose its `relayReviewPolicy` explicitly.
 Missing policy retains human review. The worker cannot downgrade a fixed policy.
-Coordinator-agent review is not implemented in this increment. Inspecting a
-child's result is not human approval and never permits self-acceptance.
+Experimental coordinator review requires a prior explicit human grant and a child
+opted in at creation. `agent_decides` is not coordinator authority. Inspecting a
+child's result is not human approval and never permits self-acceptance. The root
+parent's final review remains human. Never silently obtain or infer a grant.
 
 Retry identical requests with the same key. A changed payload requires a distinct
 attempt, not reuse of an old key. If a request is uncertain, inspect the exact run
@@ -71,6 +73,15 @@ Creation is not a reporting relationship, lifecycle grant or proof of completion
 Reuse the exact creation key and payload on retry, never a new key to escape an
 uncertain result.
 
+For explicitly granted coordinator review, `work read RUN` exposes
+`task.coordinatorReviewGrants` with `grantId`, `scope: "direct_children"` and
+`parentTaskId`. Set the child's `relayReviewPolicy` to `coordinator` and include
+`relayReviewGrantId` from that read. Only the current acknowledged parent reviewer
+may create such children, assigned to another agent. Policy and grant reference
+are immutable. Omission stays human, and grandchildren are not covered. Human-chat
+tools use `grantId` instead. Only the root's exact origin chat can issue
+`relay_coordinator_grant` or `relay_coordinator_revoke` on explicit human instruction.
+
 Collect child receipt IDs, then `work wait-children RUN --file children.json`:
 
 ```json
@@ -105,6 +116,41 @@ create/adopt tools and fixture-only verification, not live launch certification.
 
 For filesystem work, stop editing and compute the candidate with `candidate inspect
 --directory REPOSITORY_ROOT`. Include that digest in your submission. Reviewers
-independently recapture it, verify the work and use `result request|inspect|accept|reject
-CALLER_RUN --file review.json`. The JSON must identify the submitted run and exact
-candidate. Never accept your own submission or infer acceptance from a comment.
+independently recapture it and verify the work. Review disposition follows native
+settlement and publication. Never accept your own submission or infer acceptance
+from a comment.
+
+For granted children, `task inspect PARENT_RUN --task CHILD_ID` returns `relayReview`
+with submitted `runId`, `candidate`, `summary`, `state`, `interactionId` and applicable
+`grantId`. Inspect each child after an admitted continuation and acknowledge the
+exact parent run. Use `result inspect PARENT_RUN --file review.json`, then
+`result accept|reject PARENT_RUN --file review.json`. The file contains:
+
+```json
+{
+  "runId": "CHILD_SUBMITTED_RELAY_RUN_ID",
+  "candidate": "EXACT_SUBMITTED_CANDIDATE",
+  "reason": "Specific review findings and checks supporting this decision."
+}
+```
+
+Both decisions require a reason (maximum 4,000 characters). The caller must be the
+current claimed, acknowledged parent run in the granted binding revision/native
+conversation, without cancellation or a submitted final result. Relay resolves
+the exact interaction and requires backend resolver proof for that coordinator
+agent and backend run. Status alone is insufficient. An unconfirmed decision must
+not be reposted. Inspect evidence rather than changing IDs to bypass a conflict.
+
+Candidate-ready comments use the backend's standard wake path. A `recorded` comment
+receipt does not establish admission: `awaiting_admission` / `continuation_unconfirmed`
+remains pending, with no automatic repost. Rejection needs explicit follow-up for
+rework. No automatic rework wake is implemented. Do not duplicate tasks or mark them
+Done to force continuation.
+
+Human override remains available through the exact authorised chat, subject to
+conflicting decision intents. Revocation before disposition can recover to
+`human_only` under the original exact scope. Existing legacy `anyone` cards require
+explicit human review and matching recorded human proof, never agent approval.
+See `docs/coordinator-review.md` for limits. This feature is offline-tested. Live
+tests are user-deferred, and neither the final workflow nor complete autonomous
+recovery is claimed verified.

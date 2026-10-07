@@ -1,10 +1,11 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { validateTaskPolicy } from './task-policy.mjs';
 import { taskOrigins } from './task-origin.mjs';
+import { validateCoordinatorGrant } from './coordinator-review.mjs';
 
 function taskPayload(value, idempotencyKey) {
   requireValue(value && typeof value === 'object' && !Array.isArray(value), 'invalid_request', 'Task payload required');
-  const allowed = ['title', 'description', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'status', 'priority', 'relayReviewPolicy'];
+  const allowed = ['title', 'description', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'status', 'priority', 'relayReviewPolicy', 'relayReviewGrantId'];
   requireValue(Object.keys(value).every(key => allowed.includes(key)), 'invalid_request', 'Unsupported task creation field');
   requireValue(!(value.assigneeAgentId && value.assigneeUserId), 'invalid_request', 'Choose a human or agent assignee, not both');
   requireValue(value.description === undefined || typeof value.description === 'string', 'invalid_request', 'Description must be a string');
@@ -19,16 +20,60 @@ function taskPayload(value, idempotencyKey) {
     'invalid_status', 'Unsupported task status');
   requireValue(value.priority === undefined || ['critical', 'high', 'medium', 'low'].includes(value.priority), 'invalid_request', 'Unsupported task priority');
   if (value.relayReviewPolicy !== undefined) validateTaskPolicy(value.relayReviewPolicy);
-  const { relayReviewPolicy, ...fields } = value;
+  if (value.relayReviewPolicy === 'coordinator') text(value.relayReviewGrantId, 'relayReviewGrantId');
+  else requireValue(value.relayReviewGrantId === undefined, 'invalid_review_policy', 'Only coordinator review accepts a grant reference');
+  const { relayReviewPolicy, relayReviewGrantId, ...fields } = value;
   return { ...fields, title: text(value.title, 'title'), description: value.description ?? '', idempotencyKey };
 }
 
+function coordinatorCreationScope(store, request, companyId, run, expected) {
+  if (request.relayReviewPolicy !== 'coordinator') return null;
+  const grant = validateCoordinatorGrant(store, request.relayReviewGrantId, { companyId, parentTaskId: request.body.parentId });
+  const scope = grant.request;
+  requireValue(!expected || canonical(scope) === canonical(expected.request),
+    'coordinator_grant_scope_changed', 'Coordinator grant changed during task creation', 409);
+  requireValue(typeof request.body.assigneeAgentId === 'string' && request.body.assigneeAgentId.trim() &&
+    request.body.assigneeAgentId !== scope.reviewerAgentId && !request.body.assigneeUserId,
+  'invalid_coordinator_child', 'Coordinator children must be assigned to an independent agent', 403);
+  if (run) {
+    const live = store.run(run.id);
+    requireValue(canonical(live.request) === canonical(run.request) && live.conversationId === run.conversationId &&
+      (live.backendRunId ?? live.request.runId) === (run.backendRunId ?? run.request.runId) &&
+      live.nativeState === 'claimed' && live.deliveryState === 'acknowledged' && !live.cancellationRequested && !live.result && !live.waiting &&
+      run.request.taskId === scope.parentTaskId && run.request.bindingId === scope.reviewerBindingId &&
+      run.request.bindingRevision === scope.reviewerBindingRevision && run.request.agentId === scope.reviewerAgentId &&
+      run.conversationId === scope.reviewerConversationId,
+    'coordinator_reviewer_mismatch', 'Only the current acknowledged parent reviewer may create coordinator children', 403);
+  } else {
+    const origin = request.origin;
+    const binding = origin && store.binding(origin.bindingId, false);
+    const bridge = binding && store.operation(`opencode-bridge:${binding.id}`);
+    requireValue(origin && ['bindingId', 'conversationId', 'sessionCreatedAt'].every(field => origin[field] === scope.origin[field]) &&
+      binding && !binding.lifecycleState && binding.config.companyId === companyId &&
+      binding.config.harness === 'opencode' && binding.config.delivery === 'pull' && binding.config.conversationId === origin.conversationId &&
+      bridge?.state === 'armed' && bridge.identity?.bindingId === origin.bindingId &&
+      bridge.identity.conversationId === origin.conversationId && bridge.sessionCreatedAt === origin.sessionCreatedAt,
+    'invalid_origin', 'Coordinator creation requires the exact native grant origin', 403);
+  }
+  return grant;
+}
+
+function coordinatorParent(parent, grant, run) {
+  requireValue(parent?.id === grant.request.parentTaskId && parent.companyId === grant.request.companyId && !parent.parentId &&
+    parent.assigneeAgentId === grant.request.reviewerAgentId && !parent.assigneeUserId &&
+    ['backlog', 'todo', 'in_progress', 'blocked', 'in_review'].includes(parent.status) &&
+    (!run || !parent.executionRunId || parent.executionRunId === (run.backendRunId ?? run.request.runId)),
+  'coordinator_parent_scope_changed', 'Backend parent must remain a nonterminal root assigned to this reviewer', 409);
+}
+
 export async function createOperatorTask(store, api, input) {
+  input = structuredClone(input);
   const companyId = text(input.companyId, 'companyId');
   const key = text(input.key, 'key');
   const id = `operator-task:${digest([companyId, key])}`;
   const request = { companyId, body: taskPayload(input.payload, `relay-operator:${digest([companyId, key])}`) };
   if (input.payload.relayReviewPolicy !== undefined) request.relayReviewPolicy = input.payload.relayReviewPolicy;
+  if (input.payload.relayReviewGrantId !== undefined) request.relayReviewGrantId = input.payload.relayReviewGrantId;
   if (input.origin !== undefined) {
     const origin = input.origin;
     requireValue(origin && Object.keys(origin).every(key => ['bindingId', 'conversationId', 'sessionCreatedAt', 'sourceMessageId', 'sourceDigest'].includes(key)),
@@ -48,6 +93,7 @@ export async function createOperatorTask(store, api, input) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Task creation key has a different payload', 409);
     if (operation.state === 'recorded') return operation;
   }
+  const grant = coordinatorCreationScope(store, request, companyId);
   const parentOrigin = () => {
     const parent = taskOrigins(store).find(task => task.request.companyId === companyId && task.receipt.id === request.body.parentId);
     requireValue(parent && ['bindingId', 'conversationId', 'sessionCreatedAt'].every(field =>
@@ -59,6 +105,7 @@ export async function createOperatorTask(store, api, input) {
   // Validate explicit resource scope before creating. Paperclip remains authority
   // for membership/assignment permissions and validates the mutation itself.
   const company = await api('GET', `/api/companies/${encodeURIComponent(companyId)}`);
+  coordinatorCreationScope(store, request, companyId, null, grant);
   requireValue(company.id === companyId, 'identity_mismatch', 'Company identity changed', 409);
   const checks = [
     ...(request.body.parentId && !ownedParent ? [['issues', request.body.parentId]] : []),
@@ -68,16 +115,24 @@ export async function createOperatorTask(store, api, input) {
   ];
   for (const [collection, resourceId] of checks) {
     const resource = await api('GET', `/api/${collection}/${encodeURIComponent(resourceId)}`);
+    coordinatorCreationScope(store, request, companyId, null, grant);
     requireValue(resource.id === resourceId && resource.companyId === companyId, 'forbidden', 'Task resource belongs to another company', 403);
   }
   if (ownedParent) {
     const parent = await api('GET', `/api/issues/${encodeURIComponent(request.body.parentId)}`);
+    coordinatorCreationScope(store, request, companyId, null, grant);
+    if (grant) coordinatorParent(parent, grant);
     requireValue(parent.id === request.body.parentId && parent.companyId === companyId,
       'forbidden', 'Parent task belongs to another company', 403);
     requireValue(['backlog', 'todo', 'in_progress', 'blocked', 'in_review'].includes(parent.status),
       'parent_unavailable', 'Parent task must be nonterminal', 409);
     requireValue(canonical(parentOrigin()) === canonical(ownedParent),
       'parent_scope_changed', 'Recorded parent origin changed during task creation', 409);
+  }
+  operation = store.operation(id);
+  if (operation) {
+    requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Task creation key has a different payload', 409);
+    if (operation.state === 'recorded') return operation;
   }
   if (!operation) operation = store.saveOperation({ id, runId: '', request, state: 'uncertain' });
   // This endpoint supports idempotency keys; uncertainty reuses the exact key/body.
@@ -89,6 +144,8 @@ export async function createOperatorTask(store, api, input) {
 
 // Persist integration mutation intent and response, not a second task store.
 export async function mutate(store, run, token, api, input) {
+  input = structuredClone(input);
+  if (input.kind === 'task.create' && input.payload?.relayReviewPolicy === 'coordinator') run = structuredClone(run);
   const key = text(input.key, 'key');
   const kind = text(input.kind, 'kind');
   const taskId = input.taskId ?? run.request.taskId;
@@ -150,6 +207,7 @@ export async function mutate(store, run, token, api, input) {
   const operationId = digest([run.request.companyId, run.request.bindingId, kind, key]);
   const request = { kind, method, path, body };
   if (kind === 'task.create' && input.payload.relayReviewPolicy !== undefined) request.relayReviewPolicy = input.payload.relayReviewPolicy;
+  if (kind === 'task.create' && input.payload.relayReviewGrantId !== undefined) request.relayReviewGrantId = input.payload.relayReviewGrantId;
   let operation = store.operation(operationId);
   if (operation) {
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Operation key has a different payload', 409);
@@ -169,7 +227,19 @@ export async function mutate(store, run, token, api, input) {
       }
       requireValue(false, 'operation_uncertain', 'Backend does not confirm this mutation. No replay is authorised.', 409);
     }
-  } else operation = store.saveOperation({ id: operationId, runId: run.id, request, state: 'uncertain' });
+  }
+  const grant = coordinatorCreationScope(store, request, run.request.companyId, run);
+  if (grant) {
+    const parent = await api(run, token, 'GET', `/api/issues/${encodeURIComponent(request.body.parentId)}`);
+    coordinatorCreationScope(store, request, run.request.companyId, run, grant);
+    coordinatorParent(parent, grant, run);
+    operation = store.operation(operationId);
+    if (operation) {
+      requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Operation key has a different payload', 409);
+      if (operation.state === 'recorded') return operation;
+    }
+  }
+  if (!operation) operation = store.saveOperation({ id: operationId, runId: run.id, request, state: 'uncertain' });
   const receipt = await api(run, token, method, path, body);
   return store.saveOperation({ ...operation, state: 'recorded', receipt });
 }

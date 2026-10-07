@@ -97,7 +97,7 @@ test('harness review decisions require the exact latest candidate and never repl
     store.acknowledge(run.id); store.submit(run.id, { key: 'one', candidate: 'candidate', summary: 'Answer' });
     store.publication(run.id, { state: 'recorded' }); store.settle(run.id, { outcome: 'completed', evidence: 'Finished' });
     run = store.recordReview(run.id, { interactionId: 'review', candidate: 'candidate', status: 'pending' });
-    const item = { id: 'review', kind: 'request_confirmation', status: scenario === 'conflict' ? 'rejected' : 'pending',
+    const item = { id: 'review', kind: 'request_confirmation', resolverPolicy: 'human_only', status: scenario === 'conflict' ? 'rejected' : 'pending',
       createdAt: new Date(Date.now() - 1000).toISOString(), idempotencyKey: `relay-review:${run.id}:${digest(run.result)}`,
       payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: 'candidate', label: run.id } } };
     const bridge = store.saveOperation({ id: 'opencode-bridge:worker', runId: '', state: 'armed',
@@ -110,6 +110,8 @@ test('harness review decisions require the exact latest candidate and never repl
         posts++;
         if (scenario === 'uncommitted') throw new Error('lost');
         item.status = input.decision === 'accept' ? 'accepted' : 'rejected';
+        item.result = { version: 1, outcome: item.status, reason: input.decision === 'reject' ? input.reason : null };
+        item.resolvedByUserId = 'board-user';
         if (scenario === 'lost') throw new Error('lost');
       }
       return path.endsWith('/interactions') ? [item] : { id: 'task', companyId: 'company', assigneeAgentId: 'agent', status: 'in_review' };
@@ -148,7 +150,7 @@ function reviewFixture(t) {
     return store.recordReview(run.id, { interactionId: `review-${candidate}`, candidate, status: 'pending' });
   };
   f.run = f.complete();
-  f.item = { id: f.run.review.interactionId, kind: 'request_confirmation', status: 'pending',
+  f.item = { id: f.run.review.interactionId, kind: 'request_confirmation', resolverPolicy: 'human_only', status: 'pending',
     createdAt: new Date(Date.now() - 1000).toISOString(), idempotencyKey: `relay-review:${f.run.id}:${digest(f.run.result)}`,
     payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: f.run.result.candidate, label: f.run.id } } };
   f.issue = { id: 'task', companyId: 'company', assigneeAgentId: 'agent-worker', status: 'in_review',
@@ -162,7 +164,12 @@ function reviewFixture(t) {
     source: { id: 'human', text: 'Accept this result', createdAt: Date.now() } };
   f.api = async (method, path, body) => {
     f.calls.push({ method, path, body });
-    if (method === 'POST') f.item.status = path.endsWith('/accept') ? 'accepted' : 'rejected';
+    if (method === 'POST') {
+      f.item.status = path.endsWith('/accept') ? 'accepted' : 'rejected';
+      f.item.result = { version: 1, outcome: f.item.status, reason: body.reason ?? null };
+      f.item.resolvedByUserId = 'board-user';
+      f.item.resolvedByAgentId = null; f.item.resolvedByRunId = null;
+    }
     return structuredClone(path.endsWith('/interactions') ? [f.item] : f.issue);
   };
   f.invoke = (action = 'review', input = {}, bridge = f.bridge, api = f.api) => harnessReview(store, bridge, action,
@@ -200,6 +207,93 @@ test('worker-chat human review remains local and candidate is optional for loade
   assert.equal((await f.invoke('reviews', {}, f.worker)).reviews[0].scope, 'local');
   assert.equal((await f.invoke('review', { candidate: undefined }, f.worker)).status, 'accepted');
   assert.equal(f.intent().request.bindingId, 'worker');
+});
+
+for (const state of ['uncertain', 'recorded']) {
+  for (const stage of [0, 1, 2, 3]) {
+    test(`${state} coordinator intent at await ${stage} prevents a competing human POST`, async t => {
+      const f = reviewFixture(t);
+      const decision = { id: `review-decision:${digest(['company', 'task'])}`, runId: 'coordinator-run',
+        targetRunId: f.run.id, companyId: 'company', taskId: 'task', candidate: f.run.result.candidate,
+        resultDigest: digest(f.run.result), interactionId: f.item.id, action: 'accept', policy: 'coordinator',
+        state, ...(state === 'recorded' ? { confirmed: true } : {}) };
+      if (!stage) f.store.saveOperation(decision);
+      let calls = 0;
+      const api = async (...args) => {
+        const result = await f.api(...args);
+        if (++calls === stage) f.store.saveOperation(decision);
+        return result;
+      };
+      await assert.rejects(f.invoke('review', {}, f.bridge, api), { code: 'review_conflict' });
+      assert.equal(f.posts().length, 0);
+      assert.equal(f.intent(), null);
+      assert.deepEqual(f.store.operation(decision.id), decision);
+    });
+  }
+}
+
+for (const [state, targetRunId, candidate, blocked] of [
+  ['uncertain', 'older-run', 'older-candidate', true],
+  ['recorded', 'older-run', 'candidate', true],
+  ['recorded', 'older-run', 'older-candidate', false],
+]) {
+  test(`${state} coordinator decision for ${targetRunId}/${candidate} ${blocked ? 'blocks' : 'allows'} human review`, async t => {
+    const f = reviewFixture(t);
+    const decision = f.store.saveOperation({ id: `review-decision:${digest(['company', 'task'])}`,
+      runId: 'coordinator-run', targetRunId, candidate, state });
+    if (blocked) await assert.rejects(f.invoke(), { code: 'review_conflict' });
+    else assert.equal((await f.invoke()).status, 'accepted');
+    assert.equal(f.posts().length, blocked ? 0 : 1);
+    assert.equal(f.intent()?.state ?? null, blocked ? null : 'recorded');
+    assert.deepEqual(f.store.operation(decision.id), decision);
+  });
+}
+
+test('recorded coordinator acceptance cannot be adopted as human proof', async t => {
+  const f = reviewFixture(t);
+  f.item.status = 'accepted';
+  f.store.saveOperation({ id: `review-decision:${digest(['company', 'task'])}`, runId: 'coordinator-run',
+    targetRunId: f.run.id, candidate: f.run.result.candidate, interactionId: f.item.id,
+    state: 'recorded', confirmed: true, action: 'accept' });
+  await assert.rejects(f.invoke(), { code: 'review_conflict' });
+  assert.equal(f.posts().length, 0);
+  assert.equal(f.intent(), null);
+});
+
+for (const caller of ['origin', 'worker']) {
+  test(`${caller} human can override coordinator policy without a coordinator intent`, async t => {
+    const f = reviewFixture(t);
+    f.task.request.relayReviewPolicy = 'coordinator';
+    f.store.saveOperation(f.task);
+    f.item.resolverPolicy = 'not_creator';
+    const receipt = await f.invoke('review', {}, caller === 'origin' ? f.bridge : f.worker);
+    assert.equal(receipt.status, 'accepted');
+    assert.equal(f.posts().length, 1);
+    assert.equal(f.intent().state, 'recorded');
+    assert.equal(f.intent().request.sourceMessageId, f.input.source.id);
+    assert.equal(f.intent().request.sourceDigest, digest(f.input.source.text));
+    assert.deepEqual(f.store.operation(f.task.id), f.task);
+  });
+}
+
+test('origin human can accept a coordinator child through recorded descendant lineage', async t => {
+  const f = reviewFixture(t);
+  f.add('coordinator');
+  const parent = f.complete('coordinator', 'parent', 'parent-candidate');
+  f.task.request.body.assigneeAgentId = 'agent-coordinator';
+  f.task.receipt = { id: 'parent', companyId: 'company', assigneeAgentId: 'agent-coordinator' };
+  f.store.saveOperation(f.task);
+  const child = f.store.saveOperation({ id: 'operation:child', runId: parent.id, state: 'recorded', request: {
+    kind: 'task.create', method: 'POST', path: '/api/companies/company/issues', relayReviewPolicy: 'coordinator',
+    body: { parentId: 'parent', assigneeAgentId: 'agent-worker' },
+  }, receipt: { ...f.issue, parentId: 'parent' } });
+  f.item.resolverPolicy = 'not_creator';
+  assert.equal((await f.invoke('reviews')).reviews[0].scope, 'delegated');
+  assert.equal((await f.invoke()).status, 'accepted');
+  assert.equal(f.intent().state, 'recorded');
+  assert.equal(f.intent().request.bindingId, 'origin');
+  assert.equal(f.posts().length, 1);
+  assert.deepEqual(f.store.operation(child.id), child);
 });
 
 for (const [name, change] of [
@@ -463,6 +557,8 @@ test('matching dashboard decisions reconcile without a POST but conflicting deci
   for (const decision of ['accept', 'reject']) {
     const f = reviewFixture(t);
     f.item.status = decision === 'accept' ? 'accepted' : 'rejected';
+    f.item.result = { version: 1, outcome: f.item.status, reason: decision === 'reject' ? f.input.reason : null };
+    f.item.resolvedByUserId = 'board-user';
     await assert.rejects(f.invoke('review', { decision: decision === 'accept' ? 'reject' : 'accept' }), { code: 'review_conflict' });
     assert.equal(f.intent(), null);
     assert.equal((await f.invoke('review', { decision })).status, f.item.status);
@@ -533,7 +629,7 @@ test('lost pending intent fences the task across bindings but not unrelated task
   assert.equal((await f.invoke('reviews')).decisions[0].receipt, undefined);
 });
 
-test('lifecycle completion can finish during acceptance without stranding its harness intent', async t => {
+test('human_only lifecycle completion can finish during acceptance without stranding its harness intent', async t => {
   const f = reviewFixture(t);
   f.store.saveOperation({ id: `review-disposition:${f.run.id}`, runId: f.run.id, state: 'waiting',
     candidate: f.run.result.candidate, interactionId: f.item.id });
@@ -559,6 +655,39 @@ test('lifecycle completion can finish during acceptance without stranding its ha
   assert.deepEqual(await f.invoke(), receipt);
   assert.equal(f.posts().length, 1);
   assert.equal(f.dispatch().nativeState, 'unclaimed');
+});
+
+test('legacy permissive acceptance needs recorded harness proof before lifecycle completion', async t => {
+  const f = reviewFixture(t);
+  f.item.resolverPolicy = 'not_creator';
+  f.store.saveOperation({ id: `review-disposition:${f.run.id}`, runId: f.run.id, state: 'waiting',
+    candidate: f.run.result.candidate, interactionId: f.item.id });
+  const operatorApi = async (method, path, body) => {
+    if (path.startsWith('/api/heartbeat-runs/')) return { id: f.run.request.runId, companyId: 'company',
+      agentId: 'agent-worker', status: 'succeeded' };
+    if (method === 'PATCH') f.issue.status = body.status;
+    return f.api(method, path, body);
+  };
+  const receipt = await f.invoke('review', {}, f.bridge, async (...args) => {
+    const result = await f.api(...args);
+    if (args[0] === 'POST') {
+      await reconcileCompletions(f.store, operatorApi);
+      assert.equal(f.intent().state, 'uncertain');
+      assert.equal(f.issue.status, 'in_review');
+      assert.equal(f.store.operation(`completion:${f.run.id}`), null);
+      assert.equal(f.store.operation(`review-disposition:${f.run.id}`).reason, 'human_review_required');
+    }
+    return result;
+  });
+  assert.equal(receipt.status, 'accepted');
+  const proof = f.intent();
+  assert.equal(proof.state, 'recorded');
+  await reconcileCompletions(f.store, operatorApi);
+  assert.equal(f.issue.status, 'done');
+  assert.equal(f.store.operation(`completion:${f.run.id}`).state, 'recorded');
+  assert.deepEqual(f.intent(), proof);
+  assert.deepEqual(await f.invoke(), receipt);
+  assert.equal(f.posts().length, 1);
 });
 
 test('decision discovery omits private intent and receipt fields', async t => {
@@ -588,6 +717,7 @@ test('persisted older intents retain task fencing, replay and exact retry compat
   f.store.recover(f.run.id, recovered);
   assert.equal(f.store.dispatch(recovered).id, f.run.id);
   f.item.status = 'accepted'; f.issue.status = 'done';
+  f.item.result = { version: 1, outcome: 'accepted', reason: null }; f.item.resolvedByUserId = 'board-user';
   assert.equal((await f.invoke('review', { candidate: undefined })).status, 'accepted');
   assert.equal(f.dispatch().nativeState, 'unclaimed');
 });
@@ -670,3 +800,107 @@ for (const first of ['origin', 'worker']) {
     });
   }
 }
+
+for (const lost of [false, true]) {
+  test(`rejection confirms with an immediate backend execution${lost ? ' after a lost reply' : ''}`, async t => {
+    const f = reviewFixture(t);
+    const api = async (...args) => {
+      const result = await f.api(...args);
+      if (args[0] === 'POST') {
+        f.issue.executionRunId = 'new-backend-run'; f.issue.status = 'in_progress';
+        if (lost) throw new Error('Lost reply');
+      }
+      return result;
+    };
+    if (lost) await assert.rejects(f.invoke('review', { decision: 'reject' }, f.bridge, api), /Lost reply/);
+    const receipt = await f.invoke('review', { decision: 'reject' }, f.bridge, api);
+    assert.equal(receipt.status, 'rejected');
+    assert.equal(f.intent().state, 'recorded');
+    assert.equal(f.store.run(f.run.id).review.status, 'rejected');
+    assert.equal(f.posts().length, 1);
+    assert.equal(f.issue.executionRunId, 'new-backend-run');
+    assert.equal(f.issue.status, 'in_progress');
+    const next = f.complete('worker', 'task', 'next-candidate');
+    const active = f.dispatch('worker');
+    assert.deepEqual(await f.invoke('review', { decision: 'reject' }, f.bridge, api), receipt);
+    assert.deepEqual((await f.invoke('reviews')).decisions[0].receipt, receipt);
+    assert.deepEqual(f.store.run(next.id), next);
+    assert.deepEqual(f.store.run(active.id), active);
+    assert.equal(f.posts().length, 1);
+  });
+}
+
+for (const status of ['done', 'cancelled']) {
+  test(`persisted rejection can read back on ${status} without a new POST`, async t => {
+    const f = reviewFixture(t);
+    await assert.rejects(f.invoke('review', { decision: 'reject' }, f.bridge, async (...args) => {
+      const result = await f.api(...args);
+      if (args[0] === 'POST') throw new Error('Lost reply');
+      return result;
+    }), /Lost reply/);
+    f.issue.status = status;
+    const request = f.intent().request;
+    assert.equal((await f.invoke('review', { decision: 'reject' })).status, 'rejected');
+    assert.deepEqual(f.intent().request, request);
+    assert.equal(f.posts().length, 1);
+  });
+}
+
+for (const [name, change] of [
+  ['missing human', item => { delete item.resolvedByUserId; }],
+  ['empty human', item => { item.resolvedByUserId = ' '; }],
+  ['agent', item => { item.resolvedByAgentId = 'agent'; }],
+  ['run', item => { item.resolvedByRunId = 'run'; }],
+  ['result outcome', item => { item.result.outcome = 'accepted'; }],
+  ['reason', item => { item.result.reason = 'Different changes'; }],
+  ['missing reason', item => { delete item.result.reason; }],
+  ['company', item => { item.companyId = 'other'; }],
+  ['task', item => { item.issueId = 'other'; }],
+]) {
+  test(`rejection readback rejects mismatched ${name}`, async t => {
+    const f = reviewFixture(t);
+    await assert.rejects(f.invoke('review', { decision: 'reject' }, f.bridge, async (...args) => {
+      const result = await f.api(...args);
+      if (args[0] === 'POST') { f.issue.executionRunId = 'new-backend-run'; change(f.item); }
+      return result;
+    }), { code: 'review_uncertain' });
+    const intent = f.intent();
+    await assert.rejects(f.invoke('review', { decision: 'reject' }), { code: 'review_uncertain' });
+    assert.deepEqual(f.intent(), intent);
+    assert.equal(f.store.run(f.run.id).review.status, 'pending');
+    assert.equal(f.posts().length, 1);
+  });
+}
+
+test('POST readback never overwrites a concurrently replaced intent', async t => {
+  const f = reviewFixture(t);
+  let replacement;
+  await assert.rejects(f.invoke('review', {}, f.bridge, async (...args) => {
+    const result = await f.api(...args);
+    if (args[0] === 'POST') replacement = f.store.saveOperation({ ...f.intent(), request: { ...f.intent().request, sourceDigest: 'changed' } });
+    return result;
+  }), { code: 'review_conflict' });
+  assert.deepEqual(f.intent(), replacement);
+  assert.equal(f.store.run(f.run.id).review.status, 'pending');
+});
+
+test('active backend execution never authorises adoption of a decision without an intent', async t => {
+  const f = reviewFixture(t);
+  f.issue.executionRunId = 'new-run';
+  f.item.status = 'rejected'; f.item.result = { version: 1, outcome: 'rejected', reason: f.input.reason };
+  f.item.resolvedByUserId = 'board-user';
+  await assert.rejects(f.invoke('review', { decision: 'reject' }), { code: 'review_not_found' });
+  assert.equal(f.intent(), null);
+  assert.equal(f.posts().length, 0);
+});
+
+test('later coordinator intent cannot prevent read-only recovery of an older recorded receipt', async t => {
+  const f = reviewFixture(t);
+  const receipt = await f.invoke('review', { decision: 'reject' });
+  const next = f.complete('worker', 'task', 'next');
+  const coordinator = f.store.saveOperation({ id: `review-decision:${digest(['company', 'task'])}`, runId: 'coordinator',
+    targetRunId: next.id, candidate: next.result.candidate, state: 'uncertain', action: 'accept' });
+  assert.deepEqual(await f.invoke('review', { decision: 'reject' }), receipt);
+  assert.deepEqual(f.store.operation(coordinator.id), coordinator);
+  assert.equal(f.posts().length, 1);
+});

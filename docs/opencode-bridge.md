@@ -204,6 +204,36 @@ for later enrolment; no native resources are removed.
 
 ## Verification
 
+### Rejection Rework
+
+DEF-20 exercised rejection in tmp on 2026-10-07 without modifying access. Paperclip
+confirmed the human rejection of `REWORK TEST v1` and immediately requested a
+continuation despite the review card's `continuationPolicy: none` (its review-path
+recovery behaviour). Relay's old decision readback rejected the new execution
+owner, left the decision uncertain, and refused the continuation at admission.
+Paperclip then placed the task under execution reconciliation.
+
+The fix separates confirmation of an already-attempted exact human decision from
+new execution admission. Background reconciliation reads the exact candidate,
+interaction, reason and human resolver without reposting. The adapter waits within
+its deadline for an unresolved decision instead of immediately failing the wake.
+Automated coverage includes continuation racing rejection readback, lost replies,
+wrong human receipts, cancellation and bounded admission waits.
+
+After deployment, the original rejection reconciled to recorded. The failed
+backend wake had no Relay run or native delivery intent. Its terminal failure and
+cleanup events were inspected before resolving that exact recovery action through
+Paperclip's supported endpoint with `actionOutcome: not_performed`. This explicit
+recovery continued the SAME task in the SAME native tmp conversation and produced
+`REWORK TEST v2`, published and pending human review. No replacement task, manual
+native prompt or repeated rejection was used. This proves evidence-based recovery,
+not a fully automatic rejection cycle: a fresh rejection after the fix is still
+needed to verify the uninterrupted path. V2 was not automatically approved.
+The user explicitly accepted v2 from the originating chat. Relay confirmed Done
+at `2026-10-07T13:52:14.286Z` and announced its completion toast at
+`2026-10-07T13:52:22.435Z`; the user confirmed seeing it. The implementation
+checkpoint passed 855 automated tests plus syntax and diff whitespace checks.
+
 ### Chat Return Path
 
 DEF-18 verified the live chat-origin round trip on 2026-10-06. The originating

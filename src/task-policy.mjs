@@ -1,7 +1,7 @@
 import { requireValue } from './protocol.mjs';
 
 export function validateTaskPolicy(policy) {
-  requireValue(['none', 'human', 'agent_decides'].includes(policy), 'invalid_review_policy', 'Use none, human or agent_decides');
+  requireValue(['none', 'human', 'agent_decides', 'coordinator'].includes(policy), 'invalid_review_policy', 'Use none, human, agent_decides or coordinator');
   return policy;
 }
 

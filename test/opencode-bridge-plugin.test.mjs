@@ -106,7 +106,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   } };
   hooks = await plugin({ client, directory: '/work' }, { configDirectory });
   const tools = hooks.tool;
-  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_delegate', 'relay_delegations', 'relay_questions', 'relay_review', 'relay_reviews', 'relay_worker_prepare', 'relay_workers']);
+  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_questions', 'relay_review', 'relay_reviews', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();
   for (const tool of Object.values(tools)) {
     assert.equal(typeof tool.execute, 'function');
@@ -317,6 +317,10 @@ test(`discovery delegates native requests, announces UI-only results and accepts
       res.end(JSON.stringify([reviewItem]));
     } else if (req.method === 'POST' && req.url === '/api/issues/task/interactions/review/accept') {
       reviewItem.status = 'accepted';
+      reviewItem.result = { version: 1, outcome: 'accepted' };
+      reviewItem.resolvedByUserId = 'local-user';
+      reviewItem.resolvedByAgentId = null;
+      reviewItem.resolvedByRunId = null;
       if (loseAcceptanceResponse) {
         reviewIssue.status = 'done';
         res.statusCode = 502;
@@ -524,7 +528,7 @@ test(`discovery delegates native requests, announces UI-only results and accepts
   store.settle(reviewRun.id, { outcome: 'completed', evidence: 'Fixture review candidate finished' });
   store.recordReview(reviewRun.id, { interactionId: 'review', status: 'pending', candidate: 'review-revision' });
   reviewIssue = { ...delegated.receipt, status: 'in_review' };
-  reviewItem = { id: 'review', kind: 'request_confirmation', status: 'pending', createdAt: new Date().toISOString(),
+  reviewItem = { id: 'review', kind: 'request_confirmation', resolverPolicy: 'human_only', status: 'pending', createdAt: new Date().toISOString(),
     idempotencyKey: `relay-review:${reviewRun.id}:${digest(store.run(reviewRun.id).result)}`,
     payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: 'review-revision', label: reviewRun.id } } };
   store.saveOperation({ id: `review-disposition:${reviewRun.id}`, runId: reviewRun.id, state: 'waiting',
@@ -786,7 +790,8 @@ test('worker tools validate native authority, remain read-only on inspection and
   assert.equal(requests.length, requestCount, 'Retry preserves the parent without creating another child');
 });
 
-test('answer tool reads the current native message, asks permission and resolves only its exact waiting question', async t => {
+for (const decision of ['accept', 'reject']) {
+test(`answer tool reads the current native message, asks permission and resolves only its exact waiting question (review: ${decision})`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'relay-plugin-answer-'));
   const bin = join(root, 'bin'); mkdirSync(bin);
   const prior = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
@@ -794,12 +799,23 @@ test('answer tool reads the current native message, asks permission and resolves
   writeFileSync(join(bin, 'herdr'), `#!${process.execPath}\nconsole.log(${JSON.stringify(JSON.stringify({ result: { agents: [pane] } }))});\n`, { mode: 0o700 });
   Object.assign(process.env, { PATH: `${bin}:${prior.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: 'pane' });
   let question, posts = 0;
+  const issue = { id: 'task', companyId: 'company', assigneeAgentId: 'agent', status: 'in_progress' };
+  const requests = [];
   const backend = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
+    requests.push({ method: req.method, path: req.url, body: body ? JSON.parse(body) : undefined,
+      executionRunId: issue.executionRunId });
     res.setHeader('Content-Type', 'application/json');
-    if (req.method === 'POST') { posts++; question.status = req.url.endsWith('/accept') ? 'accepted' : 'answered'; question.result = JSON.parse(body); }
-    res.end(JSON.stringify(req.url.endsWith('/interactions') ? [question] : req.method === 'POST' ? question :
-      { id: 'task', companyId: 'company', assigneeAgentId: 'agent', status: 'in_progress' }));
+    if (req.method === 'POST') {
+      posts++;
+      question.status = req.url.endsWith('/accept') ? 'accepted' : req.url.endsWith('/reject') ? 'rejected' : 'answered';
+      question.result = { version: 1, outcome: question.status, ...JSON.parse(body) };
+      question.resolvedByUserId = 'local-user';
+      question.resolvedByAgentId = null;
+      question.resolvedByRunId = null;
+      if (question.status === 'rejected') issue.executionRunId = 'backend-rejection-continuation';
+    }
+    res.end(JSON.stringify(req.url.endsWith('/interactions') ? [question] : req.method === 'POST' ? question : issue));
   });
   await new Promise(resolve => backend.listen(0, '127.0.0.1', resolve));
   const auth = join(root, 'backend.json'); writeFileSync(auth, '{"localTrusted":true}');
@@ -852,17 +868,166 @@ test('answer tool reads the current native message, asks permission and resolves
   store.publication(completed.id, { state: 'recorded' });
   store.settle(completed.id, { outcome: 'completed', evidence: 'Fixture terminal' });
   store.recordReview(completed.id, { interactionId: 'review', status: 'pending', candidate: 'candidate' });
-  question = { id: 'review', kind: 'request_confirmation', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(),
+  question = { id: 'review', kind: 'request_confirmation', resolverPolicy: 'human_only', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(),
     idempotencyKey: `relay-review:${completed.id}:${digest(store.run(completed.id).result)}`,
     payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: 'candidate', label: completed.id } } };
   messages[0].info.id = 'approval'; messages[0].info.time.created = Date.now();
-  messages[0].parts[0].text = 'accpeted'; messages[1].info.parentID = 'approval';
+  const sourceText = decision === 'accept' ? 'accpeted' : 'Reject this result. Add the missing regression test.';
+  const args = { decision, ...(decision === 'reject' ? { reason: 'Add the missing regression test.' } : {}) };
+  messages[0].parts[0].text = sourceText; messages[1].info.parentID = 'approval';
   assert.equal(JSON.parse(await hooks.tool.relay_reviews.execute({}, context)).reviews.length, 1);
-  await assert.rejects(hooks.tool.relay_review.execute({ decision: 'accept' }, denied), /Permission denied/);
+  await assert.rejects(hooks.tool.relay_review.execute(args, denied), /Permission denied/);
   assert.equal(posts, 1);
-  assert.equal(JSON.parse(await hooks.tool.relay_review.execute({ decision: 'accept' }, context)).status, 'accepted');
+  const receipt = JSON.parse(await hooks.tool.relay_review.execute(args, context));
+  assert.equal(receipt.status, decision === 'accept' ? 'accepted' : 'rejected');
+  assert.equal(receipt.interactionId, 'review');
   assert.equal(approvals.at(-1).permission, 'relay_review');
   assert.equal(approvals.at(-1).metadata.candidate, 'candidate');
-  assert.equal(approvals.at(-1).metadata.sourceText, 'accpeted');
+  assert.equal(approvals.at(-1).metadata.sourceText, sourceText);
+  const reviewPost = requests.findIndex(request => request.method === 'POST' && request.path.endsWith(`/review/${decision}`));
+  assert.ok(reviewPost >= 0);
+  assert.deepEqual(requests[reviewPost].body, decision === 'reject' ? { reason: args.reason } : {});
+  assert.deepEqual(requests.slice(reviewPost + 1), [
+    { method: 'GET', path: '/api/issues/task', body: undefined, executionRunId: issue.executionRunId },
+    { method: 'GET', path: '/api/issues/task/interactions', body: undefined, executionRunId: issue.executionRunId },
+  ], 'The committed decision is read back after the POST, even when rejection starts a continuation');
+  if (decision === 'reject') {
+    assert.equal(issue.executionRunId, 'backend-rejection-continuation');
+    assert.equal(question.result.reason, args.reason);
+  }
+  const recorded = store.operation(`harness-review:${digest(['company', 'review'])}`);
+  assert.equal(recorded.state, 'recorded');
+  assert.deepEqual(recorded.receipt, receipt);
+  assert.equal(store.run(completed.id).review.status, receipt.status);
+  assert.deepEqual(JSON.parse(await hooks.tool.relay_review.execute(args, context)), receipt,
+    'The exact human decision remains retryable after readback without another POST');
   assert.equal(posts, 2);
+});
+}
+
+test('coordinator tools require permission and re-read the latest native human message before grant and revoke', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'relay-plugin-coordinator-'));
+  const bin = join(root, 'bin'); mkdirSync(bin);
+  const directory = join(root, 'relay');
+  const prior = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
+  const pane = { agent: 'opencode', agent_session: { value: 'conversation', kind: 'id' },
+    terminal_id: 'terminal', pane_id: 'pane', cwd: '/work' };
+  writeFileSync(join(bin, 'herdr'), `#!${process.execPath}\nconsole.log(${JSON.stringify(JSON.stringify({ result: { agents: [pane] } }))});\n`, { mode: 0o700 });
+  Object.assign(process.env, { PATH: `${bin}:${prior.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: 'pane' });
+  const requests = [];
+  const backend = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = raw ? JSON.parse(raw) : undefined;
+    requests.push({ method: req.method, path: req.url, body });
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'GET' && req.url === '/api/issues/parent') {
+      res.end(JSON.stringify({ id: 'parent', companyId: 'company', assigneeAgentId: 'reviewer', status: 'in_progress' }));
+    } else if (req.method === 'GET' && req.url === '/api/companies/company') res.end(JSON.stringify({ id: 'company' }));
+    else if (req.method === 'GET' && req.url === '/api/agents/worker') res.end(JSON.stringify({ id: 'worker', companyId: 'company' }));
+    else if (req.method === 'POST' && req.url === '/api/companies/company/issues') res.end(JSON.stringify({ ...body, id: 'child', companyId: 'company' }));
+    else { res.statusCode = 404; res.end(JSON.stringify({ message: 'Unexpected backend request' })); }
+  });
+  let service, hooks;
+  t.after(async () => {
+    await hooks?.dispose(); await service?.close(); await new Promise(resolve => backend.close(resolve));
+    for (const [key, value] of Object.entries(prior)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    rmSync(root, { recursive: true, force: true });
+  });
+  await new Promise(resolve => backend.listen(0, '127.0.0.1', resolve));
+  const auth = join(root, 'backend.json'); writeFileSync(auth, '{"localTrusted":true}', { mode: 0o600 });
+  service = await startService({ directory, paperclipUrl: `http://127.0.0.1:${backend.address().port}`, backendContextFile: auth });
+  const store = service.store, configured = {};
+  for (const id of ['origin', 'reviewer', 'worker']) {
+    const observedId = `herdr-agent:${id}`;
+    const conversationId = id === 'origin' ? 'conversation' : `chat-${id}`;
+    store.saveOperation({ id: observedId, runId: '', marker: id, agentId: id, availability: 'present',
+      identity: { harness: 'opencode', sessionKind: 'id', conversationId, machineId: 'machine', session: 'default', companyId: 'company' },
+      placement: { directory: id === 'origin' ? '/work' : `/work/${id}`, terminalId: id === 'origin' ? 'terminal' : `terminal-${id}` },
+      observation: { display: { name: id } } });
+    configured[id] = await configureBridge(store, directory, async () => ({ id, companyId: 'company', adapterType: 'herdr_relay',
+      adapterConfig: { observationOnly: true, relayObservationMarker: id } }), { observedId, reserved: true });
+    const bridgeId = `opencode-bridge:${configured[id].bindingId}`;
+    store.saveOperation({ ...store.operation(bridgeId), state: 'armed', ready: true, sessionCreatedAt: 123, epoch: `epoch-${id}`,
+      lastSeen: new Date().toISOString() });
+  }
+  store.saveOperation({ id: 'operator-task:parent', runId: '', state: 'recorded',
+    request: { companyId: 'company', relayReviewPolicy: 'human', body: { assigneeAgentId: 'reviewer' }, origin: {
+      bindingId: configured.origin.bindingId, conversationId: 'conversation', sessionCreatedAt: 123,
+      sourceMessageId: 'create-parent', sourceDigest: digest('Create the root task'),
+    } }, receipt: { id: 'parent', companyId: 'company', assigneeAgentId: 'reviewer' } });
+  const source = { info: { id: 'grant-human', role: 'user', sessionID: 'conversation', time: { created: Date.now() - 1000 } },
+    parts: [{ type: 'text', text: 'Allow the parent coordinator to review direct children.' },
+      { type: 'text', text: 'Synthetic authority', synthetic: true }, { type: 'text', text: 'Ignored authority', ignored: true }] };
+  const messages = [source, { info: { id: 'tool-turn', role: 'assistant', sessionID: 'conversation', parentID: source.info.id }, parts: [] }];
+  let historyReads = 0;
+  const client = { session: {
+    get: async () => ({ data: { id: 'conversation', directory: '/work', time: { created: 123 } } }),
+    messages: async () => { historyReads++; return { data: structuredClone(messages) }; },
+    status: async () => ({ data: { conversation: { type: 'busy' } } }),
+  } };
+  hooks = await plugin({ client, directory: '/work' }, { configDirectory: join(directory, 'bridges') });
+  const tools = hooks.tool, approvals = [];
+  const context = { sessionID: 'conversation', messageID: 'tool-turn', ask: async permission => { approvals.push(permission); } };
+  assert.equal(tools.relay_delegate.args.relayReviewPolicy.parse('coordinator'), 'coordinator');
+  assert.equal(tools.relay_delegate.args.grantId.parse('grant'), 'grant');
+  assert.equal(tools.relay_delegate.args.grantId.parse(undefined), undefined);
+  await hooks.config();
+  let grant;
+  for (const name of ['relay_coordinator_grant', 'relay_coordinator_revoke']) {
+    const args = name === 'relay_coordinator_grant'
+      ? { key: 'grant', parentTaskId: 'parent', reviewerBindingId: configured.reviewer.bindingId }
+      : { grantId: grant.grantId };
+    if (grant) {
+      source.info.id = 'revoke-human'; source.info.time.created = Date.now();
+      source.parts[0].text = 'Revoke that coordinator review grant.'; messages[1].info.parentID = source.info.id;
+    }
+    const original = structuredClone(source), beforeRequests = requests.length, beforeApprovals = approvals.length;
+    const beforeGrant = grant && store.operation(grant.grantId);
+    await assert.rejects(tools[name].execute(args, { ...context, sessionID: 'foreign' }), /enrolled conversation/);
+    await assert.rejects(tools[name].execute(args, { ...context, messageID: 'missing' }), /user message could not be verified/);
+    messages[1].info.parentID = 'older-human';
+    await assert.rejects(tools[name].execute(args, context), /user message could not be verified/);
+    messages[1].info.parentID = source.info.id;
+    for (const flag of ['synthetic', 'ignored']) {
+      source.parts[0][flag] = true;
+      await assert.rejects(tools[name].execute(args, context), /user message could not be verified/);
+      delete source.parts[0][flag];
+    }
+    assert.equal(approvals.length, beforeApprovals, 'Invalid source must fail before permission');
+    await assert.rejects(tools[name].execute(args, { ...context, ask: async () => { throw new Error('Permission denied'); } }), /Permission denied/);
+    for (const change of ['text', 'id', 'latest', 'synthetic', 'ignored']) {
+      try {
+        await assert.rejects(tools[name].execute(args, { ...context, ask: async () => {
+          if (change === 'text') source.parts[0].text = 'Changed instruction';
+          else if (change === 'id') source.info.id = 'changed-human';
+          else if (change === 'latest') messages.push({ info: { ...source.info, id: 'newer-human' }, parts: source.parts });
+          else source.parts[0][change] = true;
+        } }), /User message changed; no delegation sent/);
+      } finally {
+        Object.assign(source, structuredClone(original)); messages.splice(2);
+      }
+    }
+    assert.equal(requests.length, beforeRequests, 'Denied or changed source must not reach the backend');
+    if (grant) assert.deepEqual(store.operation(grant.grantId), beforeGrant);
+    else assert.equal(store.db.prepare("SELECT count(*) AS count FROM operations WHERE id LIKE 'coordinator-review-grant:%'").get().count, 0);
+    const beforeReads = historyReads;
+    const receipt = JSON.parse(await tools[name].execute(args, context));
+    assert.equal(historyReads - beforeReads, 2, 'Read source before permission and again immediately before sending');
+    assert.deepEqual(approvals.at(-1), { permission: 'relay_coordinator_review', patterns: [args.parentTaskId ?? args.grantId], always: [],
+      metadata: { ...args, sourceMessageId: source.info.id, sourceText: source.parts[0].text } });
+    assert.equal(receipt.state, grant ? 'revoked' : 'active');
+    assert.deepEqual(JSON.parse(await tools[name].execute(args, context)), receipt, 'Exact retries are idempotent');
+    if (!grant) {
+      grant = receipt;
+      const delegated = JSON.parse(await tools.relay_delegate.execute({ key: 'child', targetBindingId: configured.worker.bindingId,
+        title: 'Independent check', description: 'Check the change.', parentTaskId: 'parent',
+        relayReviewPolicy: 'coordinator', grantId: grant.grantId }, context));
+      assert.equal(store.operation(delegated.id).request.relayReviewPolicy, 'coordinator');
+      assert.equal(store.operation(delegated.id).request.relayReviewGrantId, grant.grantId);
+      assert.equal(requests.at(-1).body.relayReviewPolicy, undefined);
+      assert.equal(requests.at(-1).body.grantId, undefined);
+      assert.equal(requests.at(-1).body.relayReviewGrantId, undefined);
+    }
+  }
+  assert.equal(requests.filter(request => request.method !== 'GET').length, 1, 'Only child creation writes to the backend');
 });

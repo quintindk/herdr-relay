@@ -10,7 +10,8 @@ import { digest } from './protocol.mjs';
 const delegationArgs = {
   key: tool.schema.string().min(1), targetBindingId: tool.schema.string().min(1),
   title: tool.schema.string().min(1), description: tool.schema.string().min(1),
-  relayReviewPolicy: tool.schema.enum(['human', 'none', 'agent_decides']).optional(),
+  relayReviewPolicy: tool.schema.enum(['human', 'none', 'agent_decides', 'coordinator']).optional(),
+  grantId: tool.schema.string().min(1).optional(),
   parentTaskId: tool.schema.string().min(1).optional(),
 };
 const workerArgs = {
@@ -19,6 +20,7 @@ const workerArgs = {
   label: tool.schema.string().optional(), directory: tool.schema.string().optional(), observedId: tool.schema.string().optional(),
   trustRepository: tool.schema.boolean().optional(),
 };
+const grantArgs = { key: tool.schema.string().min(1), parentTaskId: tool.schema.string().min(1), reviewerBindingId: tool.schema.string().min(1) };
 
 // Loaded by OpenCode, with a binding-scoped credential. Never uses Relay admin auth.
 export default async function relayBridge({ client, directory }, options = {}) {
@@ -114,8 +116,8 @@ export default async function relayBridge({ client, directory }, options = {}) {
       const source = [...snap.messages].reverse().find(item => item.info.role === 'user');
       const content = source?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (!source || source.info.id !== sourceId || !content?.trim()) throw new Error('Current native user message could not be verified');
-      await context.ask({ permission: action === 'delegate' ? 'relay_delegate' : 'relay_worker_prepare',
-        patterns: [action === 'delegate' ? args.targetBindingId : args.repository], always: [],
+      await context.ask({ permission: action === 'delegate' ? 'relay_delegate' : action === 'prepare-worker' ? 'relay_worker_prepare' : 'relay_coordinator_review',
+        patterns: [args.targetBindingId ?? args.repository ?? args.parentTaskId ?? args.grantId], always: [],
         metadata: { ...args, sourceMessageId: sourceId, sourceText: content } });
       const fresh = await snapshot();
       const latest = [...fresh.messages].reverse().find(item => item.info.role === 'user');
@@ -207,6 +209,10 @@ export default async function relayBridge({ client, directory }, options = {}) {
   };
   return {
     tool: {
+      relay_coordinator_grant: tool({ description: 'Grant the assigned parent coordinator authority to review explicitly opted-in direct child tasks. Final parent review remains human. State parent, reviewer and direct-child scope visibly and obtain explicit human authorisation first. Does not change existing child policies.',
+        args: grantArgs, execute: (args, context) => delegate(args, context, 'grant-review') }),
+      relay_coordinator_revoke: tool({ description: 'Revoke an exact coordinator review grant from this originating chat on explicit human instruction. Retains decisions already confirmed.',
+        args: { grantId: tool.schema.string().min(1) }, execute: (args, context) => delegate(args, context, 'revoke-review') }),
       relay_workers: tool({ description: 'List this chat\'s worker preparation receipts and verified adoption candidates in its authorised repository. Read-only.', args: {},
         async execute(_, context) {
           if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
@@ -306,6 +312,10 @@ async function discoverBridge(input, configDirectory) {
   };
   return {
     tool: {
+      relay_coordinator_grant: tool({ description: 'Grant explicit human-authorised direct-child review to the parent assignee. State parent/reviewer/scope visibly. Final parent review remains human; existing child policies do not change.',
+        args: grantArgs, execute: execute('relay_coordinator_grant') }),
+      relay_coordinator_revoke: tool({ description: 'Revoke a coordinator review grant on explicit human instruction from this exact origin chat.',
+        args: { grantId: tool.schema.string().min(1) }, execute: execute('relay_coordinator_revoke') }),
       relay_workers: tool({ description: 'List scoped worker preparations and verified worktree adoption candidates. Read-only.', args: {}, execute: execute('relay_workers') }),
       relay_worker_prepare: tool({ description: 'Create an isolated interactive Herdr worker or adopt an exact existing worktree agent. State repository, mode, branch/base or exact adoption target and any trust request before calling. Preparation is not task assignment or cleanup authority. Reuse the key on retries and inspect relay_workers for readiness.',
         args: workerArgs, execute: execute('relay_worker_prepare') }),

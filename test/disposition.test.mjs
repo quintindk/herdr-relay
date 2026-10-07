@@ -22,6 +22,8 @@ test('published result obtains idempotent review interaction before confirmed is
     if (path.endsWith('/interactions')) {
       if (method === 'GET') return interactions;
       assert.equal(body.addresseeUserId, 'board');
+      assert.equal(body.resolverPolicy, 'human_only');
+      assert.equal(body.addresseeAgentId, undefined);
       interactions.push({ ...body, id: 'review', status: 'pending' });
       return interactions[0];
     }
@@ -51,7 +53,7 @@ function fixture(store) {
   store.publication(run.id, { state: 'recorded', commentId: 'comment' });
   run = store.settle(run.id, { outcome: 'completed', evidence: 'Exact completed worker receipt' });
   store.saveOperation({ id: `review-disposition:${run.id}`, runId: run.id, state: 'waiting', candidate: 'candidate', interactionId: 'review' });
-  const interaction = { id: 'review', status: 'accepted', idempotencyKey: `relay-review:${run.id}:${digest(run.result)}`,
+  const interaction = { id: 'review', status: 'accepted', kind: 'request_confirmation', resolverPolicy: 'human_only', idempotencyKey: `relay-review:${run.id}:${digest(run.result)}`,
     payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: 'candidate', label: run.id } } };
   const issue = { id: 'task', companyId: 'company', assigneeAgentId: 'agent', status: 'in_review', executionRunId: null, checkoutRunId: null };
   const backend = { id: 'backend', companyId: 'company', agentId: 'agent', status: 'succeeded' };
@@ -215,4 +217,64 @@ test('child-wake check does not suppress ordinary work, resolved reviews or admi
     assert.deepEqual(await checkReviewWake(store, { ...f.run.request, runId: 'wake', token: 'scoped' },
       (_, __, method, path, body) => f.api(method, path, body)), { skip: false }, variant);
   }
+});
+
+test('legacy anyone reviews require exact recorded human proof, and cannot be reused for new requests', async t => {
+  for (const variant of ['proof', 'missing', 'uncertain', 'wrong-candidate', 'wrong-company', 'wrong-decision', 'wrong-receipt']) {
+    const store = new Store(':memory:'); t.after(() => store.close());
+    const f = fixture(store);
+    f.interaction.resolverPolicy = 'anyone';
+    const proof = { id: `harness-review:${digest(['company', 'review'])}`, runId: f.run.id, state: 'recorded',
+      request: { candidate: 'candidate', interactionId: 'review', decision: 'accept', sourceMessageId: 'human', sourceDigest: digest('Accept') },
+      receipt: { interactionId: 'review', status: 'accepted' } };
+    if (variant === 'uncertain') proof.state = 'uncertain';
+    if (variant === 'wrong-candidate') proof.request.candidate = 'other';
+    if (variant === 'wrong-company') proof.request.companyId = 'other';
+    if (variant === 'wrong-decision') proof.request.decision = 'reject';
+    if (variant === 'wrong-receipt') proof.receipt.interactionId = 'other';
+    if (variant !== 'missing') store.saveOperation(proof);
+    await assert.rejects(requestReviewDisposition(store, f.run.id, 'token', (_, __, ...args) => f.api(...args)),
+      { code: 'human_review_required' });
+    await reconcileCompletions(store, f.api);
+    assert.equal(f.writes.length, variant === 'proof' ? 1 : 0, variant);
+  }
+});
+
+test('disposition refuses candidate or assignment changes during review request before PATCH', async t => {
+  for (const change of ['candidate', 'assignment']) {
+    const store = new Store(':memory:'); t.after(() => store.close());
+    const f = fixture(store);
+    f.issue.status = 'in_progress';
+    f.interaction.status = 'pending';
+    await assert.rejects(requestReviewDisposition(store, f.run.id, 'token', async (_, __, ...args) => {
+      const response = await f.api(...args);
+      if (args[1].endsWith('/interactions')) {
+        if (change === 'candidate') store.save({ ...f.run, result: { ...f.run.result, summary: 'Changed' } }, 'test.changed');
+        else f.issue.assigneeAgentId = 'other';
+      }
+      return response;
+    }));
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test('legacy pending anyone review stays incomplete until exact recorded human approval', async t => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const f = fixture(store);
+  f.interaction.resolverPolicy = 'anyone';
+  f.interaction.status = 'pending';
+  await assert.rejects(requestReviewDisposition(store, f.run.id, 'token', (_, __, ...args) => f.api(...args)),
+    { code: 'human_review_required' });
+  await reconcileCompletions(store, f.api);
+  assert.equal(f.writes.length, 0);
+  f.interaction.status = 'accepted';
+  const proof = { id: `harness-review:${digest(['company', 'review'])}`, runId: f.run.id, state: 'uncertain',
+    request: { companyId: 'company', taskId: 'task', candidate: 'candidate', interactionId: 'review', decision: 'accept',
+      sourceMessageId: 'human', sourceDigest: digest('Accept') }, receipt: { interactionId: 'review', status: 'accepted' } };
+  store.saveOperation(proof);
+  await reconcileCompletions(store, f.api);
+  assert.equal(f.writes.length, 0);
+  store.saveOperation({ ...proof, state: 'recorded' });
+  await reconcileCompletions(store, f.api);
+  assert.deepEqual(f.writes, [{ status: 'done' }]);
 });

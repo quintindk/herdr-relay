@@ -21,7 +21,8 @@ test('task-scoped acceptance retires only the authorised binding and preserves p
   store.publication(run.id, { state: 'recorded', commentId: 'receipt' });
   run = store.settle(run.id, { outcome: 'completed', evidence: 'Native fixture stopped' });
   assert.throws(() => store.dispatch({ ...request, runId: 'another' }), { code: 'candidate_reserved' });
-  const interaction = { id: 'review', status: 'accepted', idempotencyKey: `relay-review:${run.id}:${digest(run.result)}`,
+  const interaction = { id: 'review', kind: 'request_confirmation', resolverPolicy: 'human_only',
+    status: 'accepted', idempotencyKey: `relay-review:${run.id}:${digest(run.result)}`,
     payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: run.result.candidate, label: run.id } } };
   const api = async () => [interaction];
   const caller = { id: 'controller-run', request: { bindingId: 'controller', agentId: 'controller', companyId: 'company' } };
@@ -77,7 +78,8 @@ test('acceptance recorded while Relay is offline triggers the same retirement on
   store.close();
   store = new Store(join(directory, 'state.sqlite'));
   t.after(() => store.close());
-  const api = async () => [{ id: 'review', status: 'accepted', idempotencyKey: `relay-review:${run.id}:${digest(result)}`,
+  const api = async () => [{ id: 'review', kind: 'request_confirmation', resolverPolicy: 'human_only',
+    status: 'accepted', idempotencyKey: `relay-review:${run.id}:${digest(result)}`,
     payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: result.candidate, label: run.id } } }];
   await reconcileRetirements(store, api);
   assert.equal(store.binding('worker').lifecycleState, 'retired');
