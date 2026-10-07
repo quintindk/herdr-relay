@@ -7,6 +7,7 @@ import { requireValue } from './protocol.mjs';
 import { candidate } from './candidate.mjs';
 import { systemdUnit, installService, uninstallService } from './installation.mjs';
 import { renderOverview, watchOverview } from './views.mjs';
+import { renderTaskBoard, watchTaskBoard } from './task-board-view.mjs';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -55,6 +56,7 @@ const help = `herdr-relay (development)
   event record --file event.json
   event checkpoint --source SOURCE
   view [--watch]
+  board [--watch] [--json]
   service-unit --paperclip-url URL [--state-dir DIR]
   install --paperclip-url URL [--state-dir DIR] [--backend-context FILE] [--herdr-config FILE]
   uninstall [--state-dir DIR]
@@ -76,7 +78,7 @@ terminal response. Automatic interruption requires a dedicated owned runtime.`;
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
     ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'company', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout']
-      .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }]])) });
+      .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }], ['json', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
   if (values.company !== undefined) requireValue(group === 'task' && action === 'create' && !id,
     'invalid_request', '--company is only valid for operator task creation without RUN_ID');
@@ -116,6 +118,19 @@ export async function main(args) {
     return;
   }
   const connection = credentials(values.context);
+  if (group === 'board') {
+    requireValue(!(values.json && values.watch), 'invalid_request', 'Choose --json or --watch');
+    const read = () => call(connection, 'GET', '/task-board');
+    if (values.watch) await watchTaskBoard(read);
+    else {
+      const value = await read();
+      console.log(values.json ? JSON.stringify(value, null, 2) : renderTaskBoard(value, {
+        width: process.stdout.columns ?? 110, height: process.stdout.rows ?? 40,
+        colour: Boolean(process.stdout.isTTY && !process.env.NO_COLOR),
+      }).text);
+    }
+    return;
+  }
   const writeContext = data => {
     requireValue(values['context-out'], 'invalid_request', '--context-out is required');
     writeFileSync(values['context-out'], `${JSON.stringify(data)}\n`, { flag: 'wx', mode: 0o600 });

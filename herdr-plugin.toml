@@ -6,6 +6,12 @@ platforms = ["linux", "macos"]
 description = "Connect Paperclip work to persistent agents in herdr."
 
 [[actions]]
+id = "toggle"
+title = "Toggle Relay task hierarchy"
+contexts = ["pane"]
+command = ["python3", "scripts/toggle-board.py"]
+
+[[actions]]
 id = "status"
 title = "Relay: service status"
 contexts = ["global"]
@@ -13,9 +19,9 @@ command = ["bash", "scripts/plugin-launch.sh", "status"]
 
 [[actions]]
 id = "work"
-title = "Relay: work and agent overview"
+title = "Relay: task hierarchy by owner"
 contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "view"]
+command = ["bash", "scripts/plugin-launch.sh", "board"]
 
 [[actions]]
 id = "agents"
@@ -25,9 +31,9 @@ command = ["bash", "scripts/plugin-launch.sh", "agent", "discover"]
 
 [[panes]]
 id = "work"
-title = "Relay work"
+title = "Relay tasks"
 placement = "split"
-command = ["bash", "scripts/plugin-launch.sh", "view", "--watch"]
+command = ["bash", "scripts/plugin-launch.sh", "board", "--watch"]
 
 [[actions]]
 id = "observed"

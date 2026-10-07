@@ -35,6 +35,7 @@ import { reconcileBridgeEnrolment } from './bridge-enrolment.mjs';
 import { notificationRequest, isNotificationSource } from './completion-notifications.mjs';
 import { harnessDelegation } from './harness-delegation.mjs';
 import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers } from './herdr-workers.mjs';
+import { taskBoard } from './task-board.mjs';
 import { coordinatorGrant, coordinatorReviewGrant, validateCoordinatorGrant } from './coordinator-review.mjs';
 
 async function body(req, limit = 128 * 1024) {
@@ -104,6 +105,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   const publications = new Map();
   const runTokens = new Map();
   const operatorApi = backendOperator(paperclipUrl, backendContextFile);
+  let boardPending, boardCache;
 
   const server = createServer(async (req, res) => {
     try {
@@ -163,6 +165,15 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       let result;
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
+      else if (req.method === 'GET' && path === '/task-board') {
+        adminOnly();
+        if (boardCache && Date.now() - Date.parse(boardCache.fetchedAt) < 4000) result = boardCache;
+        else {
+          boardPending ??= taskBoard(store, operatorApi, { companyId: observationConfig?.companyId })
+            .then(value => { boardCache = value; return value; }).finally(() => { boardPending = null; });
+          result = await boardPending;
+        }
+      }
       else if (req.method === 'POST' && path === '/tasks') {
         adminOnly();
         const key = `operator-task:${digest([text(input.companyId, 'companyId'), text(input.key, 'key')])}`;

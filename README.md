@@ -74,6 +74,8 @@ herdr plugin link /absolute/path/herdr-relay
 
 ## Documentation
 
+- [Task hierarchy pane](docs/task-board.md): browse tasks by agent or human owner
+  through Relay, with folding, search and live refresh.
 - [Herdr Relay skill](skills/herdr-relay/SKILL.md) replaces the former envoy skill.
   Install it as `~/.config/opencode/skills/herdr-relay/SKILL.md`, then restart
   OpenCode. It teaches the Relay chat tools, origin-bound human review and safe

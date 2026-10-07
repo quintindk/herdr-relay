@@ -17,6 +17,7 @@
     "src",
     "skills",
     "scripts/plugin-launch.sh",
+    "scripts/toggle-board.py",
     "herdr-plugin.toml",
     "docs/*.md"
   ],
