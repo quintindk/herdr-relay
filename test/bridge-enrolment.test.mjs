@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
 import { digest } from '../src/protocol.mjs';
 import { reconcileBridgeEnrolment } from '../src/bridge-enrolment.mjs';
+import { enrolAgent, enrolmentDirectories } from '../src/enrolment.mjs';
 import { armBridge, bridgeForToken, bridgeRequest, configureBridge, disarmBridge } from '../src/opencode-bridge.mjs';
 
 function fixture(t) {
@@ -96,6 +97,98 @@ test('configuration and arming are idempotent and require exact live plugin read
   f.backends.get(observed.agentId).status = 'paused';
   assert.equal((await f.reconcile())[0].state, 'armed');
   assert.equal(f.backends.get(observed.agentId).status, 'idle');
+});
+
+test('a directory grant cannot enrol a replacement conversation after a blocked worker reserves it', async t => {
+  const f = fixture(t), old = f.observe('old');
+  const config = { ...f.options, socketPath: join(f.directory, 'herdr.sock'), bridgeDirectories: ['/work'] };
+  const grant = await enrolAgent(f.store, config, { key: 'standing', directory: '/work', reserved: true },
+    { inspectDirectory: async path => ({ canonical: path, linked: false }) });
+  await f.reconcile(); await f.ready(old);
+  const worker = f.store.saveOperation({ id: 'herdr-worker:later', runId: '', state: 'blocked',
+    request: { directory: '/work' }, target: { directory: '/work', observedId: old.id, conversationId: 'old' } });
+  f.offline(old);
+  const next = f.observe('replacement');
+  const previous = f.bridge(old), calls = f.calls.length;
+  assert.deepEqual(enrolmentDirectories(f.store, config), []);
+  assert.deepEqual(await f.reconcile({ directories: enrolmentDirectories(f.store, config) }), []);
+  // A stale caller-supplied allowlist must also fail without relying on the directory helper.
+  assert.deepEqual(await f.reconcile(), [{ directory: '/work', state: 'blocked', error: 'worker_directory_reserved' }]);
+  assert.equal(f.bridge(next), null);
+  assert.equal(f.store.binding(f.bindingId(next), false), null);
+  assert.equal(existsSync(join(f.directory, 'bridges', `${f.bindingId(next)}.json`)), false);
+  assert.deepEqual(f.bridge(old), previous);
+  assert.deepEqual(f.store.operation(worker.id), worker);
+  assert.equal(f.store.operation(grant.enrolmentId).state, 'recorded');
+  assert.equal(f.calls.length, calls);
+});
+
+test('generic enrolment guards worker directories before configuration, arm, refresh and either disarm path', async t => {
+  for (const action of ['configure', 'arm', 'refresh', 'replace', 'ambiguous']) {
+    for (const field of ['request', 'target']) {
+      await t.test(`${action}: ${field}`, async t => {
+        const f = fixture(t), old = f.observe('old');
+        if (action !== 'configure') {
+          await f.reconcile();
+          if (action === 'arm') f.poll(old);
+          else await f.ready(old);
+        }
+        if (action === 'refresh') f.observe('old', { placement: { directory: '/work', terminalId: 'replacement' } });
+        if (action === 'replace') f.offline(old);
+        if (['replace', 'ambiguous'].includes(action)) f.observe('new');
+        for (const state of ['intent', 'prepared', 'armed', 'blocked']) {
+          const worker = f.store.saveOperation({ id: 'herdr-worker:reserved', runId: '', state, disarmed: true,
+            scope: { companyId: 'foreign' }, [field]: { directory: '/work' } });
+          const before = f.store.db.prepare('SELECT * FROM operations ORDER BY id').all();
+          const bindings = f.store.bindings(), calls = f.calls.length;
+          assert.deepEqual(await f.reconcile(), [{ directory: '/work', state: 'blocked', error: 'worker_directory_reserved' }]);
+          assert.deepEqual(f.store.db.prepare('SELECT * FROM operations ORDER BY id').all(), before);
+          assert.deepEqual(f.store.bindings(), bindings);
+          assert.deepEqual(f.store.operation(worker.id), worker);
+          assert.equal(f.calls.length, calls);
+        }
+      });
+    }
+  }
+});
+
+test('worker reservations appearing during backend I/O stop subsequent generic bridge mutations', async t => {
+  for (const action of ['configure', 'arm', 'refresh', 'replace', 'ambiguous']) {
+    for (const method of action === 'configure' ? ['GET'] : ['GET', 'PATCH']) {
+      await t.test(`${action}: ${method}`, async t => {
+        const f = fixture(t), old = f.observe('old');
+        if (action !== 'configure') {
+          await f.reconcile();
+          if (action === 'arm') f.poll(old);
+          else await f.ready(old);
+        }
+        if (action === 'refresh') f.observe('old', { placement: { directory: '/work', terminalId: 'replacement' } });
+        if (action === 'replace') f.offline(old);
+        const next = ['replace', 'ambiguous'].includes(action) ? f.observe('new') : old;
+        const path = join(f.directory, 'bridges', `${f.bindingId(old)}.json`);
+        const credential = existsSync(path) ? readFileSync(path, 'utf8') : null;
+        let before, bindings, calls;
+        const client = async (...args) => {
+          const response = await f.api(...args);
+          if (args[0] === method) {
+            f.store.saveOperation({ id: 'herdr-worker:race', runId: '', state: 'blocked', target: { directory: '/work' } });
+            before = f.store.db.prepare('SELECT * FROM operations ORDER BY id').all();
+            bindings = f.store.bindings();
+            calls = f.calls.length;
+          }
+          return response;
+        };
+        assert.deepEqual(await f.reconcile({}, client), [{ directory: '/work', state: 'blocked', error: 'worker_directory_reserved' }]);
+        assert.ok(before, 'The reservation must appear during backend I/O');
+        assert.deepEqual(f.store.db.prepare('SELECT * FROM operations ORDER BY id').all(), before);
+        assert.deepEqual(f.store.bindings(), bindings);
+        assert.equal(f.calls.length, calls);
+        assert.equal(existsSync(path) ? readFileSync(path, 'utf8') : null, credential);
+        if (action === 'arm') assert.equal(f.bridge(old).state, 'configured');
+        if (['configure', 'replace', 'ambiguous'].includes(action)) assert.equal(f.bridge(next), null);
+      });
+    }
+  }
 });
 
 test('fresh chat gets a new binding, disarms old bridges and preserves settled runs without replay', async t => {

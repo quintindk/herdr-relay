@@ -36,6 +36,9 @@ import { notificationRequest, isNotificationSource } from './completion-notifica
 import { harnessDelegation } from './harness-delegation.mjs';
 import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers } from './herdr-workers.mjs';
 import { taskBoard } from './task-board.mjs';
+import { humanTask } from './human-tasks.mjs';
+import { harnessTask } from './harness-tasks.mjs';
+import { enrolAgent, enrolmentCandidates, enrolmentDirectories } from './enrolment.mjs';
 import { coordinatorGrant, coordinatorReviewGrant, validateCoordinatorGrant } from './coordinator-review.mjs';
 
 async function body(req, limit = 128 * 1024) {
@@ -118,12 +121,40 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
-          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
+          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-complete', '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
           '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
         const action = path.split('/').at(-1);
         let result;
-        if (['grant-review', 'revoke-review'].includes(action)) {
+        if (['task-inspect', 'task-create', 'task-edit', 'task-assign', 'task-complete'].includes(action)) {
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          const live = store.operation(bridge.id);
+          const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...fields } = input;
+          const companyId = store.binding(live.identity.bindingId).config.companyId;
+          const key = action === 'task-create' ? `human-task-create:${companyId}:${live.identity.bindingId}:${text(fields.key, 'key')}`
+            : `human-task-write:${companyId}:${text(fields.taskId, 'taskId')}`;
+          requireValue(!publications.has(key), 'operation_busy', 'Task operation in progress', 409);
+          const pending = harnessTask(store, live, action, fields, operatorApi);
+          publications.set(key, pending);
+          try { result = await pending; } finally { publications.delete(key); boardCache = null; }
+        } else if (['tasks', 'enrolment-candidates', 'enrol-agent'].includes(action)) {
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          const live = store.operation(bridge.id);
+          const binding = store.binding(live.identity.bindingId);
+          requireValue(!binding.lifecycleState && ['configured', 'armed'].includes(live.state), 'bridge_unavailable', 'An active configured bridge is required', 409);
+          if (action === 'tasks') {
+            const board = await taskBoard(store, operatorApi, { companyId: binding.config.companyId });
+            result = { tasks: board.tasks, projects: board.projects, agents: board.agents, fetchedAt: board.fetchedAt, warnings: board.warnings };
+          } else {
+            requireValue(observationConfig && observationConfig.companyId === binding.config.companyId,
+              'enrolment_unavailable', 'A matching configured Herdr source is required', 409);
+            if (action === 'enrolment-candidates') result = { candidates: enrolmentCandidates(store, observationConfig) };
+            else {
+              const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...fields } = input;
+              result = await enrolAgent(store, observationConfig, fields, { bridge: live });
+            }
+          }
+        } else if (['grant-review', 'revoke-review'].includes(action)) {
           bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
           result = await coordinatorGrant(store, store.operation(bridge.id), action, input, operatorApi);
         } else if (['workers', 'prepare-worker'].includes(action)) {
@@ -182,7 +213,25 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         publications.set(key, pending);
         try { result = await pending; } finally { publications.delete(key); }
       }
+      else if (req.method === 'POST' && path === '/tasks/manage') {
+        adminOnly();
+        const companyId = text(input.companyId, 'companyId');
+        const key = input.action === 'create' ? `human-task-create:${companyId}:operator:${text(input.key, 'key')}`
+          : `human-task-write:${companyId}:${text(input.taskId, 'taskId')}`;
+        requireValue(!publications.has(key), 'operation_busy', 'Task operation in progress', 409);
+        const pending = humanTask(store, operatorApi, input);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); boardCache = null; }
+      }
       else if (req.method === 'GET' && path === '/herdr/agents') { adminOnly(); result = { source: observer?.status() ?? null, agents: observedAgents(store) }; }
+      else if (req.method === 'GET' && path === '/herdr/enrolment-candidates') {
+        adminOnly(); requireValue(observationConfig, 'enrolment_unavailable', 'Configured Herdr source required', 409);
+        result = { candidates: enrolmentCandidates(store, observationConfig) };
+      }
+      else if (req.method === 'POST' && path === '/herdr/enrol') {
+        adminOnly(); requireValue(observationConfig, 'enrolment_unavailable', 'Configured Herdr source required', 409);
+        result = await enrolAgent(store, observationConfig, input);
+      }
       else if (req.method === 'POST' && ['/herdr/configure-bridge', '/herdr/arm-bridge', '/herdr/disarm-bridge'].includes(path)) {
         adminOnly();
         requireValue(!publications.has('observed-delivery'), 'operation_busy', 'Observed agent configuration in progress', 409);
@@ -503,9 +552,10 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   const lifecycle = backendContextFile ? lifecycleRunner(store, operatorApi, publications) : null;
   const observer = observationConfig ? watchHerdrAgents(store, operatorApi, observationConfig, {
     afterReconcile: async current => {
-      if (!observationConfig.bridgeDirectories?.length || publications.has('observed-delivery')) return;
+      const directories = enrolmentDirectories(store, observationConfig);
+      if (!directories.length || publications.has('observed-delivery')) return;
       const pending = reconcileBridgeEnrolment(store, directory, operatorApi, {
-        ...observationConfig, directories: observationConfig.bridgeDirectories, current,
+        ...observationConfig, directories, current,
       });
       publications.set('observed-delivery', pending);
       try {

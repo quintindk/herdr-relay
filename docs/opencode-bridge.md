@@ -3,6 +3,8 @@
 The bridge removes the manual queue request and operator settlement steps for an
 explicitly reserved existing OpenCode conversation. It is opt-in per binding.
 Herdr still owns launch and placement. No additional OpenCode server is launched.
+Standing folder grants authorise reconciliation across fresh conversations, each
+with its own binding. They do not transfer delegation history or review authority.
 
 ## Flow
 
@@ -58,20 +60,29 @@ messages belonging to the exact invocation, not unrelated assistant history.
 
 ### Daily Use
 
-To opt folders into automatic enrolment, set `bridgeDirectories` to their absolute
-paths in the service's Herdr configuration. This authorises Relay to reserve the
-unique observed OpenCode chat in each listed folder. Other folders remain
-observation-only. Configure the global OpenCode plugin with:
+Automatic enrolment accepts exact `bridgeDirectories` in the service's Herdr
+configuration or persisted, explicitly human-authorised standing folder grants
+from the enrolment tools/CLI below. There is no broad default. This authorises
+Relay to reserve the unique observed OpenCode chat in each granted folder. Other
+folders remain observation-only. Configure the global OpenCode plugin with:
 
 ```json
 ["file:///absolute/path/herdr-relay/src/opencode-bridge-plugin.mjs",
  {"configDirectory":"/absolute/state/herdr-relay/bridges"}]
 ```
 
-Restart OpenCode once after installing this mode. The plugin discovers matching
-credentials every five seconds and follows fresh chats without another config
+Reload OpenCode when idle after installing this mode, without interrupting active
+workers. The plugin discovers matching credentials every five seconds and follows
+fresh chats without another config
 edit or restart. It matches the exact current pane, terminal and conversation,
 not just the folder. Tools remain visible while enrolment is pending.
+
+Invoking a tool triggers discovery with a bounded wait of up to 12 seconds for the
+exact chat before refusal. Only discovery is retried internally, not permission
+checks or mutations. Discovery cannot grant enrolment. If a morning startup read
+times out transiently, wait briefly and retry that read once. If it still fails,
+report the Relay gap and continue independent startup checks rather than skipping
+the whole startup or silently enrolling the caller.
 
 The observer configures each unique current chat and arms it only after an idle
 plugin readiness report. A fresh conversation retains its own observed Paperclip
@@ -82,10 +93,81 @@ rotates its bridge credential and requires fresh readiness. History is never
 replayed into a new conversation.
 
 Inspect `herdr-relay operation inspect bridge-enrolment` for per-folder results.
-`configured` means awaiting the plugin, not ready to delegate. Removing a folder
-from the allowlist does not revoke an existing reservation; disarm it explicitly.
+`configured` is not proof of readiness to receive assignments. Removing a folder
+from `bridgeDirectories` does not revoke an existing reservation or a persisted
+standing grant. An active directory grant can rearm a disarmed bridge on a later
+reconciliation. **No enrolment-grant revoke operation is implemented.** Permanent
+withdrawal of a persisted grant needs operator repair. Do not promise that disarm
+alone withdraws it or confuse coordinator-review revoke with enrolment revoke.
+Worker-owned directories, including blocked workers, take priority over both grant
+sources and are checked during each reconciliation before generic bridge changes.
 Do not type into an agent while its delegated task is executing. Automatic
 enrolment does not make simultaneous human and agent input atomic.
+
+### Read Backlog From Chat
+
+`relay_tasks` returns a read-only company backlog preview, including human-owned
+and imported tasks, description previews, projects, agents, fetch time and warnings.
+It does not assign tasks or start work. Inspect warnings for capped results and
+report backend errors rather than treating them as an empty backlog. Use it for
+morning startup and general task lookup.
+
+`relay_delegations` is only the exact origin chat's delegated work and notification
+history. `relay_reviews` lists pending candidates in its review scope. Neither is a
+substitute for the company backlog, and a new chat does not inherit the old origin.
+
+Authenticated `configured` bridges can read `relay_agents`, `relay_delegations`,
+`relay_tasks` and notification history while the caller is busy. These reads do
+not arm a bridge or enable incoming assignments. Target readiness still controls
+which peers `relay_agents` returns. Exact native identity and credential checks
+remain required. A caller with no matching credential cannot bootstrap access by
+invoking a read or enrolment tool.
+
+### Enrol From Chat Or CLI
+
+Use read-only `relay_enrolment_candidates` to resolve the exact directory and
+observed candidate. On explicit human instruction, visibly state that directory,
+candidate and standing reservation before calling `relay_enrol_agent` with:
+
+```json
+{
+  "key": "reserve-project-folder-1",
+  "directory": "/exact/canonical/project",
+  "observedId": "OBSERVED_ID_FROM_CANDIDATES",
+  "reserved": true
+}
+```
+
+`observedId` is optional, but when supplied it must match the unique current
+candidate. `reserved: true` is required by the service. Permission checks and the
+current native human source authorise the mutation. Keep the same key, immutable
+payload and human source on retries. Tool permission is not a broad folder default.
+
+If the caller lacks a bridge credential, an already enrolled coordinator may
+perform this exact human-authorised operation. Alternatively, with explicit user
+authority, use the operator CLI:
+
+```bash
+herdr-relay agent enrolment-candidates
+herdr-relay agent enrol --directory /exact/canonical/project --key KEY --reserved
+```
+
+This CLI requires operator authority. Do not acquire credentials, self-elevate,
+change defaults or re-enrol users automatically because discovery failed. The
+request persists a standing folder grant in the configured Herdr/company scope.
+It does not directly arm the bridge, change service config or assign work. Existing
+reconciliation performs configuration and arming after exact readiness checks.
+No Relay service restart is needed. `requested` or `configured` is not `ready`.
+
+Linked Git worktrees and worker-owned directories are refused by generic
+enrolment. Use `relay_workers` and `relay_worker_prepare` in `adopt` mode with the
+exact verified candidate instead. Ambiguous observations, unsettled prior work,
+manual-pull reservations and stale identity remain blockers. A standing grant
+follows fresh chats only under those checks. Do not bypass a blocker with new keys.
+
+If the new tools are missing, reload the OpenCode plugin through a user-controlled
+quit/restart when idle. Restarting Relay does not replace a running plugin. Do not
+force restarts, terminate workers or use raw task creation as a chat-tool substitute.
 
 ### Delegate From Chat
 
@@ -112,7 +194,8 @@ Later notices are still attempted. Legacy tasks created without an origin are
 not retrospectively assigned a return address. CLI/operator callers must include
 an explicit validated origin through the task API to receive return notices.
 
-Installing these tools requires one restart of each originating OpenCode process.
+Installing these tools requires one user-controlled restart of each originating
+OpenCode process when idle. Do not interrupt active work.
 Worker processes do not need a restart merely to execute a delegated task.
 
 ### Review From Origin
@@ -139,7 +222,11 @@ the decision. Old plugin processes do not receive review-ready toasts until they
 restart with support for the new notification kind, preventing false completion
 labels. Completion toasts continue to work unchanged.
 
-### Explicit Enrolment
+### Manual Per-Binding Setup
+
+This lower-level operator route reserves one exact binding. Prefer standing-folder
+enrolment above for discovery-mode daily use. It is not an automatic fallback when
+chat tools refuse access.
 
 Write a private input file with the exact ID from `herdr-relay agent observed`:
 
@@ -169,11 +256,13 @@ For multiple enrolled agents, use one plugin entry with
 `{"configFiles":["/private/first.json","/private/second.json"]}` instead.
 The plugin selects the matching directory and, when several bindings share it,
 the calling Herdr pane's exact terminal/session identity. Ambiguity fails closed.
-Each newly enrolled harness must restart after its configuration is added;
-restarting before enrolment does not load a future credential. Existing running
+With explicit `configFile`/`configFiles`, each newly enrolled harness must restart
+when idle after its configuration is added. Restarting before enrolment does not
+load a future credential. Existing running
 plugins keep their already-loaded binding until their own restart.
 
-Quit and restart **the target OpenCode process**, resuming the same conversation.
+When idle, quit and restart **the target OpenCode process**, resuming the same
+conversation.
 If that recreates its Herdr terminal rather than only the harness process, setup
 must be reconciled explicitly. Other conversations do not match the plugin's
 directory/session/terminal checks and cannot take delivery for this binding.
@@ -193,16 +282,28 @@ Assign a small issue only after arming. Arming enables on-demand wakes but does
 not itself invoke a task. Stale plugin presence rejects new dispatch. Herdr's
 observed availability remains separate from Paperclip's own run state.
 
-After work is settled, return the agent to paused observation-only mode:
+After work is settled, disarm the exact binding:
 
 ```bash
 herdr-relay agent disarm-bridge --file /private/binding.json
 ```
 
 Disarming refuses active/unsettled work. Credentials and history remain available
-for later enrolment; no native resources are removed.
+for later enrolment; no native resources are removed. With no active folder grant,
+this returns the binding to paused observation-only mode. An active configured or
+persisted folder grant can rearm it. Persisted enrolment grants have no revoke
+operation in this implementation and need operator repair for permanent withdrawal.
 
 ## Verification
+
+### Backlog And Enrolment
+
+Local automated tests cover configured-busy reads without arming/dispatch, company
+and exact-origin scoping, bounded discovery waits, permission/source checks,
+persisted idempotent grants, linked-worktree refusal and worker-directory priority
+during reconciliation. These tests do not certify a live morning startup or
+end-to-end enrolment workflow. The live evidence below concerns earlier features,
+not these additions. No automatic enrolment-grant revocation or recovery is claimed.
 
 ### Rejection Rework
 

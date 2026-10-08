@@ -1,5 +1,9 @@
 # Bounded service schedules
 
+For the deferred Horology-style/native Paperclip integration, see the
+[scheduling plan](scheduling-plan.md). The contract below remains the existing
+bounded standing-task scheduler, not a general cron or reminder API.
+
 Start Relay with `--backend-context /private/operator-backend.json` to enable
 operator-authorised scheduling. The file contains `{"token":"BACKEND_TOKEN"}`,
 or `{"localTrusted":true}` only for an explicitly trusted loopback Paperclip instance.

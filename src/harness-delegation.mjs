@@ -55,7 +55,8 @@ export async function harnessDelegation(store, bridge, action, input, api) {
     current.sessionCreatedAt === bridge.sessionCreatedAt,
   'bridge_identity_mismatch', 'Bridge identity or epoch changed', 409);
   bridge = current;
-  requireValue(bridge.state === 'armed', 'bridge_unavailable', 'Delegation requires an armed bridge', 409);
+  requireValue(['agents', 'delegation-status'].includes(action) ? ['configured', 'armed'].includes(bridge.state) : bridge.state === 'armed',
+    'bridge_unavailable', 'Delegation writes require an armed bridge', 409);
   requireValue(Number.isSafeInteger(bridge.sessionCreatedAt) && bridge.sessionCreatedAt > 0 &&
     input.sessionCreatedAt === bridge.sessionCreatedAt && input.conversationId === bridge.identity.conversationId &&
     typeof bridge.epoch === 'string' && bridge.epoch.trim() && input.epoch === bridge.epoch &&

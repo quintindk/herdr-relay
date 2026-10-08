@@ -9,6 +9,29 @@ license: MIT
 Use `herdr-relay --context "$RELAY_CONTEXT"` or the exact CLI command supplied by
 the runtime. The context file holds credentials. Do not print or copy its contents.
 
+## Read Scope
+
+- In an assigned run, `task list RUN` reads the company backlog under the worker's
+  backend authority. `work list` lists invocations, not the general backlog.
+  Reading a task does not assign it or authorise work outside the current brief.
+- In a human chat, use `relay_tasks` for morning/general backlog lookup, including
+  human-owned and imported tasks and description previews. `relay_delegations`
+  returns only that exact origin chat's delegated work. Neither it nor
+  `relay_reviews` substitutes for the backlog.
+- Configured busy bridges can read `relay_agents`, `relay_tasks`,
+  `relay_delegations` and notification history without enabling incoming work.
+  Discovery on tool invocation waits up to 12 seconds for the exact credential,
+  never grants enrolment. After a transient startup timeout, pause briefly and
+  retry the read once, then report the limitation and continue independent startup
+  checks. Missing tools need a plugin reload at idle, not a forced restart.
+- Workers must not enrol themselves, obtain operator credentials or widen folder
+  defaults. Human-authorised `relay_enrol_agent`/operator `agent enrol` creates a
+  standing folder reservation, not an assignment. Linked worktrees and worker
+  directories require `relay_worker_prepare` adoption outside an active run.
+  See `skills/herdr-relay/SKILL.md` for the authority and recovery boundaries.
+
+## Execute Assigned Work
+
 1. `agent discover` lists registered peers in your company. Discovery does not
    confer authority to stop them or make them your reports.
 2. `work list` lists your invocations. Select the explicit run ID supplied with

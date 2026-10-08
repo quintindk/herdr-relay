@@ -13,6 +13,8 @@ team hierarchy or project to participate.
 - Dedicated owned runtimes with verified interruption, shutdown and continuation.
 - Durable dispatch, progress, submission, questions and bounded continuation.
 - Peer task delegation, human-owned tasks, dependencies and receipt-only inbox events.
+- Read-only company backlog previews and explicit human-authorised standing folder
+  enrolment, separate from task assignment and exact-chat delegation history.
 - Exact candidate digests, independent review evidence and Paperclip acceptance.
 - Experimental explicit human grants for coordinator review of opted-in direct
   children. The root parent's final review remains human.
@@ -72,13 +74,41 @@ Link the herdr plugin:
 herdr plugin link /absolute/path/herdr-relay
 ```
 
+## Chat Startup
+
+Use `relay_tasks` for the company backlog, including human-owned/imported tasks and
+description previews. `relay_delegations` is restricted to work delegated from the
+exact origin chat, not general startup lookup. Configured busy callers can read
+tasks, ready peers, delegations and notification history without enabling incoming
+assignments. Discovery waits up to 12 seconds on invocation and never grants access.
+Retry a transient startup read once after a brief pause, then report the limitation
+and continue independent startup checks. Do not substitute reviews for the backlog.
+
+Explicit human-authorised enrolment uses `relay_enrolment_candidates` then
+`relay_enrol_agent` with `key`, exact `directory`, optional discovered `observedId`
+and `reserved: true`. Without a bridge credential, use an enrolled coordinator or
+the user-authorised operator CLI: `herdr-relay agent enrolment-candidates`, then
+`herdr-relay agent enrol --directory /exact/folder --key KEY --reserved`. Never
+self-elevate after a failed read. No Relay service restart is required. Missing
+tools need the OpenCode plugin reloaded at idle, without interrupting active work.
+
+The persisted reservation follows fresh chats, not old review rights. Linked
+worktrees and worker directories require `relay_worker_prepare` adoption. Worker
+reservations take priority on every reconciliation. **Enrolment revoke is not
+implemented:** disarming cannot permanently withdraw an active standing grant.
+Operator repair is required. See the [bridge contract](docs/opencode-bridge.md).
+These additions have local automated coverage, not live workflow certification.
+
 ## Documentation
 
+- [Deferred scheduling plan](docs/scheduling-plan.md): Horology-style tools over
+  native Paperclip routines, with safe busy-agent and reminder semantics.
 - [Task hierarchy pane](docs/task-board.md): browse tasks by agent or human owner
   through Relay, with folding, search and live refresh.
 - [Herdr Relay skill](skills/herdr-relay/SKILL.md) replaces the former envoy skill.
   Install it as `~/.config/opencode/skills/herdr-relay/SKILL.md`, then restart
-  OpenCode. It teaches the Relay chat tools, origin-bound human review and safe
+  OpenCode when idle without interrupting active workers. It teaches backlog reads,
+  explicit enrolment, Relay chat tools, origin-bound human review and safe
   recovery. [Relay work](skills/relay-work/SKILL.md) remains the worker CLI protocol.
 - [Current handover](docs/handover.md) and [specification](docs/spec-v2.md).
 - [Optional local model gateway](docs/model-gateway.md).

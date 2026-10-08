@@ -18,6 +18,8 @@ const help = `herdr-relay (development)
   agent list
   agent discover
   agent observed
+  agent enrolment-candidates
+  agent enrol --directory ABSOLUTE_PATH --key KEY --reserved
   agent prepare-pull|release-pull --file reservation.json
   agent configure-bridge|arm-bridge|disarm-bridge --file bridge.json
   agent register --file binding.json --context-out worker.json
@@ -40,6 +42,10 @@ const help = `herdr-relay (development)
   work wait-children RUN --file FILE  (JSON: {"taskIds":["CHILD_ID",...]})
   task create RUN --key KEY --file task.json
   task create --company COMPANY_ID --key KEY --file task.json
+  task inspect --company COMPANY_ID --task TASK_ID
+  task edit|reassign --company COMPANY_ID --task TASK_ID --key KEY --file changes.json
+  task complete --company COMPANY_ID --task TASK_ID --key KEY --file completion.json
+    Mutation files: {"expectedRevision":"FROM_INSPECT","payload":{...},"reason":"Human instruction"}; complete omits payload.
   task assign RUN --key KEY --file assignment.json
   task update RUN --key KEY --file changes.json [--task TARGET_TASK_ID]
   work answer RUN --key KEY --interaction ID --file answers.json
@@ -78,10 +84,10 @@ terminal response. Automatic interruption requires a dedicated owned runtime.`;
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
     ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'company', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout']
-      .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }], ['json', { type: 'boolean' }]])) });
+      .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }], ['json', { type: 'boolean' }], ['reserved', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
-  if (values.company !== undefined) requireValue(group === 'task' && action === 'create' && !id,
-    'invalid_request', '--company is only valid for operator task creation without RUN_ID');
+  if (values.company !== undefined) requireValue(group === 'task' && ['create', 'inspect', 'edit', 'reassign', 'complete'].includes(action) && !id,
+    'invalid_request', '--company is only valid for runless operator task commands');
   if (group === 'adapter-stdio') {
     const { serveAdapterStdio } = await import('./remote-adapter.mjs');
     await serveAdapterStdio();
@@ -193,6 +199,10 @@ export async function main(args) {
   } else if (group === 'agent' && action === 'list') result = await call(connection, 'GET', '/bindings');
   else if (group === 'agent' && action === 'discover') result = await call(connection, 'GET', '/peers');
   else if (group === 'agent' && action === 'observed') result = await call(connection, 'GET', '/herdr/agents');
+  else if (group === 'agent' && action === 'enrolment-candidates') result = await call(connection, 'GET', '/herdr/enrolment-candidates');
+  else if (group === 'agent' && action === 'enrol') result = await call(connection, 'POST', '/herdr/enrol', {
+    key: values.key, directory: values.directory, reserved: values.reserved === true,
+  });
   else if (group === 'agent' && ['prepare-pull', 'release-pull', 'configure-bridge', 'arm-bridge', 'disarm-bridge'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/herdr/${action}`, JSON.parse(readFileSync(values.file, 'utf8')));
@@ -253,6 +263,15 @@ export async function main(args) {
     result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/${action === 'retire' ? 'retire' : action === 'check' ? 'reviewer-check' : 'review'}`, {
       ...JSON.parse(readFileSync(values.file, 'utf8')), action,
     });
+  }
+  else if (group === 'task' && ['inspect', 'edit', 'reassign', 'complete'].includes(action) && !id) {
+    requireValue(values.company && values.task && (action === 'inspect' || (values.file && values.key)),
+      'invalid_request', '--company and --task required; mutations also need --key and --file');
+    const details = action === 'inspect' ? {} : JSON.parse(readFileSync(values.file, 'utf8'));
+    requireValue(details && typeof details === 'object' && !Array.isArray(details) &&
+      Object.keys(details).every(key => ['expectedRevision', 'payload', 'reason'].includes(key)), 'invalid_request', 'Unsupported mutation file fields');
+    result = await call(connection, 'POST', '/tasks/manage', { ...details, action: action === 'reassign' ? 'assign' : action,
+      companyId: values.company, taskId: values.task, ...(action === 'inspect' ? {} : { key: values.key }) });
   }
   else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);
   else if (group === 'work' && action === 'wait-children' && id) {

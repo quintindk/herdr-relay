@@ -11,6 +11,367 @@ import { createServer } from 'node:http';
 import { digest } from '../src/protocol.mjs';
 import plugin from '../src/opencode-bridge-plugin.mjs';
 
+async function discoveryFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), 'relay-plugin-tools-'));
+  const bin = join(root, 'bin'); mkdirSync(bin);
+  const configDirectory = join(root, 'bridges'); mkdirSync(configDirectory);
+  const inventoryFile = join(root, 'herdr.json'), countFile = join(root, 'calls');
+  writeFileSync(countFile, '');
+  const pane = { agent: 'opencode', agent_session: { value: 'first', kind: 'id' },
+    terminal_id: 'terminal', pane_id: 'pane', cwd: '/work' };
+  const inventory = () => writeFileSync(inventoryFile, JSON.stringify({ result: { agents: [pane] } }));
+  inventory();
+  writeFileSync(join(bin, 'herdr'), `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(countFile)}, 'call\\n');\nconsole.log(fs.readFileSync(${JSON.stringify(inventoryFile)}, 'utf8'));\n`, { mode: 0o700 });
+  const prior = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
+  Object.assign(process.env, { PATH: `${bin}:${prior.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: 'pane' });
+  const requests = [], approvals = [], sdkCalls = [], hooks = [];
+  const source = { info: { id: 'human', role: 'user', sessionID: 'first', time: { created: 123 } },
+    parts: [{ type: 'text', text: 'Enrol the observed agent in /worker and reserve it.' }] };
+  const messages = [source, { info: { id: 'tool-turn', role: 'assistant', sessionID: 'first', parentID: 'human' }, parts: [] }];
+  let failMutation = false;
+  const server = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    requests.push({ path: req.url, body });
+    const responses = {
+      '/bridge/poll': { state: 'configured' }, '/bridge/agents': { agents: [{ bindingId: 'worker', ready: false }] },
+      '/bridge/tasks': { tasks: [{ id: 'task', status: 'in_progress' }], companyId: 'company' },
+      '/bridge/task-inspect': { task: { id: 'task', title: 'Human task' }, revision: 'revision' },
+      ...Object.fromEntries(['create', 'edit', 'assign', 'complete'].map(action => [`/bridge/task-${action}`, { state: 'recorded' }])),
+      '/bridge/enrolment-candidates': { candidates: [{ observedId: 'observed', directory: '/worker' }] },
+      '/bridge/enrol-agent': { state: 'configured' }, '/bridge/delegation-status': { delegations: [] },
+      '/bridge/notification-history': { notifications: [] },
+    };
+    if ((req.url === '/bridge/enrol-agent' || /^\/bridge\/task-(create|edit|assign|complete)$/.test(req.url)) && failMutation) {
+      res.statusCode = 502;
+      res.end(JSON.stringify({ code: 'lost_response', message: 'Response lost after enrolment' }));
+    } else if (responses[req.url]) res.end(JSON.stringify(responses[req.url]));
+    else { res.statusCode = 404; res.end(JSON.stringify({ code: 'unexpected', message: req.url })); }
+  });
+  t.after(async () => {
+    for (const hook of hooks) await hook.dispose();
+    await new Promise(resolve => server.close(resolve));
+    for (const [key, value] of Object.entries(prior)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    rmSync(root, { recursive: true, force: true });
+  });
+  const socketPath = join(root, 'relay.sock');
+  await new Promise(resolve => server.listen(socketPath, resolve));
+  const config = conversationId => {
+    const path = join(configDirectory, `${conversationId}.json`);
+    writeFileSync(path, JSON.stringify({ directory: '/work', conversationId, terminalId: 'terminal', socketPath, token: 'fixture' }));
+    return path;
+  };
+  const client = { session: {
+    get: async ({ path }) => { sdkCalls.push('get'); return { data: { id: path.id, directory: '/work', time: { created: 123 } } }; },
+    messages: async () => { sdkCalls.push('messages'); return { data: structuredClone(messages) }; },
+    status: async () => ({ data: { first: { type: 'busy' }, second: { type: 'busy' } } }),
+    promptAsync: async () => assert.fail('Configured tools must not send prompts'),
+  } };
+  const load = async options => {
+    const hook = await plugin({ client, directory: '/work' }, options ?? { configDirectory });
+    hooks.push(hook); return hook;
+  };
+  return { root, configDirectory, inventoryFile, countFile, pane, inventory, requests, approvals, sdkCalls, source, messages, config, load,
+    failMutation: () => { failMutation = true; },
+    context: { sessionID: 'first', messageID: 'tool-turn', ask: async permission => { approvals.push(permission); } } };
+}
+
+for (const discovery of [false, true]) {
+test(`configured busy bridge exposes read-only previews and permission-checked enrolment (discovery: ${discovery})`, async t => {
+  const f = await discoveryFixture(t);
+  const configFile = f.config('first');
+  const hooks = await f.load(discovery ? undefined : { configFile });
+  const tools = hooks.tool;
+  assert.equal(Object.keys(tools).length, 19);
+  assert.deepEqual(tools.relay_tasks.args, {});
+  assert.equal(tools.relay_enrol_agent.args.reserved.parse(true), true);
+  assert.equal(tools.relay_enrol_agent.args.reserved.parse(undefined), undefined);
+  assert.equal(tools.relay_enrol_agent.args.observedId.parse(undefined), undefined);
+  if (!discovery) {
+    for (const entry of Object.values(tools)) {
+      await assert.rejects(entry.execute({}, { ...f.context, sessionID: 'foreign' }), /enrolled conversation/);
+    }
+    assert.deepEqual(f.sdkCalls, [], 'Every direct tool must reject foreign context before native reads');
+  }
+  await hooks.config();
+  assert.deepEqual(JSON.parse(await tools.relay_agents.execute({}, f.context)), { agents: [{ bindingId: 'worker', ready: false }] });
+  assert.deepEqual(JSON.parse(await tools.relay_tasks.execute({}, f.context)), { tasks: [{ id: 'task', status: 'in_progress' }], companyId: 'company' });
+  assert.deepEqual(JSON.parse(await tools.relay_enrolment_candidates.execute({}, f.context)), { candidates: [{ observedId: 'observed', directory: '/worker' }] });
+  assert.deepEqual(JSON.parse(await tools.relay_delegations.execute({}, f.context)), { delegations: [], notifications: [] });
+  assert.equal(f.sdkCalls.includes('messages'), false);
+  assert.deepEqual(f.approvals, []);
+  assert.ok(f.requests.every(request => request.body.idle === false), 'Busy configured conversations may inspect without arming');
+  assert.equal(new Set(f.requests.map(request => request.body.epoch)).size, 1);
+  const args = { key: 'enrol-once', directory: '/worker', observedId: 'observed', reserved: true };
+  await assert.rejects(tools.relay_enrol_agent.execute(args, { ...f.context, messageID: 'missing' }), /user message could not be verified/);
+  for (const flag of ['synthetic', 'ignored']) {
+    f.source.parts[0][flag] = true;
+    await assert.rejects(tools.relay_enrol_agent.execute(args, f.context), /user message could not be verified/);
+    delete f.source.parts[0][flag];
+  }
+  assert.deepEqual(f.approvals, []);
+  await assert.rejects(tools.relay_enrol_agent.execute(args, { ...f.context, ask: async () => { throw new Error('Permission denied'); } }), /Permission denied/);
+  const original = structuredClone(f.source);
+  for (const change of ['text', 'id', 'latest']) {
+    try {
+      await assert.rejects(tools.relay_enrol_agent.execute(args, { ...f.context, ask: async () => {
+        if (change === 'text') f.source.parts[0].text = 'Do not enrol';
+        else if (change === 'id') f.source.info.id = 'changed';
+        else f.messages.push({ info: { ...f.source.info, id: 'newer' }, parts: f.source.parts });
+      } }), /User message changed/);
+    } finally { Object.assign(f.source, structuredClone(original)); f.messages.splice(2); }
+  }
+  assert.equal(f.requests.some(request => request.path === '/bridge/enrol-agent'), false);
+  assert.deepEqual(JSON.parse(await tools.relay_enrol_agent.execute(args, f.context)), { state: 'configured' });
+  assert.deepEqual(f.approvals, [{ permission: 'relay_enrol_agent', patterns: ['/worker'], always: [],
+    metadata: { ...args, sourceMessageId: 'human', sourceText: original.parts[0].text } }]);
+  assert.deepEqual(f.requests.at(-1).body.source, { id: 'human', text: original.parts[0].text, createdAt: 123 });
+  for (const [key, value] of Object.entries(args)) assert.deepEqual(f.requests.at(-1).body[key], value);
+  f.failMutation();
+  await assert.rejects(tools.relay_enrol_agent.execute({ ...args, key: 'lost' }, f.context), { code: 'lost_response' });
+  assert.equal(f.requests.filter(request => request.path === '/bridge/enrol-agent').length, 2, 'A lost mutation response must not retry tool execution');
+});
+
+test(`task tools preserve payloads, native authority and per-action permissions (discovery: ${discovery})`, async t => {
+  const f = await discoveryFixture(t);
+  const configFile = f.config('first');
+  const { tool: tools } = await f.load(discovery ? undefined : { configFile });
+  const inspect = JSON.parse(await tools.relay_task_inspect.execute({ taskId: 'task' }, { sessionID: 'first' }));
+  assert.equal(inspect.revision, 'revision');
+  assert.equal(f.sdkCalls.includes('messages'), false, 'Inspection must not read native history');
+  assert.deepEqual(f.approvals, []);
+  assert.deepEqual(f.requests.filter(item => item.path !== '/bridge/poll').map(item => item.path), ['/bridge/task-inspect']);
+  assert.equal(f.requests.at(-1).body.source, undefined);
+  assert.equal(f.requests.at(-1).body.taskId, 'task');
+  assert.equal(f.requests.at(-1).body.idle, false);
+  const writes = () => f.requests.filter(item => /^\/bridge\/task-(create|edit|assign|complete)$/.test(item.path));
+  f.source.parts = [{ type: 'text', text: 'Manage this task as proposed.' },
+    { type: 'text', text: 'Synthetic authority', synthetic: true }, { type: 'text', text: 'Ignored authority', ignored: true }];
+  const original = structuredClone(f.source);
+  for (const [action, payload] of [
+    ['create', { title: 'Human task', description: 'Details', priority: 'high', status: 'blocked',
+      unblockDescriptor: { owner: { userId: 'human-owner' }, action: 'Approve access' },
+      parentId: 'parent', projectId: 'project', assigneeUserId: 'human-owner' }],
+    ['edit', { title: 'Renamed task', description: '', status: 'cancelled' }],
+    ['assign', { assigneeAgentId: 'worker' }], ['complete', undefined],
+  ]) {
+    const name = `relay_task_${action}`, entry = tools[name];
+    const args = { key: action, ...(action === 'create' ? {} : { taskId: 'task', expectedRevision: inspect.revision, reason: 'Human instruction' }),
+      ...(payload ? { payload } : {}) };
+    assert.match(entry.description, /visibly in chat/);
+    for (const [field, schema] of Object.entries(entry.args)) assert.deepEqual(schema.parse(args[field]), args[field]);
+    if (action !== 'create') {
+      assert.equal(entry.args.expectedRevision.safeParse(undefined).success, false);
+      assert.equal(entry.args.reason.safeParse(undefined).success, false);
+    }
+    const before = writes().length, approved = f.approvals.length;
+    await assert.rejects(entry.execute(args, { ...f.context, messageID: 'missing' }), /user message could not be verified/);
+    f.messages[1].info.parentID = 'old-human';
+    await assert.rejects(entry.execute(args, f.context), /user message could not be verified/);
+    f.messages[1].info.parentID = 'human';
+    for (const flag of ['synthetic', 'ignored']) {
+      f.source.parts[0][flag] = true;
+      await assert.rejects(entry.execute(args, f.context), /user message could not be verified/);
+      delete f.source.parts[0][flag];
+    }
+    assert.equal(f.approvals.length, approved, 'Unverified sources cannot request permission');
+    await assert.rejects(entry.execute(args, { ...f.context, ask: async () => { throw new Error('Permission denied'); } }), /Permission denied/);
+    for (const change of ['text', 'id', 'latest']) {
+      try {
+        await assert.rejects(entry.execute(args, { ...f.context, ask: async () => {
+          if (change === 'text') f.source.parts[0].text = 'Do not change the task';
+          else if (change === 'id') f.source.info.id = 'changed';
+          else f.messages.push({ info: { ...f.source.info, id: 'newer' }, parts: f.source.parts });
+        } }), /User message changed/);
+      } finally { Object.assign(f.source, structuredClone(original)); f.messages.splice(2); }
+    }
+    assert.equal(writes().length, before, 'Denied or stale native sources cannot send task writes');
+    assert.deepEqual(JSON.parse(await entry.execute(args, f.context)), { state: 'recorded' });
+    assert.deepEqual(f.approvals.at(-1), { permission: name, patterns: [args.taskId ?? payload.title], always: [],
+      metadata: { ...args, sourceMessageId: 'human', sourceText: original.parts[0].text } });
+    const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...sent } = writes().at(-1).body;
+    assert.deepEqual(sent, { ...args, source: { id: 'human', text: original.parts[0].text, createdAt: 123 } });
+    assert.equal(writes().at(-1).path, `/bridge/task-${action}`);
+    assert.equal(f.approvals.length, approved + 1);
+  }
+  for (const payload of [{ assigneeUserId: null }, { assigneeAgentId: null }, { assigneeUserId: 'human' }]) {
+    assert.deepEqual(tools.relay_task_assign.args.payload.parse(payload), payload);
+  }
+  for (const payload of [{}, { assigneeUserId: 'human', assigneeAgentId: 'agent' }, { assigneeUserId: null, assigneeAgentId: null }]) {
+    assert.equal(tools.relay_task_assign.args.payload.safeParse(payload).success, false);
+  }
+  assert.equal(tools.relay_task_complete.args.payload, undefined);
+  assert.equal(tools.relay_task_create.args.payload.safeParse({ title: 'Task', status: 'cancelled' }).success, false);
+  assert.equal(tools.relay_task_edit.args.payload.safeParse({ status: 'done' }).success, false);
+  assert.equal(tools.relay_task_create.args.payload.safeParse({ title: 'Task', assigneeAgentId: 'agent' }).success, false);
+  assert.equal(tools.relay_task_create.args.payload.safeParse({ title: 'Task', status: 'blocked',
+    unblockDescriptor: { owner: 'board', action: 'Approve' } }).success, true);
+  f.failMutation();
+  for (const action of ['create', 'edit', 'assign', 'complete']) {
+    const before = writes().length;
+    const args = { key: `lost-${action}`, ...(action === 'create' ? { payload: { title: 'Task' } } : {
+      taskId: 'task', expectedRevision: inspect.revision, reason: 'Human instruction',
+      ...(action === 'complete' ? {} : { payload: action === 'edit' ? { title: 'Renamed' } : { assigneeUserId: 'human' } }),
+    }) };
+    await assert.rejects(tools[`relay_task_${action}`].execute(args, f.context), { code: 'lost_response' });
+    assert.equal(writes().length, before + 1, 'A lost task response must not retry execution');
+  }
+});
+
+test(`task tools round-trip through the authenticated service (discovery: ${discovery})`, async t => {
+  const f = await discoveryFixture(t);
+  const task = { id: 'task', companyId: 'company', title: 'Human work', description: '',
+    status: 'todo', priority: 'medium', assigneeUserId: 'human', assigneeAgentId: null };
+  const requests = [];
+  const backend = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = raw ? JSON.parse(raw) : undefined;
+    requests.push({ method: req.method, path: req.url, body });
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'GET' && req.url === '/api/companies/company') {
+      res.end(JSON.stringify({ id: 'company', defaultResponsibleUserId: 'human' }));
+    } else if (req.method === 'GET' && req.url === '/api/agents/worker') {
+      res.end(JSON.stringify({ id: 'worker', companyId: 'company' }));
+    } else if (req.method === 'GET' && (req.url === '/api/issues/task/interactions' || req.url.startsWith('/api/companies/company/issues?'))) {
+      res.end('[]');
+    } else if ((req.method === 'POST' && req.url === '/api/companies/company/issues') ||
+      (req.method === 'PATCH' && req.url === '/api/issues/task')) {
+      Object.assign(task, body);
+      res.end(JSON.stringify(task));
+    } else if (req.method === 'GET' && req.url === '/api/issues/task') res.end(JSON.stringify(task));
+    else { res.statusCode = 404; res.end(JSON.stringify({ message: `Unexpected request: ${req.method} ${req.url}` })); }
+  });
+  let service, hooks;
+  t.after(async () => { await hooks?.dispose(); await service?.close(); await new Promise(resolve => backend.close(resolve)); });
+  await new Promise(resolve => backend.listen(0, '127.0.0.1', resolve));
+  const auth = join(f.root, 'backend.json'); writeFileSync(auth, '{"localTrusted":true}', { mode: 0o600 });
+  const directory = join(f.root, 'relay');
+  service = await startService({ directory, paperclipUrl: `http://127.0.0.1:${backend.address().port}`, backendContextFile: auth });
+  service.store.saveOperation({ id: 'herdr-agent:test', runId: '', marker: 'marker', agentId: 'origin', availability: 'present',
+    identity: { harness: 'opencode', sessionKind: 'id', conversationId: 'first', machineId: 'machine', session: 'default', companyId: 'company' },
+    placement: { directory: '/work', terminalId: 'terminal' }, observation: { display: { name: 'origin' } } });
+  const configured = await configureBridge(service.store, directory, async () => ({ id: 'origin', companyId: 'company',
+    adapterType: 'herdr_relay', adapterConfig: { observationOnly: true, relayObservationMarker: 'marker' } }),
+  { observedId: 'herdr-agent:test', reserved: true });
+  hooks = await f.load(discovery ? { configDirectory: join(directory, 'bridges') } : { configFile: configured.bridgeConfigFile });
+  const tools = hooks.tool;
+  f.source.parts[0].text = 'Create and update the human task as proposed.';
+  const inspect = () => tools.relay_task_inspect.execute({ taskId: 'task' }, { sessionID: 'first' }).then(JSON.parse);
+  let result = await inspect();
+  assert.equal(result.defaultHumanUserId, 'human');
+  assert.match(result.revision, /^[a-f0-9]{64}$/);
+  assert.equal(f.sdkCalls.includes('messages'), false);
+  assert.deepEqual(f.approvals, []);
+  assert.ok(requests.every(item => item.method === 'GET'));
+  assert.equal(service.store.db.prepare("SELECT count(*) AS n FROM operations WHERE id LIKE 'human-task:%'").get().n, 0);
+  result = JSON.parse(await tools.relay_task_create.execute({ key: 'create', payload: { title: 'Created task' } }, f.context));
+  assert.equal(result.task.title, 'Created task');
+  assert.equal(result.task.assigneeUserId, 'human');
+  assert.deepEqual(service.store.operation(result.operationId).request.authority, { kind: 'native', bindingId: configured.bindingId,
+    conversationId: 'first', sessionCreatedAt: 123, sourceMessageId: 'human', sourceDigest: digest(f.source.parts[0].text) });
+  const writes = () => requests.filter(item => item.method !== 'GET');
+  await assert.rejects(tools.relay_task_edit.execute({ key: 'stale', taskId: 'task', expectedRevision: 'stale',
+    reason: 'Old token', payload: { title: 'Not applied' } }, f.context), { code: 'stale_revision' });
+  assert.equal(writes().length, 1);
+  for (const [action, payload, reason] of [
+    ['edit', { title: 'Renamed task' }, 'Clarify title'],
+    ['assign', { assigneeAgentId: 'worker' }, 'Explicit agent assignment'],
+    ['assign', { assigneeUserId: 'human' }, 'Return to human'],
+    ['complete', undefined, 'Human work finished'],
+  ]) {
+    result = await inspect();
+    result = JSON.parse(await tools[`relay_task_${action}`].execute({ key: reason, taskId: 'task', expectedRevision: result.revision,
+      reason, ...(payload ? { payload } : {}) }, f.context));
+    assert.equal(result.state, 'recorded');
+    if (payload?.assigneeAgentId) {
+      const before = writes().length;
+      await assert.rejects(tools.relay_task_complete.execute({ key: 'cannot-bypass-review', taskId: 'task', expectedRevision: result.revision,
+        reason: 'Not human-owned' }, f.context), { code: 'human_assignment_required' });
+      assert.equal(writes().length, before);
+    }
+  }
+  assert.equal(result.task.status, 'done');
+  assert.match(writes()[0].body.idempotencyKey, /^relay-operator:[a-f0-9]{64}$/);
+  assert.deepEqual(writes().map(({ body: { idempotencyKey, ...body } }) => body), [
+    { title: 'Created task', assigneeUserId: 'human', description: '', status: 'todo' },
+    { title: 'Renamed task' }, { assigneeUserId: null, assigneeAgentId: 'worker' },
+    { assigneeUserId: 'human', assigneeAgentId: null }, { status: 'done' },
+  ]);
+});
+}
+
+test('discovery serialises delayed startup, keeps epochs through read errors and waits for the current exact chat', async t => {
+  const f = await discoveryFixture(t);
+  const hooks = await f.load(), tools = hooks.tool;
+  await hooks.config(); await hooks.config();
+  const firstReads = Promise.all(['relay_agents', 'relay_tasks'].map(name => tools[name].execute({}, f.context)));
+  await delay(200);
+  assert.equal(readFileSync(f.countFile, 'utf8'), 'call\n', 'Concurrent config and execute share one discovery refresh');
+  assert.deepEqual(f.sdkCalls, []);
+  const firstFile = f.config('first');
+  await firstReads;
+  const epoch = f.requests[0].body.epoch;
+  assert.equal(new Set(f.requests.map(request => request.body.epoch)).size, 1, 'Concurrent initial reads load only one plugin');
+  const scheduledCalls = readFileSync(f.countFile, 'utf8');
+  await hooks.config(); await hooks.config();
+  await delay(200);
+  assert.equal(readFileSync(f.countFile, 'utf8'), scheduledCalls, 'Repeated config hooks must not start another discovery timer');
+  assert.equal(f.requests.filter(request => request.path === '/bridge/poll').length, 1, 'Concurrent startup must not duplicate native polling');
+  writeFileSync(firstFile, '{');
+  await tools.relay_tasks.execute({}, f.context);
+  assert.equal(f.requests.at(-1).body.epoch, epoch, 'Config read errors preserve the selected hooks');
+  rmSync(firstFile);
+  await tools.relay_agents.execute({}, f.context);
+  assert.equal(f.requests.at(-1).body.epoch, epoch, 'Missing credentials do not replace the epoch');
+  f.config('first');
+  writeFileSync(f.inventoryFile, '{');
+  await assert.rejects(tools.relay_agents.execute({}, f.context), /JSON/);
+  f.inventory();
+  await tools.relay_tasks.execute({}, f.context);
+  assert.equal(f.requests.at(-1).body.epoch, epoch, 'Inventory read errors preserve the epoch');
+
+  const before = f.requests.filter(request => request.path === '/bridge/tasks').length;
+  let switched = false;
+  const current = tools.relay_tasks.execute({}, { sessionID: 'second' }).then(result => { switched = true; return result; });
+  await delay(200);
+  assert.equal(switched, false, 'Old hooks must not refuse or execute a different native context');
+  assert.equal(f.requests.filter(request => request.path === '/bridge/tasks').length, before);
+  f.config('second');
+  await delay(1100);
+  assert.equal(switched, false, 'A config file alone must not bypass exact live selection');
+  f.pane.agent_session.value = 'second'; f.inventory();
+  await current;
+  assert.equal(f.requests.at(-1).body.conversationId, 'second');
+  assert.notEqual(f.requests.at(-1).body.epoch, epoch);
+  assert.equal(hooks.tool, tools);
+  await hooks.dispose();
+  const stoppedCalls = readFileSync(f.countFile, 'utf8'), stoppedRequests = f.requests.length;
+  await assert.rejects(tools.relay_tasks.execute({}, { sessionID: 'second' }), /disposed/);
+  await delay(5200);
+  assert.equal(readFileSync(f.countFile, 'utf8'), stoppedCalls, 'No duplicate discovery or native timers survive disposal');
+  assert.equal(f.requests.length, stoppedRequests);
+});
+
+test('discovery bounds absent-config waits and disposal wakes all callers without invoking stale tools', async t => {
+  const f = await discoveryFixture(t);
+  const hooks = await f.load();
+  const start = Date.now();
+  await assert.rejects(hooks.tool.relay_tasks.execute({}, f.context), /not enrolled for this chat yet/);
+  assert.ok(Date.now() - start >= 11500 && Date.now() - start < 14000, 'Discovery wait is bounded at twelve seconds');
+  const calls = readFileSync(f.countFile, 'utf8').trim().split('\n').length;
+  assert.ok(calls >= 10 && calls <= 13, `Expected roughly one refresh per second, got ${calls}`);
+  f.config('first');
+  await hooks.tool.relay_agents.execute({}, f.context);
+  const reads = f.requests.filter(request => request.path !== '/bridge/poll').length;
+  writeFileSync(f.inventoryFile, '{');
+  const waiting = Promise.all(Object.values(hooks.tool).map(entry => assert.rejects(entry.execute({}, { sessionID: 'foreign' }), /disposed/)));
+  await delay(200);
+  const disposing = Date.now();
+  await hooks.dispose(); await waiting;
+  assert.ok(Date.now() - disposing < 1000, 'Disposal must interrupt the wait rather than leave the twelve-second timeout running');
+  assert.equal(f.requests.filter(request => request.path !== '/bridge/poll').length, reads, 'Read errors must not expose old hooks to foreign context');
+});
+
 test('in-process plugin delivers and settles through the authenticated Relay bridge once', async t => {
   const root = mkdtempSync(join(tmpdir(), 'relay-plugin-'));
   const bin = join(root, 'bin'); mkdirSync(bin);
@@ -106,12 +467,14 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   } };
   hooks = await plugin({ client, directory: '/work' }, { configDirectory });
   const tools = hooks.tool;
-  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_questions', 'relay_review', 'relay_reviews', 'relay_worker_prepare', 'relay_workers']);
+  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_enrol_agent', 'relay_enrolment_candidates', 'relay_questions', 'relay_review', 'relay_reviews', 'relay_task_assign', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_tasks', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();
-  for (const tool of Object.values(tools)) {
-    assert.equal(typeof tool.execute, 'function');
-    await assert.rejects(tool.execute({}, { sessionID: 'first' }), /not enrolled for this chat yet/);
-  }
+  for (const tool of Object.values(tools)) assert.equal(typeof tool.execute, 'function');
+  let initialSettled = false;
+  const initialRead = assert.rejects(tools.relay_questions.execute({}, { sessionID: 'first' }),
+    { code: 'bridge_unavailable', status: 409 }).finally(() => { initialSettled = true; });
+  await delay(200);
+  assert.equal(initialSettled, false, 'The first tool call must wait for credentials rather than refuse immediately');
   assert.equal(readFileSync(countFile, 'utf8'), 'call\n', 'Empty-directory discovery has completed before enrolment');
   assert.deepEqual(sdkCalls, [], 'An empty directory must not inspect a native session');
 
@@ -131,6 +494,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
     }));
   }
   const bridge = index => service.store.operation(`opencode-bridge:${configured[index].bindingId}`);
+  await initialRead;
   const until = async (predicate, message) => {
     for (let i = 0; i < 200; i++) { if (predicate()) return; await delay(50); }
     assert.fail(message);
@@ -138,7 +502,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   await until(() => bridge(0).ready, 'Config added after startup was not discovered');
   assert.equal(bridge(0).sessionCreatedAt, 123);
   assert.equal(bridge(1).lastSeen, undefined, 'The other chat must not report readiness on the same terminal');
-  assert.deepEqual(sdkCalls.filter(call => call.method === 'get'), [{ method: 'get', id: 'first', directory: '/work' }]);
+  assert.deepEqual(sdkCalls.filter(call => call.method === 'get'), Array(2).fill({ method: 'get', id: 'first', directory: '/work' }));
   assert.deepEqual(prompts, []);
 
   pane.agent_session.value = 'second';
@@ -323,6 +687,9 @@ test(`discovery delegates native requests, announces UI-only results and accepts
       reviewItem.resolvedByRunId = null;
       if (loseAcceptanceResponse) {
         reviewIssue.status = 'done';
+        // Delay complete readback evidence until the exact-source retry below.
+        // Otherwise the lifecycle reconciler can independently record acceptance.
+        reviewItem.resolvedByUserId = null;
         res.statusCode = 502;
         res.end(JSON.stringify({ message: 'Response lost after backend accepted the review' }));
       } else res.end(JSON.stringify(reviewItem));
@@ -402,9 +769,6 @@ test(`discovery delegates native requests, announces UI-only results and accepts
     { bindingId: configured.worker.bindingId, agentId: 'worker', label: 'worker', directory: '/worker' },
   ] });
   assert.deepEqual(JSON.parse(await tools.relay_delegations.execute({}, context)), { delegations: [], notifications: [] });
-  for (const name of ['relay_agents', 'relay_delegate', 'relay_delegations']) {
-    await assert.rejects(tools[name].execute(args, { ...context, sessionID: 'foreign' }), /enrolled conversation/);
-  }
   await assert.rejects(tools.relay_delegate.execute(args, { ...context, messageID: 'missing' }), /user message could not be verified/);
   messages[1].info.parentID = 'old-human';
   await assert.rejects(tools.relay_delegate.execute(args, context), /user message could not be verified/);
@@ -632,7 +996,10 @@ test(`discovery delegates native requests, announces UI-only results and accepts
     }
     assert.deepEqual(reviewWrites(), [{ method: 'POST', path: '/api/issues/task/interactions/review/accept', body: {} }]);
   }
-  const receipt = JSON.parse(await tools.relay_review.execute({ decision: 'accept' }, reviewContext));
+  const receipt = JSON.parse(await tools.relay_review.execute({ decision: 'accept' }, { ...reviewContext, ask: async permission => {
+    await reviewContext.ask(permission);
+    if (loseAcceptanceResponse) reviewItem.resolvedByUserId = 'local-user';
+  } }));
   assert.equal(receipt.status, 'accepted');
   assert.equal(receipt.interactionId, 'review');
   assert.deepEqual(approvals.at(-1), { permission: 'relay_review', patterns: ['review'], always: [], metadata: {
@@ -734,9 +1101,6 @@ test('worker tools validate native authority, remain read-only on inspection and
   const context = { sessionID: 'conversation', messageID: 'tool-turn', ask: async permission => { approvals.push(permission); } };
   const args = { key: 'prepare-once', mode: 'create', repository: '/work', branch: 'worker/check', base: 'HEAD', label: 'Check', trustRepository: true };
   const tools = hooks.tool;
-  for (const name of ['relay_workers', 'relay_worker_prepare']) {
-    await assert.rejects(tools[name].execute(args, { ...context, sessionID: 'foreign' }), /enrolled conversation/);
-  }
   const beforeRead = historyReads;
   await assert.rejects(tools.relay_workers.execute({}, { sessionID: 'conversation' }), { code: 'worker_repository_forbidden', status: 409 });
   assert.equal(historyReads, beforeRead, 'Worker inspection requires neither native message history nor a permission callback');
@@ -983,7 +1347,6 @@ test('coordinator tools require permission and re-read the latest native human m
     }
     const original = structuredClone(source), beforeRequests = requests.length, beforeApprovals = approvals.length;
     const beforeGrant = grant && store.operation(grant.grantId);
-    await assert.rejects(tools[name].execute(args, { ...context, sessionID: 'foreign' }), /enrolled conversation/);
     await assert.rejects(tools[name].execute(args, { ...context, messageID: 'missing' }), /user message could not be verified/);
     messages[1].info.parentID = 'older-human';
     await assert.rejects(tools[name].execute(args, context), /user message could not be verified/);

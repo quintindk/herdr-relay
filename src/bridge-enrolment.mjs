@@ -10,6 +10,14 @@ export async function reconcileBridgeEnrolment(store, directory, api, { director
   const inScope = item => item?.identity?.companyId === companyId && item.identity.machineId === machineId && item.identity.session === session;
   for (const target of new Set(directories)) {
     try {
+      const checkDirectory = () => {
+        requireValue(!store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%'").all()
+          .map(row => JSON.parse(row.data)).some(item => item.request?.directory === target || item.target?.directory === target),
+        'worker_directory_reserved', 'Worker directories require exact worker enrolment, including blocked workers', 409);
+        requireValue(current() && directories.includes(target), 'bridge_identity_mismatch', 'Bridge enrolment is no longer current', 409);
+        return true;
+      };
+      checkDirectory();
       const candidates = () => observedAgents(store).filter(item => inScope(item) && item.identity.harness === 'opencode' &&
         item.identity.sessionKind === 'id' && item.placement?.directory === target && item.availability !== 'offline');
       const bridges = () => store.db.prepare("SELECT data FROM operations WHERE id LIKE 'opencode-bridge:%'").all()
@@ -21,7 +29,7 @@ export async function reconcileBridgeEnrolment(store, directory, api, { director
         for (const bridge of bridges()) {
           if ((bridge.state !== 'configured' || !bridge.backendPaused) &&
             store.runs(bridge.identity.bindingId).every(run => run.nativeState === 'settled')) {
-            await disarmBridge(store, api, { bindingId: bridge.identity.bindingId }, () => current() && directories.includes(target));
+            await disarmBridge(store, api, { bindingId: bridge.identity.bindingId }, checkDirectory);
           }
         }
       }
@@ -31,7 +39,7 @@ export async function reconcileBridgeEnrolment(store, directory, api, { director
       const bindingId = `observed-${digest(observed.id).slice(0, 24)}`;
       const id = `opencode-bridge:${bindingId}`;
       const check = () => {
-        requireValue(current() && directories.includes(target), 'bridge_identity_mismatch', 'Bridge enrolment is no longer current', 409);
+        checkDirectory();
         const live = candidates();
         requireValue(live.length === 1, 'bridge_candidates_ambiguous', 'No unique live OpenCode chat in the allowed directory', 409);
         const latest = live[0];

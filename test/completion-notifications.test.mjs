@@ -203,7 +203,8 @@ test('ownership checks reject other bindings, fresh chats, stale epochs and unar
   assert.throws(() => f.begin(notification.id), { code: 'notification_not_found' });
   assert.throws(() => f.invoke('notification-list', {}, oldBridge), { code: 'bridge_identity_mismatch' });
   f.bridge = f.store.saveOperation({ ...oldBridge, state: 'configured' });
-  for (const action of ['notification-list', 'notification-history', 'notification-begin', 'notification-observe']) {
+  assert.deepEqual(f.history(), [notification], 'Configured bridges retain read-only notification history');
+  for (const action of ['notification-list', 'notification-begin', 'notification-observe']) {
     assert.throws(() => f.invoke(action, { id: notification.id, idle: true }), { code: 'bridge_unavailable' });
   }
   assert.throws(() => f.invoke('notification-list', {}, oldBridge), { code: 'bridge_unavailable' });

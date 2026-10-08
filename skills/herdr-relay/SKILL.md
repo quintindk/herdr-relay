@@ -1,6 +1,6 @@
 ---
 name: herdr-relay
-description: Prepare scoped interactive Herdr workers, delegate tasks through Relay, track results, and relay human review from the originating chat. Use when asked to prepare or adopt a worker, delegate, coordinate peers, or check delegated results. Replaces the former herdr-envoy and opencode-herdr workflow.
+description: Read the Relay company backlog, enrol exact folders with human authority, prepare scoped Herdr workers, delegate tasks and relay origin-bound human review. Use for morning task lookup, enrolment, worker preparation or adoption, peer coordination and delegated results. Replaces the former herdr-envoy and opencode-herdr workflow.
 license: MIT
 compatibility: opencode
 ---
@@ -10,6 +10,66 @@ compatibility: opencode
 Coordinate agents with the `relay_*` tools. Paperclip owns tasks and
 review; Relay delivers into enrolled conversations and returns notices. The user
 does not need to open Paperclip. Peers are separate conversations, not subagents.
+
+## Startup And Backlog
+
+- Use `relay_tasks` for morning startup and general task lookup. It is a read-only
+  company backlog preview, including human-owned and imported tasks, with
+  description previews. Reading a task neither assigns it nor starts work.
+  Check returned warnings before treating the preview as complete.
+- `relay_delegations` is only for tasks delegated from this exact origin chat and
+  their results/notification history. Neither it nor `relay_reviews` is a general
+  backlog lookup. A fresh chat does not inherit the previous chat's origin scope.
+- `relay_agents`, `relay_delegations`, `relay_tasks` and notification-history reads
+  work from an authenticated `configured` bridge while the caller is busy. These
+  reads do not arm the bridge or enable incoming assignments. Ready-peer discovery
+  still excludes targets that are not ready.
+- With `configDirectory`, a tool invocation triggers credential discovery and waits
+  up to 12 seconds for the exact chat before refusing. Discovery does not grant
+  enrolment. On a transient startup timeout, wait briefly and retry the read once.
+  If it still fails, report the missing Relay portion and continue independent
+  startup checks. Do not skip the entire startup, substitute reviews/delegations
+  for the backlog, loop indefinitely or auto-enrol the user.
+- If the tools are absent, arrange an OpenCode plugin reload when idle. A Relay
+  service restart does not load new tools into an existing OpenCode process.
+  Do not force a restart or interrupt active work.
+
+## Enrol Exact Folders
+
+- `relay_enrolment_candidates` lists observed candidates read-only. Listing is not
+  an enrolment grant or proof of readiness. Match the exact canonical directory
+  and resolve `observedId` from the returned candidate, never invent it.
+- On explicit human instruction, state the exact directory, candidate and standing
+  reservation visibly before `relay_enrol_agent`. Pass `key`, `directory`,
+  `reserved: true` and optionally the discovered `observedId`. The tool checks
+  permission and the current native human source. Reuse the same key, immutable
+  request and human source on retries. Enrolment is not task assignment.
+- This is a persisted standing folder reservation, not a one-chat permission.
+  Reconciliation follows unique fresh chats in that folder under the recorded
+  scope. It does not transfer old results or review rights. Do not widen folder
+  defaults, edit live config or silently issue new grants to repair discovery.
+- A caller with no matching bridge credential cannot bootstrap itself through the
+  tool. Use an already enrolled coordinator on explicit human authority, or the
+  operator CLI below when the user has authorised enrolment. Never obtain operator
+  credentials or elevate automatically merely because a read failed.
+
+```bash
+herdr-relay agent enrolment-candidates
+herdr-relay agent enrol --directory /exact/canonical/folder --key KEY --reserved
+```
+
+- The CLI requires operator authority. With the discovery plugin already loaded,
+  no Relay service restart is needed. A `requested`/`configured` receipt is not
+  readiness. Inspect candidates and `relay_agents` after reconciliation.
+- Linked Git worktrees and worker-owned directories require `relay_worker_prepare`
+  in `adopt` mode, not generic enrolment. Worker reservations, including blocked
+  workers, take priority and are checked during each reconciliation.
+- Duplicate chats, stale identity, unsettled prior work and manual-pull reservations
+  are blockers, not permission to pick another chat or force replacement.
+- Limitation: an active standing grant can rearm a disarmed bridge. Enrolment-grant
+  revoke is not implemented, so disarm is not permanent withdrawal. Report the
+  need for operator repair rather than inventing a revoke command or altering
+  persisted grants yourself. Coordinator-review revoke is a different operation.
 
 ## Prepare Workers
 
@@ -44,8 +104,8 @@ increment has fixture verification, not live Herdr provisioning certification.
    Use its returned `bindingId` as `targetBindingId`. Refresh discovery before
    delegation. Never invent IDs or ask the user to type them.
 2. If the target is absent, it may be busy, offline, unenrolled or awaiting a
-   plugin restart. Report that limitation. Do not silently create a replacement,
-   interrupt ongoing jobs, inject terminal input or claim its work is queued.
+   plugin reload at idle. Report that limitation. Do not silently create a
+   replacement, interrupt ongoing jobs, inject terminal input or claim its work is queued.
    Prepare a new worker only when explicitly authorised. Clarify ambiguous targets.
 3. Write a self-contained brief: objective, exact folder/file scope, required
    output, checks, constraints and whether edits or further delegation are allowed.
@@ -114,8 +174,8 @@ Example human-reviewed delegation after resolving the live binding:
 
 ## Results And Human Review
 
-- Use `relay_delegations` for this exact chat's tasks, submitted results and durable
-  notification history. The creation receipt's `status` is historical, not a
+- Use `relay_delegations` for tasks delegated from this exact chat, submitted results
+  and durable notification history. The creation receipt's `status` is historical, not a
   current task status. Read run, review and completion evidence separately.
 - A review-ready toast means a result awaits human decision, not that the task is
   Done. A completion toast follows confirmed completion. Toasts do not wake a
@@ -181,9 +241,10 @@ An idle pane or failed backend run does not prove execution stopped.
 
 ## Scope And Recovery
 
-- Only explicitly allowlisted folders auto-enrol. A unique fresh chat gets its own
-  binding; old unsettled deliveries block replacement. Two live chats in one
-  allowed folder are ambiguous, not permission to choose whichever is idle.
+- Only explicitly configured folders or persisted standing folder grants auto-enrol.
+  A unique fresh chat gets its own binding; old unsettled deliveries block
+  replacement. Two live chats in one allowed folder are ambiguous, not permission
+  to choose whichever is idle. Discovery alone never grants a reservation.
 - Returning results and review authority remain bound to the exact originating
   chat. Resume that conversation to inspect its work. A new chat in the same folder
   does not inherit old delegation receipts or review rights.
@@ -192,11 +253,13 @@ An idle pane or failed backend run does not prove execution stopped.
 - Do not use former `list_agents`, `request_agent`, `delegate`, `open_session`,
   `hand_back`, `reply_delegate` or `reap_delegate` instructions. Those belonged to
   the removed coordinator and are not Relay aliases.
-- If `relay_*` tools are missing, report that the global bridge plugin must load
-  and the OpenCode process must restart. Do not fall back to raw operator task
+- If `relay_*` tools are missing, report that the global bridge plugin must reload
+  in OpenCode when idle. Do not force a restart or fall back to raw operator task
   creation: that can omit the originating chat and lose the return path.
 - Existing peers and their dirty work belong to the user. Never kill, restart,
   rebind, clean up or force delivery into them merely to complete a delegation.
 
-After changing this installed skill or the plugin, quit and restart OpenCode to
-refresh skill discovery and tool code. Do not interrupt active workers to do so.
+After changing this installed skill or the plugin, arrange a user-controlled quit
+and restart of OpenCode when idle to refresh skill discovery and tool code. Do not
+interrupt active workers. Enrolment itself needs no service restart. The backlog
+and enrolment behaviour has local automated coverage, not live certification.

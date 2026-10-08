@@ -128,7 +128,8 @@ export function notificationRequest(store, bridge, action, input) {
     requireValue(current && canonical(current.identity) === canonical(bridge.identity) && current.epoch === bridge.epoch &&
       current.sessionCreatedAt === bridge.sessionCreatedAt, 'bridge_identity_mismatch', 'Bridge identity or epoch changed', 409);
     bridge = current;
-    requireValue(bridge.state === 'armed', 'bridge_unavailable', 'Notifications require an armed bridge', 409);
+    requireValue(action === 'notification-history' ? ['configured', 'armed'].includes(bridge.state) : bridge.state === 'armed',
+      'bridge_unavailable', 'Notification delivery requires an armed bridge', 409);
     requireValue(validOrigin({ ...bridge.identity, sessionCreatedAt: bridge.sessionCreatedAt }) &&
       input.conversationId === bridge.identity.conversationId && input.sessionCreatedAt === bridge.sessionCreatedAt &&
       (input.bindingId === undefined || input.bindingId === bridge.identity.bindingId) &&

@@ -222,6 +222,9 @@ test('caller identity, origin overrides, cross-company and self targets fail clo
     await assert.rejects(f.invoke('delegate', { targetBindingId }), { code: 'invalid_delegation_target' });
   }
   f.store.saveOperation({ ...f.bridge, state: 'configured' });
+  assert.deepEqual(await f.invoke('agents'), { agents: [{ bindingId: 'worker', agentId: 'agent-worker',
+    label: 'Agent worker', directory: '/work/worker' }] });
+  assert.deepEqual(await f.invoke('delegation-status'), { delegations: [] });
   await assert.rejects(f.invoke(), { code: 'bridge_unavailable' });
   f.store.saveOperation({ ...f.bridge, sessionCreatedAt: 124 });
   await assert.rejects(f.invoke(), { code: 'bridge_identity_mismatch' });

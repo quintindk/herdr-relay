@@ -21,6 +21,53 @@ const workerArgs = {
   trustRepository: tool.schema.boolean().optional(),
 };
 const grantArgs = { key: tool.schema.string().min(1), parentTaskId: tool.schema.string().min(1), reviewerBindingId: tool.schema.string().min(1) };
+const enrolArgs = {
+  key: tool.schema.string().min(1), directory: tool.schema.string().min(1),
+  observedId: tool.schema.string().min(1).optional(), reserved: tool.schema.boolean().optional(),
+};
+
+function taskTools(execute) {
+  const id = tool.schema.string().min(1);
+  const fields = {
+    title: id.optional(), description: tool.schema.string().optional(),
+    priority: tool.schema.enum(['critical', 'high', 'medium', 'low']).optional(),
+    status: tool.schema.enum(['backlog', 'todo', 'in_progress', 'blocked']).optional(),
+    unblockDescriptor: tool.schema.object({
+      owner: tool.schema.union([tool.schema.literal('board'), tool.schema.object({ userId: id }).strict()]),
+      action: id.max(2000),
+    }).strict().optional(),
+  };
+  const writeArgs = { key: id, taskId: id, expectedRevision: id.describe('Revision token from relay_task_inspect'), reason: id };
+  return Object.fromEntries([
+    ['inspect', {
+      description: 'Inspect an exact task and obtain its revision token before changing it. Read-only; no native message history, permission prompt or task writes. Resolve taskId from relay_tasks.',
+      args: { taskId: id },
+    }],
+    ['create', {
+      description: 'Create a human-owned task on explicit human instruction. Before calling, state the exact proposed task, fields, human owner (or company default) and reason visibly in chat; the permission popup does not show these details. Blocked tasks require an unblock owner and action. Reuse the key on retries. Does not assign an agent.',
+      args: { key: id, payload: tool.schema.object({ ...fields, title: id,
+        parentId: id.nullable().optional(), projectId: id.nullable().optional(), assigneeUserId: id.optional(),
+      }).strict() },
+    }],
+    ['edit', {
+      description: 'Edit a task on explicit human instruction. Before calling, state the exact task, proposed changes, owner and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect as expectedRevision. Blocked tasks require an unblock owner and action. Cannot set done or bypass agent review. Reuse the key on retries.',
+      args: { ...writeArgs, payload: tool.schema.object({ ...fields,
+        status: tool.schema.enum(['backlog', 'todo', 'in_progress', 'blocked', 'cancelled']).optional(),
+      }).strict() },
+    }],
+    ['assign', {
+      description: 'Change task ownership on explicit human instruction. Before calling, state the exact task, proposed human or agent owner (or unassignment) and reason visibly in chat; the permission popup does not show these details. Agent assignment may wake the agent. Supply exactly one nullable assigneeUserId or assigneeAgentId. Use the revision token from relay_task_inspect as expectedRevision and reuse the key on retries.',
+      args: { ...writeArgs, payload: tool.schema.union([
+        tool.schema.object({ assigneeUserId: id.nullable() }).strict(),
+        tool.schema.object({ assigneeAgentId: id.nullable() }).strict(),
+      ]) },
+    }],
+    ['complete', {
+      description: 'Complete only a currently human-owned task on explicit human instruction. Before calling, state the exact task, proposed completion, human owner and reason visibly in chat; the permission popup does not show these details. Cannot bypass agent result review, pending interactions or dependencies. Use the revision token from relay_task_inspect as expectedRevision and reuse the key on retries. Accepts no payload.',
+      args: writeArgs,
+    }],
+  ].map(([action, definition]) => [`relay_task_${action}`, tool({ ...definition, execute: execute(`task-${action}`) })]));
+}
 
 // Loaded by OpenCode, with a binding-scoped credential. Never uses Relay admin auth.
 export default async function relayBridge({ client, directory }, options = {}) {
@@ -116,8 +163,9 @@ export default async function relayBridge({ client, directory }, options = {}) {
       const source = [...snap.messages].reverse().find(item => item.info.role === 'user');
       const content = source?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (!source || source.info.id !== sourceId || !content?.trim()) throw new Error('Current native user message could not be verified');
-      await context.ask({ permission: action === 'delegate' ? 'relay_delegate' : action === 'prepare-worker' ? 'relay_worker_prepare' : 'relay_coordinator_review',
-        patterns: [args.targetBindingId ?? args.repository ?? args.parentTaskId ?? args.grantId], always: [],
+      await context.ask({ permission: action === 'delegate' ? 'relay_delegate' : action === 'prepare-worker' ? 'relay_worker_prepare' :
+        action === 'enrol-agent' ? 'relay_enrol_agent' : action.startsWith('task-') ? `relay_${action.replace('-', '_')}` : 'relay_coordinator_review',
+        patterns: [args.taskId ?? args.payload?.title ?? args.targetBindingId ?? args.repository ?? args.directory ?? args.parentTaskId ?? args.grantId], always: [],
         metadata: { ...args, sourceMessageId: sourceId, sourceText: content } });
       const fresh = await snapshot();
       const latest = [...fresh.messages].reverse().find(item => item.info.role === 'user');
@@ -209,6 +257,23 @@ export default async function relayBridge({ client, directory }, options = {}) {
   };
   return {
     tool: {
+      ...taskTools(action => async (args, context) => {
+        if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+        if (action === 'task-inspect') return JSON.stringify(await rpc(action, await snapshot(false), args));
+        return delegate(args, context, action);
+      }),
+      relay_enrolment_candidates: tool({ description: 'List exact observed agents available for enrolment. Read-only; listing does not grant enrolment authority.', args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+          return JSON.stringify(await rpc('enrolment-candidates', await snapshot(false)));
+        } }),
+      relay_enrol_agent: tool({ description: 'Enrol an exact observed agent only on explicit human instruction. State the directory, exact candidate and any reservation visibly before calling. Resolve observedId from relay_enrolment_candidates and reuse the key on retries. Enrolment is not task assignment.',
+        args: enrolArgs, execute: (args, context) => delegate(args, context, 'enrol-agent') }),
+      relay_tasks: tool({ description: 'Preview all tasks in this Relay company. Read-only; does not assign or start work.', args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+          return JSON.stringify(await rpc('tasks', await snapshot(false)));
+        } }),
       relay_coordinator_grant: tool({ description: 'Grant the assigned parent coordinator authority to review explicitly opted-in direct child tasks. Final parent review remains human. State parent, reviewer and direct-child scope visibly and obtain explicit human authorisation first. Does not change existing child policies.',
         args: grantArgs, execute: (args, context) => delegate(args, context, 'grant-review') }),
       relay_coordinator_revoke: tool({ description: 'Revoke an exact coordinator review grant from this originating chat on explicit human instruction. Retains decisions already confirmed.',
@@ -269,7 +334,8 @@ export default async function relayBridge({ client, directory }, options = {}) {
 
 // Keep one exact-conversation plugin alive. Discovery never grants enrolment authority.
 async function discoverBridge(input, configDirectory) {
-  let hooks, selected, timer, pending, stopped = false;
+  let hooks, selected, conversationId, timer, pending, stopped = false;
+  const waiters = new Set();
   const refresh = async () => {
     if (stopped) return;
     const { stdout } = await promisify(execFile)('herdr', ['agent', 'list'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
@@ -291,27 +357,50 @@ async function discoverBridge(input, configDirectory) {
     if (!next) return;
     const identity = next && JSON.stringify(next.config);
     if (identity === selected) return;
-    await hooks?.dispose(); hooks = undefined; selected = undefined;
-    if (stopped) return;
     const loaded = await relayBridge(input, { configFile: next.path });
+    if (!loaded.tool) return;
     if (stopped) { await loaded.dispose(); return; }
-    hooks = loaded; selected = identity;
+    await hooks?.dispose();
+    if (stopped) { await loaded.dispose(); return; }
+    hooks = loaded; selected = identity; conversationId = next.config.conversationId;
     await hooks.config();
   };
   const tick = () => {
     if (stopped || pending) return;
+    clearTimeout(timer);
     pending = refresh().catch(() => {}).finally(() => {
       pending = undefined;
-      if (!stopped) { timer = setTimeout(tick, 5000); timer.unref(); }
+      for (const ready of waiters) ready();
+      if (!stopped) { timer = setTimeout(tick, waiters.size ? 1000 : 5000); timer.unref(); }
     });
   };
   const execute = name => async (args, context) => {
-    await pending;
-    if (!hooks) throw new Error('Relay bridge is not enrolled for this chat yet. Check Relay agent readiness.');
-    return hooks.tool[name].execute(args, context);
+    let timeout, ready;
+    try {
+      const current = await new Promise((resolve, reject) => {
+        ready = () => {
+          if (stopped) reject(new Error('Relay bridge is disposed'));
+          else if (hooks && conversationId === context.sessionID) resolve(hooks);
+          else return;
+          waiters.delete(ready);
+        };
+        if (stopped) { ready(); return; }
+        waiters.add(ready);
+        timeout = setTimeout(() => reject(new Error('Relay bridge is not enrolled for this chat yet. Tool requires the enrolled conversation. Check Relay agent readiness.')), 12000);
+        tick();
+      });
+      if (stopped) throw new Error('Relay bridge is disposed');
+      // Only discovery is retried. Permission checks and mutations execute once.
+      return current.tool[name].execute(args, context);
+    } finally { clearTimeout(timeout); waiters.delete(ready); }
   };
   return {
     tool: {
+      ...taskTools(action => execute(`relay_${action.replace('-', '_')}`)),
+      relay_enrolment_candidates: tool({ description: 'List exact observed agents available for enrolment. Read-only; listing does not grant enrolment authority.', args: {}, execute: execute('relay_enrolment_candidates') }),
+      relay_enrol_agent: tool({ description: 'Enrol an exact observed agent only on explicit human instruction. State the directory, exact candidate and any reservation visibly before calling. Resolve observedId from relay_enrolment_candidates and reuse the key on retries. Enrolment is not task assignment.',
+        args: enrolArgs, execute: execute('relay_enrol_agent') }),
+      relay_tasks: tool({ description: 'Preview all tasks in this Relay company. Read-only; does not assign or start work.', args: {}, execute: execute('relay_tasks') }),
       relay_coordinator_grant: tool({ description: 'Grant explicit human-authorised direct-child review to the parent assignee. State parent/reviewer/scope visibly. Final parent review remains human; existing child policies do not change.',
         args: grantArgs, execute: execute('relay_coordinator_grant') }),
       relay_coordinator_revoke: tool({ description: 'Revoke a coordinator review grant on explicit human instruction from this exact origin chat.',
@@ -330,8 +419,12 @@ async function discoverBridge(input, configDirectory) {
       relay_review: tool({ description: 'Record an explicit human accept/reject decision for a Relay candidate. Never approve your own work.',
         args: { decision: tool.schema.enum(['accept', 'reject']), interactionId: tool.schema.string().optional(), reason: tool.schema.string().max(4000).optional() }, execute: execute('relay_review') }),
     },
-    async config() { tick(); },
+    async config() { if (!timer && !pending) tick(); },
     async 'chat.message'(input, output) { await hooks?.['chat.message'](input, output); },
-    async dispose() { stopped = true; clearTimeout(timer); await pending; await hooks?.dispose(); },
+    async dispose() {
+      stopped = true; clearTimeout(timer);
+      for (const ready of waiters) ready();
+      await pending; await hooks?.dispose();
+    },
   };
 }
