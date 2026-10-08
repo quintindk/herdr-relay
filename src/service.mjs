@@ -37,6 +37,8 @@ import { harnessDelegation } from './harness-delegation.mjs';
 import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers } from './herdr-workers.mjs';
 import { taskBoard } from './task-board.mjs';
 import { humanTask } from './human-tasks.mjs';
+import { queryTasks } from './task-query.mjs';
+import { attachTaskReference, lookupTaskReference } from './task-references.mjs';
 import { harnessTask } from './harness-tasks.mjs';
 import { enrolAgent, enrolmentCandidates, enrolmentDirectories } from './enrolment.mjs';
 import { coordinatorGrant, coordinatorReviewGrant, validateCoordinatorGrant } from './coordinator-review.mjs';
@@ -121,16 +123,22 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
-          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-complete', '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
+          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-complete',
+          '/bridge/task-list', '/bridge/task-children', '/bridge/task-comments', '/bridge/task-activity', '/bridge/task-reference-lookup', '/bridge/task-reference-attach', '/bridge/task-comment', '/bridge/task-reopen', '/bridge/task-cancel',
+          '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
           '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
         const action = path.split('/').at(-1);
         let result;
-        if (['task-inspect', 'task-create', 'task-edit', 'task-assign', 'task-complete'].includes(action)) {
+        if (action.startsWith('task-')) {
           bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
           const live = store.operation(bridge.id);
           const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...fields } = input;
           const companyId = store.binding(live.identity.bindingId).config.companyId;
+          if (['task-list', 'task-children', 'task-comments', 'task-activity', 'task-reference-lookup'].includes(action)) {
+            result = await harnessTask(store, live, action, fields, operatorApi);
+            res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+          }
           const key = action === 'task-create' ? `human-task-create:${companyId}:${live.identity.bindingId}:${text(fields.key, 'key')}`
             : `human-task-write:${companyId}:${text(fields.taskId, 'taskId')}`;
           requireValue(!publications.has(key), 'operation_busy', 'Task operation in progress', 409);
@@ -222,6 +230,27 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         const pending = humanTask(store, operatorApi, input);
         publications.set(key, pending);
         try { result = await pending; } finally { publications.delete(key); boardCache = null; }
+      }
+      else if (req.method === 'POST' && path === '/tasks/query') {
+        adminOnly(); result = await queryTasks(operatorApi, input);
+      }
+      else if (req.method === 'POST' && path === '/tasks/references') {
+        adminOnly();
+        const { action, ...fields } = input;
+        requireValue(['lookup', 'attach'].includes(action), 'invalid_request', 'Unknown reference action');
+        if (action === 'lookup') result = await lookupTaskReference(store, operatorApi, fields);
+        else {
+          requireValue(Object.keys(fields).every(key => ['companyId', 'taskId', 'key', 'expectedRevision', 'reason', 'payload'].includes(key)), 'invalid_request', 'Unsupported reference fields');
+          requireValue(fields.payload && typeof fields.payload === 'object' && !Array.isArray(fields.payload) &&
+            Object.keys(fields.payload).every(key => ['namespace', 'externalId', 'url'].includes(key)), 'invalid_request', 'Unsupported reference payload');
+          text(fields.expectedRevision, 'expectedRevision');
+          const key = `human-task-write:${text(fields.companyId, 'companyId')}:${text(fields.taskId, 'taskId')}`;
+          requireValue(!publications.has(key), 'operation_busy', 'Task operation in progress', 409);
+          const pending = attachTaskReference(store, operatorApi, { ...fields.payload, companyId: fields.companyId, taskId: fields.taskId,
+            key: fields.key, expectedRevision: fields.expectedRevision });
+          publications.set(key, pending);
+          try { result = await pending; } finally { publications.delete(key); boardCache = null; }
+        }
       }
       else if (req.method === 'GET' && path === '/herdr/agents') { adminOnly(); result = { source: observer?.status() ?? null, agents: observedAgents(store) }; }
       else if (req.method === 'GET' && path === '/herdr/enrolment-candidates') {

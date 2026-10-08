@@ -13,6 +13,9 @@ team hierarchy or project to participate.
 - Dedicated owned runtimes with verified interruption, shutdown and continuation.
 - Durable dispatch, progress, submission, questions and bounded continuation.
 - Peer task delegation, human-owned tasks, dependencies and receipt-only inbox events.
+- Daily task queries, full task/comment reads, bounded all-actor activity reports,
+  guarded human changes and durable external identity links. No tracker scheduling,
+  ingestion, due dates or planning metadata.
 - Read-only company backlog previews and explicit human-authorised standing folder
   enrolment, separate from task assignment and exact-chat delegation history.
 - Exact candidate digests, independent review evidence and Paperclip acceptance.
@@ -76,8 +79,12 @@ herdr plugin link /absolute/path/herdr-relay
 
 ## Chat Startup
 
-Use `relay_tasks` for the company backlog, including human-owned/imported tasks and
-description previews. `relay_delegations` is restricted to work delegated from the
+Use `relay_task_list` for filtered, paginated company tasks, including human-owned
+and terminal tasks. Follow `nextCursor` with unchanged scope until `complete`, and
+retain `fetchedAt` and warnings. Use `relay_task_inspect` for full text,
+`relay_task_comments` for full comment bodies and `relay_task_activity` for explicit
+`[from,to)` audit reports. `relay_tasks` remains a legacy preview, not a complete
+report. `relay_delegations` is restricted to work delegated from the
 exact origin chat, not general startup lookup. Configured busy callers can read
 tasks, ready peers, delegations and notification history without enabling incoming
 assignments. Discovery waits up to 12 seconds on invocation and never grants access.
@@ -101,14 +108,17 @@ These additions have local automated coverage, not live workflow certification.
 
 ## Documentation
 
+- [Daily task tracker](docs/daily-task-tracker.md): query limits and completeness,
+  human capture/edit/comment/complete/reopen/cancel, external references, revision
+  checks and uncertain writes. Fixture coverage is not live workflow certification.
 - [Deferred scheduling plan](docs/scheduling-plan.md): Horology-style tools over
   native Paperclip routines, with safe busy-agent and reminder semantics.
 - [Task hierarchy pane](docs/task-board.md): browse tasks by agent or human owner
   through Relay, with folding, search and live refresh.
 - [Herdr Relay skill](skills/herdr-relay/SKILL.md) replaces the former envoy skill.
   Install it as `~/.config/opencode/skills/herdr-relay/SKILL.md`, then restart
-  OpenCode when idle without interrupting active workers. It teaches backlog reads,
-  explicit enrolment, Relay chat tools, origin-bound human review and safe
+  OpenCode when idle without interrupting active workers. It teaches paginated
+  task reads, explicit enrolment, Relay chat tools, origin-bound human review and safe
   recovery. [Relay work](skills/relay-work/SKILL.md) remains the worker CLI protocol.
 - [Current handover](docs/handover.md) and [specification](docs/spec-v2.md).
 - [Optional local model gateway](docs/model-gateway.md).

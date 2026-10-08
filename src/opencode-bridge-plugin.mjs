@@ -28,6 +28,15 @@ const enrolArgs = {
 
 function taskTools(execute) {
   const id = tool.schema.string().min(1);
+  const filters = {
+    projectId: id.optional(),
+    statuses: tool.schema.array(tool.schema.enum(['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'])).optional(),
+    assigneeAgentId: id.optional(), assigneeUserId: id.optional(),
+  };
+  const pagination = { limit: tool.schema.number().int().min(1).max(999).optional(), cursor: id.optional() };
+  const reference = { namespace: id, externalId: id };
+  const externalReference = tool.schema.object({ ...reference, url: tool.schema.string().url().optional() }).strict();
+  const timestamp = tool.schema.string().datetime({ offset: true }).describe('RFC3339 timestamp with timezone; at most millisecond precision');
   const fields = {
     title: id.optional(), description: tool.schema.string().optional(),
     priority: tool.schema.enum(['critical', 'high', 'medium', 'low']).optional(),
@@ -39,20 +48,45 @@ function taskTools(execute) {
   };
   const writeArgs = { key: id, taskId: id, expectedRevision: id.describe('Revision token from relay_task_inspect'), reason: id };
   return Object.fromEntries([
+    ['list', {
+      description: 'List tasks in this Relay company with filters and pagination, including terminal statuses. Read-only; no native message history or permission prompt. Follow nextCursor with unchanged filters until complete. Use relay_task_inspect for full task details; relay_tasks remains a legacy preview.',
+      args: { ...filters, parentId: id.optional(), ...pagination },
+    }],
+    ['children', {
+      description: 'List direct children of an exact task with filters and pagination. Read-only; no native message history or permission prompt. Follow nextCursor with unchanged filters until complete.',
+      args: { taskId: id, ...filters, ...pagination },
+    }],
+    ['comments', {
+      description: 'Read task comments with pagination. Read-only; no native message history or permission prompt. Follow nextCursor until complete.',
+      args: { taskId: id, ...pagination, limit: tool.schema.number().int().min(1).max(499).optional() },
+    }],
+    ['activity', {
+      description: 'Read task activity in an explicit RFC3339 [from,to) interval, optionally scoped to one task. Read-only; no native message history or permission prompt. Follow nextCursor with unchanged bounds until complete.',
+      args: { taskId: id.optional(), from: timestamp, to: timestamp, ...pagination,
+        limit: tool.schema.number().int().min(1).max(200).optional() },
+    }],
+    ['reference-lookup', {
+      description: 'Look up a task by its exact external namespace and ID through Relay. Read-only; no native message history or permission prompt.',
+      args: { payload: tool.schema.object(reference).strict() },
+    }],
+    ['reference-attach', {
+      description: 'Attach an external reference to an existing task on explicit human instruction. Before calling, state the exact task, reference and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries.',
+      args: { ...writeArgs, payload: externalReference },
+    }],
     ['inspect', {
-      description: 'Inspect an exact task and obtain its revision token before changing it. Read-only; no native message history, permission prompt or task writes. Resolve taskId from relay_tasks.',
+      description: 'Inspect an exact task and obtain its revision token before changing it. Read-only; no native message history, permission prompt or task writes. Resolve taskId from the paginated relay_task_list or legacy relay_tasks preview.',
       args: { taskId: id },
     }],
     ['create', {
       description: 'Create a human-owned task on explicit human instruction. Before calling, state the exact proposed task, fields, human owner (or company default) and reason visibly in chat; the permission popup does not show these details. Blocked tasks require an unblock owner and action. Reuse the key on retries. Does not assign an agent.',
-      args: { key: id, payload: tool.schema.object({ ...fields, title: id,
+      args: { key: id, externalReference: externalReference.optional(), payload: tool.schema.object({ ...fields, title: id,
         parentId: id.nullable().optional(), projectId: id.nullable().optional(), assigneeUserId: id.optional(),
       }).strict() },
     }],
     ['edit', {
-      description: 'Edit a task on explicit human instruction. Before calling, state the exact task, proposed changes, owner and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect as expectedRevision. Blocked tasks require an unblock owner and action. Cannot set done or bypass agent review. Reuse the key on retries.',
+      description: 'Edit a task on explicit human instruction. Before calling, state the exact task, proposed changes, owner and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect as expectedRevision. Blocked tasks require an unblock owner and action. Cannot set done or cancelled or bypass agent review; use relay_task_cancel to cancel. Reuse the key on retries.',
       args: { ...writeArgs, payload: tool.schema.object({ ...fields,
-        status: tool.schema.enum(['backlog', 'todo', 'in_progress', 'blocked', 'cancelled']).optional(),
+        parentId: id.nullable().optional(), blockedByIssueIds: tool.schema.array(id).max(100).optional(),
       }).strict() },
     }],
     ['assign', {
@@ -66,7 +100,19 @@ function taskTools(execute) {
       description: 'Complete only a currently human-owned task on explicit human instruction. Before calling, state the exact task, proposed completion, human owner and reason visibly in chat; the permission popup does not show these details. Cannot bypass agent result review, pending interactions or dependencies. Use the revision token from relay_task_inspect as expectedRevision and reuse the key on retries. Accepts no payload.',
       args: writeArgs,
     }],
-  ].map(([action, definition]) => [`relay_task_${action}`, tool({ ...definition, execute: execute(`task-${action}`) })]));
+    ['cancel', {
+      description: 'Cancel a task on explicit human instruction. Before calling, state the exact task and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries. Accepts no payload.',
+      args: writeArgs,
+    }],
+    ['reopen', {
+      description: 'Reopen a terminal task on explicit human instruction. Before calling, state the exact task, proposed status and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries.',
+      args: { ...writeArgs, payload: tool.schema.object({ status: tool.schema.enum(['todo', 'in_progress']).optional() }).strict() },
+    }],
+    ['comment', {
+      description: 'Add a task comment on explicit human instruction. Before calling, state the exact task, comment and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries.',
+      args: { ...writeArgs, payload: tool.schema.object({ body: id }).strict() },
+    }],
+  ].map(([action, definition]) => [`relay_task_${action.replaceAll('-', '_')}`, tool({ ...definition, execute: execute(`task-${action}`) })]));
 }
 
 // Loaded by OpenCode, with a binding-scoped credential. Never uses Relay admin auth.
@@ -164,7 +210,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
       const content = source?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (!source || source.info.id !== sourceId || !content?.trim()) throw new Error('Current native user message could not be verified');
       await context.ask({ permission: action === 'delegate' ? 'relay_delegate' : action === 'prepare-worker' ? 'relay_worker_prepare' :
-        action === 'enrol-agent' ? 'relay_enrol_agent' : action.startsWith('task-') ? `relay_${action.replace('-', '_')}` : 'relay_coordinator_review',
+        action === 'enrol-agent' ? 'relay_enrol_agent' : action.startsWith('task-') ? `relay_${action.replaceAll('-', '_')}` : 'relay_coordinator_review',
         patterns: [args.taskId ?? args.payload?.title ?? args.targetBindingId ?? args.repository ?? args.directory ?? args.parentTaskId ?? args.grantId], always: [],
         metadata: { ...args, sourceMessageId: sourceId, sourceText: content } });
       const fresh = await snapshot();
@@ -259,7 +305,9 @@ export default async function relayBridge({ client, directory }, options = {}) {
     tool: {
       ...taskTools(action => async (args, context) => {
         if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
-        if (action === 'task-inspect') return JSON.stringify(await rpc(action, await snapshot(false), args));
+        if (['task-inspect', 'task-list', 'task-children', 'task-comments', 'task-activity', 'task-reference-lookup'].includes(action)) {
+          return JSON.stringify(await rpc(action, await snapshot(false), args));
+        }
         return delegate(args, context, action);
       }),
       relay_enrolment_candidates: tool({ description: 'List exact observed agents available for enrolment. Read-only; listing does not grant enrolment authority.', args: {},
@@ -269,7 +317,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
         } }),
       relay_enrol_agent: tool({ description: 'Enrol an exact observed agent only on explicit human instruction. State the directory, exact candidate and any reservation visibly before calling. Resolve observedId from relay_enrolment_candidates and reuse the key on retries. Enrolment is not task assignment.',
         args: enrolArgs, execute: (args, context) => delegate(args, context, 'enrol-agent') }),
-      relay_tasks: tool({ description: 'Preview all tasks in this Relay company. Read-only; does not assign or start work.', args: {},
+      relay_tasks: tool({ description: 'Legacy task preview for this Relay company. Use relay_task_list for filtered, paginated reads. Read-only; does not assign or start work.', args: {},
         async execute(_, context) {
           if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
           return JSON.stringify(await rpc('tasks', await snapshot(false)));
@@ -396,11 +444,11 @@ async function discoverBridge(input, configDirectory) {
   };
   return {
     tool: {
-      ...taskTools(action => execute(`relay_${action.replace('-', '_')}`)),
+      ...taskTools(action => execute(`relay_${action.replaceAll('-', '_')}`)),
       relay_enrolment_candidates: tool({ description: 'List exact observed agents available for enrolment. Read-only; listing does not grant enrolment authority.', args: {}, execute: execute('relay_enrolment_candidates') }),
       relay_enrol_agent: tool({ description: 'Enrol an exact observed agent only on explicit human instruction. State the directory, exact candidate and any reservation visibly before calling. Resolve observedId from relay_enrolment_candidates and reuse the key on retries. Enrolment is not task assignment.',
         args: enrolArgs, execute: execute('relay_enrol_agent') }),
-      relay_tasks: tool({ description: 'Preview all tasks in this Relay company. Read-only; does not assign or start work.', args: {}, execute: execute('relay_tasks') }),
+      relay_tasks: tool({ description: 'Legacy task preview for this Relay company. Use relay_task_list for filtered, paginated reads. Read-only; does not assign or start work.', args: {}, execute: execute('relay_tasks') }),
       relay_coordinator_grant: tool({ description: 'Grant explicit human-authorised direct-child review to the parent assignee. State parent/reviewer/scope visibly. Final parent review remains human; existing child policies do not change.',
         args: grantArgs, execute: execute('relay_coordinator_grant') }),
       relay_coordinator_revoke: tool({ description: 'Revoke a coordinator review grant on explicit human instruction from this exact origin chat.',

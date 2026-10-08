@@ -1,6 +1,6 @@
 ---
 name: herdr-relay
-description: Read the Relay company backlog, enrol exact folders with human authority, prepare scoped Herdr workers, delegate tasks and relay origin-bound human review. Use for morning task lookup, enrolment, worker preparation or adoption, peer coordination and delegated results. Replaces the former herdr-envoy and opencode-herdr workflow.
+description: Query Relay tasks and activity, capture and update human work, attach external references, enrol exact folders, prepare scoped Herdr workers, delegate tasks and relay origin-bound human review. Use for daily task tracking, enrolment, worker preparation or adoption, peer coordination and delegated results. Replaces the former herdr-envoy and opencode-herdr workflow.
 license: MIT
 compatibility: opencode
 ---
@@ -13,14 +13,14 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
 
 ## Startup And Backlog
 
-- Use `relay_tasks` for morning startup and general task lookup. It is a read-only
-  company backlog preview, including human-owned and imported tasks, with
-  description previews. Reading a task neither assigns it nor starts work.
-  Check returned warnings before treating the preview as complete.
+- Use `relay_task_list` for morning startup and filtered company task lookup,
+  including terminal and human-owned tasks. `relay_tasks` is a legacy preview.
+  Reading a task neither assigns it nor starts work. Follow `nextCursor` with
+  unchanged filters/limit until `complete`; report `fetchedAt` and warnings.
 - `relay_delegations` is only for tasks delegated from this exact origin chat and
   their results/notification history. Neither it nor `relay_reviews` is a general
   backlog lookup. A fresh chat does not inherit the previous chat's origin scope.
-- `relay_agents`, `relay_delegations`, `relay_tasks` and notification-history reads
+- `relay_agents`, `relay_delegations`, task queries and notification-history reads
   work from an authenticated `configured` bridge while the caller is busy. These
   reads do not arm the bridge or enable incoming assignments. Ready-peer discovery
   still excludes targets that are not ready.
@@ -33,6 +33,55 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
 - If the tools are absent, arrange an OpenCode plugin reload when idle. A Relay
   service restart does not load new tools into an existing OpenCode process.
   Do not force a restart or interrupt active work.
+
+## Daily Task Tracking
+
+- `relay_task_inspect({taskId})` returns full text, relationships, attached references
+  and `revision`. `relay_task_children` reads direct children. `relay_task_comments`
+  reads full bodies. List descriptions are only 1,200-character previews.
+- Query limits default to 50, with maxima 999 for list/children, 499 for comments,
+  200 for activity. List filters are `projectId`, `statuses`, `assigneeAgentId`,
+  `assigneeUserId`, `parentId`; children uses `taskId` instead of `parentId`.
+  No implicit status exclusion, root-only null filter or `me` owner sentinel exists.
+- `relay_task_activity({from,to,taskId?})` reports all-actor issue audit in `[from,to)`.
+  Use explicit timezone-qualified RFC3339 bounds, at most millisecond precision.
+  Full audit access is required, including to prove list exhaustion. Follow even
+  empty pages with cursors. Count audited transitions, not current done statuses.
+- `complete` means scoped traversal exhausted, not a snapshot. Comments re-fetch
+  the unbounded backend collection on every page, with a 10,000-row safety cap.
+  Restart to reread earlier edits. Never build precision-sensitive cursors from
+  displayed dates. Access errors, stale cursors or limits mean incomplete, not empty.
+- On explicit human instruction use `relay_task_create`, `relay_task_edit`,
+  `relay_task_assign`, `relay_task_comment`, `relay_task_complete`, `relay_task_reopen`
+  or `relay_task_cancel`. State exact task, changes, owner and reason first. Inspect
+  before existing-task writes, then pass `key`, `expectedRevision`, `reason` and
+  action payload. Create takes `key`, `payload`, optional `externalReference`, no
+  reason argument; it uses an explicit/default human, never an agent. Add initial
+  dependencies through a subsequent edit because the plugin create schema omits them.
+- Complete/cancel omit payload. Reopen takes `{}` for todo or `{status:"in_progress"}`.
+  Edit supports independent parent/dependency changes with cycle checks, not review
+  policy changes or terminal status escapes. Blocked needs a human unblock owner/action.
+  Complete/reopen/cancel/comment require current human ownership. Execution,
+  interactions and latest-result acceptance/no-review guards cannot be bypassed.
+- Comments forbid `agent://` anywhere and require exact user-authored readback.
+  Cancellation requires a reason retained in the journal, not a posted comment.
+  Relay does not PATCH the parent, but Paperclip can wake it and its own agents may
+  change it. Never promise parent isolation.
+- Reuse the identical key/request/native source on retries. Uncertain existing-task
+  writes only reconcile, never resend; different human-write keys are fenced for
+  that task. Create retries retain backend idempotency.
+  Revision checks are best effort, not backend CAS. `recorded` acknowledges the
+  operation; check actual task state and `outcome.confirmed` before claiming success.
+- `relay_task_reference_lookup({payload:{namespace,externalId}})` returns null,
+  reserved, or attached with a fresh task summary. Attach via
+  `relay_task_reference_attach` with key/task/revision/reason and reference payload.
+  Company/namespace/external ID is unique; optional HTTP(S) URL metadata is immutable.
+  Create's attached reference reuses the existing task without editing/reopening.
+  Reserved is unresolved, not absent. Attached metadata is included in revisions.
+
+See `docs/daily-task-tracker.md` and `docs/task-commands.md`. No due dates, planning
+metadata, ingestion/migration, scheduler or engagement entity is provided here.
+These contracts have fixture coverage, not live workflow certification.
 
 ## Enrol Exact Folders
 

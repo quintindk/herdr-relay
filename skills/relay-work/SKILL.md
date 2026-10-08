@@ -14,11 +14,12 @@ the runtime. The context file holds credentials. Do not print or copy its conten
 - In an assigned run, `task list RUN` reads the company backlog under the worker's
   backend authority. `work list` lists invocations, not the general backlog.
   Reading a task does not assign it or authorise work outside the current brief.
-- In a human chat, use `relay_tasks` for morning/general backlog lookup, including
-  human-owned and imported tasks and description previews. `relay_delegations`
+- In a human chat, use paginated `relay_task_list` for morning/general lookup,
+  including human-owned and terminal tasks. `relay_tasks` is a legacy preview.
+  Use `relay_task_inspect` for full text and revision. `relay_delegations`
   returns only that exact origin chat's delegated work. Neither it nor
   `relay_reviews` substitutes for the backlog.
-- Configured busy bridges can read `relay_agents`, `relay_tasks`,
+- Configured busy bridges can read `relay_agents`, task queries,
   `relay_delegations` and notification history without enabling incoming work.
   Discovery on tool invocation waits up to 12 seconds for the exact credential,
   never grants enrolment. After a transient startup timeout, pause briefly and
@@ -29,6 +30,44 @@ the runtime. The context file holds credentials. Do not print or copy its conten
   standing folder reservation, not an assignment. Linked worktrees and worker
   directories require `relay_worker_prepare` adoption outside an active run.
   See `skills/herdr-relay/SKILL.md` for the authority and recovery boundaries.
+
+## Human Tracker Boundary
+
+- Worker `task list RUN` and `task inspect RUN --task ID` are not runless tracker
+  queries. Operator `task list|children|comments|activity --company ID` requires
+  operator credentials and no RUN. Never fake a run or obtain operator credentials
+  to use these routes from assigned work. Continue the worker protocol below.
+- Human-chat `relay_task_children` reads direct children, `relay_task_comments`
+  returns full bodies, and `relay_task_activity` requires explicit RFC3339 `[from,to)`
+  bounds with timezone and at most millisecond precision. List filters include
+  project, statuses, human/agent owner and parent; terminal tasks are not excluded.
+- Follow `nextCursor` with unchanged scope/limit until `complete`; retain `fetchedAt`
+  and warnings. Limits default to 50, max 999 list/children, 499 comments, 200 activity.
+  Complete is not a snapshot. Full audit access is needed for activity and list
+  exhaustion. Comments re-fetch the unbounded collection with a 10,000-row cap,
+  not the lossy backend timestamp cursor. Do not invent cursors or treat errors as
+  empty results. Restart traversal for earlier comment edits.
+- Human-safe CLI creation is `task capture`, not generic `task create`. Human-chat
+  create/edit/assign/comment/complete/reopen/cancel tools require explicit human
+  instruction, and active workers cannot use them. Existing writes need inspect's
+  revision and a stable key. Parent/dependency edits reject cycles. Disposition and
+  comment routes require current human ownership. Latest-result acceptance or exact
+  recorded no-review completion is not bypassed by changing owner or status.
+- Comments forbid `agent://` and require user-attributed receipts. Cancel reasons
+  stay in the journal. No parent PATCH is sent, but backend transitions can wake
+  parent agents. `recorded` is not success unless actual `outcome.confirmed` agrees.
+  Revisions are best effort without backend CAS. Uncertain existing-task writes
+  reconcile without replay and fence different human-write keys for the same task.
+  Create retries retain backend idempotency.
+- External references are unique company/namespace/external-ID links. Lookup is
+  null, reserved or attached; reserved is unresolved creation. Optional create
+  `externalReference` reuses an attached task without editing/reopening it.
+  Explicit attach requires a revision and writes only local metadata, included in
+  subsequent revisions. Optional HTTP(S) URL metadata is immutable.
+
+Full envelopes and exact commands: `docs/daily-task-tracker.md` and
+`docs/task-commands.md`. No due dates, planning metadata, ingestion/migration,
+scheduler or engagement entity belongs to this tracker contract.
 
 ## Execute Assigned Work
 

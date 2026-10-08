@@ -36,16 +36,28 @@ const help = `herdr-relay (development)
   work progress RUN --key KEY --summary-file FILE
   work ask RUN --key KEY --question-file FILE
   work interactions RUN
-  task list RUN
-  task inspect RUN --task CHILD_ID
+  task list RUN  [worker]
+  task inspect RUN --task CHILD_ID  [worker]
   work wait-child RUN --task CHILD_ID
   work wait-children RUN --file FILE  (JSON: {"taskIds":["CHILD_ID",...]})
   task create RUN --key KEY --file task.json
-  task create --company COMPANY_ID --key KEY --file task.json
+  task create --company COMPANY_ID --key KEY --file task.json  [generic operator create, unchanged]
+  task capture --company COMPANY_ID --key KEY --file capture.json  [human-safe create]
+    Capture file: {"payload":{...},"externalReference":{"namespace":"...","externalId":"...","url":"https://..."}}; externalReference and url are optional.
+  task list --company COMPANY_ID [--project ID] [--status todo,blocked] [--agent ID] [--user ID] [--parent ID] [--limit N] [--cursor TOKEN]  [runless query]
+  task children --company COMPANY_ID --task TASK_ID [--project ID] [--status todo,blocked] [--agent ID] [--user ID] [--limit N] [--cursor TOKEN]  [runless query]
+  task comments --company COMPANY_ID --task TASK_ID [--limit N] [--cursor TOKEN]  [runless query]
+  task activity --company COMPANY_ID --from RFC3339 --to RFC3339 [--task TASK_ID] [--limit N] [--cursor TOKEN]  [runless query]
+    Limits: positive integers, at most 999 for list/children, 499 for comments, 200 for activity. Activity covers [from,to).
+  task reference-lookup --company COMPANY_ID --namespace NAMESPACE --external-id EXTERNAL_ID  [runless reference]
+  task reference-attach --company COMPANY_ID --task TASK_ID --key KEY --file reference.json  [runless reference]
+    Reference file: {"expectedRevision":"FROM_INSPECT","payload":{"namespace":"...","externalId":"...","url":"https://..."},"reason":"Human instruction"}; url and reason are optional.
   task inspect --company COMPANY_ID --task TASK_ID
   task edit|reassign --company COMPANY_ID --task TASK_ID --key KEY --file changes.json
   task complete --company COMPANY_ID --task TASK_ID --key KEY --file completion.json
-    Mutation files: {"expectedRevision":"FROM_INSPECT","payload":{...},"reason":"Human instruction"}; complete omits payload.
+  task comment|reopen|cancel --company COMPANY_ID --task TASK_ID --key KEY --file mutation.json  [runless human mutation]
+    Mutation files: {"expectedRevision":"FROM_INSPECT","payload":{...},"reason":"Human instruction"}; complete/cancel omit payload, cancel requires reason.
+    Comment payload: {"body":"..."}. Reopen payload: {"status":"todo"} or {} (todo by default).
   task assign RUN --key KEY --file assignment.json
   task update RUN --key KEY --file changes.json [--task TARGET_TASK_ID]
   work answer RUN --key KEY --interaction ID --file answers.json
@@ -83,11 +95,33 @@ terminal response. Automatic interruption requires a dedicated owned runtime.`;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
-    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'company', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout']
+    ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'company', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout', 'project', 'status', 'agent', 'user', 'parent', 'limit', 'cursor', 'from', 'to', 'namespace', 'external-id']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }], ['json', { type: 'boolean' }], ['reserved', { type: 'boolean' }]])) });
   const [group, action, id] = positionals;
-  if (values.company !== undefined) requireValue(group === 'task' && ['create', 'inspect', 'edit', 'reassign', 'complete'].includes(action) && !id,
+  const queryOptions = {
+    list: ['project', 'status', 'agent', 'user', 'parent', 'limit', 'cursor'],
+    children: ['task', 'project', 'status', 'agent', 'user', 'limit', 'cursor'],
+    comments: ['task', 'limit', 'cursor'],
+    activity: ['task', 'limit', 'cursor', 'from', 'to'],
+    'reference-lookup': ['namespace', 'external-id'],
+  };
+  const query = Object.hasOwn(queryOptions, action);
+  const humanMutation = ['edit', 'reassign', 'complete', 'comment', 'reopen', 'cancel', 'reference-attach'].includes(action);
+  if (values.company !== undefined) requireValue(group === 'task' && (query || humanMutation || ['create', 'capture', 'inspect'].includes(action)) && positionals.length === 2,
     'invalid_request', '--company is only valid for runless operator task commands');
+  for (const option of ['project', 'status', 'agent', 'user', 'parent', 'limit', 'cursor', 'from', 'to', 'namespace', 'external-id']) {
+    if (values[option] !== undefined) requireValue(group === 'task' && values.company && query && queryOptions[action].includes(option),
+      'invalid_request', `--${option} is not supported for this command`);
+  }
+  if (group === 'task' && values.company !== undefined) {
+    const allowed = ['context', 'state-dir', 'help', 'company', ...(query ? queryOptions[action] :
+      action === 'inspect' ? ['task'] : ['key', 'file', ...(humanMutation ? ['task'] : [])])];
+    for (const option of Object.keys(values)) {
+      requireValue(allowed.includes(option), 'invalid_request', `--${option} is not supported for this command`);
+      requireValue(typeof values[option] !== 'string' || values[option].trim().length > 0,
+        'invalid_request', `--${option} must not be empty`);
+    }
+  }
   if (group === 'adapter-stdio') {
     const { serveAdapterStdio } = await import('./remote-adapter.mjs');
     await serveAdapterStdio();
@@ -264,13 +298,59 @@ export async function main(args) {
       ...JSON.parse(readFileSync(values.file, 'utf8')), action,
     });
   }
-  else if (group === 'task' && ['inspect', 'edit', 'reassign', 'complete'].includes(action) && !id) {
+  else if (group === 'task' && query && !id) {
+    requireValue(values.company, 'invalid_request', '--company is required');
+    if (action === 'reference-lookup') {
+      requireValue(values.namespace && values['external-id'], 'invalid_request', '--namespace and --external-id are required');
+      result = await call(connection, 'POST', '/tasks/references', { action: 'lookup', companyId: values.company,
+        namespace: values.namespace, externalId: values['external-id'] });
+    } else {
+      if (['children', 'comments'].includes(action)) requireValue(values.task, 'invalid_request', '--task is required');
+      if (action === 'activity') requireValue(values.from && values.to, 'invalid_request', '--from and --to are required');
+      const input = { companyId: values.company, kind: action };
+      for (const [option, field] of Object.entries({ task: 'taskId', project: 'projectId', agent: 'assigneeAgentId',
+        user: 'assigneeUserId', parent: 'parentId', cursor: 'cursor', from: 'from', to: 'to' })) {
+        if (values[option] !== undefined) input[field] = values[option];
+      }
+      if (values.status !== undefined) {
+        input.statuses = values.status.split(',');
+        requireValue(input.statuses.every(status => ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'].includes(status)) &&
+          new Set(input.statuses).size === input.statuses.length, 'invalid_request', '--status must be comma-separated distinct task statuses');
+      }
+      if (values.limit !== undefined) {
+        const max = action === 'activity' ? 200 : action === 'comments' ? 499 : 999;
+        input.limit = Number(values.limit);
+        requireValue(/^[0-9]+$/.test(values.limit) && Number.isSafeInteger(input.limit) && input.limit > 0 && input.limit <= max,
+          'invalid_request', `--limit must be an integer from 1 to ${max}`);
+      }
+      result = await call(connection, 'POST', '/tasks/query', input);
+    }
+  }
+  else if (group === 'task' && action === 'capture' && !id) {
+    requireValue(values.company && values.key && values.file, 'invalid_request', '--company, --key and --file are required');
+    const details = JSON.parse(readFileSync(values.file, 'utf8'));
+    requireValue(details && typeof details === 'object' && !Array.isArray(details) &&
+      Object.keys(details).every(key => ['payload', 'externalReference'].includes(key)) &&
+      details.payload && typeof details.payload === 'object' && !Array.isArray(details.payload),
+    'invalid_request', 'Capture file requires payload and optional externalReference only');
+    if (details.externalReference !== undefined) requireValue(details.externalReference && typeof details.externalReference === 'object' &&
+      !Array.isArray(details.externalReference) && Object.keys(details.externalReference).every(key => ['namespace', 'externalId', 'url'].includes(key)),
+    'invalid_request', 'Unsupported externalReference fields');
+    result = await call(connection, 'POST', '/tasks/manage', { ...details, action: 'create', companyId: values.company, key: values.key });
+  }
+  else if (group === 'task' && (action === 'inspect' || humanMutation) && !id) {
     requireValue(values.company && values.task && (action === 'inspect' || (values.file && values.key)),
       'invalid_request', '--company and --task required; mutations also need --key and --file');
     const details = action === 'inspect' ? {} : JSON.parse(readFileSync(values.file, 'utf8'));
     requireValue(details && typeof details === 'object' && !Array.isArray(details) &&
       Object.keys(details).every(key => ['expectedRevision', 'payload', 'reason'].includes(key)), 'invalid_request', 'Unsupported mutation file fields');
-    result = await call(connection, 'POST', '/tasks/manage', { ...details, action: action === 'reassign' ? 'assign' : action,
+    if (action === 'reference-attach') requireValue(typeof details.expectedRevision === 'string' && details.expectedRevision.trim() &&
+      details.payload && typeof details.payload === 'object' && !Array.isArray(details.payload) &&
+      Object.keys(details.payload).every(key => ['namespace', 'externalId', 'url'].includes(key)) &&
+      ['namespace', 'externalId'].every(key => typeof details.payload[key] === 'string' && details.payload[key].trim()),
+    'invalid_request', 'Reference attachment requires expectedRevision and payload with namespace, externalId and optional url');
+    result = await call(connection, 'POST', action === 'reference-attach' ? '/tasks/references' : '/tasks/manage',
+      { ...details, action: action === 'reference-attach' ? 'attach' : action === 'reassign' ? 'assign' : action,
       companyId: values.company, taskId: values.task, ...(action === 'inspect' ? {} : { key: values.key }) });
   }
   else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);

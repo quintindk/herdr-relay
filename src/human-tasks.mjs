@@ -1,12 +1,15 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { createOperatorTask } from './operations.mjs';
+import { resultPolicy } from './task-policy.mjs';
+import { finishTaskReference, reserveTaskReference, taskReferences, validateTaskReference } from './task-references.mjs';
 
 const publicFields = ['id', 'companyId', 'identifier', 'title', 'description', 'parentId', 'projectId',
-  'assigneeUserId', 'assigneeAgentId', 'status', 'priority', 'updatedAt'];
-const guardedFields = [...publicFields, 'createdAt', 'responsibleUserId', 'executionRunId', 'checkoutRunId',
+  'assigneeUserId', 'assigneeAgentId', 'responsibleUserId', 'status', 'priority', 'updatedAt',
+  'createdAt', 'completedAt', 'cancelledAt'];
+const guardedFields = [...publicFields, 'executionRunId', 'checkoutRunId',
   'executionLockedAt', 'activeRun', 'activeRecoveryAction', 'executionBlocker', 'executionState',
   'executionPolicy', 'reviewPolicy', 'reviewAttention', 'blockedBy', 'blockedByIssueIds',
-  'blockerAttention', 'blockedInboxAttention', 'unblockDescriptor', 'liveDescendantCount', 'hiddenAt'];
+  'blocks', 'blockerAttention', 'blockedInboxAttention', 'unblockDescriptor', 'liveDescendantCount', 'hiddenAt'];
 const pick = (value, fields) => Object.fromEntries(fields.map(field => [field, value[field] ?? null]));
 const object = (value, fields) => requireValue(value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).every(field => fields.includes(field) && value[field] !== undefined),
@@ -14,18 +17,29 @@ const object = (value, fields) => requireValue(value && typeof value === 'object
 const fresh = (value, limit) => { const age = Date.now() - Date.parse(value); return age >= 0 && age < limit; };
 
 // The caller serialises writes per task. Revision checks are best effort: the
-// backend PATCH has no compare-and-swap contract. Uncertain PATCHes are never sent twice.
+// backend PATCH has no compare-and-swap contract. Uncertain writes are never sent twice
+// except creation, whose existing wrapper owns backend idempotency.
 // Inspect returns { task, revision, defaultHumanUserId? }; mutations additionally
-// return { operationId, state, reconciled? }. No backend configuration is returned.
+// return { operationId, state, outcome: { confirmed, reused? }, reconciled? }.
+// Recording a backend response does not imply it matched the requested outcome.
+// Create alone accepts externalReference: { namespace, externalId, url? }. Existing
+// references reuse the actual task without editing it. Lookup/attach remain separate
+// dispatcher routes, whose public attach wrapper must require expectedRevision.
 export async function humanTask(store, api, input, { check = () => {}, authority = { kind: 'operator' } } = {}) {
-  object(input, ['action', 'companyId', 'taskId', 'key', 'expectedRevision', 'payload', 'reason']);
+  object(input, ['action', 'companyId', 'taskId', 'key', 'expectedRevision', 'payload', 'reason', 'externalReference']);
   input = structuredClone(input);
   authority = structuredClone(authority);
   requireValue(authority && typeof authority === 'object' && !Array.isArray(authority), 'invalid_authority', 'Server authority required');
   text(authority.kind, 'authority.kind');
   const { action, companyId, taskId } = input;
-  requireValue(['create', 'inspect', 'edit', 'assign', 'complete'].includes(action), 'invalid_request', 'Unknown human task action');
+  requireValue(['create', 'inspect', 'edit', 'assign', 'complete', 'comment', 'reopen', 'cancel'].includes(action), 'invalid_request', 'Unknown human task action');
   text(companyId, 'companyId');
+  let externalReference;
+  if (input.externalReference !== undefined) {
+    requireValue(action === 'create', 'invalid_request', 'External reference is only supported on creation');
+    object(input.externalReference, ['namespace', 'externalId', 'url']);
+    externalReference = validateTaskReference({ companyId, ...input.externalReference });
+  }
   if (action !== 'create') text(taskId, 'taskId');
   else requireValue(taskId === undefined && input.expectedRevision === undefined, 'invalid_request', 'Creation cannot target an existing task');
   if (input.reason !== undefined) text(input.reason, 'reason');
@@ -36,16 +50,35 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     if (action !== 'create') text(input.expectedRevision, 'expectedRevision');
   }
   const payload = input.payload ?? {};
-  if (action === 'complete') requireValue(input.payload === undefined, 'invalid_request', 'Completion accepts no payload');
+  if (['complete', 'cancel'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'Completion and cancellation accept no payload');
+  if (action === 'cancel') text(input.reason, 'reason');
+  if (action === 'comment') {
+    object(input.payload, ['body']);
+    text(payload.body, 'body');
+    // Paperclip 2026.1001.0 shared/project-mentions parses agent:// Markdown
+    // links, not bare @names or email addresses. Reject the scheme conservatively
+    // (even in code/plain text), without a racy company-agent lookup.
+    requireValue(!/agent:\/\//i.test(payload.body), 'agent_mention_forbidden',
+      'Human task comments cannot contain agent:// references: backend mentions can wake agents');
+  }
+  if (action === 'reopen') {
+    object(input.payload, ['status']);
+    requireValue(payload.status === undefined || ['todo', 'in_progress'].includes(payload.status), 'invalid_status', 'Reopen to todo or in_progress');
+  }
   if (['create', 'edit'].includes(action)) {
-    object(input.payload, ['title', 'description', 'priority', 'status', 'unblockDescriptor',
-      ...(action === 'create' ? ['parentId', 'projectId', 'assigneeUserId'] : [])]);
+    object(input.payload, ['title', 'description', 'priority', 'status', 'unblockDescriptor', 'parentId', 'blockedByIssueIds',
+      ...(action === 'create' ? ['projectId', 'assigneeUserId'] : [])]);
     requireValue(Object.keys(payload).length > 0, 'invalid_request', 'Task fields required');
     if (action === 'create' || payload.title !== undefined) text(payload.title, 'title');
     if (payload.description !== undefined) requireValue(typeof payload.description === 'string', 'invalid_request', 'Description must be a string');
     if (payload.priority !== undefined) requireValue(['critical', 'high', 'medium', 'low'].includes(payload.priority), 'invalid_request', 'Invalid priority');
-    if (payload.status !== undefined) requireValue(['backlog', 'todo', 'in_progress', 'blocked',
-      ...(action === 'edit' ? ['cancelled'] : [])].includes(payload.status), 'invalid_status', 'Use completion for done; review status is not editable');
+    if (payload.status !== undefined) requireValue(['backlog', 'todo', 'in_progress', 'blocked'].includes(payload.status),
+      'invalid_status', 'Use dedicated completion, reopen and cancellation actions');
+    if (payload.blockedByIssueIds !== undefined) {
+      requireValue(Array.isArray(payload.blockedByIssueIds) && payload.blockedByIssueIds.length <= 100 &&
+        new Set(payload.blockedByIssueIds).size === payload.blockedByIssueIds.length, 'invalid_request', 'Expected at most 100 unique dependencies');
+      payload.blockedByIssueIds.forEach(id => text(id, 'blockedByIssueId'));
+    }
     for (const field of ['parentId', 'projectId', 'assigneeUserId']) {
       if (payload[field] !== undefined && (field === 'assigneeUserId' || payload[field] !== null)) text(payload[field], field);
     }
@@ -70,12 +103,18 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     desired = { assigneeUserId: null, assigneeAgentId: null, ...payload };
     if (desired.assigneeAgentId) text(input.reason, 'reason');
   } else if (action === 'complete') desired = { status: 'done' };
+  else if (action === 'reopen') desired = { status: payload.status ?? 'todo' };
+  else if (action === 'cancel') desired = { status: 'cancelled' };
+  else if (action === 'comment') desired = {};
   else if (action === 'edit') desired = payload;
 
   // Source evidence belongs to the immutable request, not the durable owner/key.
   const owner = Object.fromEntries(Object.entries(authority).filter(([field]) =>
     !['sourceMessageId', 'sourceCreatedAt', 'sourceDigest', 'source', 'epoch', 'bindingRevision', 'bindingConfig'].includes(field)));
   const id = action === 'inspect' ? null : `human-task:${digest([companyId, owner, input.key])}`;
+  // UUID-shaped deterministic request identity, independent of retries and backend authorship.
+  const hash = digest(id);
+  const clientRequestId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
   const request = { ...input, authority };
   const previous = () => {
     const operation = id && store.operation(id);
@@ -90,6 +129,92 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   const scoped = (value, expectedId) => {
     requireValue(value && value.id === expectedId && value.companyId === companyId, 'forbidden', 'Task resource must belong to the requested company', 403);
     return value;
+  };
+  const fence = targetId => {
+    const pending = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'human-task:%'").all()
+      .map(row => JSON.parse(row.data)).some(item => item.id !== id && item.state !== 'recorded' &&
+        item.request?.companyId === companyId && (item.request.taskId === targetId || item.taskId === targetId));
+    requireValue(!pending, 'operation_uncertain', 'Reconcile the earlier human task write before using a different key', 409);
+  };
+  const relations = async () => {
+    const cache = new Map();
+    const read = async targetId => {
+      text(targetId, 'relatedTaskId');
+      requireValue(targetId !== taskId, 'relationship_cycle', 'Task cannot refer back to itself', 409);
+      if (!cache.has(targetId)) {
+        requireValue(cache.size < 100, 'graph_limit', 'Relationship validation exceeds 100 tasks', 409);
+        cache.set(targetId, scoped(await send('GET', `/api/issues/${encodeURIComponent(targetId)}`), targetId));
+      }
+      return cache.get(targetId);
+    };
+    const visit = async (targetId, kind, visiting, visited) => {
+      requireValue(!visiting.has(targetId), 'relationship_cycle', 'Relationship graph contains a cycle', 409);
+      if (visited.has(targetId)) return;
+      const task = await read(targetId);
+      visiting.add(targetId);
+      const next = kind === 'parent' ? (task.parentId == null ? [] : [task.parentId]) : dependencyIds(task);
+      for (const nextId of next) await visit(nextId, kind, visiting, visited);
+      visiting.delete(targetId);
+      visited.add(targetId);
+    };
+    if (payload.parentId != null) await visit(payload.parentId, 'parent', new Set(), new Set());
+    const visited = new Set();
+    for (const dependencyId of payload.blockedByIssueIds ?? []) await visit(dependencyId, 'dependency', new Set(), visited);
+  };
+  const dependencyIds = task => {
+    requireValue((task.blockedByIssueIds == null || Array.isArray(task.blockedByIssueIds)) &&
+      (task.blockedBy == null || Array.isArray(task.blockedBy)), 'invalid_backend_response', 'Invalid task dependencies', 502);
+    const ids = [...new Set([...(task.blockedByIssueIds ?? []), ...(task.blockedBy ?? []).map(item => item?.id)])];
+    requireValue(ids.length <= 100 && ids.every(id => typeof id === 'string' && id.trim()), 'invalid_backend_response', 'Invalid task dependencies', 502);
+    return ids;
+  };
+  const project = task => {
+    const value = { ...pick(task, publicFields), blockedByIssueIds: dependencyIds(task) };
+    for (const field of ['blockedBy', 'blocks']) {
+      requireValue(task[field] == null || Array.isArray(task[field]), 'invalid_backend_response', 'Invalid relationship summaries', 502);
+      value[field] = (task[field] ?? []).map(item => {
+        const fields = ['id', 'identifier', 'title', 'status', 'priority', 'assigneeAgentId', 'assigneeUserId'];
+        requireValue(item && fields.every(key => item[key] == null || typeof item[key] === 'string') &&
+          (item.companyId === undefined || item.companyId === companyId), 'invalid_backend_response', 'Invalid relationship summary', 502);
+        return pick(item, fields);
+      });
+    }
+    const descriptor = task.unblockDescriptor;
+    value.unblockDescriptor = null;
+    if (descriptor != null) {
+      const owner = descriptor.owner;
+      requireValue(typeof descriptor.action === 'string' && descriptor.action.length <= 2000 &&
+        (owner === 'board' || (owner && typeof owner === 'object' && !Array.isArray(owner) &&
+          ['userId', 'agentId'].filter(key => typeof owner[key] === 'string' && owner[key].trim()).length === 1)),
+      'invalid_backend_response', 'Invalid unblock descriptor', 502);
+      value.unblockDescriptor = { action: descriptor.action, owner: owner === 'board' ? owner :
+        (typeof owner.userId === 'string' ? { userId: owner.userId } : { agentId: owner.agentId }) };
+    }
+    return value;
+  };
+  const commentReceipt = async operation => {
+    // Paperclip's after cursor round-trips SQL timestamps through JS Date,
+    // losing sub-millisecond precision and potentially returning the anchor again.
+    const comments = await send('GET', `/api/issues/${encodeURIComponent(taskId)}/comments?order=asc`);
+    requireValue(Array.isArray(comments) && comments.length <= 10000,
+      'invalid_backend_response', 'Expected at most 10000 comments. No replay is authorised.', 502);
+    const seen = new Set();
+    let match;
+    for (const comment of comments) {
+      requireValue(comment && typeof comment.id === 'string' && comment.id.trim() && !seen.has(comment.id) &&
+        comment.companyId === companyId && comment.issueId === taskId,
+      'invalid_backend_response', 'Invalid comment receipt scope or identity', 502);
+      seen.add(comment.id);
+      if (comment.clientRequestId !== operation.clientRequestId) continue;
+      requireValue(!match && comment.body === operation.commentBody && (!operation.commentId || operation.commentId === comment.id) &&
+        comment.authorType === 'user' && typeof comment.authorUserId === 'string' && comment.authorUserId.trim() &&
+        comment.authorAgentId == null && comment.derivedAuthorAgentId == null &&
+        comment.createdByRunId == null && comment.derivedCreatedByRunId == null && comment.deletedAt == null,
+      'operation_uncertain', 'Exact user-authored comment receipt not confirmed', 409);
+      match = comment;
+    }
+    requireValue(match, 'operation_uncertain', 'Comment not confirmed. No replay is authorised.', 409);
+    return match.id;
   };
   const runsFor = targetId => store.runs().filter(run => run.request.companyId === companyId && run.request.taskId === targetId);
   const localState = targetId => {
@@ -113,10 +238,17 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     'invalid_backend_response', 'Invalid task interactions', 502);
     check();
     const local = localState(targetId);
-    return { task, interactions, local, revision: digest([pick(task, guardedFields), interactions, local]) };
+    const references = taskReferences(store, companyId, targetId);
+    const publicTask = { ...project(task), references };
+    return { task, publicTask, interactions, local, revision: digest([pick(task, guardedFields), interactions, local, references]) };
   };
-  const response = (snapshot, operation) => ({ task: pick(snapshot.task, publicFields), revision: snapshot.revision,
-    ...(operation ? { operationId: operation.id, state: operation.state, ...(operation.reconciled ? { reconciled: true } : {}) } : {}) });
+  const matches = (snapshot, expected) => Object.entries(expected).every(([field, value]) =>
+    canonical(snapshot.publicTask[field] ?? null) === canonical(value));
+  const response = (snapshot, operation) => ({ task: snapshot.publicTask, revision: snapshot.revision,
+    ...(operation ? { operationId: operation.id, state: operation.state,
+      outcome: { confirmed: matches(snapshot, operation.expected ?? operation.body) &&
+        (!operation.clientRequestId || Boolean(operation.commentId)), ...(operation.reused ? { reused: true } : {}) },
+      ...(operation.reconciled ? { reconciled: true } : {}) } : {}) });
   const company = async () => {
     const value = await send('GET', `/api/companies/${encodeURIComponent(companyId)}`);
     requireValue(value?.id === companyId, 'forbidden', 'Company identity changed', 403);
@@ -132,14 +264,35 @@ export async function humanTask(store, api, input, { check = () => {}, authority
       ? { defaultHumanUserId: settings.defaultResponsibleUserId } : {}) };
   }
   if (action === 'create') {
-    if (!operation) {
+    if (externalReference && operation?.state !== 'recorded') {
+      // Persist exact key/source before reservation, so even pre-create failures
+      // cannot adopt this reservation with changed task fields or authority.
+      operation = store.transaction(() => {
+        check();
+        return previous() ?? store.saveOperation({ id, runId: '', request, state: 'uncertain' });
+      });
+      check();
+      const reservation = reserveTaskReference(store, externalReference, id);
+      check();
+      if (reservation.state === 'attached' && !operation.taskId) {
+        operation = store.saveOperation({ ...operation, taskId: reservation.taskId, reused: true,
+          expected: { id: reservation.taskId, companyId } });
+      }
+    }
+    if (!operation?.body && !operation?.taskId) {
       const settings = await company();
       check();
       const body = { ...payload, assigneeUserId: text(payload.assigneeUserId ?? settings.defaultResponsibleUserId, 'assigneeUserId'),
         description: payload.description ?? '', status: payload.status ?? 'todo' };
-      operation = previous() ?? store.saveOperation({ id, runId: '', request, body, state: 'uncertain' });
+      await relations();
+      check();
+      operation = store.transaction(() => {
+        check();
+        const current = previous();
+        return current?.body || current?.taskId ? current : store.saveOperation({ ...current, id, runId: '', request, body, state: 'uncertain' });
+      });
     }
-    if (operation.state !== 'recorded') {
+    if (operation.state !== 'recorded' && !operation.taskId) {
       const { unblockDescriptor, ...body } = operation.body;
       // The existing creator owns backend idempotency. Its strict payload parser
       // predates unblockDescriptor, so append only the validated, persisted value.
@@ -147,24 +300,37 @@ export async function humanTask(store, api, input, { check = () => {}, authority
         method === 'POST' && unblockDescriptor ? { ...value, unblockDescriptor } : value),
       { companyId, key: `human-task:create:${digest([companyId, owner, input.key])}`, payload: body });
       check();
-      operation = store.saveOperation({ ...operation, state: 'recorded', taskId: created.receipt.id });
+      operation = store.saveOperation({ ...previous(), taskId: created.receipt.id });
     }
+    check();
+    if (externalReference && !operation.reused) finishTaskReference(store, externalReference, id, operation.taskId);
     const snapshot = await inspect(operation.taskId);
     check();
+    operation = store.transaction(() => {
+      check();
+      const current = previous();
+      return current.state === 'recorded' ? current : store.saveOperation({ ...current, state: 'recorded', receipt: snapshot.publicTask });
+    });
     return response(snapshot, operation);
   }
 
-  const initial = await inspect(taskId);
+  let initial = await inspect(taskId);
   check();
   operation = previous();
   if (operation) {
     if (operation.state !== 'recorded') {
-      requireValue(Object.entries(operation.expected).every(([field, value]) => canonical(initial.task[field] ?? null) === canonical(value)),
+      requireValue(matches(initial, operation.expected),
         'operation_uncertain', 'Backend does not confirm the requested fields and ownership. No replay is authorised.', 409);
-      operation = store.saveOperation({ ...operation, state: 'recorded', reconciled: true, receipt: pick(initial.task, publicFields) });
+      const commentId = operation.clientRequestId ? await commentReceipt(operation) : undefined;
+      if (commentId) {
+        initial = await inspect(taskId);
+        requireValue(matches(initial, operation.expected), 'operation_uncertain', 'Task changed during comment reconciliation', 409);
+      }
+      operation = store.saveOperation({ ...operation, ...(commentId ? { commentId } : {}), state: 'recorded', reconciled: true, receipt: initial.publicTask });
     }
     return response(initial, operation);
   }
+  fence(taskId);
   requireValue(initial.revision === input.expectedRevision, 'stale_revision', 'Inspect the task again before changing it', 409);
   const guard = snapshot => {
     check();
@@ -172,27 +338,49 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     requireValue(!task.executionRunId && !task.checkoutRunId && !task.executionLockedAt && !task.activeRun &&
       !task.activeRecoveryAction && !task.executionBlocker && !task.executionState,
     'task_busy', 'Execution, recovery or execution policy state prevents human mutation', 409);
+    // Paperclip 2026.1001.0 issueExecutionPolicySchema defaults. Unknown policy
+    // fields, configured stages, monitors and review controls are never inert.
+    const policy = task.executionPolicy;
+    requireValue(policy == null || (typeof policy === 'object' && !Array.isArray(policy) && policy.mode === 'normal' &&
+      Object.keys(policy).every(key => ['mode', 'commentRequired', 'stages', 'monitor', 'maxReviewRounds'].includes(key)) &&
+      (policy.commentRequired === undefined || typeof policy.commentRequired === 'boolean') &&
+      (policy.stages === undefined || (Array.isArray(policy.stages) && policy.stages.length === 0)) &&
+      policy.monitor == null && policy.maxReviewRounds == null), 'review_required', 'Execution policy requires its dedicated workflow', 409);
     requireValue(!snapshot.interactions.some(item => item.status === 'pending'), 'interaction_pending', 'Resolve pending task interactions first', 409);
     requireValue(canonical(localState(taskId)) === canonical(snapshot.local), 'stale_revision', 'Relay task state changed', 409);
     requireValue(snapshot.local.decisions.every(item => item.state === 'recorded' || item.state === 'skipped'),
       'review_decision_uncertain', 'Resolve uncertain review or completion decisions first', 409);
-    for (const run of runsFor(taskId)) {
-      requireValue(run.nativeState === 'settled', 'task_busy', 'Relay work must settle before human mutation', 409);
-      if (run.result) {
-        requireValue(run.review?.status === 'accepted' && run.review.candidate === run.result.candidate &&
-          run.publication?.state === 'recorded' && run.settlement?.outcome === 'completed',
-        'acceptance_required', 'Every prior result must be accepted, settled and published', 409);
+    const runs = runsFor(taskId);
+    requireValue(runs.every(run => run.nativeState === 'settled'), 'task_busy', 'Relay work must settle before human mutation', 409);
+    const run = runs.find(run => run.result);
+    if (run && action !== 'comment') {
+      const completion = store.operation(`no-review-completion:${run.id}`);
+      const noReview = completion?.state === 'recorded' && completion.runId === run.id && completion.companyId === companyId &&
+        completion.taskId === taskId && completion.status === 'done' && completion.policy === 'none' &&
+        completion.candidate === run.result.candidate && canonical(completion.decision) === canonical(run.result.reviewDecision ?? null) &&
+        resultPolicy(store, run, run.result) === 'none' && !task.reviewPolicy;
+      requireValue(run.publication?.state === 'recorded' && run.settlement?.outcome === 'completed',
+        'acceptance_required', 'Latest result must be settled and published', 409);
+      if (!noReview) {
+        requireValue(run.review?.status === 'accepted' && run.review.candidate === run.result.candidate,
+        'acceptance_required', 'Latest result must have exact acceptance or recorded policy-matched no-review completion', 409);
         requireValue(snapshot.interactions.some(item => item.id === run.review.interactionId && item.status === 'accepted' &&
-          item.kind === 'request_confirmation' && item.payload?.target?.revisionId === run.result.candidate &&
-          item.payload.target.label === run.id && item.payload.target.key === 'herdr-relay-candidate' &&
-          item.payload.target.type === 'custom' && item.idempotencyKey === `relay-review:${run.id}:${digest(run.result)}`),
+          item.kind === 'request_confirmation' && canonical(item.payload?.target) === canonical({ type: 'custom',
+            key: 'herdr-relay-candidate', revisionId: run.result.candidate, label: run.id }) &&
+          item.idempotencyKey === `relay-review:${run.id}:${digest(run.result)}`),
         'acceptance_required', 'Backend must confirm exact candidate acceptance', 409);
       }
     }
-    if (action === 'complete') {
+    // resume:false only suppresses self-comment resumption, not assignee wakes.
+    if (['complete', 'reopen', 'cancel', 'comment'].includes(action)) {
       requireValue(typeof task.assigneeUserId === 'string' && task.assigneeUserId.trim() && !task.assigneeAgentId,
-        'human_assignment_required', 'Only a currently human-assigned task can be completed here', 409);
-      requireValue(!task.reviewPolicy && !task.executionPolicy && !['blocked', 'in_review', 'cancelled'].includes(task.status),
+        'human_assignment_required', 'Only a currently human-assigned task can change disposition or receive comments here', 409);
+    }
+    if (action === 'reopen') requireValue(['done', 'cancelled'].includes(task.status), 'invalid_status', 'Only done or cancelled tasks can reopen', 409);
+    if (action === 'edit' && desired.status !== undefined) requireValue(!['done', 'cancelled'].includes(task.status),
+      'invalid_status', 'Use explicit reopen for terminal tasks', 409);
+    if (action === 'complete') {
+      requireValue(!task.reviewPolicy && !['blocked', 'in_review', 'cancelled'].includes(task.status),
         'review_required', 'Task policy or disposition requires its dedicated workflow', 409);
       requireValue(!task.liveDescendantCount, 'dependency_unresolved', 'Active descendants prevent completion', 409);
     }
@@ -222,6 +410,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     }
   };
   guard(initial);
+  if (action === 'edit') await relations();
   if (desired.assigneeAgentId) scoped(await send('GET', `/api/agents/${encodeURIComponent(desired.assigneeAgentId)}`), desired.assigneeAgentId);
   if (action === 'complete') {
     const blockers = initial.task.blockedBy ?? [];
@@ -241,16 +430,24 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   requireValue(current.revision === initial.revision, 'stale_revision', 'Task changed while validating the mutation', 409);
   guard(current);
   targetReady();
+  fence(taskId);
   requireValue(!previous(), 'operation_conflict', 'Concurrent human task operation', 409);
   const body = Object.fromEntries(Object.entries(desired).filter(([field, value]) => canonical(current.task[field] ?? null) !== canonical(value)));
   // Assignment must explicitly clear the opposite owner even when already null.
   if (action === 'assign' && Object.keys(body).length) Object.assign(body, desired);
   const expected = { ...pick(current.task, ['id', 'companyId', 'assigneeUserId', 'assigneeAgentId']), ...desired };
   check();
-  operation = store.saveOperation({ id, runId: '', request, body, expected, state: 'uncertain' });
-  if (Object.keys(body).length) await send('PATCH', `/api/issues/${encodeURIComponent(taskId)}`, body);
+  // Cancellation reasons remain in request.reason, not backend comments. Terminal
+  // child transitions can still wake parents through Paperclip's own automation.
+  const commentBody = action === 'comment' ? payload.body : undefined;
+  if (action === 'comment') Object.assign(body, { body: commentBody, clientRequestId, reopen: false, resume: false, interrupt: false });
+  operation = store.saveOperation({ id, runId: '', request, body, expected, state: 'uncertain',
+    ...(commentBody !== undefined ? { clientRequestId, commentBody } : {}) });
+  if (Object.keys(body).length) await send(action === 'comment' ? 'POST' : 'PATCH',
+    `/api/issues/${encodeURIComponent(taskId)}${action === 'comment' ? '/comments' : ''}`, body);
+  const commentId = commentBody !== undefined ? await commentReceipt(operation) : undefined;
   const receipt = await inspect(taskId);
   check();
-  operation = store.saveOperation({ ...operation, state: 'recorded', receipt: pick(receipt.task, publicFields) });
+  operation = store.saveOperation({ ...operation, ...(commentId ? { commentId } : {}), state: 'recorded', receipt: receipt.publicTask });
   return response(receipt, operation);
 }

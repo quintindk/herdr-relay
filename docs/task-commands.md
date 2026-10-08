@@ -3,6 +3,144 @@
 Tasks remain in Paperclip. Relay records mutation intent, request identity and
 receipts in schema 4, preserving prior schemas.
 
+## Daily Tracker CLI
+
+The [daily task tracker](daily-task-tracker.md) documents `queryTasks`, `humanTask`,
+reference identity, authority and recovery. The commands below have **no RUN
+argument** and require operator authority with a configured backend context.
+Worker credentials are not an alternative. `--context FILE` or `RELAY_CONTEXT`
+selects a credential file. Never put a token in command arguments, print the file
+or obtain operator credentials to bypass a bridge refusal.
+
+```bash
+herdr-relay task list --company COMPANY_ID --status todo,blocked --limit 50
+herdr-relay task list --company COMPANY_ID --status done,cancelled --limit 50
+herdr-relay task children --company COMPANY_ID --task TASK_ID --limit 50
+herdr-relay task inspect --company COMPANY_ID --task TASK_ID
+herdr-relay task comments --company COMPANY_ID --task TASK_ID --limit 499
+herdr-relay task activity --company COMPANY_ID --from 2026-10-08T00:00:00+02:00 --to 2026-10-09T00:00:00+02:00 --limit 200
+```
+
+List filters are `--project ID`, `--status STATUS[,STATUS...]`, `--agent ID`,
+`--user ID`, `--parent ID`. Children accepts the same filters except `--parent`.
+Comments accepts only task and pagination. Activity accepts optional `--task`, not
+list filters. Status values are distinct, without spaces around commas. Omit status
+to include all statuses, including terminal tasks. Query task/project/agent/parent
+IDs must be lowercase UUIDs. Human IDs must be explicit, not `me`.
+
+All four queries accept `--limit N` and `--cursor TOKEN`. Default limit is 50;
+maximums are 999 for list/children, 499 for comments, 200 for activity. The CLI
+returns one JSON page unchanged, not automatic pagination. Follow `nextCursor`
+with unchanged arguments until `complete`. Preserve `fetchedAt`, `scope` and
+`warnings`. Descriptions in lists are previews. Comments fetch the full backend
+collection each time, capped at 10,000 rows, then page locally without the backend's
+lossy timestamp cursor. Short or empty pages alone do not prove completeness.
+Activity uses `[from,to)` with timezone-qualified RFC3339 bounds of at most
+millisecond precision, and requires full all-actor issue audit access. List
+exhaustion also requires full audit proof. Never synthesise precision-sensitive
+cursors or report a failed traversal as empty.
+
+### Capture And Mutate
+
+Human-safe creation is `task capture`, **not** generic `task create` below:
+
+```bash
+herdr-relay task capture --company COMPANY_ID --key follow-up-1 --file capture.json
+```
+
+`capture.json` is an envelope, unlike the generic create file:
+
+```json
+{
+  "payload": {
+    "title": "Review the proposed change",
+    "description": "Confirm the result with the owner.",
+    "status": "todo",
+    "priority": "low"
+  },
+  "externalReference": {
+    "namespace": "manual",
+    "externalId": "change-review-1"
+  }
+}
+```
+
+`externalReference` is optional and accepts optional `url`. The payload can supply
+`assigneeUserId`, otherwise the company default human is required. It cannot assign
+an agent. Optional `parentId`, `projectId` and `blockedByIssueIds` are supported by
+operator capture. There are no due-date or planning fields.
+
+Existing-task mutations use these exact CLI verbs:
+
+```bash
+herdr-relay task edit --company COMPANY_ID --task TASK_ID --key edit-1 --file changes.json
+herdr-relay task reassign --company COMPANY_ID --task TASK_ID --key owner-1 --file assignment.json
+herdr-relay task comment --company COMPANY_ID --task TASK_ID --key note-1 --file comment.json
+herdr-relay task complete --company COMPANY_ID --task TASK_ID --key complete-1 --file completion.json
+herdr-relay task reopen --company COMPANY_ID --task TASK_ID --key reopen-1 --file reopen.json
+herdr-relay task cancel --company COMPANY_ID --task TASK_ID --key cancel-1 --file cancellation.json
+```
+
+Inspect first. Mutation files accept only `expectedRevision`, `payload`, `reason`.
+For example, `changes.json`:
+
+```json
+{
+  "expectedRevision": "REVISION_FROM_FRESH_INSPECT",
+  "payload": { "description": "Updated human follow-up scope." },
+  "reason": "The human owner clarified the request."
+}
+```
+
+Use `payload: {"assigneeUserId":"HUMAN_USER_ID"}` for reassign,
+`payload: {"body":"Human progress note"}` for comment, and
+`payload: {"status":"in_progress"}` or `{}` for reopen (`todo` default).
+Complete and cancel **omit payload entirely**. Cancel requires `reason`, which
+stays in the Relay journal, not a backend comment. Agent reassign also requires a
+reason and can wake that agent. Other operator reasons are optional.
+
+Complete, reopen, cancel and comment require current human ownership and cannot
+bypass execution, pending interactions or review guards. Non-comment mutations
+check the latest result's exact acceptance or recorded policy-matched no-review
+completion. Comments forbid `agent://` links and require exact human attribution
+on readback. Parent/dependency edits are separate and cycle-checked. Relay does
+not PATCH a child's parent, but backend child transitions can still wake its agent.
+
+Reuse the exact key, revision, payload and source on an uncertain retry. Existing
+task writes reconcile without resending, and an unresolved write fences other
+human-mutation keys for that task. Revisions are best effort, not backend CAS.
+`state: "recorded"` is not proof of the desired disposition: check actual `task`
+and `outcome.confirmed`. A reference reuse also returns `outcome.reused`.
+
+### Reference Commands
+
+```bash
+herdr-relay task reference-lookup --company COMPANY_ID --namespace manual --external-id change-review-1
+herdr-relay task reference-attach --company COMPANY_ID --task TASK_ID --key reference-1 --file reference.json
+```
+
+`reference.json` contains:
+
+```json
+{
+  "expectedRevision": "REVISION_FROM_FRESH_INSPECT",
+  "payload": {
+    "namespace": "manual",
+    "externalId": "change-review-1",
+    "url": "https://example.com/changes/1"
+  },
+  "reason": "Link the existing source record."
+}
+```
+
+URL and operator reason are optional. The company/namespace/external ID tuple is
+unique. URL metadata, including its absence, is immutable. Lookup returns `null`,
+reserved state, or an attached reference with freshly checked task summary.
+Attachment writes only local metadata, never PATCHes or reopens the task. Capture
+with an attached identity reuses the actual task without editing it. Reserved
+identities are unresolved creation, not permission to use a new key. Attached
+references appear in inspect and participate in revision hashing.
+
 ## Operator Creation
 
 Create a task without a worker run using the operator credential:
@@ -246,3 +384,24 @@ handoff, execution blocker or active recovery action appeared. DEF-9 remained
 In Review until the user accepted that original candidate. Relay then marked
 DEF-9 Done automatically at `2026-10-05T12:26:50.009Z`, with a recorded completion
 receipt and the same sole accepted review. No manual status repair was needed.
+
+## Verification
+
+Offline commands from the checkout root:
+
+```bash
+node src/cli.mjs --help
+npm run check
+node --test test/task-query.test.mjs test/task-references.test.mjs test/human-tasks.test.mjs test/task-tracker-service.test.mjs test/task-cli.test.mjs test/opencode-bridge-plugin.test.mjs
+```
+
+Allow at least 300,000 ms when running the targeted checks through a tool runner.
+For the full suite (`npm test`), allow at least 600,000 ms. These commands exercise
+fixtures and CLI argument routing, not live task creation or parent wake behaviour.
+The historical live evidence above concerns the earlier creation/review workflows,
+not certification of the new daily tracker.
+
+Shell examples use actual operator company/task IDs and opaque cursors obtained
+from reads. Those identifiers are not credentials. Mutation JSON belongs in the
+named files; credential contents do not. Do not invent a worker RUN to make a
+runless command work, and do not claim an example was executed without its result.

@@ -7,6 +7,7 @@ import { Store } from '../src/store.mjs';
 import { humanTask } from '../src/human-tasks.mjs';
 import { createOperatorTask } from '../src/operations.mjs';
 import { digest } from '../src/protocol.mjs';
+import { attachTaskReference, lookupTaskReference, reserveTaskReference, finishTaskReference } from '../src/task-references.mjs';
 
 function fixture(t, file = ':memory:') {
   const store = new Store(file);
@@ -14,7 +15,13 @@ function fixture(t, file = ':memory:') {
   const task = { id: 'task', companyId: 'company', identifier: 'TEST-1', title: 'Human work', description: 'Full description\n'.repeat(200),
     parentId: null, projectId: null, assigneeUserId: 'human', assigneeAgentId: null, status: 'todo', priority: 'medium', updatedAt: '2026-10-08T00:00:00Z' };
   const state = { task, company: { id: 'company', defaultResponsibleUserId: 'default-human' }, interactions: [], children: [],
-    resources: new Map(), creations: new Map(), calls: [], hook: null, patch: null, post: null };
+    resources: new Map(), creations: new Map(), calls: [], comments: [], hook: null, patch: null, post: null };
+  const comment = body => {
+    const value = { id: `comment-${state.comments.length}`, companyId: 'company', issueId: 'task', body: body.body,
+      clientRequestId: body.clientRequestId, authorType: 'user', authorUserId: 'connector-human', authorAgentId: null };
+    state.comments.push(value);
+    return value;
+  };
   const api = async (method, path, body) => {
     state.calls.push({ method, path, ...(body ? { body: structuredClone(body) } : {}) });
     await state.hook?.(method, path, body);
@@ -22,9 +29,15 @@ function fixture(t, file = ':memory:') {
     if (method === 'PATCH') {
       assert.equal(path, '/api/issues/task');
       if (state.patch) return state.patch(body);
+      if (body.comment) comment({ body: body.comment, clientRequestId: body.commentClientRequestId });
       Object.assign(state.task, body, { updatedAt: '2026-10-08T00:01:00Z' });
       value = state.task;
     } else if (method === 'POST') {
+      if (path === '/api/issues/task/comments') {
+        value = comment(body);
+        await state.post?.(value, body);
+        return structuredClone(value);
+      }
       assert.equal(path, '/api/companies/company/issues');
       if (!state.creations.has(body.idempotencyKey)) state.creations.set(body.idempotencyKey,
         { ...structuredClone(task), ...body, id: `created-${state.creations.size}` });
@@ -33,6 +46,13 @@ function fixture(t, file = ':memory:') {
     } else {
       assert.equal(method, 'GET');
       if (path === '/api/companies/company') value = state.company;
+      else if (path.startsWith('/api/issues/task/comments?')) {
+        const query = new URLSearchParams(path.split('?')[1]);
+        assert.equal(query.get('order'), 'asc');
+        assert.equal(query.has('limit'), false);
+        assert.equal(query.has('after'), false);
+        value = state.comments;
+      }
       else if (path.endsWith('/interactions')) value = state.interactions;
       else if (path.startsWith('/api/companies/company/issues?')) {
         const query = new URLSearchParams(path.split('?')[1]);
@@ -52,6 +72,202 @@ function fixture(t, file = ':memory:') {
   const writes = () => state.calls.filter(call => call.method !== 'GET');
   return { store, state, api, inspect, input, writes };
 }
+
+const externalReference = { namespace: 'crm', externalId: 'CASE-1', url: 'https://example.com/cases/1' };
+const referenceCreate = { action: 'create', companyId: 'company', key: 'create-reference',
+  externalReference, payload: { title: 'Follow-up' } };
+
+test('external-reference creation reserves by journal identity and exposes references in its receipt', async t => {
+  const f = fixture(t);
+  f.state.post = () => {
+    const ref = f.store.operation(`task-reference:${digest(['company', 'crm', 'CASE-1'])}`);
+    assert.equal(ref.state, 'reserved');
+    assert.deepEqual(f.store.operation(ref.ownerKey).request.externalReference, externalReference);
+  };
+  const result = await humanTask(f.store, f.api, referenceCreate);
+  assert.deepEqual(result.task.references, [{ companyId: 'company', taskId: result.task.id, ...externalReference }]);
+  assert.deepEqual(result.outcome, { confirmed: true });
+  assert.deepEqual(f.store.operation(result.operationId).receipt, result.task);
+  assert.equal(f.writes().length, 1);
+  assert.equal(f.writes()[0].body.externalReference, undefined);
+  const count = f.store.db.prepare('SELECT total_changes() AS n').get().n;
+  assert.deepEqual(await humanTask(f.store, f.api, referenceCreate), result);
+  assert.equal(f.store.db.prepare('SELECT total_changes() AS n').get().n, count);
+});
+
+test('new create keys reuse actual terminal task state without defaults, resource validation or backend writes', async t => {
+  for (const status of ['done', 'cancelled']) {
+    const f = fixture(t);
+    const first = await humanTask(f.store, f.api, referenceCreate);
+    const task = [...f.state.creations.values()][0];
+    Object.assign(task, { status, title: 'Actual title', assigneeUserId: null, assigneeAgentId: 'agent', token: 'private-token' });
+    f.state.company.defaultResponsibleUserId = null;
+    const input = { ...referenceCreate, key: 'reuse', payload: { title: 'Do not apply', parentId: 'nonexistent' } };
+    const reused = await humanTask(f.store, f.api, input);
+    assert.equal(reused.task.id, first.task.id);
+    assert.equal(reused.task.status, status);
+    assert.equal(reused.task.title, 'Actual title');
+    assert.equal(reused.task.assigneeAgentId, 'agent');
+    assert.deepEqual(reused.outcome, { confirmed: true, reused: true });
+    assert.equal(f.writes().length, 1);
+    const journal = f.store.operation(reused.operationId);
+    assert.deepEqual(journal.request.payload, input.payload);
+    assert.deepEqual(journal.receipt, reused.task);
+    assert.doesNotMatch(JSON.stringify(reused), /private-token|sourceDigest|ownerKey/);
+    const count = f.store.db.prepare('SELECT total_changes() AS n').get().n;
+    await humanTask(f.store, f.api, input);
+    assert.equal(f.store.db.prepare('SELECT total_changes() AS n').get().n, count);
+    await assert.rejects(humanTask(f.store, f.api, { ...input, payload: { title: 'Changed request' } }), { code: 'operation_conflict' });
+    await assert.rejects(humanTask(f.store, f.api, { ...input, externalReference: { ...externalReference, externalId: 'other' } }), { code: 'operation_conflict' });
+    await assert.rejects(humanTask(f.store, f.api, { ...input, key: 'url-conflict', externalReference: { ...externalReference, url: 'https://other.example' } }), { code: 'task_reference_conflict' });
+  }
+});
+
+test('reference creation rejects malformed metadata and non-create use before API or journal access', async t => {
+  const f = fixture(t);
+  for (const value of [null, [], {}, { namespace: 'crm' }, { ...externalReference, externalId: '' },
+    ...['companyId', 'taskId', 'ownerKey', 'engagement', 'dueAt', 'createdAt', 'token'].map(field => ({ ...externalReference, [field]: 'injected' })),
+    ...[null, undefined, '', 'javascript:alert(1)', 'https://user:pass@example.com'].map(url => ({ ...externalReference, url }))]) {
+    await assert.rejects(humanTask(f.store, f.api, { ...referenceCreate, externalReference: value }), { code: 'invalid_request' });
+  }
+  for (const action of ['inspect', 'edit', 'assign', 'complete', 'comment', 'reopen', 'cancel']) {
+    await assert.rejects(humanTask(f.store, f.api, { ...referenceCreate, action, taskId: 'task' }), { code: 'invalid_request' });
+  }
+  assert.equal(f.state.calls.length, 0);
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM operations').get().n, 0);
+});
+
+test('inspect references are local public projections and invalidate revisions for both edits and attachments', async t => {
+  const f = fixture(t);
+  const first = await f.inspect();
+  assert.deepEqual(first.task.references, []);
+  const ref = { companyId: 'company', ...externalReference };
+  reserveTaskReference(f.store, ref, 'owner');
+  assert.equal((await f.inspect()).revision, first.revision);
+  finishTaskReference(f.store, ref, 'owner', 'task');
+  f.state.task.references = [{ token: 'forged-backend-reference' }];
+  const current = await f.inspect();
+  assert.notEqual(current.revision, first.revision);
+  assert.deepEqual(current.task.references, [{ ...ref, taskId: 'task' }]);
+  assert.doesNotMatch(JSON.stringify(current.task.references), /owner|token|At/);
+  await assert.rejects(humanTask(f.store, f.api, { action: 'edit', companyId: 'company', taskId: 'task', key: 'edit',
+    expectedRevision: first.revision, payload: { title: 'Changed' } }), { code: 'stale_revision' });
+  await assert.rejects(attachTaskReference(f.store, f.api, { ...ref, externalId: 'new', taskId: 'task', key: 'attach',
+    expectedRevision: first.revision }), { code: 'stale_revision' });
+  assert.equal(f.writes().length, 0);
+});
+
+test('interrupted reference finalisation and receipt inspection recover after restart without another POST', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'human-reference-finish-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const failure of ['task-identity', 'finish', 'inspect', 'human-receipt']) {
+    const file = join(directory, `${failure}.sqlite`);
+    const f = fixture(t, file);
+    const save = f.store.saveOperation.bind(f.store);
+    f.store.saveOperation = operation => {
+      if ((failure === 'task-identity' && operation.id.startsWith('human-task:') && operation.taskId) ||
+        (failure === 'finish' && operation.id.startsWith('task-reference:') && operation.state === 'attached') ||
+        (failure === 'human-receipt' && operation.id.startsWith('human-task:') && operation.state === 'recorded')) throw new Error('interrupted');
+      return save(operation);
+    };
+    if (failure === 'inspect') f.state.hook = (method, path) => {
+      if (path.startsWith('/api/issues/created-')) throw new Error('interrupted');
+    };
+    await assert.rejects(humanTask(f.store, f.api, referenceCreate), /interrupted/);
+    const reopened = new Store(file); t.after(() => reopened.close());
+    f.state.hook = null;
+    const result = await humanTask(reopened, f.api, referenceCreate);
+    assert.equal(result.task.id, 'created-0');
+    assert.equal(result.task.references.length, 1);
+    assert.equal(result.outcome.reused, undefined);
+    assert.equal(result.state, 'recorded');
+    assert.equal(f.writes().length, 1);
+  }
+});
+
+test('revoked create authority cannot send or finish, and reservations retain exact source and key', async t => {
+  for (const stage of ['initial', 'company', 'post', 'reuse']) {
+    const f = fixture(t);
+    if (stage === 'reuse') await humanTask(f.store, f.api, referenceCreate);
+    const input = { ...referenceCreate, key: stage === 'reuse' ? 'reuse' : referenceCreate.key };
+    let valid = stage !== 'initial';
+    const authority = { kind: 'native', bindingId: 'caller', sourceDigest: 'source' };
+    const check = () => assert.ok(valid, 'revoked');
+    f.state.hook = (method, path) => {
+      if ((stage === 'company' && path === '/api/companies/company') || (stage === 'reuse' && path.startsWith('/api/issues/'))) valid = false;
+    };
+    if (stage === 'post') f.state.post = () => { valid = false; };
+    await assert.rejects(humanTask(f.store, f.api, input, { check, authority }), /revoked/);
+    assert.equal(f.writes().length, ['post', 'reuse'].includes(stage) ? 1 : 0);
+    if (stage === 'initial') {
+      assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM operations').get().n, 0);
+      continue;
+    }
+    if (stage !== 'reuse') assert.equal((await lookupTaskReference(f.store, f.api, { companyId: 'company', namespace: 'crm', externalId: 'CASE-1' })).state, 'reserved');
+    await assert.rejects(humanTask(f.store, f.api, input, { authority: { ...authority, sourceDigest: 'different' } }), { code: 'operation_conflict' });
+    valid = true;
+    f.state.hook = null;
+    f.state.post = null;
+    const result = await humanTask(f.store, f.api, input, { check, authority });
+    assert.equal(result.task.id, 'created-0');
+    assert.equal(f.state.creations.size, 1);
+  }
+});
+
+test('competing human creates reserve one external identity before posting', async t => {
+  const f = fixture(t);
+  const results = await Promise.allSettled([
+    humanTask(f.store, f.api, referenceCreate),
+    humanTask(f.store, f.api, { ...referenceCreate, key: 'competitor' }),
+  ]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.find(result => result.status === 'rejected').reason.code, 'task_reference_reserved');
+  const reused = await humanTask(f.store, f.api, { ...referenceCreate, key: 'competitor' });
+  assert.equal(reused.outcome.reused, true);
+  assert.equal(f.writes().length, 1);
+});
+
+test('pre-create reservation failures retain the exact payload, reference and authority owner', async t => {
+  const f = fixture(t);
+  f.state.company.defaultResponsibleUserId = null;
+  await assert.rejects(humanTask(f.store, f.api, referenceCreate), { code: 'invalid_request' });
+  for (const change of [{ payload: { title: 'Changed' } }, { externalReference: { ...externalReference, externalId: 'other' } },
+    { externalReference: undefined }]) {
+    await assert.rejects(humanTask(f.store, f.api, { ...referenceCreate, ...change }));
+  }
+  await assert.rejects(humanTask(f.store, f.api, referenceCreate, { authority: { kind: 'native', bindingId: 'other' } }),
+    { code: 'task_reference_reserved' });
+  assert.equal(f.writes().length, 0);
+  f.state.company.defaultResponsibleUserId = 'human';
+  assert.equal((await humanTask(f.store, f.api, referenceCreate)).task.id, 'created-0');
+  assert.equal(f.writes().length, 1);
+});
+
+test('reusing a reference requires fresh matching backend company and task identity before recording success', async t => {
+  for (const change of [{ companyId: 'foreign' }, { id: 'foreign' }]) {
+    const f = fixture(t);
+    reserveTaskReference(f.store, { companyId: 'company', ...externalReference }, 'import');
+    finishTaskReference(f.store, { companyId: 'company', ...externalReference }, 'import', 'task');
+    Object.assign(f.state.task, change);
+    await assert.rejects(humanTask(f.store, f.api, referenceCreate), { code: 'forbidden' });
+    const journal = f.store.db.prepare("SELECT data FROM operations WHERE id LIKE 'human-task:%'").get();
+    assert.equal(JSON.parse(journal.data).state, 'uncertain');
+    assert.equal(JSON.parse(journal.data).receipt, undefined);
+    assert.equal(f.writes().length, 0);
+  }
+});
+
+test('simultaneous same-key human creates preserve one backend identity and do not turn creation into reuse', async t => {
+  const f = fixture(t);
+  const results = await Promise.all([
+    humanTask(f.store, f.api, referenceCreate), humanTask(f.store, f.api, referenceCreate),
+  ]);
+  assert.equal(f.state.creations.size, 1);
+  assert.equal(results[0].task.id, results[1].task.id);
+  assert.equal(results[0].outcome.reused, undefined);
+  assert.equal(results[1].outcome.reused, undefined);
+  assert.equal(new Set(f.writes().map(call => call.body.idempotencyKey)).size, 1);
+});
 
 function runFor(f, overrides = {}) {
   const binding = f.store.binding('worker', false) ?? f.store.register({ id: 'worker', companyId: 'company', agentId: 'agent',
@@ -104,9 +320,9 @@ test('rejects unknown actions, malicious fields, missing revisions and invalid p
   for (const input of [
     { ...base, action: 'delete' }, { ...base, authority: { kind: 'operator' } }, { ...base, origin: {} },
     { ...base, expectedRevision: undefined }, { ...base, key: '' }, { ...base, payload: {} },
-    ...['reviewPolicy', 'executionPolicy', 'executionRunId', 'companyId', 'parentId', 'projectId', 'assigneeAgentId', 'idempotencyKey']
+    ...['reviewPolicy', 'executionPolicy', 'executionRunId', 'companyId', 'projectId', 'assigneeAgentId', 'idempotencyKey', 'dueAt', 'startDate']
       .map(field => ({ ...base, payload: { [field]: 'override' } })),
-    ...['done', 'in_review', 'bogus'].map(status => ({ ...base, payload: { status } })),
+    ...['done', 'in_review', 'cancelled', 'bogus'].map(status => ({ ...base, payload: { status } })),
     { ...base, payload: { description: 7 } }, { ...base, payload: { title: '' } }, { ...base, payload: { priority: 'urgent' } },
     { ...base, action: 'complete', payload: { status: 'done' } }, { ...base, action: 'inspect' },
   ]) await assert.rejects(humanTask(f.store, f.api, input));
@@ -150,13 +366,14 @@ test('stale revisions and changes during validation cannot PATCH', async t => {
 });
 
 test('all mutation types refuse execution holds, pending interactions and unsettled Relay work', async t => {
-  for (const action of ['edit', 'assign', 'complete']) {
+  for (const action of ['edit', 'assign', 'complete', 'comment', 'reopen', 'cancel']) {
     for (const hold of ['executionRunId', 'checkoutRunId', 'executionLockedAt', 'activeRun', 'activeRecoveryAction', 'executionBlocker', 'executionState', 'interaction', 'run']) {
       const f = fixture(t);
       if (hold === 'interaction') f.state.interactions.push({ id: 'question', status: 'pending' });
       else if (hold === 'run') runFor(f);
       else f.state.task[hold] = hold === 'executionState' ? { status: 'pending', currentStageId: 'stage' } : 'active';
-      const input = await f.input(action, action === 'complete' ? undefined : action === 'assign' ? { assigneeUserId: 'another' } : { title: 'new' });
+      const payload = { edit: { title: 'new' }, assign: { assigneeUserId: 'another' }, comment: { body: 'Note' }, reopen: {} }[action];
+      const input = { ...await f.input(action, payload), ...(action === 'cancel' ? { reason: 'Not needed' } : {}) };
       await assert.rejects(humanTask(f.store, f.api, input), { code: hold === 'interaction' ? 'interaction_pending' : 'task_busy' });
       assert.equal(f.writes().length, 0);
     }
@@ -169,6 +386,7 @@ test('human completion needs no candidate or run and reports backend review disp
     f.state.patch = () => { f.state.task.status = status; return { ...f.state.task, status: 'done' }; };
     const result = await humanTask(f.store, f.api, await f.input('complete'));
     assert.equal(result.task.status, status);
+    assert.deepEqual(result.outcome, { confirmed: status === 'done' });
     assert.deepEqual(f.writes().map(call => call.body), [{ status: 'done' }]);
     assert.equal(f.store.runs().length, 0);
   }
@@ -475,6 +693,500 @@ test('blocked create/edit accepts only bounded board or user unblock descriptors
       const input = action === 'create' ? { action, companyId: 'company', key: 'create', payload } : await f.input(action, payload);
       assert.equal((await humanTask(f.store, f.api, input)).task.status, 'blocked');
       assert.deepEqual(f.writes()[0].body.unblockDescriptor, unblockDescriptor);
+    }
+  }
+});
+
+test('inspect projects responsible human, timestamps, dependency summaries and unblock context without nested secrets', async t => {
+  const f = fixture(t);
+  Object.assign(f.state.task, { responsibleUserId: 'responsible', createdAt: '2026-10-01T00:00:00Z',
+    completedAt: '2026-10-02T00:00:00Z', cancelledAt: '2026-10-03T00:00:00Z', blockedByIssueIds: ['dependency'],
+    blockedBy: [{ id: 'dependency', title: 'Access', status: 'blocked', activeRecoveryAction: { token: 'SECRET' } }],
+    blocks: [{ id: 'dependent', status: 'todo', adapterConfig: { token: 'SECRET' } }],
+    unblockDescriptor: { owner: { agentId: 'agent', token: 'SECRET' }, action: 'Grant access', secret: 'SECRET' } });
+  const first = await f.inspect();
+  for (const field of ['responsibleUserId', 'createdAt', 'completedAt', 'cancelledAt', 'blockedByIssueIds']) {
+    assert.deepEqual(first.task[field], f.state.task[field]);
+  }
+  assert.equal(first.task.blockedBy[0].title, 'Access');
+  assert.equal(first.task.blocks[0].id, 'dependent');
+  assert.deepEqual(first.task.unblockDescriptor, { owner: { agentId: 'agent' }, action: 'Grant access' });
+  assert.equal(JSON.stringify(first).includes('SECRET'), false);
+  f.state.task.completedAt = null;
+  assert.notEqual((await f.inspect()).revision, first.revision);
+  for (const change of [{ blockedByIssueIds: [7] }, { blockedBy: [{ id: 'dependency', title: {} }] },
+    { blocks: [{ companyId: 'foreign' }] }, { unblockDescriptor: { owner: { userId: {} }, action: 'Action' } },
+    { responsibleUserId: {} }, { completedAt: {} }]) {
+    const bad = fixture(t); Object.assign(bad.state.task, change);
+    await assert.rejects(bad.inspect(), { code: 'invalid_backend_response' });
+  }
+});
+
+test('comments persist UUID intent before POST, preserve connector attribution and read more than 100 comments without cursors', async t => {
+  const f = fixture(t);
+  f.state.task.status = 'blocked';
+  f.state.comments.push(...Array.from({ length: 125 }, (_, i) => ({ id: `old-${i}`, companyId: 'company', issueId: 'task',
+    body: 'Blocked pending access', clientRequestId: 'unrelated', createdAt: '2026-10-08T00:00:00.123Z' })));
+  const input = await f.input('comment', { body: 'Blocked pending access' });
+  f.state.hook = (method, path, body) => {
+    if (method !== 'POST') return;
+    assert.equal(path, '/api/issues/task/comments');
+    const operations = f.store.db.prepare("SELECT data FROM operations WHERE id LIKE 'human-task:%'").all().map(row => JSON.parse(row.data));
+    assert.equal(operations.length, 1);
+    const operation = operations[0];
+    assert.equal(operation.state, 'uncertain');
+    assert.equal(operation.clientRequestId, body.clientRequestId);
+    const hash = digest(operation.id);
+    assert.equal(body.clientRequestId, `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`);
+    assert.match(body.clientRequestId, /^[a-f0-9]{8}-[a-f0-9]{4}-5[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+    assert.deepEqual(body, { body: input.payload.body, clientRequestId: operation.clientRequestId, reopen: false, resume: false, interrupt: false });
+  };
+  const authority = { kind: 'native', bindingId: 'caller', sourceDigest: 'human-source' };
+  // Model the installed backend's lossy cursor: sub-ms rows repeat the anchor.
+  const api = (method, path, body) => path.includes('/comments?') && new URLSearchParams(path.split('?')[1]).has('after')
+    ? Promise.resolve(structuredClone(f.state.comments.slice(0, 100))) : f.api(method, path, body);
+  const result = await humanTask(f.store, api, input, { authority });
+  assert.equal(result.task.status, 'blocked');
+  assert.deepEqual(result.outcome, { confirmed: true });
+  assert.equal(f.state.comments[125].authorUserId, 'connector-human');
+  assert.equal(f.state.comments[125].authorAgentId, null);
+  assert.equal(f.store.operation(result.operationId).commentId, 'comment-125');
+  assert.deepEqual(f.store.operation(result.operationId).request.authority, authority);
+  assert.deepEqual(f.state.calls.filter(call => call.path.includes('/comments?')).map(call => call.path),
+    ['/api/issues/task/comments?order=asc']);
+  await humanTask(f.store, api, input, { authority });
+  assert.equal(f.writes().length, 1);
+});
+
+test('comment payload forbids attribution, wake flags and missing revisions', async t => {
+  const f = fixture(t);
+  const base = await f.input('comment', { body: 'Note' });
+  for (const payload of [undefined, {}, { body: '' }, { body: 1 },
+    ...['authorUserId', 'authorAgentId', 'onBehalfOfUserId', 'authorType', 'clientRequestId', 'reopen', 'resume', 'interrupt']
+      .map(field => ({ body: 'Note', [field]: 'override' }))]) {
+    await assert.rejects(humanTask(f.store, f.api, { ...base, payload }));
+  }
+  await assert.rejects(humanTask(f.store, f.api, { ...base, expectedRevision: undefined }));
+  assert.equal(f.writes().length, 0);
+});
+
+test('comments reject agent reference syntax before any API call or uncertain intent, even without an @ label', async t => {
+  const f = fixture(t);
+  const base = await f.input('comment', { body: 'Note' });
+  const calls = f.state.calls.length;
+  for (const body of ['[@Agent](agent://12345678-1234-1234-1234-123456789abc)',
+    '[Agent](agent://agent?i=bot)', '[](agent:///agent)', '[Email human@example.com](agent://agent)',
+    '`[Agent](agent://agent)`', 'agent://not-yet-created', '[Agent](AGENT://agent)']) {
+    await assert.rejects(humanTask(f.store, f.api, { ...base, payload: { body } }), { code: 'agent_mention_forbidden' });
+  }
+  assert.equal(f.state.calls.length, calls);
+  assert.equal(f.store.db.prepare("SELECT count(*) AS n FROM operations WHERE id LIKE 'human-task:%'").get().n, 0);
+  const result = await humanTask(f.store, f.api, { ...base, payload: {
+    body: 'Email human@example.com, @Agent or @12345678-1234-1234-1234-123456789abc is plain prose. [Human](user://human)',
+  } });
+  assert.equal(result.outcome.confirmed, true);
+  assert.equal(f.writes().length, 1);
+});
+
+test('comments require human ownership including terminal tasks and revalidate before POST', async t => {
+  for (const status of ['todo', 'blocked', 'done', 'cancelled']) {
+    for (const assignees of [{ assigneeUserId: null }, { assigneeUserId: ' ' },
+      { assigneeUserId: null, assigneeAgentId: 'agent' }, { assigneeAgentId: 'agent' }]) {
+      const f = fixture(t);
+      Object.assign(f.state.task, assignees, { status });
+      await assert.rejects(humanTask(f.store, f.api, await f.input('comment', { body: 'Note' })),
+        { code: 'human_assignment_required' });
+      assert.equal(f.writes().length, 0);
+      assert.equal(f.store.db.prepare("SELECT count(*) AS n FROM operations WHERE id LIKE 'human-task:%'").get().n, 0);
+    }
+  }
+  const f = fixture(t);
+  const input = await f.input('comment', { body: 'Note' });
+  let reads = 0;
+  f.state.hook = (method, path) => {
+    if (path === '/api/issues/task' && ++reads === 2) Object.assign(f.state.task, { assigneeUserId: null, assigneeAgentId: 'agent' });
+  };
+  await assert.rejects(humanTask(f.store, f.api, input), { code: 'stale_revision' });
+  assert.equal(f.writes().length, 0);
+  assert.equal(f.store.db.prepare("SELECT count(*) AS n FROM operations WHERE id LIKE 'human-task:%'").get().n, 0);
+});
+
+test('comment receipts require explicit user attribution and reject agent, run, deleted or missing actor evidence', async t => {
+  for (const change of [{ authorType: undefined }, { authorType: 'agent' }, { authorType: 'system' },
+    { authorUserId: undefined }, { authorUserId: null }, { authorUserId: ' ' }, { authorUserId: 7 },
+    { authorAgentId: 'agent' }, { derivedAuthorAgentId: 'agent' }, { createdByRunId: 'run' },
+    { derivedCreatedByRunId: 'run' }, { deletedAt: '2026-10-08T00:00:00Z' }]) {
+    const f = fixture(t);
+    const input = await f.input('comment', { body: 'Note' });
+    f.state.post = value => Object.assign(value, change);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(humanTask(f.store, f.api, input), { code: 'operation_uncertain' });
+    }
+    assert.equal(f.writes().length, 1);
+    const operation = JSON.parse(f.store.db.prepare("SELECT data FROM operations WHERE id LIKE 'human-task:%'").get().data);
+    assert.equal(operation.state, 'uncertain');
+    assert.equal(operation.commentId, undefined);
+  }
+});
+
+test('comment receipts accept exactly 10000 rows and report changed task ownership after posting honestly', async t => {
+  const f = fixture(t);
+  f.state.comments.push(...Array.from({ length: 9999 }, (_, i) => ({ id: `old-${i}`, companyId: 'company', issueId: 'task' })));
+  f.state.post = () => { f.state.task.assigneeUserId = 'other-human'; };
+  const result = await humanTask(f.store, f.api, await f.input('comment', { body: 'Note' }));
+  assert.equal(f.store.operation(result.operationId).commentId, 'comment-9999');
+  assert.equal(result.task.assigneeUserId, 'other-human');
+  assert.equal(result.outcome.confirmed, false);
+  assert.equal(f.writes().length, 1);
+});
+
+test('uncertain comments survive restart and never resend, even when another comment has identical text', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'human-comments-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const committed of [true, false]) {
+    const file = join(directory, `${committed}.sqlite`);
+    const f = fixture(t, file);
+    f.state.comments.push({ id: 'old', companyId: 'company', issueId: 'task', body: 'Same text', clientRequestId: 'other' });
+    const input = await f.input('comment', { body: 'Same text' });
+    f.state.post = () => { if (!committed) f.state.comments.pop(); throw new Error('Lost response'); };
+    await assert.rejects(humanTask(f.store, f.api, input), /Lost response/);
+    const reopened = new Store(file); t.after(() => reopened.close());
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (committed) {
+        const result = await humanTask(reopened, f.api, input);
+        assert.equal(result.reconciled, true);
+        assert.equal(result.outcome.confirmed, true);
+      } else await assert.rejects(humanTask(reopened, f.api, input), { code: 'operation_uncertain' });
+    }
+    assert.equal(f.writes().length, 1);
+  }
+});
+
+test('comment readback rejects wrong body, scope, duplicate identity and excessive rows without replay', async t => {
+  for (const problem of ['body', 'company', 'issue', 'missing-company', 'missing-issue', 'duplicate', 'repeat', 'limit']) {
+    const f = fixture(t);
+    const input = await f.input('comment', { body: 'Note' });
+    f.state.post = value => {
+      if (problem === 'body') value.body = 'Different';
+      if (problem === 'company') value.companyId = 'foreign';
+      if (problem === 'issue') value.issueId = 'foreign';
+      if (problem === 'missing-company') delete value.companyId;
+      if (problem === 'missing-issue') delete value.issueId;
+      if (problem === 'duplicate') f.state.comments.push({ ...value, id: 'duplicate' });
+      if (problem === 'repeat') f.state.comments.push({ ...value });
+      if (problem === 'limit') {
+        f.state.comments.push(...Array.from({ length: 10000 }, (_, i) => ({ id: `extra-${i}`, companyId: 'company', issueId: 'task' })));
+      }
+    };
+    await assert.rejects(humanTask(f.store, f.api, input));
+    await assert.rejects(humanTask(f.store, f.api, input));
+    assert.equal(f.writes().length, 1);
+  }
+});
+
+test('reopen is explicit, terminal-only and human-owned, and returns actual disposition', async t => {
+  for (const status of ['done', 'cancelled']) {
+    for (const payload of [{}, { status: 'todo' }, { status: 'in_progress' }]) {
+      const f = fixture(t); f.state.task.status = status;
+      const result = await humanTask(f.store, f.api, await f.input('reopen', payload));
+      assert.equal(result.task.status, payload.status ?? 'todo');
+      assert.equal(result.outcome.confirmed, true);
+      assert.deepEqual(f.writes().map(call => call.body), [{ status: payload.status ?? 'todo' }]);
+    }
+  }
+  for (const status of ['todo', 'in_progress', 'in_review', 'blocked']) {
+    const f = fixture(t); f.state.task.status = status;
+    await assert.rejects(humanTask(f.store, f.api, await f.input('reopen', {})), { code: 'invalid_status' });
+    assert.equal(f.writes().length, 0);
+  }
+  for (const payload of [undefined, { status: 'done' }, { status: 'cancelled' }, { status: 'blocked' }, { resume: true }]) {
+    const f = fixture(t); f.state.task.status = 'done';
+    await assert.rejects(humanTask(f.store, f.api, await f.input('reopen', payload)));
+    assert.equal(f.writes().length, 0);
+  }
+  const f = fixture(t); f.state.task.status = 'done';
+  f.state.patch = () => { f.state.task.status = 'in_review'; return { status: 'todo' }; };
+  const result = await humanTask(f.store, f.api, await f.input('reopen', {}));
+  assert.equal(result.task.status, 'in_review');
+  assert.equal(result.outcome.confirmed, false);
+  assert.equal(result.state, 'recorded');
+});
+
+test('cancel journals its reason without backend comments or intentional changes to parents or siblings', async t => {
+  const f = fixture(t);
+  f.state.task.parentId = 'parent';
+  f.state.resources.set('/api/issues/parent', { id: 'parent', companyId: 'company', status: 'in_progress' });
+  f.state.children.push({ id: 'child', status: 'todo' });
+  for (const reason of [undefined, '', '  ']) {
+    await assert.rejects(humanTask(f.store, f.api, { ...await f.input('cancel'), reason }));
+  }
+  const input = { ...await f.input('cancel'), reason: 'No longer required [Agent](agent://agent)' };
+  const result = await humanTask(f.store, f.api, input);
+  assert.equal(result.task.status, 'cancelled');
+  assert.equal(result.outcome.confirmed, true);
+  assert.equal(f.state.comments.length, 0);
+  assert.equal(f.store.operation(result.operationId).request.reason, input.reason);
+  assert.equal(f.store.operation(result.operationId).clientRequestId, undefined);
+  assert.equal(f.writes().length, 1);
+  assert.deepEqual(f.writes()[0], { method: 'PATCH', path: '/api/issues/task', body: { status: 'cancelled' } });
+  assert.equal(f.state.calls.some(call => call.path.includes('/comments')), false);
+  assert.equal(f.state.children[0].status, 'todo');
+  assert.equal(f.state.resources.get('/api/issues/parent').status, 'in_progress');
+});
+
+test('reopen and cancel cannot bypass agent ownership or use edit as a terminal-status escape', async t => {
+  for (const action of ['reopen', 'cancel']) {
+    for (const assignees of [{ assigneeUserId: null }, { assigneeUserId: null, assigneeAgentId: 'agent' }, { assigneeAgentId: 'agent' }]) {
+      const f = fixture(t); Object.assign(f.state.task, assignees, { status: 'done' });
+      const input = { ...await f.input(action, action === 'reopen' ? {} : undefined), reason: 'Human request' };
+      await assert.rejects(humanTask(f.store, f.api, input), { code: 'human_assignment_required' });
+      assert.equal(f.writes().length, 0);
+    }
+  }
+  for (const status of ['done', 'cancelled']) {
+    const f = fixture(t); f.state.task.status = status;
+    await assert.rejects(humanTask(f.store, f.api, await f.input('edit', { status: 'todo' })), { code: 'invalid_status' });
+    assert.equal(f.writes().length, 0);
+  }
+});
+
+test('all new mutations check revision both before and after validation', async t => {
+  for (const action of ['comment', 'reopen', 'cancel']) {
+    for (const during of [false, true]) {
+      const f = fixture(t); f.state.task.status = 'done';
+      const payload = { comment: { body: 'Note' }, reopen: {} }[action];
+      const input = { ...await f.input(action, payload), reason: 'Human request' };
+      await assert.rejects(humanTask(f.store, f.api, { ...input, expectedRevision: undefined }), { code: 'invalid_request' });
+      if (during) {
+        let reads = 0;
+        f.state.hook = (method, path) => { if (path === '/api/issues/task' && ++reads === 2) f.state.task.description = 'Changed'; };
+      } else f.state.task.description = 'Changed';
+      await assert.rejects(humanTask(f.store, f.api, input), { code: 'stale_revision' });
+      assert.equal(f.writes().length, 0);
+    }
+  }
+});
+
+test('uncertain reopen and cancellation reconcile read-only with exact status and journalled reason', async t => {
+  for (const action of ['reopen', 'cancel']) {
+    const f = fixture(t); f.state.task.status = 'done';
+    const input = { ...await f.input(action, action === 'reopen' ? {} : undefined), reason: 'Human request' };
+    f.state.patch = body => {
+      f.state.task.status = body.status;
+      throw new Error('Lost reply');
+    };
+    await assert.rejects(humanTask(f.store, f.api, input));
+    const result = await humanTask(f.store, f.api, input);
+    assert.equal(result.reconciled, true);
+    assert.equal(result.outcome.confirmed, true);
+    assert.equal(f.writes().length, 1);
+    assert.equal(f.store.operation(result.operationId).request.reason, input.reason);
+    assert.equal(f.state.calls.some(call => call.path.includes('/comments')), false);
+  }
+});
+
+test('relationship edits and creation validate graphs and preserve parent and dependencies independently', async t => {
+  const f = fixture(t);
+  f.state.resources.set('/api/issues/parent', { id: 'parent', companyId: 'company', parentId: 'ancestor' });
+  f.state.resources.set('/api/issues/ancestor', { id: 'ancestor', companyId: 'company' });
+  f.state.resources.set('/api/issues/dependency', { id: 'dependency', companyId: 'company', blockedByIssueIds: ['leaf'] });
+  f.state.resources.set('/api/issues/leaf', { id: 'leaf', companyId: 'company' });
+  const payload = { parentId: 'parent', blockedByIssueIds: ['dependency'] };
+  let result = await humanTask(f.store, f.api, await f.input('edit', payload, 'set'));
+  assert.equal(result.outcome.confirmed, true);
+  assert.deepEqual(f.writes()[0].body, payload);
+  result = await humanTask(f.store, f.api, await f.input('edit', { parentId: null }, 'clear-parent'));
+  assert.equal(result.task.parentId, null);
+  assert.deepEqual(result.task.blockedByIssueIds, ['dependency']);
+  assert.deepEqual(f.writes()[1].body, { parentId: null });
+  await humanTask(f.store, f.api, await f.input('edit', { parentId: 'parent' }, 'parent'));
+  result = await humanTask(f.store, f.api, await f.input('edit', { blockedByIssueIds: [] }, 'clear-dependencies'));
+  assert.equal(result.task.parentId, 'parent');
+  assert.deepEqual(result.task.blockedByIssueIds, []);
+  assert.deepEqual(f.writes()[3].body, { blockedByIssueIds: [] });
+  assert.ok(f.writes().every(call => call.path === '/api/issues/task'));
+  result = await humanTask(f.store, f.api, { action: 'create', companyId: 'company', key: 'create-graph', payload: { title: 'Child', ...payload } });
+  assert.equal(result.task.parentId, 'parent');
+  assert.deepEqual(result.task.blockedByIssueIds, ['dependency']);
+  assert.equal(result.outcome.confirmed, true);
+  assert.ok(f.state.calls.some(call => call.path === '/api/issues/ancestor'));
+  assert.ok(f.state.calls.some(call => call.path === '/api/issues/leaf'));
+});
+
+test('relationship validation refuses self, transitive cycles, foreign graphs and read limits without PATCH', async t => {
+  for (const field of ['parentId', 'blockedByIssueIds']) {
+    for (const problem of ['self', 'cycle', 'existing-cycle', 'foreign', 'limit']) {
+      const f = fixture(t);
+      const edge = next => field === 'parentId' ? { parentId: next } : { blockedByIssueIds: [next] };
+      for (let i = 0; i < 101; i++) f.state.resources.set(`/api/issues/node-${i}`,
+        { id: `node-${i}`, companyId: 'company', ...(i < 100 ? edge(`node-${i + 1}`) : {}) });
+      if (problem !== 'limit') f.state.resources.set('/api/issues/node-1', { id: 'node-1', companyId: problem === 'foreign' ? 'foreign' : 'company',
+        ...(problem === 'cycle' ? edge('task') : problem === 'existing-cycle' ? edge('node-0') : {}) });
+      const payload = edge(problem === 'self' ? 'task' : 'node-0');
+      await assert.rejects(humanTask(f.store, f.api, await f.input('edit', payload)),
+        { code: problem === 'foreign' ? 'forbidden' : problem === 'limit' ? 'graph_limit' : 'relationship_cycle' });
+      assert.equal(f.writes().length, 0);
+    }
+  }
+  for (const blockedByIssueIds of [null, 'id', [null], [''], ['a', 'a'], Array.from({ length: 101 }, (_, i) => `id-${i}`)]) {
+    const f = fixture(t);
+    await assert.rejects(humanTask(f.store, f.api, await f.input('edit', { blockedByIssueIds })), { code: 'invalid_request' });
+    assert.equal(f.writes().length, 0);
+  }
+});
+
+function acceptedRun(f, candidate = 'candidate') {
+  const result = { candidate, key: candidate, summary: 'Result' };
+  const run = runFor(f, { nativeState: 'settled', result, publication: { state: 'recorded' }, settlement: { outcome: 'completed' },
+    review: { status: 'accepted', candidate, interactionId: `review-${candidate}` } });
+  f.state.interactions.push({ id: run.review.interactionId, status: 'accepted', kind: 'request_confirmation',
+    idempotencyKey: `relay-review:${run.id}:${digest(result)}`, payload: { target: { type: 'custom', key: 'herdr-relay-candidate', revisionId: candidate, label: run.id } } });
+  return run;
+}
+
+test('settled rejected history is allowed, but latest authoritative result must be accepted for edit, assign and complete', async t => {
+  for (const action of ['edit', 'assign', 'complete']) {
+    for (const latestAccepted of [true, false]) {
+      const f = fixture(t);
+      const old = acceptedRun(f, 'old');
+      if (latestAccepted) f.store.save({ ...old, review: { ...old.review, status: 'rejected' } }, 'test');
+      const latest = acceptedRun(f, 'latest');
+      if (!latestAccepted) f.store.save({ ...latest, review: { ...latest.review, status: 'rejected' } }, 'test');
+      runFor(f, { nativeState: 'settled', settlement: { outcome: 'failed' } });
+      const payload = { edit: { title: 'New' }, assign: { assigneeUserId: 'other' } }[action];
+      const input = await f.input(action, payload);
+      if (latestAccepted) assert.equal((await humanTask(f.store, f.api, input)).outcome.confirmed, true);
+      else {
+        await assert.rejects(humanTask(f.store, f.api, input), { code: 'acceptance_required' });
+        assert.equal(f.writes().length, 0);
+      }
+    }
+  }
+});
+
+test('no-review completion must be recorded for the exact latest result and match creator policy and decision', async t => {
+  for (const policy of ['none', 'agent_decides']) {
+    for (const problem of ['none', 'policy', 'candidate', 'decision', 'company', 'task', 'run', 'status', 'state', 'unpublished']) {
+      const f = fixture(t);
+      f.store.saveOperation({ id: 'operator-task:policy', runId: '', state: 'recorded', receipt: { id: 'task' },
+        request: { companyId: 'company', relayReviewPolicy: problem === 'policy' ? 'human' : policy } });
+      const result = { candidate: 'candidate', key: 'result', summary: 'Result',
+        ...(policy === 'agent_decides' ? { reviewDecision: { mode: 'none', reason: 'Low risk' } } : {}) };
+      const run = runFor(f, { nativeState: 'settled', result, settlement: { outcome: 'completed' },
+        publication: { state: problem === 'unpublished' ? 'pending' : 'recorded' } });
+      const completion = { id: `no-review-completion:${run.id}`, runId: run.id, companyId: 'company', taskId: 'task',
+        state: 'recorded', status: 'done', policy: 'none', candidate: result.candidate, decision: result.reviewDecision ?? null };
+      const field = { candidate: 'candidate', decision: 'decision', company: 'companyId', task: 'taskId', run: 'runId', status: 'status', state: 'state' }[problem];
+      if (field) completion[field] = 'different';
+      f.store.saveOperation(completion);
+      const input = await f.input('complete');
+      if (problem === 'none') assert.equal((await humanTask(f.store, f.api, input)).outcome.confirmed, true);
+      else {
+        await assert.rejects(humanTask(f.store, f.api, input));
+        assert.equal(f.writes().length, 0);
+      }
+    }
+  }
+});
+
+test('only known inert normal execution policies permit mutations', async t => {
+  for (const executionPolicy of [null, { mode: 'normal' }, { mode: 'normal', commentRequired: true, stages: [], monitor: null, maxReviewRounds: null }]) {
+    const f = fixture(t); f.state.task.executionPolicy = executionPolicy;
+    assert.equal((await humanTask(f.store, f.api, await f.input('complete'))).outcome.confirmed, true);
+  }
+  for (const executionPolicy of [{}, { stages: [] }, { mode: 'other' }, { mode: 'normal', unknown: false },
+    { mode: 'normal', stages: [{}] }, { mode: 'normal', stages: null }, { mode: 'normal', monitor: {} },
+    { mode: 'normal', monitor: false }, { mode: 'normal', maxReviewRounds: 1 }, { mode: 'normal', authorizationPolicy: {} },
+    { mode: 'normal', reviewPreset: null }, { mode: 'normal', commentRequired: 'false' }]) {
+    for (const action of ['edit', 'assign', 'complete', 'reopen', 'cancel', 'comment']) {
+      const f = fixture(t); f.state.task.executionPolicy = executionPolicy;
+      const payload = { edit: { title: 'New' }, assign: { assigneeUserId: 'other' }, reopen: {}, comment: { body: 'Note' } }[action];
+      await assert.rejects(humanTask(f.store, f.api, { ...await f.input(action, payload), reason: 'Human request' }), { code: 'review_required' });
+      assert.equal(f.writes().length, 0);
+    }
+  }
+});
+
+test('every uncertain human-task write fences all different keys and authorities for the same task', async t => {
+  for (const pendingAction of ['edit', 'assign', 'complete', 'reopen', 'cancel', 'comment']) {
+    const f = fixture(t); f.state.task.status = pendingAction === 'reopen' ? 'done' : 'todo';
+    const payloads = { edit: { title: 'New' }, assign: { assigneeUserId: 'other' }, reopen: {}, comment: { body: 'Note' } };
+    const pending = { ...await f.input(pendingAction, payloads[pendingAction], 'uncertain'), reason: 'Human request' };
+    f.state.hook = method => { if (method !== 'GET') throw new Error('Lost write'); };
+    await assert.rejects(humanTask(f.store, f.api, pending), /Lost write/);
+    f.state.hook = null;
+    for (const action of ['edit', 'assign', 'complete', 'reopen', 'cancel', 'comment']) {
+      const input = { ...await f.input(action, payloads[action], `different-${action}`), reason: 'Human request' };
+      await assert.rejects(humanTask(f.store, f.api, input, { authority: { kind: 'native', bindingId: 'different' } }), { code: 'operation_uncertain' });
+    }
+    assert.equal(f.writes().length, 1);
+  }
+});
+
+test('uncertain operation appearing during validation is fenced before dispatch', async t => {
+  const f = fixture(t);
+  const input = await f.input('edit', { title: 'New' });
+  let reads = 0;
+  f.state.hook = (method, path) => {
+    if (path === '/api/issues/task' && ++reads === 2) f.store.saveOperation({ id: 'human-task:other', runId: '', state: 'uncertain',
+      request: { companyId: 'company', taskId: 'task', action: 'comment' } });
+  };
+  await assert.rejects(humanTask(f.store, f.api, input), { code: 'operation_uncertain' });
+  assert.equal(f.writes().length, 0);
+});
+
+test('recorded responses explicitly report whether requested fields actually matched', async t => {
+  const f = fixture(t);
+  f.state.patch = () => ({ ...f.state.task, title: 'Requested' });
+  const input = await f.input('edit', { title: 'Requested' });
+  const result = await humanTask(f.store, f.api, input);
+  assert.equal(result.state, 'recorded');
+  assert.equal(result.task.title, 'Human work');
+  assert.deepEqual(result.outcome, { confirmed: false });
+  assert.equal((await humanTask(f.store, f.api, input)).outcome.confirmed, false);
+  assert.equal(f.writes().length, 1);
+});
+
+test('cancellation reports backend review disposition rather than claiming cancellation', async t => {
+  const f = fixture(t);
+  f.state.patch = () => {
+    f.state.task.status = 'in_review';
+    return { ...f.state.task, status: 'cancelled' };
+  };
+  const result = await humanTask(f.store, f.api, { ...await f.input('cancel'), reason: 'Requested cancellation' });
+  assert.equal(result.task.status, 'in_review');
+  assert.equal(result.outcome.confirmed, false);
+  assert.equal(result.state, 'recorded');
+});
+
+test('comments check authority at send and readback boundaries without replay after revocation', async t => {
+  for (const afterSend of [false, true]) {
+    const f = fixture(t);
+    const input = await f.input('comment', { body: 'Note' });
+    let valid = true;
+    let reads = 0;
+    f.state.hook = (method, path) => { if (!afterSend && path.endsWith('/interactions') && ++reads === 2) valid = false; };
+    f.state.post = () => { valid = false; };
+    await assert.rejects(humanTask(f.store, f.api, input, { check: () => assert.ok(valid, 'revoked') }), /revoked/);
+    assert.equal(f.writes().length, afterSend ? 1 : 0);
+    if (afterSend) {
+      f.state.hook = null;
+      assert.equal((await humanTask(f.store, f.api, input)).reconciled, true);
+      assert.equal(f.writes().length, 1);
+    }
+  }
+});
+
+test('creation applies bounded same-company ancestry and dependency validation through the existing wrapper', async t => {
+  for (const field of ['parentId', 'blockedByIssueIds']) {
+    for (const problem of ['foreign', 'cycle']) {
+      const f = fixture(t);
+      const edge = id => field === 'parentId' ? { parentId: id } : { blockedByIssueIds: [id] };
+      f.state.resources.set('/api/issues/related', { id: 'related', companyId: 'company', ...edge('next') });
+      f.state.resources.set('/api/issues/next', { id: 'next', companyId: problem === 'foreign' ? 'foreign' : 'company', ...edge('related') });
+      await assert.rejects(humanTask(f.store, f.api, { action: 'create', companyId: 'company', key: 'create',
+        payload: { title: 'Child', ...edge('related') } }), { code: problem === 'foreign' ? 'forbidden' : 'relationship_cycle' });
+      assert.equal(f.writes().length, 0);
     }
   }
 });

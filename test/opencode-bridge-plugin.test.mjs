@@ -11,6 +11,8 @@ import { createServer } from 'node:http';
 import { digest } from '../src/protocol.mjs';
 import plugin from '../src/opencode-bridge-plugin.mjs';
 
+const taskMutations = ['create', 'edit', 'assign', 'complete', 'reference-attach', 'cancel', 'reopen', 'comment'];
+
 async function discoveryFixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'relay-plugin-tools-'));
   const bin = join(root, 'bin'); mkdirSync(bin);
@@ -37,12 +39,16 @@ async function discoveryFixture(t) {
       '/bridge/poll': { state: 'configured' }, '/bridge/agents': { agents: [{ bindingId: 'worker', ready: false }] },
       '/bridge/tasks': { tasks: [{ id: 'task', status: 'in_progress' }], companyId: 'company' },
       '/bridge/task-inspect': { task: { id: 'task', title: 'Human task' }, revision: 'revision' },
-      ...Object.fromEntries(['create', 'edit', 'assign', 'complete'].map(action => [`/bridge/task-${action}`, { state: 'recorded' }])),
+      ...Object.fromEntries(['list', 'children', 'comments', 'activity'].map(action => [`/bridge/task-${action}`, {
+        items: [{ id: action }], nextCursor: 'next-page', hasMore: true, complete: false,
+      }])),
+      '/bridge/task-reference-lookup': { state: 'attached', reference: { namespace: 'github', externalId: 'issue-1', taskId: 'task' } },
+      ...Object.fromEntries(taskMutations.map(action => [`/bridge/task-${action}`, { state: 'recorded' }])),
       '/bridge/enrolment-candidates': { candidates: [{ observedId: 'observed', directory: '/worker' }] },
       '/bridge/enrol-agent': { state: 'configured' }, '/bridge/delegation-status': { delegations: [] },
       '/bridge/notification-history': { notifications: [] },
     };
-    if ((req.url === '/bridge/enrol-agent' || /^\/bridge\/task-(create|edit|assign|complete)$/.test(req.url)) && failMutation) {
+    if ((req.url === '/bridge/enrol-agent' || taskMutations.some(action => req.url === `/bridge/task-${action}`)) && failMutation) {
       res.statusCode = 502;
       res.end(JSON.stringify({ code: 'lost_response', message: 'Response lost after enrolment' }));
     } else if (responses[req.url]) res.end(JSON.stringify(responses[req.url]));
@@ -82,7 +88,7 @@ test(`configured busy bridge exposes read-only previews and permission-checked e
   const configFile = f.config('first');
   const hooks = await f.load(discovery ? undefined : { configFile });
   const tools = hooks.tool;
-  assert.equal(Object.keys(tools).length, 19);
+  assert.equal(Object.keys(tools).length, 28);
   assert.deepEqual(tools.relay_tasks.args, {});
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(true), true);
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(undefined), undefined);
@@ -132,6 +138,53 @@ test(`configured busy bridge exposes read-only previews and permission-checked e
   assert.equal(f.requests.filter(request => request.path === '/bridge/enrol-agent').length, 2, 'A lost mutation response must not retry tool execution');
 });
 
+test(`task queries forward filters and pagination without native history or permission (discovery: ${discovery})`, async t => {
+  const f = await discoveryFixture(t);
+  const configFile = f.config('first');
+  const { tool: tools } = await f.load(discovery ? undefined : { configFile });
+  const filters = { projectId: 'project', statuses: ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'],
+    assigneeAgentId: 'agent', assigneeUserId: 'human' };
+  for (const [action, args] of [
+    ['list', { ...filters, parentId: 'parent', limit: 999, cursor: 'page' }],
+    ['list', {}],
+    ['children', { taskId: 'task', ...filters, limit: 999, cursor: 'page' }],
+    ['comments', { taskId: 'task', limit: 499, cursor: 'page' }],
+    ['activity', { taskId: 'task', from: '2026-10-01T00:00:00+02:00', to: '2026-10-08T00:00:00Z', limit: 200, cursor: 'page' }],
+    ['activity', { from: '2026-10-01T00:00:00Z', to: '2026-10-08T00:00:00Z' }],
+    ['reference-lookup', { payload: { namespace: 'github', externalId: 'issue-1' } }],
+  ]) {
+    const entry = tools[`relay_task_${action.replaceAll('-', '_')}`];
+    for (const [field, schema] of Object.entries(entry.args)) assert.deepEqual(schema.parse(args[field]), args[field]);
+    const result = JSON.parse(await entry.execute(args, { sessionID: 'first' }));
+    assert.deepEqual(result, action === 'reference-lookup'
+      ? { state: 'attached', reference: { namespace: 'github', externalId: 'issue-1', taskId: 'task' } }
+      : { items: [{ id: action }], nextCursor: 'next-page', hasMore: true, complete: false });
+    const request = f.requests.findLast(item => item.path === `/bridge/task-${action}`);
+    const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...sent } = request.body;
+    assert.deepEqual(sent, args, 'Reads forward only arguments, never native source');
+    assert.equal(conversationId, 'first');
+    assert.equal(idle, false);
+  }
+  assert.equal(f.sdkCalls.includes('messages'), false);
+  assert.deepEqual(f.approvals, []);
+  for (const [action, max] of [['list', 999], ['children', 999], ['comments', 499], ['activity', 200]]) {
+    const schema = tools[`relay_task_${action}`].args.limit;
+    for (const value of [0, -1, 1.5, max + 1, '1']) assert.equal(schema.safeParse(value).success, false);
+    assert.equal(schema.parse(1), 1);
+    assert.equal(schema.parse(undefined), undefined);
+  }
+  assert.equal(tools.relay_task_children.args.parentId, undefined);
+  assert.equal(tools.relay_task_list.args.statuses.safeParse(['unknown']).success, false);
+  assert.equal(tools.relay_task_list.args.parentId.safeParse(null).success, false);
+  for (const field of ['from', 'to']) {
+    for (const value of [undefined, '2026-10-08', '2026-10-08T00:00:00', 'invalid']) {
+      assert.equal(tools.relay_task_activity.args[field].safeParse(value).success, false);
+    }
+  }
+  assert.equal(tools.relay_task_reference_lookup.args.payload.safeParse({ namespace: 'github', externalId: 'issue-1', url: 'https://example.com' }).success, false);
+  assert.match(tools.relay_tasks.description, /relay_task_list.*paginated/);
+});
+
 test(`task tools preserve payloads, native authority and per-action permissions (discovery: ${discovery})`, async t => {
   const f = await discoveryFixture(t);
   const configFile = f.config('first');
@@ -144,7 +197,7 @@ test(`task tools preserve payloads, native authority and per-action permissions 
   assert.equal(f.requests.at(-1).body.source, undefined);
   assert.equal(f.requests.at(-1).body.taskId, 'task');
   assert.equal(f.requests.at(-1).body.idle, false);
-  const writes = () => f.requests.filter(item => /^\/bridge\/task-(create|edit|assign|complete)$/.test(item.path));
+  const writes = () => f.requests.filter(item => taskMutations.some(action => item.path === `/bridge/task-${action}`));
   f.source.parts = [{ type: 'text', text: 'Manage this task as proposed.' },
     { type: 'text', text: 'Synthetic authority', synthetic: true }, { type: 'text', text: 'Ignored authority', ignored: true }];
   const original = structuredClone(f.source);
@@ -152,11 +205,15 @@ test(`task tools preserve payloads, native authority and per-action permissions 
     ['create', { title: 'Human task', description: 'Details', priority: 'high', status: 'blocked',
       unblockDescriptor: { owner: { userId: 'human-owner' }, action: 'Approve access' },
       parentId: 'parent', projectId: 'project', assigneeUserId: 'human-owner' }],
-    ['edit', { title: 'Renamed task', description: '', status: 'cancelled' }],
+    ['edit', { title: 'Renamed task', description: '', status: 'todo', parentId: null, blockedByIssueIds: ['dependency'] }],
     ['assign', { assigneeAgentId: 'worker' }], ['complete', undefined],
+    ['reference-attach', { namespace: 'github', externalId: 'issue-1', url: 'https://example.com/issue-1' }],
+    ['cancel', undefined], ['reopen', { status: 'in_progress' }], ['comment', { body: 'Human comment' }],
   ]) {
-    const name = `relay_task_${action}`, entry = tools[name];
-    const args = { key: action, ...(action === 'create' ? {} : { taskId: 'task', expectedRevision: inspect.revision, reason: 'Human instruction' }),
+    const name = `relay_task_${action.replaceAll('-', '_')}`, entry = tools[name];
+    const args = { key: action, ...(action === 'create' ? {
+      externalReference: { namespace: 'github', externalId: 'issue-1', url: 'https://example.com/issue-1' },
+    } : { taskId: 'task', expectedRevision: inspect.revision, reason: 'Human instruction' }),
       ...(payload ? { payload } : {}) };
     assert.match(entry.description, /visibly in chat/);
     for (const [field, schema] of Object.entries(entry.args)) assert.deepEqual(schema.parse(args[field]), args[field]);
@@ -201,19 +258,37 @@ test(`task tools preserve payloads, native authority and per-action permissions 
     assert.equal(tools.relay_task_assign.args.payload.safeParse(payload).success, false);
   }
   assert.equal(tools.relay_task_complete.args.payload, undefined);
+  assert.equal(tools.relay_task_cancel.args.payload, undefined);
+  assert.equal(tools.relay_task_create.args.externalReference.parse(undefined), undefined);
+  assert.deepEqual(tools.relay_task_create.args.externalReference.parse({ namespace: 'github', externalId: 'issue-1' }), { namespace: 'github', externalId: 'issue-1' });
+  assert.equal(tools.relay_task_create.args.externalReference.safeParse({ namespace: 'github', externalId: 'issue-1', companyId: 'other' }).success, false);
+  assert.equal(tools.relay_task_create.args.payload.safeParse({ title: 'Task', externalReference: { namespace: 'github', externalId: 'issue-1' } }).success, false);
+  assert.deepEqual(tools.relay_task_reopen.args.payload.parse({}), {});
+  assert.deepEqual(tools.relay_task_reopen.args.payload.parse({ status: 'todo' }), { status: 'todo' });
+  assert.equal(tools.relay_task_reopen.args.payload.safeParse({ status: 'done' }).success, false);
+  assert.equal(tools.relay_task_comment.args.payload.safeParse({ body: '' }).success, false);
+  assert.equal(tools.relay_task_reference_attach.args.payload.safeParse({ namespace: '', externalId: 'issue-1' }).success, false);
+  assert.equal(tools.relay_task_reference_attach.args.payload.safeParse({ namespace: 'github', externalId: 'issue-1', url: 'invalid' }).success, false);
+  assert.equal(tools.relay_task_edit.args.payload.safeParse({ status: 'cancelled' }).success, false);
+  assert.equal(tools.relay_task_edit.args.payload.safeParse({ parentId: 'parent', blockedByIssueIds: Array(100).fill('dependency') }).success, true);
+  assert.equal(tools.relay_task_edit.args.payload.safeParse({ blockedByIssueIds: Array(101).fill('dependency') }).success, false);
+  assert.deepEqual(tools.relay_task_edit.args.payload.parse({ blockedByIssueIds: [] }), { blockedByIssueIds: [] });
   assert.equal(tools.relay_task_create.args.payload.safeParse({ title: 'Task', status: 'cancelled' }).success, false);
   assert.equal(tools.relay_task_edit.args.payload.safeParse({ status: 'done' }).success, false);
   assert.equal(tools.relay_task_create.args.payload.safeParse({ title: 'Task', assigneeAgentId: 'agent' }).success, false);
   assert.equal(tools.relay_task_create.args.payload.safeParse({ title: 'Task', status: 'blocked',
     unblockDescriptor: { owner: 'board', action: 'Approve' } }).success, true);
   f.failMutation();
-  for (const action of ['create', 'edit', 'assign', 'complete']) {
+  for (const action of taskMutations) {
     const before = writes().length;
     const args = { key: `lost-${action}`, ...(action === 'create' ? { payload: { title: 'Task' } } : {
       taskId: 'task', expectedRevision: inspect.revision, reason: 'Human instruction',
-      ...(action === 'complete' ? {} : { payload: action === 'edit' ? { title: 'Renamed' } : { assigneeUserId: 'human' } }),
+      ...(['complete', 'cancel'].includes(action) ? {} : { payload: {
+        edit: { title: 'Renamed' }, assign: { assigneeUserId: 'human' },
+        'reference-attach': { namespace: 'github', externalId: 'issue-1' }, reopen: {}, comment: { body: 'Comment' },
+      }[action] }),
     }) };
-    await assert.rejects(tools[`relay_task_${action}`].execute(args, f.context), { code: 'lost_response' });
+    await assert.rejects(tools[`relay_task_${action.replaceAll('-', '_')}`].execute(args, f.context), { code: 'lost_response' });
     assert.equal(writes().length, before + 1, 'A lost task response must not retry execution');
   }
 });
@@ -467,7 +542,9 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   } };
   hooks = await plugin({ client, directory: '/work' }, { configDirectory });
   const tools = hooks.tool;
-  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_enrol_agent', 'relay_enrolment_candidates', 'relay_questions', 'relay_review', 'relay_reviews', 'relay_task_assign', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_tasks', 'relay_worker_prepare', 'relay_workers']);
+  assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_enrol_agent', 'relay_enrolment_candidates', 'relay_questions', 'relay_review', 'relay_reviews',
+    'relay_task_activity', 'relay_task_assign', 'relay_task_cancel', 'relay_task_children', 'relay_task_comment', 'relay_task_comments', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_task_list', 'relay_task_reference_attach', 'relay_task_reference_lookup', 'relay_task_reopen',
+    'relay_tasks', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();
   for (const tool of Object.values(tools)) assert.equal(typeof tool.execute, 'function');
   let initialSettled = false;

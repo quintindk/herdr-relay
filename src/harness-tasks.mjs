@@ -1,14 +1,20 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { humanTask } from './human-tasks.mjs';
 import { isNotificationSource } from './completion-notifications.mjs';
+import { queryTasks } from './task-query.mjs';
+import { attachTaskReference, lookupTaskReference } from './task-references.mjs';
 
 // The service authenticates and polls the bridge first, then removes only the
 // known transport fields. Native user selection is checked by the plugin.
 export async function harnessTask(store, bridge, action, input, api) {
-  requireValue(['task-inspect', 'task-create', 'task-edit', 'task-assign', 'task-complete'].includes(action),
+  const queryKinds = { 'task-list': 'list', 'task-children': 'children', 'task-comments': 'comments', 'task-activity': 'activity' };
+  const reading = action === 'task-inspect' || action === 'task-reference-lookup' || Object.hasOwn(queryKinds, action);
+  requireValue(['task-inspect', 'task-create', 'task-edit', 'task-assign', 'task-complete', 'task-comment', 'task-reopen', 'task-cancel',
+    'task-reference-lookup', 'task-reference-attach', ...Object.keys(queryKinds)].includes(action),
     'invalid_bridge_action', 'Unknown human task action');
   requireValue(input && typeof input === 'object' && !Array.isArray(input) &&
-    Object.keys(input).every(field => ['key', 'taskId', 'expectedRevision', 'payload', 'reason', 'source'].includes(field) && input[field] !== undefined),
+    Object.keys(input).every(field => ['key', 'taskId', 'expectedRevision', 'payload', 'reason', 'source', 'externalReference',
+      'projectId', 'statuses', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'limit', 'cursor', 'from', 'to'].includes(field) && input[field] !== undefined),
   'invalid_request', 'Only human task arguments and native source are accepted');
   requireValue(bridge?.identity && typeof bridge.id === 'string', 'bridge_identity_mismatch', 'Current native bridge required', 409);
   bridge = structuredClone(bridge);
@@ -21,7 +27,6 @@ export async function harnessTask(store, bridge, action, input, api) {
   'bridge_identity_mismatch', 'Human tasks require an active binding and exact native session identity', 409);
   const bindingProof = canonical(caller);
   const companyId = text(caller.config.companyId, 'companyId');
-  const reading = action === 'task-inspect';
   const sourceProof = reading ? null : canonical(input.source);
   const check = () => {
     const current = store.operation(bridge.id);
@@ -49,5 +54,20 @@ export async function harnessTask(store, bridge, action, input, api) {
       sourceMessageId: input.source.id, sourceDigest: digest(input.source.text),
     } : {}) };
   const { source, ...args } = input;
+  const send = async (...request) => { check(); try { return await api(...request); } finally { check(); } };
+  if (Object.hasOwn(queryKinds, action)) return queryTasks(send, { ...args, kind: queryKinds[action], companyId });
+  if (action === 'task-reference-lookup') {
+    requireValue(Object.keys(args).length === 1 && args.payload, 'invalid_request', 'Reference lookup requires only payload');
+    requireValue(Object.keys(args.payload).every(field => ['namespace', 'externalId'].includes(field)), 'invalid_request', 'Unsupported reference lookup fields');
+    return lookupTaskReference(store, send, { ...args.payload, companyId });
+  }
+  if (action === 'task-reference-attach') {
+    requireValue(Object.keys(args).every(field => ['key', 'taskId', 'expectedRevision', 'payload', 'reason'].includes(field)), 'invalid_request', 'Unsupported attachment fields');
+    text(args.expectedRevision, 'expectedRevision');
+    text(args.reason, 'reason');
+    requireValue(args.payload && Object.keys(args.payload).every(field => ['namespace', 'externalId', 'url'].includes(field)), 'invalid_request', 'Unsupported reference attachment fields');
+    return attachTaskReference(store, send, { ...args.payload, companyId, taskId: args.taskId, key: args.key,
+      expectedRevision: args.expectedRevision }, { authority, check });
+  }
   return humanTask(store, api, { ...args, action: action.slice(5), companyId }, { authority, check });
 }
