@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from 'node:util';
 import { StringDecoder } from 'node:string_decoder';
+import { randomUUID } from 'node:crypto';
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 const keyOf = (...parts) => JSON.stringify(parts);
@@ -214,11 +215,12 @@ export function renderTaskBoard(value, options = {}) {
   header.push(style(line(source), options.offline ? '33' : '2'));
   if (value.warnings?.length) header.push(style(line(`WARNING / ${value.warnings.map(warning => clean(typeof warning === 'object' ? warning?.message ?? warning?.code ?? 'source warning' : warning)).join(' / ')}`), '33'));
   header.push(style(rule, '2'));
-  const footer = [style(rule, '2'), line(width >= 84
-    ? 'j/k move  Enter fold  h done  i idle  / search  Esc clear  r refresh  Tab detail  q quit'
-    : 'j/k move  Enter fold  / find  Tab detail  q quit')];
+  const assignment = options.assignmentPrompt;
+  const footer = [style(rule, '2'), line(assignment ? 'j/k select agent  Enter assign / Esc cancel / q quit' : width >= 84
+    ? `j/k move  Enter fold  h done  i idle  / search  Esc clear  r refresh  Tab detail${options.canAssign ? '  a assign' : ''}  q quit`
+    : `j/k move  Enter fold  / find  Tab detail${options.canAssign ? '  a assign' : ''}  q quit`)];
   const detail = [];
-  if (options.detail && selected && height >= 14) {
+  if (!assignment && options.detail && selected && height >= 14) {
     detail.push(style(line('DETAIL / READ ONLY'), '1;36'));
     if (selected.type === 'task') {
       detail.push(line(`${selected.task.identifier || selected.task.id} / ${selected.task.title || 'Untitled'}`));
@@ -238,7 +240,7 @@ export function renderTaskBoard(value, options = {}) {
     if (selectedIndex >= offset + capacity) offset = selectedIndex - capacity + 1;
   }
   const visibleRows = rows.slice(offset, offset + capacity);
-  const body = visibleRows.map(row => {
+  let body = visibleRows.map(row => {
     const selected = row.id === selectedId;
     const mark = selected ? (unicode ? '▸' : '>') : ' ';
     const fold = row.expandable ? (row.expanded ? (unicode ? '▾' : '-') : (unicode ? '▸' : '+')) : (unicode ? '·' : '.');
@@ -268,24 +270,37 @@ export function renderTaskBoard(value, options = {}) {
         : row.task.priority === 'high' ? '33' : active(row.task) ? '36' : '0';
     return style(text, selected ? `${tone};7` : tone);
   });
+  if (assignment) {
+    const title = assignment.task.identifier || assignment.task.id;
+    body = [style(line(`ASSIGN ${title} / ${assignment.task.title || 'Untitled'}`), '1;36'),
+      ...assignment.agents.slice(0, Math.max(0, capacity - 1)).map((agent, index) => {
+        const mark = index === assignment.index ? (unicode ? '▸' : '>') : ' ';
+        const state = `${clean(agent.availability || 'unknown')} / ${clean(agent.nativeState || 'unknown')}`;
+        return style(line(pair(`${mark} ${clean(agent.name || agent.id)}`, state)), index === assignment.index ? '36;7' : '0');
+      })];
+  }
   if (!rows.length && capacity) body.push(style(line('No tasks match. / clears search; h shows completed.'), '2'));
   while (body.length < capacity) body.push(' '.repeat(width));
   const position = rows.length && capacity ? `${offset + 1}-${offset + visibleRows.length}/${rows.length}` : `0/${rows.length}`;
-  footer.push(line(options.searching ? `/${clean(options.filter)}_  Enter apply / Esc clear`
-    : `${position} / READ ONLY${options.filter ? ` / filter: ${clean(options.filter)}` : ''}${!wide ? ' / h done / i idle / r refresh' : ''}`));
+  footer.push(line(assignment ? `AGENT ${assignment.index + 1}/${assignment.agents.length}` : options.notice ||
+    (options.searching ? `/${clean(options.filter)}_  Enter apply / Esc clear`
+      : `${position} / READ ONLY${options.filter ? ` / filter: ${clean(options.filter)}` : ''}${!wide ? ' / h done / i idle / r refresh' : ''}`)));
   const lines = [...header, ...body, ...detail, ...footer].slice(0, height);
   while (lines.length < height) lines.push(' '.repeat(width));
   return { text: lines.join('\n'), rows, visibleRows, selectedId, offset };
 }
 
 /** Resolves on quit, signal or stream close. Non-TTY reads once and emits plain text. */
-export async function watchTaskBoard(read, { input = process.stdin, output = process.stdout, interval = 5000 } = {}) {
+export async function watchTaskBoard(read, { input = process.stdin, output = process.stdout, interval = 5000,
+  inspectTask, assignTask } = {}) {
   const tty = Boolean(input.isTTY && output.isTTY);
   const empty = { companies: [], agents: [], projects: [], tasks: [], warnings: [], fetchedAt: null };
   let value = empty; let hasSnapshot = false; let offline = '';
   let stopped = false; let timer; let escapeTimer; let reading = false; let again = false;
   let selectedId; let offset = 0; let showDone = false; let showIdle = false; let detail = false;
   let searching = false; let filter = ''; let frame; let pending = '';
+  let assignment; let assigning = false; let notice = '';
+  const canAssign = typeof inspectTask === 'function' && typeof assignTask === 'function';
   let paintedLines; let paintedWidth; let paintedHeight;
   const collapsed = new Set();
   const controller = new AbortController();
@@ -299,7 +314,8 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
   const draw = () => {
     if (stopped) return;
     const options = { width: output.columns || 100, height: output.rows || 30, colour: tty,
-      selectedId, offset, showDone, showIdle, filter, detail, searching, offline, hasSnapshot };
+      selectedId, offset, showDone, showIdle, filter, detail, searching, offline, hasSnapshot,
+      canAssign, assignmentPrompt: assigning ? null : assignment, notice };
     const all = buildBoardRows(value, options);
     options.expanded = new Set(all.filter(row => row.expandable && !collapsed.has(row.id)).map(row => row.id));
     frame = renderTaskBoard(value, options);
@@ -331,8 +347,49 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     if (again) { again = false; void refresh(); }
     else timer = setTimeout(() => { void refresh(); }, Math.max(10, Number(interval) || 5000));
   };
+  const prepareAssign = () => {
+    const row = frame?.rows.find(row => row.id === selectedId);
+    if (!canAssign || assigning || row?.type !== 'task') return;
+    const agents = value.agents.filter(agent => agent.companyId === row.companyId && agent.availability === 'present')
+      .sort((left, right) => clean(left.name || left.id).localeCompare(clean(right.name || right.id)) || left.id.localeCompare(right.id));
+    if (!agents.length) { notice = 'ASSIGN FAILED / no present agents in this company'; draw(); return; }
+    const index = Math.max(0, agents.findIndex(agent => agent.id === row.task.assigneeAgentId));
+    assignment = { task: row.task, companyId: row.companyId, taskId: row.taskId, agents, index }; notice = ''; draw();
+  };
+  const confirmAssign = async () => {
+    if (!assignment || assigning) return;
+    const selected = assignment, agent = selected.agents[selected.index];
+    assigning = true; notice = `Assigning ${selected.task.identifier || selected.task.id} to ${agent.name || agent.id}...`;
+    try {
+      draw();
+      const snapshot = await inspectTask({ companyId: selected.companyId, taskId: selected.taskId }, controller.signal);
+      if (stopped) return;
+      if (snapshot.task?.id !== selected.taskId || snapshot.task.companyId !== selected.companyId || !snapshot.revision) {
+        throw Error('Assignment preview identity is not confirmed');
+      }
+      const result = await assignTask({ companyId: selected.companyId, taskId: selected.taskId,
+        expectedRevision: snapshot.revision, key: randomUUID(), reason: 'Assigned from the task board',
+        payload: { assigneeAgentId: agent.id } }, controller.signal);
+      if (stopped) return;
+      if (result.outcome?.confirmed !== true || result.task?.assigneeAgentId !== agent.id) throw Error('Assignment is not confirmed');
+      value = { ...value, tasks: value.tasks.map(task => task.id === selected.taskId && task.companyId === selected.companyId
+        ? { ...task, assigneeAgentId: agent.id, assigneeUserId: null } : task) };
+      notice = `Assigned ${selected.task.identifier || selected.task.id} to ${agent.name || agent.id}`;
+    } catch (error) { if (!stopped) notice = `ASSIGN FAILED / ${clean(error.message)}`; }
+    finally { assignment = null; assigning = false; if (!stopped) { draw(); void refresh(); } }
+  };
   const handle = key => {
     if (key === '\x03' || (!searching && key === 'q')) { stop(); return; }
+    if (assigning) return;
+    if (assignment) {
+      if (key === '\x1b') { assignment = null; notice = ''; draw(); }
+      else if (['j', 'k', '\x1b[A', '\x1b[B', '\x1bOA', '\x1bOB'].includes(key)) {
+        assignment.index = Math.max(0, Math.min(assignment.agents.length - 1,
+          assignment.index + (['j', '\x1b[B', '\x1bOB'].includes(key) ? 1 : -1))); draw();
+      } else if (key === '\r' || key === '\n' || key === 'a') void confirmAssign();
+      return;
+    }
+    notice = '';
     if (searching) {
       if (key === '\x1b') { searching = false; filter = ''; }
       else if (key === '\r' || key === '\n') searching = false;
@@ -357,6 +414,7 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     else if (key === '/') searching = true;
     else if (key === '\x1b') { filter = ''; searching = false; offset = 0; }
     else if (key === 'r') { void refresh(); return; }
+    else if (key === 'a') { prepareAssign(); return; }
     draw();
   };
   const onData = chunk => {

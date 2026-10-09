@@ -327,6 +327,44 @@ test('quit pauses fresh non-flowing stdin and aborts the pending refresh', async
   assert.equal(io.input.readableFlowing, false);
 });
 
+test('assignment picker lists only present company agents and confirms one guarded assignment', async t => {
+  const io = streams(); const assignments = []; let inspected = 0; let finishAssign;
+  const value = { ...sample(), fetchedAt: null, agents: [...sample().agents,
+    { id: 'alpha', companyId: 'c', name: 'Alpha', availability: 'present', nativeState: 'idle' },
+    { id: 'zulu', companyId: 'c', name: 'Zulu', availability: 'present', nativeState: 'working' },
+    { id: 'offline', companyId: 'c', name: 'Offline', availability: 'offline', nativeState: 'idle' },
+    { id: 'foreign', companyId: 'other', name: 'Foreign', availability: 'present', nativeState: 'idle' }] };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    inspectTask: async input => { inspected++; return { task: value.tasks.find(task => task.id === input.taskId), revision: 'assignment-revision' }; },
+    assignTask: input => { assignments.push(input); return new Promise(resolve => { finishAssign = resolve; }); },
+  });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'ja');
+  assert.match(screen(io.output), /ASSIGN R-1/); assert.match(screen(io.output), /Alpha/); assert.match(screen(io.output), /Zulu/);
+  assert.doesNotMatch(screen(io.output), /Offline|Foreign/);
+  io.input.emit('data', 'j'); assert.match(screen(io.output), /▸ Zulu/);
+  io.input.emit('data', '\r'); await new Promise(resolve => setTimeout(resolve, 20)); io.input.emit('data', '\r');
+  assert.equal(inspected, 1, screen(io.output)); assert.equal(assignments.length, 1, screen(io.output));
+  assert.equal(assignments[0].taskId, '1'); assert.equal(assignments[0].expectedRevision, 'assignment-revision');
+  assert.deepEqual(assignments[0].payload, { assigneeAgentId: 'zulu' }); assert.ok(assignments[0].key);
+  finishAssign({ task: { ...value.tasks[0], assigneeAgentId: 'zulu', assigneeUserId: null }, outcome: { confirmed: true } });
+  await tick(); assert.match(screen(io.output), /Assigned R-1 to Zulu/);
+  io.input.emit('data', 'q'); await running;
+});
+
+test('assignment picker reports no present agents and never calls assignment', async t => {
+  const io = streams(); let assignments = 0;
+  const value = { ...sample(), fetchedAt: null, agents: sample().agents.map(agent => ({ ...agent, availability: 'offline' })) };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    inspectTask: async () => assert.fail('No present agent, no inspection'),
+    assignTask: async () => { assignments++; },
+  });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'ja');
+  assert.match(screen(io.output), /ASSIGN FAILED \/ no present agents/); assert.equal(assignments, 0);
+  io.input.emit('data', 'q'); await running;
+});
+
 test('SIGTERM, input end and output failure clean up without waiting for refresh', async () => {
   for (const mode of ['signal', 'end', 'error', 'setup']) {
     const io = streams();

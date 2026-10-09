@@ -168,7 +168,10 @@ export async function main(args) {
   if (group === 'board') {
     requireValue(!(values.json && values.watch), 'invalid_request', 'Choose --json or --watch');
     const read = signal => call(connection, 'GET', '/task-board', undefined, { signal });
-    if (values.watch) await watchTaskBoard(read);
+    if (values.watch) await watchTaskBoard(read, {
+      inspectTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'inspect' }, { signal }),
+      assignTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'assign' }, { signal }),
+    });
     else {
       const value = await read();
       console.log(values.json ? JSON.stringify(value, null, 2) : renderTaskBoard(value, {
