@@ -208,6 +208,12 @@ test('Herdr source config requires an explicit scoped socket and company', () =>
   assert.throws(() => herdrConfig({ ...config, socketPath: 'relative' }), { code: 'invalid_herdr_config' });
   assert.throws(() => herdrConfig({ ...config, bridgeDirectories: ['relative'] }), { code: 'invalid_herdr_config' });
   assert.deepEqual(herdrConfig({ ...config, bridgeDirectories: ['/work'] }).bridgeDirectories, ['/work']);
+  assert.deepEqual(herdrConfig({ ...config, workerProvisioning: { mode: 'localUser', maxActiveWorkers: 10 } }).workerProvisioning,
+    { mode: 'localUser', maxActiveWorkers: 10 });
+  for (const workerProvisioning of [{ mode: 'strict' }, { mode: 'localUser', extra: true },
+    { mode: 'localUser', maxActiveWorkers: 0 }, { mode: 'localUser', maxActiveWorkers: 101 }]) {
+    assert.throws(() => herdrConfig({ ...config, workerProvisioning }), { code: 'invalid_herdr_config' });
+  }
   const installation = { node: '/usr/bin/node', cli: '/app/cli.mjs', stateDirectory: '/state', paperclipUrl: 'http://127.0.0.1:3100',
     backendContextFile: '/state/backend.json', herdrConfigFile: '/state/herdr config.json' };
   assert.match(systemdUnit(installation), /"--herdr-config" "\/state\/herdr config.json"/);

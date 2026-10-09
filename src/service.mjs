@@ -34,7 +34,7 @@ import { taskPolicy } from './task-policy.mjs';
 import { reconcileBridgeEnrolment } from './bridge-enrolment.mjs';
 import { notificationRequest, isNotificationSource } from './completion-notifications.mjs';
 import { harnessDelegation } from './harness-delegation.mjs';
-import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers } from './herdr-workers.mjs';
+import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers, workerGrantConfigured } from './herdr-workers.mjs';
 import { taskBoard } from './task-board.mjs';
 import { manageRoutine } from './routines.mjs';
 import { harnessRoutine } from './harness-routines.mjs';
@@ -104,8 +104,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   for (const row of store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%'").all()) {
     const grant = JSON.parse(row.data);
     if (!observationConfig || ['companyId', 'machineId', 'session', 'socketPath'].some(key => grant.scope?.[key] !== observationConfig[key]) ||
-      !observationConfig.workerRepositories?.some(item => item.repository === grant.allowed?.allowed?.repository &&
-        item.worktreeRoot === grant.allowed?.allowed?.worktreeRoot)) {
+      !workerGrantConfigured(observationConfig, grant)) {
       store.saveOperation({ ...grant, state: 'blocked', blocker: 'grant_revoked', disarmed: false });
     }
   }

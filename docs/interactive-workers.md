@@ -12,7 +12,8 @@ live Herdr worker launch is part of this increment's verification.
 
 ## Repository Authority
 
-The operator's service Herdr configuration must contain exact absolute pairs:
+Strict mode is the default. The operator's service Herdr configuration must contain
+exact absolute pairs:
 
 ```json
 {
@@ -48,6 +49,42 @@ still applies. `worktreeRoot` must already exist as a directory.
   It applies scoped Git trust for the operation, not a global Git configuration
   change or permission to widen the repository allowlist.
 
+### Local User Mode
+
+A single-user installation can deliberately use the operating-system account as
+the filesystem authority instead of maintaining repository allowlists:
+
+```json
+{
+  "workerProvisioning": {
+    "mode": "localUser",
+    "maxActiveWorkers": 10
+  }
+}
+```
+
+`maxActiveWorkers` defaults to 10 and accepts 1 to 100. In this mode:
+
+- An armed human chat may prepare a linked worktree from any accessible repository
+  or create a plain workspace at an exact absolute directory.
+- Cross-repository preparation is allowed. The origin does not need to share the
+  requested repository's Git common directory.
+- Create always requires `directory`. Its canonical parent must already exist and
+  the destination must not exist. Relay never adopts existing content implicitly.
+- Omit `repository` for a plain workspace. `branch`, `base` and `trustRepository`
+  are then invalid. Relay creates the directory with mode `0700`, creates a Herdr
+  workspace there and launches the fixed OpenCode standby agent.
+- Supply `repository` for a linked worktree. Relay still pins the base commit,
+  requires a new branch and validates the exact Git worktree identity.
+- Adopt requires exact `directory` and `observedId`. Repository-less adoption
+  validates the directory identity and preserves its contents without launching.
+- Git trust remains false unless explicitly requested. Local-user mode does not
+  edit global or repository Git configuration.
+
+The armed bridge, verified human source, idempotency, exact native placement,
+worker limit and review boundaries remain enforced. This mode deliberately trusts
+the service's OS account, so it is unsuitable for a shared or hostile host.
+
 ## Prepare Before Dispatch
 
 Prepare all required workers before dispatching the parent task. An active parent
@@ -80,20 +117,35 @@ authorisation:
   "key": "prepare-parser-worker-1",
   "mode": "create",
   "repository": "/absolute/path/project",
+  "directory": "/absolute/path/project-workers/parser",
   "branch": "relay/parser-worker",
   "base": "HEAD",
   "label": "Parser worker"
 }
 ```
 
-`branch`, `base` and `label` are optional. Omitted base means `HEAD`. Relay resolves
+In local-user mode `directory` is required. `branch`, `base` and `label` are
+optional. Omitted base means `HEAD`. Relay resolves
 the base once to a full commit SHA and persists it. Background `worktree.create`
 uses that pinned SHA even if the ref later moves. The branch and path must be new.
-Relay generates the directory beneath `worktreeRoot`, and a branch if omitted.
-Do not supply `directory` or `observedId` in create mode.
+Strict mode generates the directory beneath `worktreeRoot` and does not accept a
+create directory. Both modes generate a branch if omitted. Never supply
+`observedId` in create mode.
+
+For a plain local-user workspace, omit repository and Git fields:
+
+```json
+{
+  "key": "prepare-lab-1",
+  "mode": "create",
+  "directory": "/home/user/play/lab-1",
+  "label": "Lab 1"
+}
+```
 
 Preparation returns a durable `intent`, not a launched worker. The background
-driver calls raw Herdr protocol-22 `worktree.create` and `agent.start` RPCs. Launch
+driver calls raw Herdr protocol-22 `worktree.create` or `workspace.create`, then
+`agent.start`. Launch
 uses the fixed interactive OpenCode `build` standby prompt, not caller-supplied
 commands or executable arguments. The standby turn is not a work assignment.
 
@@ -136,6 +188,7 @@ verified. Read the state and blocker together.
 | State | Meaning |
 | --- | --- |
 | `intent` | Create request persisted. Background creation has not completed. |
+| `directory_created` | Plain workspace directory created. Herdr workspace creation remains pending. |
 | `created` | Worktree and shell receipt verified. Agent start remains pending. |
 | `awaiting_native` | Start receipt persisted. Exact native session observation is pending. |
 | `prepared` | Exact target selected. Bridge enrolment remains pending. Adoption starts here. |
@@ -153,8 +206,9 @@ Revocation blocks fresh work and waits for unsettled work before disarming.
 - An identical preparation retry requires the same key, immutable fields, origin
   conversation and source message. A changed request or source conflicts. Do not
   retry from a later human message as though it were the original request.
-- Persisted uncertainty precedes each mutating RPC. An unknown transport outcome
-  never authorises repeating `worktree.create` or `agent.start`, including after a
+- Persisted uncertainty precedes directory creation and each mutating RPC. An
+  unknown outcome never authorises repeating `workspace.create`, `worktree.create`
+  or `agent.start`, including after a
   restart. Do not choose a new key, branch or path to evade that fence.
 - Read-only snapshot failures can be retried. They do not require another launch.
   A verified `created` stage can resume its not-yet-attempted start, which is not

@@ -186,15 +186,19 @@ herdr-relay agent enrol --directory /exact/canonical/folder --key KEY --reserved
 
 - Use `relay_workers` for read-only preparation receipts and verified adoption
   candidates. It does not advance preparation. No automatic readiness toast exists.
-- `relay_worker_prepare` requires explicit human authority and an operator-set
-  `workerRepositories` entry: an exact absolute `repository`/`worktreeRoot` pair.
-  The origin must share that repository's common Git directory. Do not edit live
-  config or widen permissions to bypass a refusal.
-- State repository, mode, branch/base or exact adoption target, and any
-  `trustRepository` request before calling. `create` chooses a new linked-worktree
-  path and pins the base commit SHA. `adopt` requires the exact candidate's
+- `relay_worker_prepare` requires explicit human authority. Strict mode requires
+  an exact operator-set `workerRepositories` repository/worktreeRoot pair and the
+  same Git common directory as the origin. Operator-selected `localUser` mode
+  instead permits exact local directories, cross-repository worktrees and plain
+  workspaces under the service account's filesystem permissions. Never alter live
+  configuration merely to bypass a refusal.
+- State mode, exact destination, optional repository and branch/base, and any
+  `trustRepository` request before calling. Strict create chooses its worktree
+  path. Local-user create requires `directory`; with a repository it creates a
+  linked worktree, and without one it creates a plain Herdr workspace. Worktree
+  creation pins the base commit SHA. `adopt` requires the exact candidate's
   `directory` and `observedId`, forbids `base`, preserves files and never launches.
-- Preparation is asynchronous: `intent`, `created`, `awaiting_native`, `prepared`,
+- Preparation is asynchronous: `intent`, optional `directory_created`, `created`, `awaiting_native`, `prepared`,
   `configured`, then `armed`. Raw launch success is not native readiness. Inspect
   blockers, then refresh `relay_agents` before dispatch. `blocked` or `uncertain`
   is not ready. Use bounded checks, not an indefinite polling turn.

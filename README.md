@@ -108,6 +108,12 @@ implemented:** disarming cannot permanently withdraw an active standing grant.
 Operator repair is required. See the [bridge contract](docs/opencode-bridge.md).
 These additions have local automated coverage, not live workflow certification.
 
+Interactive worker preparation defaults to exact repository allowlists. Trusted
+single-user installations may opt into `workerProvisioning.mode: "localUser"` to
+create cross-repository worktrees or plain Herdr workspaces at explicit local
+directories, bounded by the service account and an active-worker limit. See
+[interactive workers](docs/interactive-workers.md).
+
 ## Documentation
 
 - [Cron routines](docs/cron-routines.md): explicit Paperclip-backed recurring tasks

@@ -571,7 +571,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   hooks = await plugin({ client, directory: '/work' }, { configDirectory });
   const tools = hooks.tool;
   assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_enrol_agent', 'relay_enrolment_candidates', 'relay_questions', 'relay_review', 'relay_reviews',
-    'relay_schedule_cancel', 'relay_schedule_create', 'relay_schedule_inspect', 'relay_schedule_pause', 'relay_schedule_preview', 'relay_schedule_resume', 'relay_schedule_run', 'relay_schedules',
+    'relay_schedule_cancel', 'relay_schedule_create', 'relay_schedule_edit', 'relay_schedule_inspect', 'relay_schedule_pause', 'relay_schedule_preview', 'relay_schedule_resume', 'relay_schedule_run', 'relay_schedules',
     'relay_task_activity', 'relay_task_assign', 'relay_task_cancel', 'relay_task_children', 'relay_task_comment', 'relay_task_comments', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_task_list', 'relay_task_reference_attach', 'relay_task_reference_lookup', 'relay_task_reopen',
     'relay_tasks', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();
@@ -904,7 +904,7 @@ test(`discovery delegates native requests, announces UI-only results and accepts
   const operation = store.operation(delegated.id);
   assert.deepEqual(operation.request.origin, { bindingId: configured.origin.bindingId, conversationId: 'conversation',
     sessionCreatedAt: 123, sourceMessageId: 'human', sourceDigest: digest(sourceText) });
-  assert.equal(operation.request.relayReviewPolicy, 'human');
+  assert.equal(operation.request.relayReviewPolicy, 'none');
   assert.deepEqual(requests, [
     { method: 'GET', path: '/api/companies/company', body: undefined },
     { method: 'GET', path: '/api/agents/worker', body: undefined },
@@ -1134,7 +1134,7 @@ test(`discovery delegates native requests, announces UI-only results and accepts
     message: `${args.title}\nReady for human review\nFull result: relay_delegations`, variant: 'success', duration: 15000 });
   assert.deepEqual(JSON.parse(await tools.relay_reviews.execute({}, reviewContext)),
     { reviews: [], decisions: [{ ...decision, state: 'recorded', receipt }] });
-  assert.equal(store.operation(delegated.id).request.relayReviewPolicy, 'human');
+  assert.equal(store.operation(delegated.id).request.relayReviewPolicy, 'none');
   await hooks.dispose();
   assert.deepEqual(prompts, [], 'Notifications and reviews must never call the native prompt endpoint, even with noReply');
   assert.deepEqual(normalPrompts, [], 'Notifications and reviews must never start a promptAsync model turn');

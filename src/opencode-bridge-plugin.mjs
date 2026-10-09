@@ -16,7 +16,7 @@ const delegationArgs = {
 };
 const workerArgs = {
   key: tool.schema.string().min(1), mode: tool.schema.enum(['create', 'adopt']),
-  repository: tool.schema.string().min(1), branch: tool.schema.string().optional(), base: tool.schema.string().optional(),
+  repository: tool.schema.string().min(1).optional(), branch: tool.schema.string().optional(), base: tool.schema.string().optional(),
   label: tool.schema.string().optional(), directory: tool.schema.string().optional(), observedId: tool.schema.string().optional(),
   trustRepository: tool.schema.boolean().optional(),
 };
@@ -352,12 +352,12 @@ export default async function relayBridge({ client, directory }, options = {}) {
         args: grantArgs, execute: (args, context) => delegate(args, context, 'grant-review') }),
       relay_coordinator_revoke: tool({ description: 'Revoke an exact coordinator review grant from this originating chat on explicit human instruction. Retains decisions already confirmed.',
         args: { grantId: tool.schema.string().min(1) }, execute: (args, context) => delegate(args, context, 'revoke-review') }),
-      relay_workers: tool({ description: 'List this chat\'s worker preparation receipts and verified adoption candidates in its authorised repository. Read-only.', args: {},
+      relay_workers: tool({ description: 'List this chat\'s worker preparation receipts and verified adoption candidates. Read-only.', args: {},
         async execute(_, context) {
           if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
           return JSON.stringify(await rpc('workers', await snapshot(false)));
         } }),
-      relay_worker_prepare: tool({ description: 'Prepare an isolated interactive Herdr worker or adopt an exact existing worker. State repository, mode, branch/base or exact adoption target and any trust request visibly before calling. Requires an operator-configured repository scope. Preparation does not assign work or grant cleanup rights. Reuse the key on retries; inspect relay_workers until ready before relay_delegate.',
+      relay_worker_prepare: tool({ description: 'Prepare an isolated interactive Herdr worker or adopt an exact existing worker. State the mode, destination, optional repository and branch/base, and any trust request visibly before calling. Strict mode requires an operator-configured repository scope; localUser mode permits exact local directories and cross-repository work. Preparation does not assign work or grant cleanup rights. Reuse the key on retries; inspect relay_workers until ready before relay_delegate.',
         args: workerArgs, execute: (args, context) => delegate(args, context, 'prepare-worker') }),
       relay_agents: tool({ description: 'List ready Relay agents available for delegation. Resolve target binding IDs from this list, not from the user.', args: {},
         async execute(_, context) {

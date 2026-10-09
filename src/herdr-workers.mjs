@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { realpath, lstat } from 'node:fs/promises';
+import { realpath, lstat, mkdir, readdir } from 'node:fs/promises';
 import { connect } from 'node:net';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { canonical, digest, RelayError, requireValue, text } from './protocol.mjs';
 import { observedAgents } from './herdr-agents.mjs';
 import { isNotificationSource } from './completion-notifications.mjs';
@@ -12,10 +13,10 @@ import { configureBridge, armBridge, disarmBridge } from './opencode-bridge.mjs'
 // Integration: POST /bridge/prepare-worker must authenticate, validate the native
 // poll and human source, then pass ONLY the worker fields below and the refreshed
 // bridge. POST /bridge/workers awaits inspect only. Neither route grants directory
-// permissions. Call reconcile on an independent background tick, sharing the
+// permissions unless localUser provisioning is explicitly configured. Call reconcile on an independent background tick, sharing the
 // service's publications Map, and await it on close. herdr-workers serialises the
 // driver; observed-delivery covers enrolment/revocation, never launch or polling.
-// Preserve workerRepositories when parsing Herdr config. Do not add these paths
+// Preserve workerRepositories and workerProvisioning when parsing Herdr config. Do not add these paths
 // to bridgeDirectories. Prepare returns intent/prepared, never creates or starts.
 // Inspection is async and returns {workers,candidates}. Reconcile's optional sixth
 // deps argument (like prepare/inspect's deps) is a trusted test seam only.
@@ -36,6 +37,8 @@ const absolute = (value, name) => {
   requireValue(isAbsolute(value), 'invalid_request', `${name} must be absolute`);
   return value;
 };
+const localUser = config => config.workerProvisioning?.mode === 'localUser';
+const workerKind = request => request.kind ?? 'worktree';
 const beneath = (root, path) => {
   const part = relative(root, path);
   return part && part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part);
@@ -112,6 +115,10 @@ function rpc(socketPath, method, params) {
 }
 
 async function repositoryScope(config, repository, deps) {
+  if (localUser(config)) {
+    const repositoryPath = await deps.realpath(repository);
+    return { allowed: { mode: 'localUser' }, repository: repositoryPath, worktreeRoot: null };
+  }
   fail(Array.isArray(config.workerRepositories) && config.workerRepositories.length > 0,
     'worker_repository_forbidden', 'An explicit worker repository allowlist is required');
   const matches = config.workerRepositories.filter(item => item?.repository === repository);
@@ -122,6 +129,26 @@ async function repositoryScope(config, repository, deps) {
   const root = await deps.realpath(allowed.worktreeRoot);
   fail((await deps.lstat(root)).isDirectory(), 'worker_repository_forbidden', 'Worktree root must be an existing directory');
   return { allowed, repository: repositoryPath, worktreeRoot: root };
+}
+
+async function newLocalPath(directory, deps) {
+  const parent = await deps.realpath(dirname(directory));
+  const path = join(parent, basename(directory));
+  fail(directory !== parse(directory).root && directory !== homedir() && directory !== parent && path === directory,
+    'worker_directory_mismatch', 'Local worker directory must be a canonical child path');
+  return path;
+}
+
+async function workspaceIdentity(directory, deps) {
+  const path = await deps.realpath(directory), stat = await deps.lstat(path);
+  fail(path === directory && stat.isDirectory(), 'worker_directory_mismatch', 'Workspace must remain an exact directory');
+  return { directory: path, device: stat.dev ?? null, inode: stat.ino ?? null };
+}
+
+export function workerGrantConfigured(config, operation) {
+  if (operation.allowed?.allowed?.mode === 'localUser') return localUser(config);
+  return config.workerRepositories?.filter(item => item.repository === operation.selection.repository).length === 1 &&
+    config.workerRepositories.some(item => canonical(item) === canonical(operation.allowed?.allowed));
 }
 
 async function gitIdentity(repository, trust, deps) {
@@ -213,7 +240,23 @@ export async function inspectHerdrWorkers(store, bridge, config, deps = {}) {
   const scope = scopeOf(config), binding = caller(store, bridge, scope);
   const candidates = [];
   let snapshot;
-  for (const entry of config.workerRepositories ?? []) {
+  if (localUser(config)) {
+    snapshot = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
+    exactAgent(snapshot, targetFrom(store.operation(bridge.identity.observedId)));
+    for (const observed of observedAgents(store).filter(item => inScope(item, scope) &&
+      item.id !== bridge.identity.observedId && item.identity.harness === 'opencode')) {
+      try {
+        const target = targetFrom(observed);
+        exactObservation(store, scope, target); exactAgent(snapshot, target);
+        await workspaceIdentity(target.directory, deps);
+        caller(store, bridge, scope);
+        const reserved = records(store).some(item => item.request.directory === target.directory && !(item.state === 'blocked' && item.disarmed));
+        candidates.push({ observedId: observed.id, repository: null, directory: target.directory, branch: null,
+          eligible: !reserved, linkedWorktree: false, preservesFiles: true, launchesAgent: false, reserved });
+      } catch { /* Unverified directories are not adoption candidates. */ }
+    }
+  }
+  for (const entry of localUser(config) ? [] : config.workerRepositories ?? []) {
     try {
       const allowed = await repositoryScope(config, entry.repository, deps);
       const commonDirectory = await gitIdentity(allowed.repository, false, deps);
@@ -247,7 +290,7 @@ export async function inspectHerdrWorkers(store, bridge, config, deps = {}) {
 }
 
 export async function prepareHerdrWorker(store, bridge, input, config, deps = {}) {
-  deps = { git, realpath, lstat, rpc, ...deps };
+  deps = { git, realpath, lstat, mkdir, readdir, rpc, ...deps };
   const scope = scopeOf(config), binding = caller(store, bridge, scope, true);
   requireValue(input && typeof input === 'object' && Object.keys(input).every(key => fields.has(key)),
     'invalid_request', 'Only structured worker preparation fields are accepted');
@@ -260,14 +303,23 @@ export async function prepareHerdrWorker(store, bridge, input, config, deps = {}
   'invalid_worker_source', 'Worker preparation requires explicit native human text, not a notification or invocation');
   requireValue(['create', 'adopt'].includes(input.mode), 'invalid_request', 'Use create or adopt');
   requireValue(input.trustRepository === undefined || typeof input.trustRepository === 'boolean', 'invalid_request', 'trustRepository must be boolean');
-  const selection = { key: singleLine(input.key, 'key'), mode: input.mode, repository: absolute(input.repository, 'repository'),
+  const selection = { key: singleLine(input.key, 'key'), mode: input.mode,
+    repository: input.repository === undefined ? null : absolute(input.repository, 'repository'),
     branch: input.branch === undefined ? null : singleLine(input.branch, 'branch'),
     base: input.base === undefined ? null : singleLine(input.base, 'base'),
     label: input.label === undefined ? null : singleLine(input.label, 'label'),
     directory: input.directory === undefined ? null : absolute(input.directory, 'directory'),
     observedId: input.observedId === undefined ? null : singleLine(input.observedId, 'observedId'), trustRepository: input.trustRepository === true };
-  requireValue(input.mode === 'adopt' ? selection.directory && selection.observedId && !selection.base : !selection.directory && !selection.observedId,
-    'invalid_request', 'Adopt requires directory and observedId, without base; create chooses its own directory');
+  if (localUser(config)) {
+    requireValue(input.mode === 'adopt' ? selection.directory && selection.observedId && !selection.base : selection.directory && !selection.observedId,
+      'invalid_request', 'localUser create requires directory; adopt requires directory and observedId without base');
+    requireValue(selection.repository || (!selection.branch && !selection.base && !selection.trustRepository),
+      'invalid_request', 'Plain workspaces do not accept branch, base or trustRepository');
+  } else {
+    requireValue(selection.repository, 'invalid_request', 'repository is required in strict mode');
+    requireValue(input.mode === 'adopt' ? selection.directory && selection.observedId && !selection.base : !selection.directory && !selection.observedId,
+      'invalid_request', 'Adopt requires directory and observedId, without base; create chooses its own directory');
+  }
   const origin = { ...originIdentity(bridge, binding),
     sourceMessageId: source.id, sourceCreatedAt: source.createdAt, sourceDigest: digest(source.text) };
   const id = `herdr-worker:${digest([scope, binding.id, binding.createdAt, bridge.identity.conversationId, bridge.sessionCreatedAt, selection.key])}`;
@@ -285,9 +337,11 @@ export async function prepareHerdrWorker(store, bridge, input, config, deps = {}
     return true;
   };
   try {
-    const allowed = await repositoryScope(config, selection.repository, deps);
-    const commonDirectory = await gitIdentity(allowed.repository, selection.trustRepository, deps);
-    await originRepository(bridge, commonDirectory, selection.trustRepository, deps);
+    const kind = selection.repository ? 'worktree' : 'workspace';
+    const allowed = kind === 'worktree' ? await repositoryScope(config, selection.repository, deps) :
+      { allowed: { mode: 'localUser' }, repository: null, worktreeRoot: null };
+    const commonDirectory = kind === 'worktree' ? await gitIdentity(allowed.repository, selection.trustRepository, deps) : null;
+    if (!localUser(config)) await originRepository(bridge, commonDirectory, selection.trustRepository, deps);
     check();
     operation = store.operation(id);
     if (operation) {
@@ -295,21 +349,24 @@ export async function prepareHerdrWorker(store, bridge, input, config, deps = {}
         canonical(operation.allowed) === canonical(allowed), 'worker_conflict', 'Worker key already has a different immutable request or origin');
       return summary(operation);
     }
-    const branch = selection.branch ?? (selection.mode === 'create' ? `relay-worker-${digest(id).slice(0, 20)}` : null);
+    if (!operation && localUser(config)) fail(records(store).filter(item => !(item.state === 'blocked' && item.disarmed)).length <
+      (config.workerProvisioning.maxActiveWorkers ?? 10), 'worker_limit_reached', 'Maximum active local workers reached');
+    const branch = kind === 'worktree' ? selection.branch ?? (selection.mode === 'create' ? `relay-worker-${digest(id).slice(0, 20)}` : null) : null;
     fail(!branch?.startsWith('-') && !selection.base?.startsWith('-'), 'invalid_git_ref', 'Git refs cannot start with a dash');
     if (branch) await deps.git(allowed.repository, ['check-ref-format', `refs/heads/${branch}`], selection.trustRepository);
-    const directory = selection.mode === 'create' ? join(allowed.worktreeRoot, `relay-worker-${digest(id).slice(0, 20)}`) : await deps.realpath(selection.directory);
-    fail(beneath(allowed.worktreeRoot, directory), 'worker_directory_mismatch', 'Directory must be beneath the configured worktree root');
-    const baseCommit = selection.mode === 'create' ? (await deps.git(allowed.repository,
+    const directory = selection.mode === 'create' ? (localUser(config) ? await newLocalPath(selection.directory, deps) :
+      join(allowed.worktreeRoot, `relay-worker-${digest(id).slice(0, 20)}`)) : await deps.realpath(selection.directory);
+    if (!localUser(config)) fail(beneath(allowed.worktreeRoot, directory), 'worker_directory_mismatch', 'Directory must be beneath the configured worktree root');
+    const baseCommit = kind === 'worktree' && selection.mode === 'create' ? (await deps.git(allowed.repository,
       ['rev-parse', '--verify', '--end-of-options', `${selection.base ?? 'HEAD'}^{commit}`], selection.trustRepository)).trim() : null;
     fail(baseCommit === null || /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseCommit), 'invalid_git_ref', 'Base must resolve to a commit');
-    const request = { ...selection, repository: allowed.repository, worktreeRoot: allowed.worktreeRoot,
+    const request = { ...selection, kind, repository: allowed.repository, worktreeRoot: allowed.worktreeRoot,
       commonDirectory, directory, branch, baseCommit };
     let target, identity;
     if (selection.mode === 'adopt') {
-      identity = await worktree(request, deps);
+      identity = kind === 'worktree' ? await worktree(request, deps) : await workspaceIdentity(directory, deps);
       const observed = store.operation(selection.observedId);
-      fail(observed?.placement?.directory === directory, 'worker_observation_mismatch', 'Observed directory must be the exact worktree root');
+      fail(observed?.placement?.directory === directory, 'worker_observation_mismatch', 'Observed directory must be the exact worker root');
       target = targetFrom(observed);
       fail(target.conversationId !== bridge.identity.conversationId && target.terminalId !== bridge.identity.terminalId,
         'worker_observation_mismatch', 'Choose a worker separate from the requesting conversation');
@@ -318,21 +375,24 @@ export async function prepareHerdrWorker(store, bridge, input, config, deps = {}
       let stat;
       try { stat = await deps.lstat(directory); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       fail(!stat, 'worker_path_occupied', 'Create never adopts an existing path');
-      const refs = (await deps.git(allowed.repository, ['for-each-ref', '--format=%(refname)'], selection.trustRepository)).trim().split('\n');
-      fail(!refs.includes(`refs/heads/${branch}`), 'worker_branch_occupied', 'Create requires a new branch');
+      if (kind === 'worktree') {
+        const refs = (await deps.git(allowed.repository, ['for-each-ref', '--format=%(refname)'], selection.trustRepository)).trim().split('\n');
+        fail(!refs.includes(`refs/heads/${branch}`), 'worker_branch_occupied', 'Create requires a new branch');
+      }
     }
     const snapshot = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
     check();
     exactAgent(snapshot, targetFrom(store.operation(bridge.identity.observedId)));
     if (target) { exactObservation(store, scope, target); exactAgent(snapshot, target); }
-    fail(canonical(await repositoryScope(config, selection.repository, deps)) === canonical(allowed),
-      'worker_repository_forbidden', 'Worker allowlist or realpaths changed');
-    fail(await gitIdentity(allowed.repository, selection.trustRepository, deps) === commonDirectory,
+    fail(workerGrantConfigured(config, { allowed, selection }), 'worker_repository_forbidden', 'Worker provisioning mode changed');
+    if (kind === 'worktree') fail(await gitIdentity(allowed.repository, selection.trustRepository, deps) === commonDirectory,
       'worker_repository_mismatch', 'Repository identity changed before preparation');
-    await originRepository(bridge, commonDirectory, selection.trustRepository, deps);
+    if (!localUser(config)) await originRepository(bridge, commonDirectory, selection.trustRepository, deps);
     check();
     operation = store.transaction(() => {
       fail(!store.operation(id), 'operation_busy', 'Worker preparation already recorded');
+      if (localUser(config)) fail(records(store).filter(item => !(item.state === 'blocked' && item.disarmed)).length <
+        (config.workerProvisioning.maxActiveWorkers ?? 10), 'worker_limit_reached', 'Maximum active local workers reached');
       fail(!records(store).some(item => !(item.state === 'blocked' && item.disarmed) && (item.request.directory === directory ||
         (branch && item.request.commonDirectory === commonDirectory && item.request.branch === branch))),
       'worker_conflict', 'Worktree or branch already reserved by a worker operation');
@@ -347,11 +407,12 @@ export async function prepareHerdrWorker(store, bridge, input, config, deps = {}
 
 async function driveCreation(store, operation, config, deps, check, validate) {
   const { request, selection, scope, id } = operation;
-  const { directory, branch, baseCommit } = request;
+  const { directory, branch, baseCommit } = request, kind = workerKind(request);
   if (operation.state === 'awaiting_native') {
     await validate();
-    fail(canonical(await worktree(request, deps)) === canonical(operation.worktreeIdentity),
-      'worker_repository_mismatch', 'Launched worktree identity changed');
+    const identity = kind === 'worktree' ? await worktree(request, deps) : await workspaceIdentity(directory, deps);
+    fail(canonical(identity) === canonical(operation.worktreeIdentity),
+      'worker_repository_mismatch', 'Launched worker directory identity changed');
     const snapshot = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
     check(); exactAgent(snapshot, targetFrom(store.operation(operation.origin.identity.observedId)));
     const receipt = operation.startReceipt;
@@ -381,12 +442,47 @@ async function driveCreation(store, operation, config, deps, check, validate) {
     return store.saveOperation({ ...operation, state: 'prepared', step: null, blocker: null, target });
   }
   if (operation.state === 'intent') {
-    await validate();
     let stat;
     try { stat = await deps.lstat(directory); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     fail(!stat, 'worker_path_occupied', 'Create never adopts an existing path');
-    const refs = (await deps.git(request.repository, ['for-each-ref', '--format=%(refname)'], request.trustRepository)).trim().split('\n');
-    fail(!refs.includes(`refs/heads/${branch}`), 'worker_branch_occupied', 'Create requires a new branch');
+    if (kind === 'workspace') {
+      check();
+      operation = store.saveOperation({ ...operation, state: 'uncertain', step: 'directory.create' });
+      await deps.mkdir(directory, { mode: 0o700 });
+      const identity = await workspaceIdentity(directory, deps);
+      operation = store.saveOperation({ ...operation, state: 'directory_created', step: null, worktreeIdentity: identity });
+    } else {
+      await validate();
+      const refs = (await deps.git(request.repository, ['for-each-ref', '--format=%(refname)'], request.trustRepository)).trim().split('\n');
+      fail(!refs.includes(`refs/heads/${branch}`), 'worker_branch_occupied', 'Create requires a new branch');
+    }
+  }
+  if (operation.state === 'directory_created') {
+    await validate();
+    fail((await deps.readdir(directory)).length === 0, 'worker_path_occupied', 'New workspace directory must remain empty before launch');
+    const before = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
+    check(); exactAgent(before, targetFrom(store.operation(operation.origin.identity.observedId)));
+    fail(![...before.panes, ...before.agents].some(item => item.cwd === directory),
+      'worker_observation_mismatch', 'Workspace directory is already open in Herdr');
+    operation = store.saveOperation({ ...operation, state: 'uncertain', step: 'workspace.create' });
+    const created = await deps.rpc(scope.socketPath, 'workspace.create', {
+      cwd: directory, label: selection.label ?? `Relay ${basename(directory)}`, focus: false });
+    const workspace = created.workspace;
+    fail(created.type === 'workspace_created' && workspace && typeof workspace.workspace_id === 'string' && workspace.workspace_id &&
+      typeof workspace.active_tab_id === 'string' && workspace.active_tab_id,
+    'invalid_worker_receipt', 'Herdr workspace receipt does not match the request');
+    const after = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
+    check(); exactAgent(after, targetFrom(store.operation(operation.origin.identity.observedId)));
+    const panes = after.panes.filter(item => item.workspace_id === workspace.workspace_id || item.cwd === directory);
+    const pane = panes[0];
+    fail(panes.length === 1 && pane.cwd === directory && pane.workspace_id === workspace.workspace_id &&
+      pane.tab_id === workspace.active_tab_id && !pane.agent,
+    'invalid_worker_receipt', 'Created workspace placement does not match the request');
+    const receipt = { directory, paneId: pane.pane_id, terminalId: pane.terminal_id,
+      workspaceId: pane.workspace_id, tabId: pane.tab_id };
+    operation = store.saveOperation({ ...operation, state: 'created', step: null, createReceipt: receipt });
+  }
+  if (operation.state === 'intent') {
     const snapshot = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
     check(); exactAgent(snapshot, targetFrom(store.operation(operation.origin.identity.observedId)));
     await validate(); check();
@@ -419,9 +515,10 @@ async function driveCreation(store, operation, config, deps, check, validate) {
       shells[0].workspace_id === receipt.workspaceId && shells[0].tab_id === receipt.tabId && shells[0].cwd === directory &&
       !shells[0].agent && !beforeStart.agents.some(item => item.terminal_id === receipt.terminalId && item.agent),
     'worker_observation_mismatch', 'Created shell placement changed before launch');
-    fail(canonical(await worktree(request, deps)) === canonical(operation.worktreeIdentity),
-      'worker_repository_mismatch', 'Worktree identity changed before launch');
-    fail((await deps.git(directory, ['rev-parse', '--verify', 'HEAD'], selection.trustRepository)).trim() === baseCommit,
+    const identity = kind === 'worktree' ? await worktree(request, deps) : await workspaceIdentity(directory, deps);
+    fail(canonical(identity) === canonical(operation.worktreeIdentity),
+      'worker_repository_mismatch', 'Worker directory identity changed before launch');
+    if (kind === 'worktree') fail((await deps.git(directory, ['rev-parse', '--verify', 'HEAD'], selection.trustRepository)).trim() === baseCommit,
       'worker_base_mismatch', 'Worktree HEAD changed before launch');
     await validate();
     check();
@@ -447,14 +544,14 @@ async function driveCreation(store, operation, config, deps, check, validate) {
 }
 
 export async function reconcileHerdrWorkers(store, directory, api, config, locks = new Map(), deps = {}) {
-  deps = { git, realpath, lstat, rpc, ...deps };
+  deps = { git, realpath, lstat, mkdir, readdir, rpc, ...deps };
   if (reconciliations.has(store) || locks.has('herdr-workers')) return [];
   reconciliations.add(store);
   const pending = Promise.resolve().then(async () => {
     const scope = scopeOf(config), results = [];
     for (let operation of records(store)) {
       if (operation.state === 'uncertain' || (operation.state === 'blocked' && operation.disarmed)) continue;
-      const creating = ['intent', 'created', 'awaiting_native'].includes(operation.state);
+      const creating = ['intent', 'directory_created', 'created', 'awaiting_native'].includes(operation.state);
       if (!creating && locks.has('observed-delivery')) continue;
       if (!creating) locks.set('observed-delivery', pending);
       const revoke = async () => {
@@ -485,9 +582,8 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
         // Epoch is a live-call fence, never persisted as durable authority.
         const callProof = initialOrigin && proof(initialOrigin);
         const check = () => {
-          fail(canonical(scopeOf(config)) === canonical(operation.scope) && config.workerRepositories?.filter(item =>
-            item.repository === operation.selection.repository).length === 1 && config.workerRepositories.some(item =>
-            canonical(item) === canonical(operation.allowed.allowed)), 'worker_repository_forbidden', 'Worker scope revoked');
+          fail(canonical(scopeOf(config)) === canonical(operation.scope) && workerGrantConfigured(config, operation),
+            'worker_repository_forbidden', 'Worker scope revoked');
           const origin = store.operation(operation.origin.bridgeId);
           fail(origin && proof(origin) === callProof, 'bridge_identity_mismatch', 'Origin changed during reconciliation');
           const binding = caller(store, origin, operation.scope, operation.state !== 'armed', false);
@@ -505,11 +601,23 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
         };
         const validate = async () => {
           check();
-          const allowed = await repositoryScope(config, operation.selection.repository, deps);
-          fail(canonical(allowed) === canonical(operation.allowed), 'worker_repository_forbidden', 'Worker scope changed');
-          fail(await gitIdentity(operation.request.repository, operation.request.trustRepository, deps) === operation.request.commonDirectory,
-            'worker_repository_mismatch', 'Repository identity changed');
-          await originRepository(initialOrigin, operation.request.commonDirectory, operation.request.trustRepository, deps);
+          const current = store.operation(operation.id);
+          if (workerKind(current.request) === 'worktree') {
+            const allowed = await repositoryScope(config, current.selection.repository, deps);
+            fail(canonical(allowed) === canonical(current.allowed), 'worker_repository_forbidden', 'Worker scope changed');
+            fail(await gitIdentity(current.request.repository, current.request.trustRepository, deps) === current.request.commonDirectory,
+              'worker_repository_mismatch', 'Repository identity changed');
+            if (!localUser(config)) await originRepository(initialOrigin, current.request.commonDirectory, current.request.trustRepository, deps);
+          } else if (current.state === 'intent') {
+            fail(await newLocalPath(current.request.directory, deps) === current.request.directory,
+              'worker_directory_mismatch', 'Workspace path changed');
+            let stat;
+            try { stat = await deps.lstat(current.request.directory); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+            fail(!stat, 'worker_path_occupied', 'Create never adopts an existing path');
+          } else {
+            fail(canonical(await workspaceIdentity(current.request.directory, deps)) === canonical(current.worktreeIdentity),
+              'worker_directory_mismatch', 'Workspace identity changed');
+          }
           check();
         };
         await validate();
@@ -517,8 +625,10 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
           operation = await driveCreation(store, operation, config, deps, check, validate);
           results.push(summary(operation)); continue;
         }
-        fail(canonical(await worktree(operation.request, deps)) === canonical(operation.worktreeIdentity),
-          'worker_repository_mismatch', 'Worker worktree identity changed');
+        const identity = workerKind(operation.request) === 'worktree' ? await worktree(operation.request, deps) :
+          await workspaceIdentity(operation.request.directory, deps);
+        fail(canonical(identity) === canonical(operation.worktreeIdentity),
+          'worker_repository_mismatch', 'Worker directory identity changed');
         const snapshot = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
         exactAgent(snapshot, operation.target, true);
         exactAgent(snapshot, targetFrom(store.operation(operation.origin.identity.observedId)), true);

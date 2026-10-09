@@ -9,7 +9,8 @@ export function herdrConfig(input) {
     machineId: text(input.machineId, 'machineId'), session: text(input.session, 'session'),
     companyId: text(input.companyId, 'companyId'), excludedWorkspaces: input.excludedWorkspaces ?? [],
     ...(input.bridgeDirectories === undefined ? {} : { bridgeDirectories: input.bridgeDirectories }),
-    ...(input.workerRepositories === undefined ? {} : { workerRepositories: input.workerRepositories }) };
+    ...(input.workerRepositories === undefined ? {} : { workerRepositories: input.workerRepositories }),
+    ...(input.workerProvisioning === undefined ? {} : { workerProvisioning: input.workerProvisioning }) };
   requireValue(isAbsolute(config.socketPath), 'invalid_herdr_config', 'Herdr socket path must be absolute');
   requireValue(Array.isArray(config.excludedWorkspaces) && config.excludedWorkspaces.every(id => typeof id === 'string' && id.length),
     'invalid_herdr_config', 'excludedWorkspaces must contain workspace IDs');
@@ -20,6 +21,12 @@ export function herdrConfig(input) {
     config.workerRepositories.every(item => item && Object.keys(item).every(key => ['repository', 'worktreeRoot'].includes(key)) &&
       typeof item.repository === 'string' && isAbsolute(item.repository) && typeof item.worktreeRoot === 'string' && isAbsolute(item.worktreeRoot))),
   'invalid_herdr_config', 'workerRepositories requires exact absolute repository and worktreeRoot pairs');
+  requireValue(config.workerProvisioning === undefined || (config.workerProvisioning &&
+    Object.keys(config.workerProvisioning).every(key => ['mode', 'maxActiveWorkers'].includes(key)) &&
+    config.workerProvisioning.mode === 'localUser' &&
+    (config.workerProvisioning.maxActiveWorkers === undefined || (Number.isSafeInteger(config.workerProvisioning.maxActiveWorkers) &&
+      config.workerProvisioning.maxActiveWorkers > 0 && config.workerProvisioning.maxActiveWorkers <= 100))),
+  'invalid_herdr_config', 'workerProvisioning supports localUser mode and maxActiveWorkers from 1 to 100');
   return config;
 }
 

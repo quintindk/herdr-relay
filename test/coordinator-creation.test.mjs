@@ -93,7 +93,7 @@ for (const worker of [false, true]) {
     assert.equal(f.calls.length, 0);
     const operation = await f.create({ relayReviewPolicy: undefined, relayReviewGrantId: undefined });
     assert.equal(operation.request.relayReviewGrantId, undefined);
-    assert.equal(taskPolicy(f.store, 'company', 'child'), 'human');
+    assert.equal(taskPolicy(f.store, 'company', 'child'), 'none');
     assert.equal(coordinatorReviewGrant(f.store, 'company', 'child'), null);
   });
 

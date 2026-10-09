@@ -62,9 +62,13 @@ function fixture(t, real = false) {
       assert.equal(store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%'").all().map(row => JSON.parse(row.data))
         .find(item => item.request.directory === params.path).state, 'uncertain');
       createdPath = params.path; createdBranch = params.branch;
-      if (real) runGit(repository, ['worktree', 'add', '-b', params.branch, params.path, params.base]);
+      if (real) runGit(params.cwd, ['worktree', 'add', '-b', params.branch, params.path, params.base]);
       return { type: 'worktree_created', root_pane: shell(), workspace: { workspace_id: 'new' }, tab: { tab_id: 'new:tab' },
         worktree: { path: createdPath, branch: createdBranch, is_linked_worktree: true, is_bare: false, is_prunable: false, is_detached: false } };
+    }
+    if (method === 'workspace.create') {
+      createdPath = params.cwd;
+      return { type: 'workspace_created', workspace: { workspace_id: 'new', active_tab_id: 'new:tab' } };
     }
     assert.equal(method, 'agent.start');
     const op = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'herdr-worker:%'").all().map(row => JSON.parse(row.data))
@@ -148,6 +152,66 @@ test('absent, unknown and duplicate exact repository allowlists refuse without R
   }
   assert.equal(f.rpcCalls.length, 0);
   assert.deepEqual(await f.inspect(), { workers: [], candidates: [] });
+});
+
+test('localUser creates a plain workspace in an exact local directory and launches through Herdr', async t => {
+  const f = fixture(t, true), directory = join(f.directory, 'lab-1');
+  f.config.workerProvisioning = { mode: 'localUser', maxActiveWorkers: 10 };
+  delete f.config.workerRepositories;
+  const input = { repository: undefined, branch: undefined, base: undefined, directory };
+  const intent = await f.prepare(input);
+  assert.equal(intent.state, 'intent'); assert.equal(intent.repository, null); assert.equal(intent.directory, directory);
+  const [result] = await f.reconcile();
+  assert.deepEqual(f.rpcCalls.map(call => call.method), [
+    'session.snapshot', 'session.snapshot', 'workspace.create', 'session.snapshot', 'session.snapshot', 'agent.start'
+  ]);
+  assert.equal(result.blocker, null); assert.equal(result.state, 'awaiting_native'); assert.equal(f.started, true);
+  assert.deepEqual(f.rpcCalls.find(call => call.method === 'workspace.create').params,
+    { cwd: directory, label: 'Relay lab-1', focus: false });
+  assert.equal(f.rpcCalls.some(call => call.method === 'worktree.create'), false);
+  assert.equal(f.runGit(f.repository, ['status', '--short']).trim(), '');
+});
+
+test('localUser allows cross-repository worktrees and generic adoption without repository authority', async t => {
+  const f = fixture(t, true), foreign = join(f.directory, 'foreign'), directory = join(f.directory, 'foreign-worker');
+  mkdirSync(foreign); f.runGit(foreign, ['init', '-b', 'main']);
+  f.runGit(foreign, ['commit', '--allow-empty', '-m', 'foreign']);
+  f.config.workerProvisioning = { mode: 'localUser' }; delete f.config.workerRepositories;
+  const created = await f.prepare({ repository: foreign, directory, branch: 'review/lab', base: 'main' });
+  assert.equal(created.state, 'intent'); assert.equal(created.repository, foreign); assert.equal(created.directory, directory);
+  const adopted = await f.prepare({ ...f.adoptInput, key: 'adopt-local', repository: undefined, branch: undefined });
+  assert.equal(adopted.state, 'prepared'); assert.equal(adopted.repository, null); assert.equal(adopted.directory, f.adopted);
+});
+
+test('localUser requires explicit destinations, canonical unused create paths and honours the active limit', async t => {
+  const f = fixture(t, true), first = join(f.directory, 'first'), second = join(f.directory, 'second');
+  f.config.workerProvisioning = { mode: 'localUser', maxActiveWorkers: 1 }; delete f.config.workerRepositories;
+  await assert.rejects(f.prepare({ repository: undefined, branch: undefined, base: undefined, directory: undefined }), { code: 'invalid_request' });
+  mkdirSync(first);
+  await assert.rejects(f.prepare({ repository: undefined, branch: undefined, base: undefined, directory: first }), { code: 'worker_path_occupied' });
+  rmSync(first, { recursive: true });
+  await f.prepare({ repository: undefined, branch: undefined, base: undefined, directory: first });
+  await assert.rejects(f.prepare({ key: 'second', repository: undefined, branch: undefined, base: undefined, directory: second }),
+    { code: 'worker_limit_reached' });
+});
+
+test('localUser journals directory and workspace uncertainty before mutation and never replays it', async t => {
+  for (const step of ['directory.create', 'workspace.create']) {
+    const f = fixture(t, true), directory = join(f.directory, step.replace('.', '-'));
+    f.config.workerProvisioning = { mode: 'localUser' }; delete f.config.workerRepositories;
+    const input = { repository: undefined, branch: undefined, base: undefined, directory };
+    await f.prepare(input);
+    const [result] = await f.reconcile(step === 'directory.create' ? { mkdir: async () => { throw new Error('mkdir failed'); } } :
+      { rpc: async (...args) => {
+        if (args[1] === 'workspace.create') throw new Error('workspace failed');
+        return f.deps.rpc(...args);
+      } });
+    assert.equal(result.state, 'uncertain'); assert.equal(result.step, step);
+    assert.equal(result.blocker, 'manual_recovery_required');
+    const calls = f.rpcCalls.length;
+    assert.deepEqual(await f.prepare(input), result); assert.equal(f.rpcCalls.length, calls);
+    assert.deepEqual(await f.reconcile(), []);
+  }
 });
 
 test('input rejects executable fields, unsafe refs, fabricated sources and conflicting key retries', async t => {
