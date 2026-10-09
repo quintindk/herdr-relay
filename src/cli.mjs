@@ -57,6 +57,7 @@ const help = `herdr-relay (development)
   task inspect --company COMPANY_ID --task TASK_ID
   task edit|reassign --company COMPANY_ID --task TASK_ID --key KEY --file changes.json
   task complete --company COMPANY_ID --task TASK_ID --key KEY --file completion.json
+  task recover --company COMPANY_ID --task TASK_ID --key KEY --file recovery.json
   task comment|reopen|cancel --company COMPANY_ID --task TASK_ID --key KEY --file mutation.json  [runless human mutation]
     Mutation files: {"expectedRevision":"FROM_INSPECT","payload":{...},"reason":"Human instruction"}; complete/cancel omit payload, cancel requires reason.
     Comment payload: {"body":"..."}. Reopen payload: {"status":"todo"} or {} (todo by default).
@@ -111,7 +112,7 @@ export async function main(args) {
     'reference-lookup': ['namespace', 'external-id'],
   };
   const query = Object.hasOwn(queryOptions, action);
-  const humanMutation = ['edit', 'reassign', 'complete', 'comment', 'reopen', 'cancel', 'reference-attach'].includes(action);
+  const humanMutation = ['edit', 'reassign', 'complete', 'comment', 'reopen', 'cancel', 'recover', 'reference-attach'].includes(action);
   if (values.company !== undefined) requireValue(group === 'task' && (query || humanMutation || ['create', 'capture', 'inspect'].includes(action)) && positionals.length === 2,
     'invalid_request', '--company is only valid for runless operator task commands');
   for (const option of ['project', 'status', 'agent', 'user', 'parent', 'limit', 'cursor', 'from', 'to', 'namespace', 'external-id']) {

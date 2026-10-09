@@ -97,7 +97,7 @@ test('existing and new human verbs use the manage route without changing their e
   const f = await fixture(t);
   const cases = [
     ['edit', { title: 'Updated title' }], ['reassign', { assigneeUserId: 'human-id' }],
-    ['complete', undefined], ['comment', { body: 'Follow up' }], ['reopen', {}], ['cancel', undefined],
+    ['complete', undefined], ['comment', { body: 'Follow up' }], ['reopen', {}], ['cancel', undefined], ['recover', undefined],
   ];
   for (const [action, payload] of cases) {
     const details = { expectedRevision: 'revision', reason: 'Human instruction', ...(payload ? { payload } : {}) };

@@ -116,7 +116,7 @@ test(`configured busy bridge exposes read-only previews and permission-checked e
   const configFile = f.config('first');
   const hooks = await f.load(discovery ? undefined : { configFile });
   const tools = hooks.tool;
-  assert.equal(Object.keys(tools).length, 37);
+  assert.equal(Object.keys(tools).length, 38);
   assert.deepEqual(tools.relay_tasks.args, {});
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(true), true);
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(undefined), undefined);
@@ -572,7 +572,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   const tools = hooks.tool;
   assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_enrol_agent', 'relay_enrolment_candidates', 'relay_questions', 'relay_review', 'relay_reviews',
     'relay_schedule_cancel', 'relay_schedule_create', 'relay_schedule_edit', 'relay_schedule_inspect', 'relay_schedule_pause', 'relay_schedule_preview', 'relay_schedule_resume', 'relay_schedule_run', 'relay_schedules',
-    'relay_task_activity', 'relay_task_assign', 'relay_task_cancel', 'relay_task_children', 'relay_task_comment', 'relay_task_comments', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_task_list', 'relay_task_reference_attach', 'relay_task_reference_lookup', 'relay_task_reopen',
+    'relay_task_activity', 'relay_task_assign', 'relay_task_cancel', 'relay_task_children', 'relay_task_comment', 'relay_task_comments', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_task_list', 'relay_task_recover', 'relay_task_reference_attach', 'relay_task_reference_lookup', 'relay_task_reopen',
     'relay_tasks', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();
   for (const tool of Object.values(tools)) assert.equal(typeof tool.execute, 'function');

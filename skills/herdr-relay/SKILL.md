@@ -98,6 +98,15 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
 
 ## Daily Task Tracking
 
+- `relay_task_recover({key,taskId,expectedRevision,reason})` is the self-service
+  terminal recovery for one narrow scheduled-task failure: a published no-review
+  result whose stale native execution was cancelled and whose task carries the
+  matching `legacy_execution_requires_reconciliation` blocker. Inspect first and
+  state the exact task and reason. Recovery preserves the result and comment,
+  records no-review completion and marks only that task Done. It never reassigns,
+  reruns, deletes or broadens ordinary blocked work. Any mismatched result, policy,
+  interaction, dependency, routine provenance or execution identity fails closed.
+
 - `relay_task_inspect({taskId})` returns full text, relationships, attached references
   and `revision`. `relay_task_children` reads direct children. `relay_task_comments`
   reads full bodies. List descriptions are only 1,200-character previews.

@@ -32,7 +32,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   requireValue(authority && typeof authority === 'object' && !Array.isArray(authority), 'invalid_authority', 'Server authority required');
   text(authority.kind, 'authority.kind');
   const { action, companyId, taskId } = input;
-  requireValue(['create', 'inspect', 'edit', 'assign', 'complete', 'comment', 'reopen', 'cancel'].includes(action), 'invalid_request', 'Unknown human task action');
+  requireValue(['create', 'inspect', 'edit', 'assign', 'complete', 'comment', 'reopen', 'cancel', 'recover'].includes(action), 'invalid_request', 'Unknown human task action');
   text(companyId, 'companyId');
   let externalReference;
   if (input.externalReference !== undefined) {
@@ -50,8 +50,8 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     if (action !== 'create') text(input.expectedRevision, 'expectedRevision');
   }
   const payload = input.payload ?? {};
-  if (['complete', 'cancel'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'Completion and cancellation accept no payload');
-  if (action === 'cancel') text(input.reason, 'reason');
+  if (['complete', 'cancel', 'recover'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'This action accepts no payload');
+  if (['cancel', 'recover'].includes(action)) text(input.reason, 'reason');
   if (action === 'comment') {
     object(input.payload, ['body']);
     text(payload.body, 'body');
@@ -102,7 +102,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     for (const field of fields) if (payload[field] !== null) text(payload[field], field);
     desired = { assigneeUserId: null, assigneeAgentId: null, ...payload };
     if (desired.assigneeAgentId) text(input.reason, 'reason');
-  } else if (action === 'complete') desired = { status: 'done' };
+  } else if (['complete', 'recover'].includes(action)) desired = { status: 'done' };
   else if (action === 'reopen') desired = { status: payload.status ?? 'todo' };
   else if (action === 'cancel') desired = { status: 'cancelled' };
   else if (action === 'comment') desired = {};
@@ -217,6 +217,16 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     return match.id;
   };
   const runsFor = targetId => store.runs().filter(run => run.request.companyId === companyId && run.request.taskId === targetId);
+  const recordRecoveredCompletion = () => {
+    const run = runsFor(taskId).find(item => item.result);
+    const id = `no-review-completion:${run.id}`;
+    const value = { id, runId: run.id, companyId, taskId, state: 'recorded', status: 'done', policy: 'none',
+      candidate: run.result.candidate, decision: run.result.reviewDecision ?? null, recoveredFrom: 'cancelled_published_routine' };
+    const existing = store.operation(id);
+    const { updatedAt, ...persisted } = existing ?? {};
+    requireValue(!existing || canonical(persisted) === canonical(value), 'completion_uncertain', 'Recovered completion record conflicts', 409);
+    if (!existing) store.saveOperation(value);
+  };
   const localState = targetId => {
     const runs = runsFor(targetId);
     const decisions = [`review-decision:${digest([companyId, targetId])}`, ...runs.flatMap(run =>
@@ -327,6 +337,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
         requireValue(matches(initial, operation.expected), 'operation_uncertain', 'Task changed during comment reconciliation', 409);
       }
       operation = store.saveOperation({ ...operation, ...(commentId ? { commentId } : {}), state: 'recorded', reconciled: true, receipt: initial.publicTask });
+      if (action === 'recover') { recordRecoveredCompletion(); initial = await inspect(taskId); }
     }
     return response(initial, operation);
   }
@@ -335,6 +346,25 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   const guard = snapshot => {
     check();
     const task = snapshot.task;
+    if (action === 'recover') {
+      const runs = runsFor(taskId), run = runs.find(item => item.result);
+      const routed = store.operation(`routine-task:${digest([companyId, taskId])}`);
+      const blocker = task.executionBlocker;
+      requireValue(task.status === 'blocked' && !task.assigneeUserId && typeof task.assigneeAgentId === 'string' &&
+        !task.executionRunId && !task.checkoutRunId && !task.executionLockedAt && !task.activeRun &&
+        !task.activeRecoveryAction && !task.executionState && blocker?.cause === 'legacy_execution_requires_reconciliation' &&
+        typeof blocker.recoveryActionId === 'string' && blocker.recoveryActionId && run && runs.filter(item => item.result).length === 1 &&
+        run.nativeState === 'settled' && run.settlement?.outcome === 'cancelled' && run.cancellationRequested === true &&
+        run.publication?.state === 'recorded' && !run.waiting && !run.dependency && !run.review &&
+        run.request.agentId === task.assigneeAgentId && blocker.agentId === run.request.agentId &&
+        blocker.runId === (run.backendRunId ?? run.request.runId) && resultPolicy(store, run, run.result) === 'none' &&
+        !task.reviewPolicy && routed?.state === 'recorded' && routed.receipt?.id === taskId && routed.relayRunId === run.id &&
+        routed.routingAgentId === run.request.agentId && routed.request?.relayReviewPolicy === 'none' &&
+        snapshot.interactions.every(item => item.status !== 'pending') &&
+        snapshot.local.decisions.every(item => item.state === 'recorded' || item.state === 'skipped'),
+      'recovery_not_authorised', 'Only an exact published no-review routine result with a legacy cancelled-execution blocker can be recovered', 409);
+      return;
+    }
     requireValue(!task.executionRunId && !task.checkoutRunId && !task.executionLockedAt && !task.activeRun &&
       !task.activeRecoveryAction && !task.executionBlocker && !task.executionState,
     'task_busy', 'Execution, recovery or execution policy state prevents human mutation', 409);
@@ -446,8 +476,9 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   if (Object.keys(body).length) await send(action === 'comment' ? 'POST' : 'PATCH',
     `/api/issues/${encodeURIComponent(taskId)}${action === 'comment' ? '/comments' : ''}`, body);
   const commentId = commentBody !== undefined ? await commentReceipt(operation) : undefined;
-  const receipt = await inspect(taskId);
+  let receipt = await inspect(taskId);
   check();
   operation = store.saveOperation({ ...operation, ...(commentId ? { commentId } : {}), state: 'recorded', receipt: receipt.publicTask });
+  if (action === 'recover') { recordRecoveredCompletion(); receipt = await inspect(taskId); }
   return response(receipt, operation);
 }

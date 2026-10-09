@@ -124,6 +124,10 @@ function taskTools(execute) {
       description: 'Cancel a task on explicit human instruction. Before calling, state the exact task and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries. Accepts no payload.',
       args: writeArgs,
     }],
+    ['recover', {
+      description: 'Recover an exact blocked scheduled task whose no-review result was published but whose stale native execution was cancelled. Preserves the result and comment, marks only that task Done, and never reassigns, reruns or deletes it. Inspect first, state the task and reason visibly, and reuse the stable key. Accepts no payload.',
+      args: writeArgs,
+    }],
     ['reopen', {
       description: 'Reopen a terminal task on explicit human instruction. Before calling, state the exact task, proposed status and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries.',
       args: { ...writeArgs, payload: tool.schema.object({ status: tool.schema.enum(['todo', 'in_progress']).optional() }).strict() },

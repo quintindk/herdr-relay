@@ -9,7 +9,7 @@ import { attachTaskReference, lookupTaskReference } from './task-references.mjs'
 export async function harnessTask(store, bridge, action, input, api) {
   const queryKinds = { 'task-list': 'list', 'task-children': 'children', 'task-comments': 'comments', 'task-activity': 'activity' };
   const reading = action === 'task-inspect' || action === 'task-reference-lookup' || Object.hasOwn(queryKinds, action);
-  requireValue(['task-inspect', 'task-create', 'task-edit', 'task-assign', 'task-complete', 'task-comment', 'task-reopen', 'task-cancel',
+  requireValue(['task-inspect', 'task-create', 'task-edit', 'task-assign', 'task-complete', 'task-comment', 'task-reopen', 'task-cancel', 'task-recover',
     'task-reference-lookup', 'task-reference-attach', ...Object.keys(queryKinds)].includes(action),
     'invalid_bridge_action', 'Unknown human task action');
   requireValue(input && typeof input === 'object' && !Array.isArray(input) &&

@@ -77,6 +77,51 @@ const externalReference = { namespace: 'crm', externalId: 'CASE-1', url: 'https:
 const referenceCreate = { action: 'create', companyId: 'company', key: 'create-reference',
   externalReference, payload: { title: 'Follow-up' } };
 
+function cancelledRoutineResult(f) {
+  f.state.task.status = 'blocked'; f.state.task.assigneeUserId = null; f.state.task.assigneeAgentId = 'router';
+  f.store.register({ id: 'binding', companyId: 'company', agentId: 'router', harness: 'opencode', instanceId: 'i', conversationId: 'c' });
+  let run = f.store.dispatch({ bindingId: 'binding', bindingRevision: 1, companyId: 'company', agentId: 'router', taskId: 'task', runId: 'backend' });
+  f.store.acknowledge(run.id); f.store.submit(run.id, { key: 'candidate', candidate: 'sha256:candidate', summary: 'Preserved result' });
+  f.store.publication(run.id, { state: 'recorded', commentId: 'comment' }); f.store.cancel(run.id);
+  run = f.store.settle(run.id, { outcome: 'cancelled', evidence: 'Stale native execution cancelled' });
+  f.state.task.executionBlocker = { recoveryActionId: 'recovery', runId: 'backend', agentId: 'router',
+    cause: 'legacy_execution_requires_reconciliation', nextAction: 'Recorded work is preserved' };
+  f.store.saveOperation({ id: `routine-task:${digest(['company', 'task'])}`, runId: '', state: 'recorded',
+    scheduleId: 'routine', routineRunId: 'occurrence', routingAgentId: 'router', backendRunId: 'backend', relayRunId: run.id,
+    request: { companyId: 'company', relayReviewPolicy: 'none', body: { assigneeAgentId: 'router' } },
+    receipt: { id: 'task', companyId: 'company', assigneeAgentId: 'router' } });
+  return run;
+}
+
+test('recover terminalises only an exact cancelled published no-review routine result', async t => {
+  const f = fixture(t), run = cancelledRoutineResult(f);
+  const input = { ...await f.input('recover'), reason: 'Preserve the published result and unblock future occurrences' };
+  const result = await humanTask(f.store, f.api, input);
+  assert.equal(result.task.status, 'done'); assert.equal(result.task.assigneeAgentId, 'router');
+  assert.deepEqual(f.writes(), [{ method: 'PATCH', path: '/api/issues/task', body: { status: 'done' } }]);
+  const completion = f.store.operation(`no-review-completion:${run.id}`);
+  assert.equal(completion.state, 'recorded'); assert.equal(completion.status, 'done');
+  assert.equal(completion.candidate, 'sha256:candidate'); assert.equal(completion.recoveredFrom, 'cancelled_published_routine');
+  assert.deepEqual(await humanTask(f.store, f.api, input), result); assert.equal(f.writes().length, 1);
+});
+
+test('recover refuses ordinary blocked tasks and altered cancelled-result evidence', async t => {
+  for (const variant of ['ordinary', 'unpublished', 'completed', 'wrong-blocker', 'review', 'not-routine']) {
+    const f = fixture(t);
+    let run;
+    if (variant !== 'ordinary') run = cancelledRoutineResult(f);
+    if (variant === 'unpublished') f.store.publication(run.id, { state: 'none' });
+    if (variant === 'completed') f.store.save({ ...run, cancellationRequested: false,
+      settlement: { outcome: 'completed', evidence: 'Different state' } }, 'fixture');
+    if (variant === 'wrong-blocker') f.state.task.executionBlocker.runId = 'other';
+    if (variant === 'review') f.state.task.reviewPolicy = { mode: 'human' };
+    if (variant === 'not-routine') f.store.saveOperation({ ...f.store.operation(`routine-task:${digest(['company', 'task'])}`), state: 'uncertain' });
+    const input = { ...await f.input('recover'), reason: 'Attempt bounded recovery' };
+    await assert.rejects(humanTask(f.store, f.api, input), { code: 'recovery_not_authorised' });
+    assert.equal(f.writes().length, 0); assert.equal(f.state.task.status, variant === 'ordinary' ? 'todo' : 'blocked');
+  }
+});
+
 test('external-reference creation reserves by journal identity and exposes references in its receipt', async t => {
   const f = fixture(t);
   f.state.post = () => {
