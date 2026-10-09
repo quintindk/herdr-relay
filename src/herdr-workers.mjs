@@ -166,7 +166,8 @@ async function originRepository(bridge, commonDirectory, trust, deps) {
 
 async function worktree(request, deps) {
   const path = await deps.realpath(request.directory);
-  fail(path === request.directory && beneath(request.worktreeRoot, path), 'worker_directory_mismatch', 'Worktree escaped its authorised directory');
+  fail(path === request.directory && (request.worktreeRoot === null || beneath(request.worktreeRoot, path)),
+    'worker_directory_mismatch', 'Worktree escaped its authorised directory');
   const common = await gitIdentity(path, request.trustRepository, deps);
   fail(await gitIdentity(request.repository, request.trustRepository, deps) === request.commonDirectory,
     'worker_repository_mismatch', 'Authorised repository identity changed');
@@ -467,12 +468,13 @@ async function driveCreation(store, operation, config, deps, check, validate) {
     operation = store.saveOperation({ ...operation, state: 'uncertain', step: 'workspace.create' });
     const created = await deps.rpc(scope.socketPath, 'workspace.create', {
       cwd: directory, label: selection.label ?? `Relay ${basename(directory)}`, focus: false });
+    check(false);
     const workspace = created.workspace;
     fail(created.type === 'workspace_created' && workspace && typeof workspace.workspace_id === 'string' && workspace.workspace_id &&
       typeof workspace.active_tab_id === 'string' && workspace.active_tab_id,
     'invalid_worker_receipt', 'Herdr workspace receipt does not match the request');
     const after = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
-    check(); exactAgent(after, targetFrom(store.operation(operation.origin.identity.observedId)));
+    check(false); exactAgent(after, targetFrom(store.operation(operation.origin.identity.observedId)));
     const panes = after.panes.filter(item => item.workspace_id === workspace.workspace_id || item.cwd === directory);
     const pane = panes[0];
     fail(panes.length === 1 && pane.cwd === directory && pane.workspace_id === workspace.workspace_id &&
@@ -490,7 +492,7 @@ async function driveCreation(store, operation, config, deps, check, validate) {
     operation = store.saveOperation({ ...operation, state: 'uncertain', step: 'worktree.create' });
     const created = await deps.rpc(scope.socketPath, 'worktree.create', { cwd: request.repository, path: directory,
       branch, base: baseCommit, label: selection.label ?? `Relay ${branch}`, focus: false, trust_repository: selection.trustRepository });
-    check();
+    check(false);
     const pane = created.root_pane;
     fail(created.type === 'worktree_created' && created.worktree?.path === directory && created.worktree.is_linked_worktree === true &&
       created.worktree.is_bare === false && created.worktree.is_prunable === false && created.worktree.is_detached === false &&
@@ -543,6 +545,26 @@ async function driveCreation(store, operation, config, deps, check, validate) {
   return operation;
 }
 
+async function recoverWorktreeCreation(store, operation, deps, check) {
+  const { request, selection, scope } = operation, identity = await worktree(request, deps);
+  fail((await deps.git(request.directory, ['rev-parse', '--verify', 'HEAD'], request.trustRepository)).trim() === request.baseCommit,
+    'worker_base_mismatch', 'Created worktree does not match the pinned base commit');
+  const snapshot = (await deps.rpc(scope.socketPath, 'session.snapshot', {})).snapshot;
+  check(); exactAgent(snapshot, targetFrom(store.operation(operation.origin.identity.observedId)));
+  const panes = snapshot.panes.filter(item => item.cwd === request.directory);
+  const pane = panes[0], workspace = pane && snapshot.workspaces.find(item => item.workspace_id === pane.workspace_id);
+  const tab = pane && snapshot.tabs.find(item => item.tab_id === pane.tab_id && item.workspace_id === pane.workspace_id);
+  const label = selection.label ?? `Relay ${request.branch}`;
+  fail(panes.length === 1 && pane && !pane.agent && workspace && tab && workspace.active_tab_id === tab.tab_id &&
+    workspace.label === label && workspace.worktree?.checkout_path === request.directory &&
+    workspace.worktree.is_linked_worktree === true && workspace.worktree.repo_root === request.repository,
+  'worker_observation_mismatch', 'Existing worktree does not match the uncertain creation intent');
+  const receipt = { directory: request.directory, paneId: pane.pane_id, terminalId: pane.terminal_id,
+    workspaceId: pane.workspace_id, tabId: pane.tab_id };
+  return store.saveOperation({ ...operation, state: 'created', step: null, blocker: null,
+    createReceipt: receipt, worktreeIdentity: identity });
+}
+
 export async function reconcileHerdrWorkers(store, directory, api, config, locks = new Map(), deps = {}) {
   deps = { git, realpath, lstat, mkdir, readdir, rpc, ...deps };
   if (reconciliations.has(store) || locks.has('herdr-workers')) return [];
@@ -550,8 +572,9 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
   const pending = Promise.resolve().then(async () => {
     const scope = scopeOf(config), results = [];
     for (let operation of records(store)) {
-      if (operation.state === 'uncertain' || (operation.state === 'blocked' && operation.disarmed)) continue;
-      const creating = ['intent', 'directory_created', 'created', 'awaiting_native'].includes(operation.state);
+      const recovering = operation.state === 'uncertain' && operation.step === 'worktree.create';
+      if ((operation.state === 'uncertain' && !recovering) || (operation.state === 'blocked' && operation.disarmed)) continue;
+      const creating = recovering || ['intent', 'directory_created', 'created', 'awaiting_native'].includes(operation.state);
       if (!creating && locks.has('observed-delivery')) continue;
       if (!creating) locks.set('observed-delivery', pending);
       const revoke = async () => {
@@ -581,7 +604,7 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
         const initialOrigin = store.operation(operation.origin.bridgeId);
         // Epoch is a live-call fence, never persisted as durable authority.
         const callProof = initialOrigin && proof(initialOrigin);
-        const check = () => {
+        const check = (requireFresh = true) => {
           fail(canonical(scopeOf(config)) === canonical(operation.scope) && workerGrantConfigured(config, operation),
             'worker_repository_forbidden', 'Worker scope revoked');
           const origin = store.operation(operation.origin.bridgeId);
@@ -591,8 +614,8 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
           fail(canonical(originIdentity(origin, binding)) === canonical(identity),
             'bridge_identity_mismatch', 'Origin binding changed');
           const observedOrigin = store.operation(origin.identity.observedId);
-          fail(fresh(origin.lastSeen, 10000) && observedOrigin.availability === 'present' &&
-            !observedOrigin.error && fresh(observedOrigin.updatedAt, 15000),
+          fail(!requireFresh || (fresh(origin.lastSeen, 10000) && observedOrigin.availability === 'present' &&
+            !observedOrigin.error && fresh(observedOrigin.updatedAt, 15000)),
           'worker_origin_unavailable', 'Wait for the exact origin to reconnect');
           fail(!isNotificationSource(store, origin, sourceMessageId) &&
             !store.runs(binding.id).some(run => run.invocation?.messageId === sourceMessageId),
@@ -621,6 +644,10 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
           check();
         };
         await validate();
+        if (recovering) {
+          operation = await recoverWorktreeCreation(store, operation, deps, check);
+          results.push(summary(operation)); continue;
+        }
         if (creating) {
           operation = await driveCreation(store, operation, config, deps, check, validate);
           results.push(summary(operation)); continue;
@@ -701,6 +728,7 @@ export async function reconcileHerdrWorkers(store, directory, api, config, locks
       } finally {
         if (locks.get('observed-delivery') === pending) locks.delete('observed-delivery');
       }
+      if (recovering && operation.state === 'uncertain') continue;
       results.push(summary(operation));
     }
     return results;

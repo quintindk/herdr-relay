@@ -172,6 +172,49 @@ test('localUser creates a plain workspace in an exact local directory and launch
   assert.equal(f.runGit(f.repository, ['status', '--short']).trim(), '');
 });
 
+test('localUser creates and verifies a linked worktree without a configured root', async t => {
+  const f = fixture(t, true), directory = join(f.directory, 'local-worktree');
+  f.config.workerProvisioning = { mode: 'localUser' }; delete f.config.workerRepositories;
+  const result = await f.create({ directory });
+  assert.equal(result.state, 'awaiting_native'); assert.equal(result.directory, directory);
+  assert.equal(f.runGit(directory, ['rev-parse', '--show-toplevel']).trim(), directory);
+  assert.equal(f.rpcCalls.filter(call => call.method === 'worktree.create').length, 1);
+  assert.equal(f.rpcCalls.filter(call => call.method === 'agent.start').length, 1);
+});
+
+test('uncertain worktree creation recovers from exact Git and Herdr state without replay', async t => {
+  const f = fixture(t, true), directory = join(f.directory, 'recovered-worktree');
+  f.config.workerProvisioning = { mode: 'localUser' }; delete f.config.workerRepositories;
+  const intent = await f.prepare({ directory });
+  const operation = f.store.operation(intent.id);
+  f.runGit(f.repository, ['worktree', 'add', '-b', operation.request.branch, directory, operation.request.baseCommit]);
+  f.store.saveOperation({ ...operation, state: 'uncertain', step: 'worktree.create', blocker: 'manual_recovery_required' });
+  const pane = { pane_id: 'recovered:p', terminal_id: 'recovered:terminal', workspace_id: 'recovered',
+    tab_id: 'recovered:tab', cwd: directory, agent: null };
+  const snapshot = { protocol: 22, version: 'test', layouts: [], agents: [f.native(f.origin)], panes: [pane],
+    tabs: [{ tab_id: pane.tab_id, workspace_id: pane.workspace_id }], workspaces: [{ workspace_id: pane.workspace_id,
+      active_tab_id: pane.tab_id, label: `Relay ${operation.request.branch}`,
+      worktree: { checkout_path: directory, is_linked_worktree: true, repo_root: f.repository } }] };
+  const calls = f.rpcCalls.length;
+  const [recovered] = await f.reconcile({ rpc: async () => ({ snapshot }) });
+  assert.equal(recovered.state, 'created'); assert.equal(recovered.step, null); assert.equal(recovered.blocker, null);
+  assert.deepEqual(f.store.operation(intent.id).createReceipt, { directory, paneId: pane.pane_id,
+    terminalId: pane.terminal_id, workspaceId: pane.workspace_id, tabId: pane.tab_id });
+  assert.equal(f.rpcCalls.length, calls, 'Recovery must not replay worktree.create');
+});
+
+test('successful worktree receipt remains durable when its mutation outlasts origin freshness', async t => {
+  const f = fixture(t);
+  const result = await f.create({}, { rpc: async (...args) => {
+    const response = await f.deps.rpc(...args);
+    if (args[1] === 'worktree.create') f.store.saveOperation({ ...f.bridge, lastSeen: '2000-01-01T00:00:00Z' });
+    return response;
+  } });
+  assert.equal(result.state, 'created'); assert.equal(result.step, null); assert.equal(result.blocker, 'enrolment_blocked');
+  assert.equal(f.rpcCalls.filter(call => call.method === 'worktree.create').length, 1);
+  assert.equal(f.rpcCalls.filter(call => call.method === 'agent.start').length, 0);
+});
+
 test('localUser allows cross-repository worktrees and generic adoption without repository authority', async t => {
   const f = fixture(t, true), foreign = join(f.directory, 'foreign'), directory = join(f.directory, 'foreign-worker');
   mkdirSync(foreign); f.runGit(foreign, ['init', '-b', 'main']);
