@@ -99,7 +99,8 @@ test('inspection needs no source or idle worker and records neither authority no
 
 test('exact conflicted published result can recover from its own active conversation', async t => {
   const f = fixture(t, 'armed');
-  Object.assign(f.task, { status: 'in_progress', assigneeUserId: null, assigneeAgentId: 'agent', executionRunId: 'backend' });
+  Object.assign(f.task, { status: 'in_progress', assigneeUserId: null, assigneeAgentId: 'agent',
+    executionRunId: 'backend', checkoutRunId: 'backend' });
   f.store.saveOperation({ ...f.bridge, lastSeen: new Date().toISOString() });
   let run = f.store.dispatch({ bindingId: 'caller', bindingRevision: 1, companyId: 'company', agentId: 'agent', taskId: 'task', runId: 'backend' });
   f.store.beginNative(run.id, 'prompt', [], 'cursor'); f.store.acknowledge(run.id);

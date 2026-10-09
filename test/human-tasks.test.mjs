@@ -172,7 +172,8 @@ test('merged_interactive recovery verifies merged artefact, comments, decisions 
 
 test('published result conflict recovery settles the exact run without changing the task or replaying work', async t => {
   const f = fixture(t);
-  Object.assign(f.state.task, { status: 'in_progress', assigneeUserId: null, assigneeAgentId: 'agent', executionRunId: 'backend' });
+  Object.assign(f.state.task, { status: 'in_progress', assigneeUserId: null, assigneeAgentId: 'agent',
+    executionRunId: 'backend', checkoutRunId: 'backend' });
   f.store.register({ id: 'binding', companyId: 'company', agentId: 'agent', harness: 'opencode', instanceId: 'i', conversationId: 'c',
     delivery: 'opencode', opencode: { url: 'http://127.0.0.1:1', directory: '/work', projectID: 'project', sessionCreatedAt: 1, exclusive: true } });
   let run = f.store.dispatch({ bindingId: 'binding', bindingRevision: 1, companyId: 'company', agentId: 'agent', taskId: 'task', runId: 'backend' });

@@ -385,7 +385,8 @@ export async function humanTask(store, api, input, { check = () => {}, authority
       requireValue(snapshot.revision === input.expectedRevision && conflicted.length === 1 &&
         snapshot.task.assigneeAgentId === run.request.agentId && !snapshot.task.assigneeUserId &&
         (!snapshot.task.executionRunId || snapshot.task.executionRunId === (run.backendRunId ?? run.request.runId)) &&
-        !snapshot.task.checkoutRunId && !snapshot.task.activeRecoveryAction && !snapshot.task.reviewPolicy &&
+        (!snapshot.task.checkoutRunId || snapshot.task.checkoutRunId === (run.backendRunId ?? run.request.runId)) &&
+        !snapshot.task.activeRecoveryAction && !snapshot.task.reviewPolicy &&
         !snapshot.interactions.some(item => item.status === 'pending') && runs.find(item => item.result)?.id === run.id &&
         !runs.some(item => item.id !== run.id && item.nativeState !== 'settled') &&
         ['human', 'none'].includes(resultPolicy(store, run, run.result)) &&
