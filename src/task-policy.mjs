@@ -9,10 +9,10 @@ export function taskPolicy(store, companyId, taskId) {
   const records = store.db.prepare('SELECT data FROM operations').all().map(row => JSON.parse(row.data))
     .filter(operation => operation.state === 'recorded' && operation.receipt?.id === taskId &&
       (operation.request?.companyId === companyId || operation.request?.path === `/api/companies/${encodeURIComponent(companyId)}/issues`) &&
-      (operation.id.startsWith('operator-task:') || operation.request?.kind === 'task.create'));
+      (operation.id.startsWith('operator-task:') || operation.id.startsWith('routine-task:') || operation.request?.kind === 'task.create'));
   const policies = [...new Set(records.map(operation => operation.request.relayReviewPolicy ?? 'human'))];
   requireValue(policies.length <= 1, 'review_policy_conflict', 'Conflicting task creation policies', 409);
-  return validateTaskPolicy(policies[0] ?? 'human');
+  return validateTaskPolicy(policies[0] ?? 'none');
 }
 
 export function resultPolicy(store, run, submission) {

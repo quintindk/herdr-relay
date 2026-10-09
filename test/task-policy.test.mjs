@@ -18,13 +18,13 @@ function fixture(t, policy) {
 test('creator policy constrains submission while agent_decides requires a reasoned choice', t => {
   for (const policy of [undefined, 'human', 'none', 'agent_decides']) {
     const f = fixture(t, policy);
-    assert.equal(taskPolicy(f.store, 'company', 'task'), policy ?? 'human');
+    assert.equal(taskPolicy(f.store, 'company', 'task'), policy ?? 'none');
     if (policy === 'agent_decides') {
       assert.throws(() => f.store.submit(f.run.id, f.submission), { code: 'review_decision_required' });
       assert.throws(() => f.store.submit(f.run.id, { ...f.submission, reviewDecision: { mode: 'none', reason: '' } }), { code: 'invalid_review_decision' });
       f.store.submit(f.run.id, { ...f.submission, reviewDecision: { mode: 'none', reason: 'Deterministic informational answer' } });
     } else {
-      assert.throws(() => f.store.submit(f.run.id, { ...f.submission, reviewDecision: { mode: policy === 'none' ? 'human' : 'none', reason: 'override' } }), { code: 'review_policy_locked' });
+      assert.throws(() => f.store.submit(f.run.id, { ...f.submission, reviewDecision: { mode: (policy ?? 'none') === 'none' ? 'human' : 'none', reason: 'override' } }), { code: 'review_policy_locked' });
       f.store.submit(f.run.id, f.submission);
     }
   }
@@ -44,7 +44,7 @@ test('delegating agent and operator persist policy per task without sending unsu
   await mutate(store, { id: 'parent-run', request: { companyId: 'company', bindingId: 'parent', taskId: 'parent' } }, 'token',
     (_, __, ...args) => api(...args), { key: 'child', kind: 'task.create', payload: { title: 'child', parentId: 'parent', relayReviewPolicy: 'none' } });
   assert.equal(taskPolicy(store, 'company', 'child'), 'none');
-  assert.equal(taskPolicy(store, 'other', 'child'), 'human');
+  assert.equal(taskPolicy(store, 'other', 'child'), 'none');
 });
 
 test('no-review completes only after verified publication and settlement with no acceptance interaction', async t => {

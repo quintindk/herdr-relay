@@ -198,7 +198,7 @@ export class Store {
     'worker_grant_inactive', 'Worker preparation grant is not active for this exact conversation', 409);
   }
 
-  dispatch(input) {
+  dispatch(input, routineClaim) {
     const request = {};
     for (const key of ['bindingId', 'companyId', 'agentId', 'runId', 'taskId']) request[key] = text(input[key], key);
     requireValue(Number.isSafeInteger(input.bindingRevision) && input.bindingRevision > 0,
@@ -208,8 +208,18 @@ export class Store {
     const binding = this.binding(request.bindingId);
     requireValue(!binding.config.taskId || binding.config.taskId === request.taskId, 'task_scope_mismatch', 'Task-scoped binding belongs to another task', 409);
     requireValue(binding.revision === request.bindingRevision, 'stale_binding', 'Binding revision does not match', 409);
-    requireValue(binding.config.companyId === request.companyId && binding.config.agentId === request.agentId,
+    const routed = routineClaim ?? this.operation(`routine-task:${digest([request.companyId, request.taskId])}`);
+    const routine = routed?.scheduleId && this.operation(routed.scheduleId);
+    const folderRoute = routed?.state === 'recorded' && routine?.persistentScope && routine.created &&
+      routed.routingAgentId === request.agentId && routine.router?.agentId === request.agentId &&
+      routed.backendRunId === request.runId && routed.target?.bindingId === binding.id &&
+      routed.target.bindingRevision === binding.revision && routed.target.bindingConfig === digest(binding.config) &&
+      routed.target.directory === routine.persistentScope.directory && routed.target.companyId === request.companyId;
+    requireValue(binding.config.companyId === request.companyId && (binding.config.agentId === request.agentId || folderRoute),
       'identity_mismatch', 'Paperclip identity does not match binding', 409);
+    requireValue(!routineClaim || folderRoute && !routine.cancellationRequested && routine.state !== 'cancelled' &&
+      routineClaim.id === `routine-task:${digest([request.companyId, request.taskId])}`,
+      'identity_mismatch', 'Routine claim must match the internal folder route', 409);
     return this.transaction(() => {
       const key = canonical([request.companyId, request.runId]);
       const recovery = this.db.prepare('SELECT * FROM backend_recoveries WHERE backend_key = ?').get(key);
@@ -287,6 +297,14 @@ export class Store {
         deliveryState: 'pending', nativeState: 'unclaimed', cancellationRequested: false,
         result: null, publication: { state: 'none' }, createdAt: now(), updatedAt: now(),
       };
+      if (routineClaim) {
+        const claimedOccurrence = this.db.prepare("SELECT data FROM operations WHERE id LIKE 'routine-task:%'").all()
+          .map(row => JSON.parse(row.data)).some(claim => claim.scheduleId === routineClaim.scheduleId &&
+            claim.routineRunId === routineClaim.routineRunId && claim.request.companyId === request.companyId);
+        requireValue(!this.operation(routineClaim.id) && !claimedOccurrence,
+          'routine_occurrence_reserved', 'Occurrence is already pinned to a native turn', 409);
+        this.saveOperation({ ...routineClaim, relayRunId: run.id });
+      }
       this.db.prepare('INSERT INTO runs VALUES (?, ?, ?, 1, ?)').run(run.id, key, binding.id, JSON.stringify(run));
       return this.save(run, 'dispatch.persisted');
     });
@@ -350,8 +368,9 @@ export class Store {
         requireValue(canonical(run.result) === canonical(result), 'submission_conflict', 'Attempt already has a different result', 409);
         return run;
       }
-      requireValue(run.nativeState === 'claimed' && !run.cancellationRequested,
-        'invalid_submission', 'Acknowledge active work before submitting', 409);
+      requireValue(run.deliveryState === 'acknowledged' && (run.nativeState === 'claimed' ||
+        run.cancellationRequested && run.nativeState === 'settled' && run.settlement?.outcome === 'cancelled'),
+        'invalid_submission', 'Result recording requires acknowledged work or its cancelled settlement', 409);
       requireValue(!run.waiting && !run.dependency, 'work_waiting', 'This turn is already waiting', 409);
       resultPolicy(this, run, result);
       run.result = result;
@@ -374,8 +393,11 @@ export class Store {
   }
 
   settle(id, input) {
-    requireValue(!this.run(id).invocation, 'native_observation_required', 'Native delivery requires verified native settlement', 409);
+    const native = this.run(id);
+    requireValue(!native.invocation || input.outcome === 'cancelled' && native.cancellationRequested,
+      'native_observation_required', 'Native success requires verified observation; operator attestation may settle requested cancellation only', 409);
     const settlement = { outcome: text(input.outcome, 'outcome'), evidence: text(input.evidence, 'evidence') };
+    if (native.invocation) settlement.evidence = `Operator-attested native cancellation: ${settlement.evidence}`;
     requireValue(['completed', 'cancelled', 'failed', 'waiting'].includes(settlement.outcome), 'invalid_outcome', 'Unknown settlement outcome');
     return this.transaction(() => {
       const run = this.run(id);

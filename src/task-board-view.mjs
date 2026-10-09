@@ -285,13 +285,15 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
   let stopped = false; let timer; let escapeTimer; let reading = false; let again = false;
   let selectedId; let offset = 0; let showDone = false; let showIdle = false; let detail = false;
   let searching = false; let filter = ''; let frame; let pending = '';
+  let paintedLines; let paintedWidth; let paintedHeight;
   const collapsed = new Set();
+  const controller = new AbortController();
   const decoder = new StringDecoder('utf8');
-  const wasRaw = Boolean(input.isRaw); const wasPaused = input.isPaused?.() ?? true;
+  const wasRaw = Boolean(input.isRaw); const wasFlowing = input.readableFlowing === true;
   let rawAttempted = false; let entered = false; let failure;
   let finish;
   const finished = new Promise(resolve => { finish = resolve; });
-  const stop = () => { stopped = true; clearTimeout(timer); clearTimeout(escapeTimer); finish(); };
+  const stop = () => { stopped = true; clearTimeout(timer); clearTimeout(escapeTimer); controller.abort(); finish(); };
   const fail = error => { failure = error; stop(); };
   const draw = () => {
     if (stopped) return;
@@ -301,15 +303,21 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     options.expanded = new Set(all.filter(row => row.expandable && !collapsed.has(row.id)).map(row => row.id));
     frame = renderTaskBoard(value, options);
     selectedId = frame.selectedId; offset = frame.offset;
-    // CRLF avoids depending on the terminal's output newline mode. Erase only our alternate screen.
-    output.write(tty ? `\x1b[H\x1b[2J${frame.text.replace(/\n/g, '\r\n')}` : `${frame.text}\n`);
+    if (!tty) { output.write(`${frame.text}\n`); return; }
+    const lines = frame.text.split('\n');
+    // Fixed-width rows overwrite old content without clearing the whole pane.
+    const repaint = !paintedLines || paintedWidth !== options.width || paintedHeight !== options.height;
+    const update = repaint ? `\x1b[H\x1b[2J${frame.text.replace(/\n/g, '\r\n')}`
+      : lines.map((line, index) => line === paintedLines[index] ? '' : `\x1b[${index + 1};1H${line}`).join('');
+    if (update) output.write(update);
+    paintedLines = lines; paintedWidth = options.width; paintedHeight = options.height;
   };
   const refresh = async () => {
     if (stopped) return;
     if (reading) { again = true; return; }
     clearTimeout(timer); reading = true;
     try {
-      const next = validate(await read());
+      const next = validate(await read(controller.signal));
       // Reject unusable snapshots before replacing the last frame, not merely on transport success.
       buildBoardRows(next);
       if (!stopped) { value = next; hasSnapshot = true; offline = ''; }
@@ -389,7 +397,8 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     output.off('resize', resize); output.off('error', fail); output.off('close', stop);
     try { if (rawAttempted) input.setRawMode(wasRaw); }
     finally {
-      try { if (tty && wasPaused) input.pause(); }
+      // Fresh stdin is neither paused nor flowing. Stop the read we started so Node can exit.
+      try { if (tty && !wasFlowing) input.pause(); }
       finally { if (entered && !output.destroyed) output.write('\x1b[0m\x1b[?25h\x1b[?1049l'); }
     }
   }

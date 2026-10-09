@@ -96,7 +96,7 @@ for (const [name, change] of [
   });
 }
 
-test('delegate persists derived immutable origin, todo assignment and default human policy', async t => {
+test('delegate persists derived immutable origin, todo assignment and default chat output review', async t => {
   const f = fixture(t);
   f.store.saveOperation({ ...f.bridge, ready: false });
   const result = await f.invoke();
@@ -104,7 +104,7 @@ test('delegate persists derived immutable origin, todo assignment and default hu
   assert.deepEqual(operation.request.origin, { bindingId: 'origin', conversationId: 'session-origin', sessionCreatedAt: 123,
     sourceMessageId: 'user-message', sourceDigest: digest(f.input.source.text) });
   assert.equal(operation.request.companyId, 'company');
-  assert.equal(operation.request.relayReviewPolicy, 'human');
+  assert.equal(operation.request.relayReviewPolicy, 'none');
   assert.equal(operation.request.body.status, 'todo');
   assert.equal(operation.request.body.assigneeAgentId, 'agent-worker');
   assert.equal(operation.request.body.relayReviewPolicy, undefined);
@@ -123,7 +123,7 @@ test('recorded retries survive restart and busy targets but changed payloads con
   f.store.saveOperation({ ...f.target, ready: false, lastSeen: '2000-01-01T00:00:00Z' });
   const calls = f.calls.length;
   assert.deepEqual(await f.invoke(), result);
-  for (const change of [{ title: 'Changed' }, { description: 'Changed' }, { relayReviewPolicy: 'none' }]) {
+  for (const change of [{ title: 'Changed' }, { description: 'Changed' }, { relayReviewPolicy: 'human' }]) {
     await assert.rejects(f.invoke('delegate', change), { code: 'operation_conflict' });
   }
   f.add('other-worker');

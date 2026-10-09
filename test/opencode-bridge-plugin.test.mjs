@@ -47,6 +47,7 @@ async function discoveryFixture(t) {
       '/bridge/enrolment-candidates': { candidates: [{ observedId: 'observed', directory: '/worker' }] },
       '/bridge/enrol-agent': { state: 'configured' }, '/bridge/delegation-status': { delegations: [] },
       '/bridge/notification-history': { notifications: [] },
+      '/bridge/routine-create': { scheduleId: 'routine:self', targetBindingId: 'self', state: 'active' },
     };
     if ((req.url === '/bridge/enrol-agent' || taskMutations.some(action => req.url === `/bridge/task-${action}`)) && failMutation) {
       res.statusCode = 502;
@@ -79,16 +80,43 @@ async function discoveryFixture(t) {
   };
   return { root, configDirectory, inventoryFile, countFile, pane, inventory, requests, approvals, sdkCalls, source, messages, config, load,
     failMutation: () => { failMutation = true; },
-    context: { sessionID: 'first', messageID: 'tool-turn', ask: async permission => { approvals.push(permission); } } };
+    context: { sessionID: 'first', messageID: 'tool-turn', ask: async permission => {
+      assert.ok(permission.patterns.every(pattern => typeof pattern === 'string' && pattern.length > 0));
+      approvals.push(permission);
+    } } };
 }
 
 for (const discovery of [false, true]) {
+test(`self-schedule tool accepts omitted target and retains human permission checks (discovery: ${discovery})`, async t => {
+  const f = await discoveryFixture(t);
+  const configFile = f.config('first');
+  const { tool: tools } = await f.load(discovery ? undefined : { configFile });
+  assert.equal(tools.relay_schedule_create.args.targetBindingId.parse(undefined), undefined);
+  assert.equal(tools.relay_schedule_create.args.targetDirectory.parse('/work'), '/work');
+  const args = { key: 'self-schedule', title: 'Read inbox', description: 'Read only',
+    cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', enabled: true, relayReviewPolicy: 'human' };
+  await assert.rejects(tools.relay_schedule_create.execute(args, { ...f.context,
+    ask: async () => { throw new Error('Permission denied'); } }), /Permission denied/);
+  assert.equal(f.requests.some(request => request.path === '/bridge/routine-create'), false);
+  const original = f.source.parts[0].text;
+  await assert.rejects(tools.relay_schedule_create.execute(args, { ...f.context,
+    ask: async () => { f.source.parts[0].text = 'Do not schedule'; } }), /User message changed/);
+  f.source.parts[0].text = original;
+  assert.equal(JSON.parse(await tools.relay_schedule_create.execute(args, f.context)).state, 'active');
+  assert.equal(f.approvals.at(-1).permission, 'relay_schedule_create');
+  assert.deepEqual(f.approvals.at(-1).patterns, ['/work']);
+  const request = f.requests.find(request => request.path === '/bridge/routine-create');
+  assert.equal(request.body.idle, false);
+  assert.equal(request.body.targetBindingId, undefined);
+  assert.deepEqual(request.body.source, { id: 'human', text: original, createdAt: 123 });
+});
+
 test(`configured busy bridge exposes read-only previews and permission-checked enrolment (discovery: ${discovery})`, async t => {
   const f = await discoveryFixture(t);
   const configFile = f.config('first');
   const hooks = await f.load(discovery ? undefined : { configFile });
   const tools = hooks.tool;
-  assert.equal(Object.keys(tools).length, 28);
+  assert.equal(Object.keys(tools).length, 37);
   assert.deepEqual(tools.relay_tasks.args, {});
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(true), true);
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(undefined), undefined);
@@ -543,6 +571,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   hooks = await plugin({ client, directory: '/work' }, { configDirectory });
   const tools = hooks.tool;
   assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_enrol_agent', 'relay_enrolment_candidates', 'relay_questions', 'relay_review', 'relay_reviews',
+    'relay_schedule_cancel', 'relay_schedule_create', 'relay_schedule_inspect', 'relay_schedule_pause', 'relay_schedule_preview', 'relay_schedule_resume', 'relay_schedule_run', 'relay_schedules',
     'relay_task_activity', 'relay_task_assign', 'relay_task_cancel', 'relay_task_children', 'relay_task_comment', 'relay_task_comments', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_task_list', 'relay_task_reference_attach', 'relay_task_reference_lookup', 'relay_task_reopen',
     'relay_tasks', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();

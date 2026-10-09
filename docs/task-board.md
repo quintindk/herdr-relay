@@ -22,6 +22,10 @@ serialises repeated key presses. Manually opened boards in other tabs are not
 closed by this shortcut. Apply key changes with `herdr server reload-config`;
 no agent restart is required.
 
+The board process starts in the plugin installation directory so its relative
+launcher resolves from any project. The invoking pane's folder is unchanged;
+task data still comes from Relay, not the board process's working directory.
+
 ## Browse
 
 The Herdr plugin's **Relay tasks** pane displays Paperclip tasks grouped by owner,
@@ -55,6 +59,18 @@ Refreshes run every five seconds only while the pane is open. Failed refreshes
 retain the last good snapshot with an explicit offline message and its age. This
 does not install a schedule, wake an agent or inject prompts. Non-interactive
 output is a single plain-text viewport; use JSON for the complete projection.
+
+Only changed screen rows are repainted. Identical frames emit no terminal output;
+selection, scrolling, search and folded groups survive refreshes. The initial
+display and terminal size changes repaint the full viewport. Polling still reads
+the complete cached Relay projection, rather than fetching individual tasks.
+Close and reopen an existing board pane to load updated display code. No Relay
+service or agent restart is needed.
+
+Quit restores the terminal, stops the input read started by the view and aborts
+any pending Relay refresh. A directly launched plugin pane then closes through
+Herdr's normal process-exit handling. A board launched inside an ordinary shell
+returns to that shell instead of closing its pane.
 
 ## API Boundary
 

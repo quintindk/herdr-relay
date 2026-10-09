@@ -36,6 +36,10 @@ import { notificationRequest, isNotificationSource } from './completion-notifica
 import { harnessDelegation } from './harness-delegation.mjs';
 import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers } from './herdr-workers.mjs';
 import { taskBoard } from './task-board.mjs';
+import { manageRoutine } from './routines.mjs';
+import { harnessRoutine } from './harness-routines.mjs';
+import { previewCron } from './cron-schedule.mjs';
+import { admitRoutineExecution } from './routine-execution.mjs';
 import { humanTask } from './human-tasks.mjs';
 import { queryTasks } from './task-query.mjs';
 import { attachTaskReference, lookupTaskReference } from './task-references.mjs';
@@ -110,6 +114,12 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   const publications = new Map();
   const runTokens = new Map();
   const operatorApi = backendOperator(paperclipUrl, backendContextFile);
+  const routineOptions = { observationConfig, routingContextFile: join(directory, 'adapter-context.json') };
+  if (observationConfig) {
+    const context = JSON.stringify({ socketPath, token });
+    if (!existsSync(routineOptions.routingContextFile)) writeFileSync(routineOptions.routingContextFile, context, { flag: 'wx', mode: 0o600 });
+    else requireValue(readFileSync(routineOptions.routingContextFile, 'utf8') === context, 'context_conflict', 'Adapter context changed');
+  }
   let boardPending, boardCache;
 
   const server = createServer(async (req, res) => {
@@ -123,6 +133,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
+          '/bridge/routine-preview', '/bridge/routine-create', '/bridge/routine-list', '/bridge/routine-inspect', '/bridge/routine-pause', '/bridge/routine-resume', '/bridge/routine-cancel', '/bridge/routine-run', '/bridge/routine-edit',
           '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-complete',
           '/bridge/task-list', '/bridge/task-children', '/bridge/task-comments', '/bridge/task-activity', '/bridge/task-reference-lookup', '/bridge/task-reference-attach', '/bridge/task-comment', '/bridge/task-reopen', '/bridge/task-cancel',
           '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
@@ -130,7 +141,11 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
         const action = path.split('/').at(-1);
         let result;
-        if (action.startsWith('task-')) {
+        if (action.startsWith('routine-')) {
+          bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
+          const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...fields } = input;
+          result = await harnessRoutine(store, store.operation(bridge.id), action, fields, operatorApi, routineOptions);
+        } else if (action.startsWith('task-')) {
           bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
           const live = store.operation(bridge.id);
           const { epoch, conversationId, terminalId, sessionCreatedAt, idle, ...fields } = input;
@@ -203,6 +218,13 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const adminOnly = () => requireValue(admin, 'forbidden', 'Operator credentials required', 403);
       let result;
       if (req.method === 'GET' && path === '/health') result = { status: 'ok', delivery: ['pull', 'opencode', 'hermes'], schema: 4 };
+      else if (req.method === 'POST' && path === '/routines/preview') {
+        adminOnly(); requireValue(Object.keys(input).every(key => ['cron', 'timezone'].includes(key)), 'invalid_request', 'Unsupported preview fields');
+        result = previewCron(input.cron, input.timezone);
+      }
+      else if (req.method === 'POST' && path === '/routines/manage') {
+        adminOnly(); result = await manageRoutine(store, operatorApi, input, routineOptions);
+      }
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'GET' && path === '/task-board') {
         adminOnly();
@@ -428,9 +450,12 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         publications.set(key, pending);
         try { result = await pending; } finally { publications.delete(key); }
       }
-      else if (req.method === 'POST' && path === '/runs') { adminOnly(); result = store.dispatch(input); }
+      else if (req.method === 'POST' && path === '/runs') {
+        adminOnly();
+        result = await admitRoutineExecution(store, operatorApi, input, routineOptions) ?? store.dispatch(input);
+      }
       else {
-        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|review|retire|progress|reviewer-check|disposition|wait-child|wait-children|child))?$/);
+        const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|reference-lookup|diagnostics|review|retire|progress|reviewer-check|disposition|wait-child|wait-children|child))?$/);
         requireValue(match, 'not_found', 'Unknown endpoint', 404);
         const [, id, action] = match;
         const run = store.run(id);
@@ -439,6 +464,15 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           requireValue(input.runId === (run.backendRunId ?? run.request.runId), 'stale_backend_run', 'Adapter no longer owns this backend invocation', 409);
         }
         if (req.method === 'GET' && !action) result = run;
+        else if (req.method === 'GET' && action === 'diagnostics') {
+          adminOnly();
+          const task = await operatorApi('GET', `/api/issues/${encodeURIComponent(run.request.taskId)}`);
+          requireValue(task.id === run.request.taskId && task.companyId === run.request.companyId,
+            'identity_mismatch', 'Diagnostic task identity changed', 409);
+          result = Object.fromEntries(['id', 'status', 'executionRunId', 'checkoutRunId', 'activeRecoveryAction',
+            'executionBlocker', 'reviewPolicy', 'reviewAttention', 'blockedByIssueIds', 'blockedBy'].map(key => [key, task[key] ?? null]));
+          result.recovery = await operatorApi('GET', `/api/issues/${encodeURIComponent(run.request.taskId)}/recovery-actions`);
+        }
         else if (req.method === 'POST' && action === 'recover') {
           adminOnly();
           text(input.token, 'token');
@@ -488,7 +522,14 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           requireValue(!run.result && !run.waiting && !run.dependency, 'work_disposition_recorded', 'This turn has already submitted or is waiting', 409);
           const key = digest([run.request.bindingId, input.kind, input.key]);
           requireValue(!publications.has(key), 'operation_busy', 'Operation is already in flight', 409);
-          const pending = mutate(store, run, runTokens.get(id), api, input);
+          const checkJob = () => {
+            const live = store.run(id);
+            requireValue(live.nativeState === 'claimed' && !live.cancellationRequested && !live.result && !live.waiting && !live.dependency,
+              'work_inactive', 'Job execution has stopped or already reported', 409);
+          };
+          const pending = mutate(store, run, runTokens.get(id), async (...args) => {
+            checkJob(); const response = await api(...args); checkJob(); return response;
+          }, input);
           publications.set(key, pending);
           try { result = await pending; } finally { publications.delete(key); }
         }
@@ -501,18 +542,27 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
             publications.set(key, pending);
             try { result = await pending; } finally { publications.delete(key); }
           } else {
-            const target = `/api/issues/${encodeURIComponent(text(input.taskId, 'taskId'))}`;
+            const taskId = text(input.taskId, 'taskId');
+            const target = `/api/issues/${encodeURIComponent(taskId)}`;
             const task = await api(run, runTokens.get(id), 'GET', target);
-            requireValue(task.companyId === run.request.companyId && task.parentId === run.request.taskId,
-              'forbidden', 'Only children of this run task may be inspected', 403);
+            requireValue(task.companyId === run.request.companyId,
+              'forbidden', 'Task belongs to another company', 403);
+            requireValue(task.id === taskId, 'identity_mismatch', 'Backend returned another task', 409);
             const childRuns = store.runs().filter(item => item.request.companyId === run.request.companyId && item.request.taskId === task.id);
             const candidate = childRuns.find(item => item.result);
             const grant = coordinatorReviewGrant(store, run.request.companyId, task.id);
             result = { task, comments: await api(run, runTokens.get(id), 'GET', `${target}/comments`),
               relayReview: candidate ? { runId: candidate.id, candidate: candidate.result.candidate, summary: candidate.result.summary,
                 state: candidate.review?.status ?? null, interactionId: candidate.review?.interactionId ?? null,
-                grantId: grant?.request.reviewerBindingId === run.request.bindingId ? grant.id : null } : null };
+                grantId: task.parentId === run.request.taskId && grant?.request.parentTaskId === run.request.taskId &&
+                  grant.request.reviewerBindingId === run.request.bindingId ? grant.id : null } : null };
           }
+        }
+        else if (req.method === 'POST' && action === 'reference-lookup') {
+          requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);
+          requireValue(input.companyId === undefined, 'invalid_request', 'Company is derived from the job');
+          result = await lookupTaskReference(store, (method, path) => api(run, runTokens.get(id), method, path),
+            { ...input, companyId: run.request.companyId });
         }
         else if (req.method === 'GET' && action === 'tasks') {
           requireValue(runTokens.has(id), 'adapter_unavailable', 'Live adapter credentials are unavailable', 503);

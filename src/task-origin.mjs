@@ -15,7 +15,7 @@ export function taskOrigins(store) {
     if (operation.id !== row.id || operation.runId !== row.run_id || operation.state !== 'recorded' ||
       !validText(receipt?.id) || !request) continue;
     let companyId, parentRun;
-    if (operation.id.startsWith('operator-task:')) {
+    if (operation.id.startsWith('operator-task:') || operation.id.startsWith('routine-task:')) {
       companyId = request.companyId;
       if (!validText(companyId) || !validOrigin(request.origin) ||
         (receipt.companyId !== undefined && receipt.companyId !== companyId)) continue;

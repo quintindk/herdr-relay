@@ -92,7 +92,7 @@ class ToggleBoardTests(unittest.TestCase):
                 "plugin", "pane", "open", "--plugin", "quintindk.herdr-relay",
                 "--entrypoint", "work", "--placement", "split", "--target-pane", target,
                 "--direction", "right" if self.width >= 160 else "down",
-                "--cwd", anchor["cwd"], "--no-focus",
+                "--cwd", str(board.PLUGIN_ROOT), "--no-focus",
             ))
             self.sequence += 1
             opened = self.pane(f"new-{self.sequence}", f"new-terminal-{self.sequence}",
@@ -140,6 +140,16 @@ class ToggleBoardTests(unittest.TestCase):
         self.assertEqual(self.mutations()[-1], ("plugin", "pane", "close", "new-1"))
         self.assertEqual(self.panes, original)
         self.assertEqual(self.saved(), [self.other])
+
+    def test_cross_project_toggle_launches_from_plugin_installation(self):
+        self.panes["anchor-a"]["cwd"] = "/some other project/twd"
+        board.toggle()
+        opened = self.mutations()[-1]
+        root = Path(opened[opened.index("--cwd") + 1])
+        self.assertEqual(root, Path(board.__file__).resolve().parent.parent)
+        self.assertTrue((root / "scripts" / "plugin-launch.sh").is_file())
+        self.assertEqual(opened[opened.index("--target-pane") + 1], "anchor-a")
+        self.assertEqual(self.panes["anchor-a"]["cwd"], "/some other project/twd")
 
     def test_focused_context_overrides_environment_target(self):
         os.environ["HERDR_PLUGIN_CONTEXT_JSON"] = json.dumps({"focused_pane_id": "anchor-b"})

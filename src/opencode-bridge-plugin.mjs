@@ -26,6 +26,26 @@ const enrolArgs = {
   observedId: tool.schema.string().min(1).optional(), reserved: tool.schema.boolean().optional(),
 };
 
+function scheduleTools(execute) {
+  const id = tool.schema.string().min(1);
+  const definitions = {
+    preview: { cron: id, timezone: id.optional() },
+    create: { key: id, title: id.max(200), description: id, targetBindingId: id.optional().describe('Optional exact-chat target. Omit both target fields to create a persistent cron for this enrolled folder.'),
+      targetDirectory: id.optional().describe('Persistent cron owner: exact enrolled folder. Future occurrences follow its unique current chat across restarts. Do not also supply targetBindingId.'),
+      cron: id, timezone: id.optional(), projectId: id.optional(), parentTaskId: id.optional(),
+      relayReviewPolicy: tool.schema.enum(['human', 'none']).optional(), enabled: tool.schema.boolean().optional() },
+    list: {}, inspect: { scheduleId: id }, pause: { scheduleId: id, key: id },
+    resume: { scheduleId: id, key: id }, cancel: { scheduleId: id, key: id }, run: { scheduleId: id, key: id },
+    edit: { scheduleId: id, key: id, payload: tool.schema.object({ title: id.max(200).optional(), description: id.optional(),
+      relayReviewPolicy: tool.schema.enum(['none', 'human']).optional() }).strict() },
+  };
+  return Object.fromEntries(Object.entries(definitions).map(([action, args]) => [action === 'list' ? 'relay_schedules' : `relay_schedule_${action}`,
+    tool({ args, description: ['preview', 'list', 'inspect'].includes(action)
+      ? `Read-only recurring task schedule ${action}. Five-field numeric cron, default Africa/Johannesburg. No schedule or task is started.`
+      : `Explicit human-authorised schedule ${action}. State exact folder or chat target, timing, timezone and review policy visibly before calling. Omit both target fields to use this enrolled folder persistently across new chats; targetDirectory selects another authorised folder and targetBindingId explicitly pins one chat. Active Relay workers cannot manage schedules. Creation defaults paused; enabled true or resume enables NEW tasks. Cancellation stops future admission, not active work. Use stable keys.`,
+    execute: execute(`routine-${action}`) })]));
+}
+
 function taskTools(execute) {
   const id = tool.schema.string().min(1);
   const filters = {
@@ -209,9 +229,10 @@ export default async function relayBridge({ client, directory }, options = {}) {
       const source = [...snap.messages].reverse().find(item => item.info.role === 'user');
       const content = source?.parts.filter(part => part.type === 'text' && !part.synthetic && !part.ignored).map(part => part.text).join('\n');
       if (!source || source.info.id !== sourceId || !content?.trim()) throw new Error('Current native user message could not be verified');
-      await context.ask({ permission: action === 'delegate' ? 'relay_delegate' : action === 'prepare-worker' ? 'relay_worker_prepare' :
+      await context.ask({ permission: action.startsWith('routine-') ? `relay_schedule_${action.slice(8)}` : action === 'delegate' ? 'relay_delegate' : action === 'prepare-worker' ? 'relay_worker_prepare' :
         action === 'enrol-agent' ? 'relay_enrol_agent' : action.startsWith('task-') ? `relay_${action.replaceAll('-', '_')}` : 'relay_coordinator_review',
-        patterns: [args.taskId ?? args.payload?.title ?? args.targetBindingId ?? args.repository ?? args.directory ?? args.parentTaskId ?? args.grantId], always: [],
+        patterns: [action === 'routine-create' ? args.targetDirectory ?? args.targetBindingId ?? config.directory ?? config.conversationId
+          : args.scheduleId ?? args.taskId ?? args.payload?.title ?? args.targetBindingId ?? args.repository ?? args.directory ?? args.parentTaskId ?? args.grantId], always: [],
         metadata: { ...args, sourceMessageId: sourceId, sourceText: content } });
       const fresh = await snapshot();
       const latest = [...fresh.messages].reverse().find(item => item.info.role === 'user');
@@ -303,6 +324,11 @@ export default async function relayBridge({ client, directory }, options = {}) {
   };
   return {
     tool: {
+      ...scheduleTools(action => async (args, context) => {
+        if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+        if (['routine-preview', 'routine-list', 'routine-inspect'].includes(action)) return JSON.stringify(await rpc(action, await snapshot(false), args));
+        return delegate(args, context, action);
+      }),
       ...taskTools(action => async (args, context) => {
         if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
         if (['task-inspect', 'task-list', 'task-children', 'task-comments', 'task-activity', 'task-reference-lookup'].includes(action)) {
@@ -444,6 +470,7 @@ async function discoverBridge(input, configDirectory) {
   };
   return {
     tool: {
+      ...scheduleTools(action => execute(action === 'routine-list' ? 'relay_schedules' : `relay_schedule_${action.slice(8)}`)),
       ...taskTools(action => execute(`relay_${action.replaceAll('-', '_')}`)),
       relay_enrolment_candidates: tool({ description: 'List exact observed agents available for enrolment. Read-only; listing does not grant enrolment authority.', args: {}, execute: execute('relay_enrolment_candidates') }),
       relay_enrol_agent: tool({ description: 'Enrol an exact observed agent only on explicit human instruction. State the directory, exact candidate and any reservation visibly before calling. Resolve observedId from relay_enrolment_candidates and reuse the key on retries. Enrolment is not task assignment.',

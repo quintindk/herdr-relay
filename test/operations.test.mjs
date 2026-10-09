@@ -55,13 +55,13 @@ test('uncertain assignment can reconcile matching current backend state without 
   assert.equal(writes, 1);
 });
 
-test('task completion requires backend acceptance and cross-company writes are rejected', async t => {
+test('job completion follows its report and cross-company writes are rejected', async t => {
   const store = new Store(':memory:');
   t.after(() => store.close());
   const run = { id: 'relay', request: { companyId: 'company', bindingId: 'binding', taskId: 'task' } };
   await assert.rejects(mutate(store, run, 'token', async () => ({}), {
     key: 'done', kind: 'task.update', payload: { status: 'done' },
-  }), { code: 'acceptance_required' });
+  }), { code: 'execution_managed' });
   await assert.rejects(mutate(store, run, 'token', async () => ({ companyId: 'foreign' }), {
     key: 'answer', kind: 'question.answer', taskId: 'foreign-task', interactionId: 'question', payload: { answers: [] },
   }), { code: 'forbidden' });

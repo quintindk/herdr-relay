@@ -71,16 +71,58 @@ test('submission does not release a conversation, acceptance is not inferred', t
   assert.equal(store.dispatch(request('next')).nativeState, 'unclaimed');
 });
 
-test('cancelling claimed work requires settlement and rejects late submissions', t => {
+test('cancelling claimed work preserves reports without clearing cancellation or inferring completion', t => {
   const store = new Store(join(temporary(t), 'relay.sqlite'));
   t.after(() => store.close());
   store.register(binding());
   const { id } = store.dispatch(request());
   store.acknowledge(id);
   assert.equal(store.cancel(id).nativeState, 'claimed');
-  assert.throws(() => store.submit(id, submission), errorCode('invalid_submission'));
+  assert.deepEqual(store.submit(id, submission).result, submission);
+  assert.equal(store.run(id).cancellationRequested, true);
+  assert.throws(() => store.settle(id, { outcome: 'completed', evidence: 'Report submitted' }), errorCode('invalid_completion'));
   assert.throws(() => store.dispatch(request('next')), errorCode('conversation_busy'));
   store.settle(id, { outcome: 'cancelled', evidence: 'Operator observed interrupted turn' });
+  assert.equal(store.dispatch(request('next')).nativeState, 'unclaimed');
+});
+
+test('an acknowledged cancelled turn may record a report after native settlement without reopening work', t => {
+  const store = new Store(join(temporary(t), 'relay.sqlite'));
+  t.after(() => store.close());
+  store.register(binding());
+  const { id } = store.dispatch(request());
+  store.acknowledge(id); store.cancel(id);
+  store.settle(id, { outcome: 'cancelled', evidence: 'Observed native turn ended' });
+  const result = store.submit(id, submission);
+  assert.deepEqual(result.result, submission);
+  assert.equal(result.cancellationRequested, true);
+  assert.equal(result.nativeState, 'settled');
+  assert.equal(result.settlement.outcome, 'cancelled');
+  assert.equal(result.publication.state, 'pending');
+  assert.deepEqual(store.submit(id, submission).result, submission);
+  assert.throws(() => store.submit(id, { ...submission, candidate: 'different' }), errorCode('submission_conflict'));
+});
+
+test('operator attestation can settle requested native cancellation but cannot infer native success', t => {
+  const store = new Store(join(temporary(t), 'relay.sqlite'));
+  t.after(() => store.close());
+  store.register(binding());
+  const { id } = store.dispatch(request());
+  store.acknowledge(id);
+  store.save({ ...store.run(id), invocation: { messageId: 'native' },
+    native: { state: 'conflict', reason: 'concurrent_native_input' } }, 'test.native');
+  const cancelled = { outcome: 'cancelled', evidence: 'Exact original response exported as aborted with no active tools' };
+  assert.throws(() => store.settle(id, cancelled), errorCode('native_observation_required'));
+  store.cancel(id);
+  for (const outcome of ['completed', 'failed', 'waiting']) {
+    assert.throws(() => store.settle(id, { ...cancelled, outcome }), errorCode('native_observation_required'));
+  }
+  const result = store.settle(id, cancelled);
+  assert.equal(result.nativeState, 'settled');
+  assert.equal(result.cancellationRequested, true);
+  assert.equal(result.native.state, 'conflict');
+  assert.deepEqual(result.settlement, { outcome: 'cancelled', evidence: `Operator-attested native cancellation: ${cancelled.evidence}` });
+  assert.deepEqual(store.settle(id, cancelled), result);
   assert.equal(store.dispatch(request('next')).nativeState, 'unclaimed');
 });
 

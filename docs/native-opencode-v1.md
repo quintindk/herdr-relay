@@ -112,11 +112,20 @@ credentials are retained. Future schema versions are rejected before schema writ
 
 ## Cancellation and concurrency limits
 
-`operation cancel` persists cancellation and rejects late submissions. Before
+`operation cancel` persists cancellation and stops further work. Acknowledged work
+may still record an existing report, including after cancelled native settlement,
+without clearing cancellation, reopening the run or marking the task complete. Before
 native intent, cancellation settles immediately. After intent, Relay waits for a
 matching terminal response and native idle state. It does **not** call OpenCode's
 session-wide abort endpoint. Native interruption must currently be performed by
 the operator who controls that reserved conversation.
+
+For an already-requested cancellation that cannot reconcile normally, the operator
+may use `operation settle RUN --outcome cancelled --evidence EVIDENCE` after checking
+the exact original turn has ended. This is explicitly recorded as operator-attested
+cancellation, retains any attribution conflict and never certifies success or
+review acceptance. Workers cannot call the settlement route. Never attest from
+an idle pane alone or clear the cancellation to make submission succeed.
 
 The OpenCode API lacks atomic idle-and-send and invocation-scoped interruption.
 `exclusive: true` is an operator reservation, not a native lock. Observed concurrent

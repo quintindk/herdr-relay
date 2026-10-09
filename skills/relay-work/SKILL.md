@@ -6,6 +6,34 @@ license: MIT
 
 # Relay work protocol
 
+## Job Authority
+
+The assignment authorises execution of its stated work and necessary bookkeeping.
+Do not ask for a second approval of in-scope task changes. Execute, verify and
+report results and failures in chat. Default review mode is `none`, meaning no
+separate acceptance card, not absence of user feedback. Formal approval is opt-in.
+
+For job bookkeeping use `task create/update/comment/reference-attach RUN --key KEY
+--file FILE` and `task reference-lookup RUN --namespace NS --external-id ID` with the
+supplied context. Create human-owned intake with the relevant customer parent and
+stable source `externalReference`, not execution-child lineage. Read changes back.
+Comments are agent-attributed. Do not close active execution instead of submitting
+its result. Scope changes or real ambiguity need a decision; routine mutations do not.
+
+Scheduled routine occurrences are ordinary tasks with verified routine provenance.
+Read and acknowledge the supplied run as usual, preserve its review policy and
+finish the turn after submission. A timer is not human authority to create, enable,
+retarget or cancel schedules. Do not invoke `relay_schedule_*` from a worker turn.
+Do not mark future occurrences completed merely because this occurrence finished.
+
+Outside assigned work, an explicit human instruction may create and activate a cron
+for the current standing-enrolled folder. Omit both target fields on
+`relay_schedule_create` to make the timer persist across new chats, or supply an
+authorised `targetDirectory`. Folder setup does not require an open or idle chat;
+each occurrence selects one idle chat only when admitted and is then pinned there.
+Never replay an admitted occurrence into a new chat. `targetBindingId` deliberately
+selects exact-chat mode instead. This is not worker authority.
+
 Use `herdr-relay --context "$RELAY_CONTEXT"` or the exact CLI command supplied by
 the runtime. The context file holds credentials. Do not print or copy its contents.
 
@@ -13,6 +41,10 @@ the runtime. The context file holds credentials. Do not print or copy its conten
 
 - In an assigned run, `task list RUN` reads the company backlog under the worker's
   backend authority. `work list` lists invocations, not the general backlog.
+  `task inspect RUN --task TASK_ID` reads full task text and comments for any task
+  in that company, including unrelated, human-owned and terminal tasks. No child,
+  project or assignee restriction applies to this read. Inspection grants no
+  mutation, dependency or review authority.
   Reading a task does not assign it or authorise work outside the current brief.
 - In a human chat, use paginated `relay_task_list` for morning/general lookup,
   including human-owned and terminal tasks. `relay_tasks` is a legacy preview.
@@ -94,7 +126,8 @@ containing `mode: "none"` or `mode: "human"` and a specific `reason`. Use judgem
 based on the task and consequences. No-review still requires verified completion
 and publication; it does not bypass tool permissions or authorise external effects.
 When creating a delegated child, choose its `relayReviewPolicy` explicitly.
-Missing policy retains human review. The worker cannot downgrade a fixed policy.
+New jobs without a policy use chat output review. Existing explicit formal policies
+are retained until the user changes that workflow. The worker cannot downgrade one itself.
 Experimental coordinator review requires a prior explicit human grant and a child
 opted in at creation. `agent_decides` is not coordinator authority. Inspecting a
 child's result is not human approval and never permits self-acceptance. The root
@@ -103,6 +136,13 @@ parent's final review remains human. Never silently obtain or infer a grant.
 Retry identical requests with the same key. A changed payload requires a distinct
 attempt, not reuse of an old key. If a request is uncertain, inspect the exact run
 using `work inspect RUN` before proceeding. Respect cancellation and stop editing.
+
+Cancellation stops further work, not evidence recording. Already acknowledged work
+may submit its existing report after cancellation, including after cancelled native
+settlement. This preserves the report without clearing cancellation, reopening the
+run, completing the task or authorising more changes. Describe incomplete work.
+The local adapter's delivery deadline does not automatically cancel a persisted
+native invocation; explicit cancellation remains effective.
 
 Native completion, result publication, review and acceptance are separate states.
 Only the operator or verified harness observer can settle native execution. Never

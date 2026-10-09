@@ -109,7 +109,7 @@ export async function harnessDelegation(store, bridge, action, input, api) {
   const targetBridge = store.operation(`opencode-bridge:${targetBindingId}`);
   const payload = { title: text(input.title, 'title'), description: text(input.description, 'description'),
     assigneeAgentId: target.config.agentId, status: 'todo',
-    relayReviewPolicy: validateTaskPolicy(input.relayReviewPolicy === undefined ? 'human' : input.relayReviewPolicy) };
+    relayReviewPolicy: validateTaskPolicy(input.relayReviewPolicy === undefined ? 'none' : input.relayReviewPolicy) };
   if (input.parentTaskId !== undefined) payload.parentId = text(input.parentTaskId, 'parentTaskId');
   if (input.grantId !== undefined) payload.relayReviewGrantId = text(input.grantId, 'grantId');
   // Recorded retries still pass through createOperatorTask's exact-payload check,

@@ -87,8 +87,12 @@ export async function requestReviewDisposition(store, id, token, api) {
     const latest = store.runs().find(item => item.request.companyId === run.request.companyId && item.request.taskId === run.request.taskId && item.result);
     requireValue(latest?.id === run.id && !store.runs().some(item => item.id !== run.id && item.request.companyId === run.request.companyId &&
       item.request.taskId === run.request.taskId && item.nativeState !== 'settled'), 'stale_candidate', 'Newer or unsettled work prevents no-review completion', 409);
-    requireValue(['in_progress', 'todo'].includes(issue.status), 'disposition_conflict', 'Cannot override a blocked or review disposition', 409);
+    const chatTransition = store.operation(`chat-review-transition:${run.id}`);
+    requireValue(['in_progress', 'todo'].includes(issue.status) || ['in_review', 'blocked'].includes(issue.status) &&
+      chatTransition?.state === 'withdrawn' && chatTransition.candidate === run.result.candidate,
+    'disposition_conflict', 'Cannot override a blocked or unrelated review disposition', 409);
     requireValue(!issue.activeRecoveryAction && !issue.executionBlocker &&
+      !issue.blockedBy?.length && !issue.blockedByIssueIds?.length &&
       (!issue.checkoutRunId || issue.checkoutRunId === (run.backendRunId ?? run.request.runId)), 'disposition_conflict', 'Task has another execution or recovery owner', 409);
     const interactions = await api(run, token, 'GET', `${path}/interactions`);
     requireValue(Array.isArray(interactions) && !interactions.some(item => item.status === 'pending'), 'review_required', 'Pending interaction prevents no-review completion', 409);
@@ -129,6 +133,7 @@ export async function requestReviewDisposition(store, id, token, api) {
 export async function reconcileCompletions(store, operatorApi, locks = new Map()) {
   const operations = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'review-disposition:%'").all().map(row => JSON.parse(row.data));
   for (const disposition of operations) {
+    if (disposition.state === 'withdrawn') continue;
     const id = `completion:${disposition.runId}`;
     let completion = store.operation(id);
     if (['recorded', 'skipped'].includes(completion?.state)) continue;

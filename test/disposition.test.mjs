@@ -14,7 +14,8 @@ test('published result obtains idempotent review interaction before confirmed is
   const interactions = []; const calls = [];
   const operations = new Map();
   const store = { run: () => run, runs: () => [run], recordReview: (_, review) => (run = { ...run, review }),
-    db: { prepare: () => ({ all: () => [] }) },
+    db: { prepare: () => ({ all: () => [{ data: JSON.stringify({ id: 'operator-task:formal', state: 'recorded',
+      request: { companyId: 'company', relayReviewPolicy: 'human' }, receipt: { id: 'task' } }) }] }) },
     operation: id => operations.get(id), saveOperation: value => { operations.set(value.id, value); return value; } };
   let lost = true;
   const api = async (_, token, method, path, body) => {
@@ -46,6 +47,8 @@ test('published result obtains idempotent review interaction before confirmed is
 });
 
 function fixture(store) {
+  store.saveOperation({ id: 'operator-task:formal', runId: '', state: 'recorded',
+    request: { companyId: 'company', relayReviewPolicy: 'human' }, receipt: { id: 'task' } });
   store.register({ id: 'worker', companyId: 'company', agentId: 'agent', harness: 'opencode', instanceId: 'instance', conversationId: 'native' });
   let run = store.dispatch({ bindingId: 'worker', bindingRevision: 1, companyId: 'company', agentId: 'agent', taskId: 'task', runId: 'backend' });
   store.acknowledge(run.id);

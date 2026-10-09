@@ -1,4 +1,4 @@
-import { canonical, requireValue, text } from './protocol.mjs';
+import { canonical, digest, requireValue, text } from './protocol.mjs';
 
 export async function recoverBackend(store, api, input) {
   const run = store.run(text(input.runId, 'runId'));
@@ -19,8 +19,12 @@ export async function recoverBackend(store, api, input) {
   'recovery_not_authorised', 'Original backend run must be terminal for the same identity', 409);
   const agentPath = `/api/agents/${encodeURIComponent(run.request.agentId)}`;
   const agent = await api('GET', agentPath);
+  const routed = store.operation(`routine-task:${digest([run.request.companyId, run.request.taskId])}`);
+  const routine = routed?.routingAgentId && store.operation(routed.scheduleId);
   requireValue(agent.companyId === run.request.companyId && agent.adapterType === 'herdr_relay' &&
-    agent.adapterConfig.bindingId === run.request.bindingId,
+    (routine ? routine.router?.agentId === run.request.agentId &&
+      canonical(agent.adapterConfig.relayRoutineScope) === canonical(routine.persistentScope) &&
+      agent.adapterConfig.relayRoutineMarker === routine.router.marker : agent.adapterConfig.bindingId === run.request.bindingId),
   'recovery_identity_mismatch', 'Backend agent no longer targets this Relay binding', 409);
   if (!operation) operation = store.saveOperation({ id, runId: run.id, state: 'intent',
     originalId, adapterConfig: agent.adapterConfig, runtimeConfig: agent.runtimeConfig });

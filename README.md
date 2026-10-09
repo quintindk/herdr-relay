@@ -24,6 +24,8 @@ team hierarchy or project to participate.
 - Owned worktree provisioning, idempotent commit finalisation and guarded cleanup.
 - Acceptance-driven retirement and recovery after Relay or Paperclip restart.
 - Bounded monitoring schedules and atomic source checkpoints.
+- Native cron routines with persistent folder ownership, stable routing agents,
+  and per-occurrence conversation pinning across new chats.
 - Herdr work/inbox pane, placement reconciliation and Linux systemd installation.
 - Per-node SSH administration and remote adapter attachment.
 
@@ -108,6 +110,8 @@ These additions have local automated coverage, not live workflow certification.
 
 ## Documentation
 
+- [Cron routines](docs/cron-routines.md): explicit Paperclip-backed recurring tasks
+  with paused creation, timezone previews and pinned native targets.
 - [Daily task tracker](docs/daily-task-tracker.md): query limits and completeness,
   human capture/edit/comment/complete/reopen/cancel, external references, revision
   checks and uncertain writes. Fixture coverage is not live workflow certification.

@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { call, credentials } from './client.mjs';
-import { requireValue } from './protocol.mjs';
+import { canonical, requireValue } from './protocol.mjs';
 
 export const type = 'herdr_relay';
 export const label = 'Herdr Relay';
@@ -9,7 +9,8 @@ Requires a local Relay service. Configure relayContextFile with an operator
 credential file, bindingId, current bindingRevision, and timeoutSec (default 300).
 Bindings select explicit CLI pull with operator settlement, or reserved native
 delivery with message-correlated native settlement.
-timeoutSec requests cancellation, but cannot force an unverified native stop.
+timeoutSec bounds delivery waiting. After a native invocation is persisted,
+elapsed time alone does not cancel it. Explicit cancellation remains supported.
 Invocations require a Paperclip task. Submission records a result comment.
 Questions, review and acceptance use separate commands and backend interactions.`;
 
@@ -25,15 +26,20 @@ export async function execute(ctx) {
   const connection = credentials(ctx.config.relayContextFile);
   const taskId = ctx.context.taskId ?? ctx.context.issueId;
   requireValue(typeof taskId === 'string' && taskId.length > 0, 'task_required', 'Relay requires an issue/task invocation');
-  const timeoutSec = ctx.config.timeoutSec ?? 300;
-  requireValue(Number.isFinite(timeoutSec) && timeoutSec > 0, 'invalid_config', 'timeoutSec must be positive');
+  const folder = ctx.config.relayRoutineScope;
+  requireValue(!folder || folder.companyId === ctx.agent.companyId && typeof folder.directory === 'string',
+    'invalid_config', 'Persistent routine scope must match the backend company');
+  const timeoutSec = ctx.config.timeoutSec ?? (folder ? Infinity : 300);
+  requireValue((folder && timeoutSec === Infinity) || Number.isFinite(timeoutSec) && timeoutSec > 0,
+    'invalid_config', 'timeoutSec must be positive');
   const started = Date.now();
   await ctx.onCancellationReady?.();
   ctx.onDispatch?.();
   const dispatch = {
-    bindingId: ctx.config.bindingId, bindingRevision: ctx.config.bindingRevision ?? 1,
+    ...(!folder ? { bindingId: ctx.config.bindingId, bindingRevision: ctx.config.bindingRevision ?? 1 } : {}),
     companyId: ctx.agent.companyId, agentId: ctx.agent.id,
     runId: ctx.runId, taskId,
+    ...(folder ? { reportedOccurrenceNoop: true } : {}),
     ...(ctx.context.relayScheduleId || ctx.context.paperclipWake?.relayScheduleId
       ? { scheduleId: ctx.context.relayScheduleId ?? ctx.context.paperclipWake.relayScheduleId } : {}),
   };
@@ -42,7 +48,7 @@ export async function execute(ctx) {
   let timedOut = false;
   let lastError;
   while (true) {
-    timedOut ||= Date.now() - started >= timeoutSec * 1000;
+    if (!run) timedOut ||= Date.now() - started >= timeoutSec * 1000;
     if (!run && !dispatchMayExist && (ctx.signal?.aborted || timedOut)) {
       // A reconnect can arrive already cancelled. Look up existing work without
       // creating it, but a rejected review dispatch needs no reconciliation.
@@ -71,16 +77,23 @@ export async function execute(ctx) {
         // A lost response may already have persisted the dispatch. Replay only
         // this immutable backend-run key, never manufacture a replacement run.
         dispatchMayExist = true;
+        const recovery = folder && ctx.config.recoverRelayRunId
+          ? await call(connection, 'GET', `/runs/${encodeURIComponent(ctx.config.recoverRelayRunId)}`) : null;
         run = ctx.config.recoverRelayRunId
-          ? await call(connection, 'POST', `/runs/${encodeURIComponent(ctx.config.recoverRelayRunId)}/recover`, { ...dispatch, token: ctx.authToken })
+          ? await call(connection, 'POST', `/runs/${encodeURIComponent(ctx.config.recoverRelayRunId)}/recover`, { ...dispatch,
+            ...(recovery ? { bindingId: recovery.request.bindingId, bindingRevision: recovery.request.bindingRevision } : {}), token: ctx.authToken })
           : await call(connection, 'POST', '/runs', dispatch);
+        if (run.skipped) return { exitCode: 0, signal: null, timedOut: false,
+          summary: 'This routine occurrence already published its result; no new native work was started.',
+          sessionParams: { conversationId: run.conversationId }, sessionDisplayId: run.conversationId,
+          resultJson: { skipped: true, reason: run.reason, relayRunId: run.relayRunId } };
         await ctx.onLog('stdout', `${JSON.stringify({ relayRunId: run.id, deliveryState: run.deliveryState })}\n`);
       }
       run = await call(connection, 'GET', `/runs/${run.id}`);
       requireValue((run.backendRunId ?? run.request.runId) === ctx.runId,
         'stale_backend_run', 'This adapter invocation has been replaced', 409);
-      timedOut ||= Date.now() - started >= timeoutSec * 1000;
-      if ((ctx.signal?.aborted || timedOut) && run.nativeState !== 'settled') {
+      if (!run.invocation) timedOut ||= Date.now() - started >= timeoutSec * 1000;
+      if ((ctx.signal?.aborted || timedOut && !run.invocation) && run.nativeState !== 'settled') {
         run = await call(connection, 'POST', `/runs/${run.id}/cancel`, { runId: ctx.runId });
       }
       // Apply known cancellation before making a fresh native run deliverable.
@@ -110,7 +123,7 @@ export async function execute(ctx) {
       if (error.code === 'stale_backend_run') throw error;
       // A definitive dispatch rejection needs operator correction, not retries.
       // Once a run exists, loss of access is still not proof that work stopped.
-      if (!run && error.code === 'review_decision_uncertain') dispatchMayExist = false;
+      if (!run && ['review_decision_uncertain', 'routine_target_busy'].includes(error.code)) dispatchMayExist = false;
       else if (!run && error.status >= 400 && error.status < 500) throw error;
       // A transport failure is not proof of native termination. Keep the run
       // supervised until Relay can reconcile it, without exposing credentials.
@@ -119,7 +132,7 @@ export async function execute(ctx) {
       lastError = code;
     }
     if (!run && !dispatchMayExist) {
-      await delay(Math.max(0, Math.min(250, timeoutSec * 1000 - (Date.now() - started))), undefined,
+      await delay(Math.max(0, Math.min(folder ? 1000 : 250, timeoutSec * 1000 - (Date.now() - started))), undefined,
         { signal: ctx.signal }).catch(error => { if (error.name !== 'AbortError') throw error; });
     } else await delay(250);
   }
@@ -153,6 +166,16 @@ export function createServerAdapter() {
         }
         requireValue(typeof ctx.config.relayContextFile === 'string', 'invalid_config', 'relayContextFile is required');
         const connection = credentials(ctx.config.relayContextFile);
+        if (ctx.config.relayRoutineScope) {
+          const scope = ctx.config.relayRoutineScope;
+          requireValue(scope.companyId === ctx.companyId && typeof scope.directory === 'string', 'invalid_config', 'Folder scope must match company');
+          const schedules = await call(connection, 'POST', '/routines/manage', { action: 'list', companyId: ctx.companyId });
+          requireValue(schedules.routines.some(routine => (!ctx.agentId || routine.routerAgentId === ctx.agentId) &&
+            canonical(routine.persistentScope) === canonical(scope)),
+            'routine_router_mismatch', 'No persistent routine owns this backend agent');
+          return { adapterType: type, status: 'pass', checks: [{ level: 'info', code: 'persistent_routine',
+            message: 'Folder-owned cron resolves a unique enrolled conversation at delivery; offline work remains pending.' }], testedAt: new Date().toISOString() };
+        }
         const bindings = await call(connection, 'GET', '/bindings');
         const binding = bindings.find(binding => binding.id === ctx.config.bindingId &&
           binding.revision === (ctx.config.bindingRevision ?? 1) && binding.config.companyId === ctx.companyId);

@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { workerContext, promptFor } from './supervisor.mjs';
 import { observe } from './opencode.mjs';
+import { assertRoutineTask } from './routine-execution.mjs';
 
 export function bridgeForToken(store, token) {
   return store.db.prepare("SELECT data FROM operations WHERE id LIKE 'opencode-bridge:%'").all()
@@ -227,6 +228,7 @@ export function bridgeRequest(store, bridgeId, action, input, ready) {
       input.priorUserIds.every(id => typeof id === 'string'), 'native_busy', 'Validated idle snapshot required', 409);
     if (active.invocation || active.cancellationRequested) return { run: active, dispatch: false };
     store.assertWorkerAdmission(identity.bindingId);
+    assertRoutineTask(store, identity.bindingId, active.request.taskId);
     const run = store.beginNative(active.id, promptFor(active, bridge.workerContext).trim(), input.priorUserIds);
     store.saveOperation({ ...bridge, ready: false });
     return { run, dispatch: Boolean(run.invocation) };

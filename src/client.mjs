@@ -12,9 +12,9 @@ export function credentials(path = process.env.RELAY_CONTEXT) {
   return { socketPath: join(dir, 'relay.sock'), token: readFileSync(join(dir, 'admin-token'), 'utf8').trim() };
 }
 
-export function call(connection, method, path, body) {
+export function call(connection, method, path, body, { signal } = {}) {
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath: connection.socketPath, path, method,
+    const req = request({ socketPath: connection.socketPath, path, method, signal,
       headers: { Authorization: `Bearer ${connection.token}`, 'Content-Type': 'application/json' } }, res => {
       let text = '';
       res.setEncoding('utf8');

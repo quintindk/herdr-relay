@@ -1,11 +1,12 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
-import { validateTaskPolicy } from './task-policy.mjs';
+import { resultPolicy, validateTaskPolicy } from './task-policy.mjs';
+import { attachTaskReference, finishTaskReference, lookupTaskReference, reserveTaskReference, validateTaskReference } from './task-references.mjs';
 import { taskOrigins } from './task-origin.mjs';
 import { validateCoordinatorGrant } from './coordinator-review.mjs';
 
 function taskPayload(value, idempotencyKey) {
   requireValue(value && typeof value === 'object' && !Array.isArray(value), 'invalid_request', 'Task payload required');
-  const allowed = ['title', 'description', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'status', 'priority', 'relayReviewPolicy', 'relayReviewGrantId'];
+  const allowed = ['title', 'description', 'assigneeAgentId', 'assigneeUserId', 'parentId', 'projectId', 'blockedByIssueIds', 'unblockDescriptor', 'status', 'priority', 'relayReviewPolicy', 'relayReviewGrantId'];
   requireValue(Object.keys(value).every(key => allowed.includes(key)), 'invalid_request', 'Unsupported task creation field');
   requireValue(!(value.assigneeAgentId && value.assigneeUserId), 'invalid_request', 'Choose a human or agent assignee, not both');
   requireValue(value.description === undefined || typeof value.description === 'string', 'invalid_request', 'Description must be a string');
@@ -72,7 +73,7 @@ export async function createOperatorTask(store, api, input) {
   const key = text(input.key, 'key');
   const id = `operator-task:${digest([companyId, key])}`;
   const request = { companyId, body: taskPayload(input.payload, `relay-operator:${digest([companyId, key])}`) };
-  if (input.payload.relayReviewPolicy !== undefined) request.relayReviewPolicy = input.payload.relayReviewPolicy;
+  request.relayReviewPolicy = input.payload.relayReviewPolicy ?? 'none';
   if (input.payload.relayReviewGrantId !== undefined) request.relayReviewGrantId = input.payload.relayReviewGrantId;
   if (input.origin !== undefined) {
     const origin = input.origin;
@@ -90,6 +91,7 @@ export async function createOperatorTask(store, api, input) {
   }
   let operation = store.operation(id);
   if (operation) {
+    if (input.payload.relayReviewPolicy === undefined && operation.request.relayReviewPolicy === undefined) delete request.relayReviewPolicy;
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Task creation key has a different payload', 409);
     if (operation.state === 'recorded') return operation;
   }
@@ -151,6 +153,9 @@ export async function mutate(store, run, token, api, input) {
   const taskId = input.taskId ?? run.request.taskId;
   text(taskId, 'taskId');
   const taskPath = `/api/issues/${encodeURIComponent(taskId)}`;
+  if (kind === 'task.reference-attach') return attachTaskReference(store, (method, path, body) => api(run, token, method, path, body), {
+    ...input.payload, companyId: run.request.companyId, taskId, key,
+  }, { authority: { kind: 'job', companyId: run.request.companyId, runId: run.id } });
   if (taskId !== run.request.taskId) {
     const target = await api(run, token, 'GET', taskPath);
     requireValue(target.companyId === run.request.companyId, 'forbidden', 'Target task belongs to another company', 403);
@@ -159,8 +164,22 @@ export async function mutate(store, run, token, api, input) {
   let path;
   let body;
   let replaySafe = false;
+  let reference;
+  let operationId = digest([run.request.companyId, run.request.bindingId, kind, key]);
   if (kind === 'task.create') {
-    body = taskPayload(input.payload, `relay:${run.request.bindingId}:${digest(key)}`);
+    const { externalReference, ...payload } = input.payload ?? {};
+    if (externalReference !== undefined) {
+      reference = validateTaskReference({ ...externalReference, companyId: run.request.companyId });
+      operationId = digest(['job-task-reference', reference.companyId, reference.namespace, reference.externalId]);
+      const existing = await lookupTaskReference(store, (method, path) => api(run, token, method, path), {
+        companyId: reference.companyId, namespace: reference.namespace, externalId: reference.externalId,
+      });
+      if (existing?.state === 'attached') {
+        reserveTaskReference(store, reference, operationId);
+        return { id: operationId, runId: run.id, state: 'recorded', receipt: existing.task, reusedExisting: true };
+      }
+    }
+    body = taskPayload(payload, reference ? `relay-reference:${operationId}` : `relay:${run.request.bindingId}:${digest(key)}`);
     path = `/api/companies/${encodeURIComponent(run.request.companyId)}/issues`;
     replaySafe = true;
   } else if (kind === 'task.assign') {
@@ -173,26 +192,34 @@ export async function mutate(store, run, token, api, input) {
   } else if (kind === 'task.update') {
     requireValue(input.payload && typeof input.payload === 'object', 'invalid_request', 'Task update required');
     body = {};
-    for (const field of ['title', 'description', 'priority', 'blockedByIssueIds']) {
+    for (const field of ['title', 'description', 'priority', 'parentId', 'blockedByIssueIds', 'unblockDescriptor']) {
       if (input.payload[field] !== undefined) body[field] = input.payload[field];
     }
     if (input.payload.status !== undefined) {
       requireValue(['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'].includes(input.payload.status),
         'invalid_status', 'Unsupported task status');
       if (input.payload.status === 'done') {
+        requireValue(taskId !== run.request.taskId, 'execution_managed', 'Submit the job result; execution completion follows verified settlement', 409);
+        requireValue(!store.runs().some(item => item.request.companyId === run.request.companyId &&
+          item.request.taskId === taskId && item.nativeState !== 'settled'), 'task_busy', 'Target has active work', 409);
         const latest = store.runs().find(item => item.request.companyId === run.request.companyId && item.request.taskId === taskId && item.result);
-        requireValue(latest?.review?.status === 'accepted' && latest.nativeState === 'settled',
+        if (latest && ['human', 'coordinator'].includes(resultPolicy(store, latest, latest.result))) {
+          requireValue(latest.review?.status === 'accepted' && latest.nativeState === 'settled',
           'acceptance_required', 'Latest candidate must be accepted and settled before task completion', 409);
-        const interactions = await api(run, token, 'GET', `${taskPath}/interactions`);
-        const accepted = interactions.find(item => item.id === latest.review.interactionId);
-        requireValue(accepted?.status === 'accepted' && accepted.payload?.target?.revisionId === latest.result.candidate,
+          const interactions = await api(run, token, 'GET', `${taskPath}/interactions`);
+          const accepted = interactions.find(item => item.id === latest.review.interactionId);
+          requireValue(accepted?.status === 'accepted' && accepted.payload?.target?.revisionId === latest.result.candidate,
           'acceptance_required', 'Backend must confirm exact candidate acceptance', 409);
+        }
       }
       body.status = input.payload.status;
     }
     requireValue(Object.keys(body).length > 0, 'invalid_request', 'No supported task update fields');
     method = 'PATCH';
     path = taskPath;
+  } else if (kind === 'task.comment') {
+    body = { body: text(input.payload?.body, 'comment.body') };
+    path = `${taskPath}/comments`;
   } else if (kind === 'question.answer') {
     const interactionId = text(input.interactionId, 'interactionId');
     const interactions = await api(run, token, 'GET', `${taskPath}/interactions`);
@@ -204,20 +231,30 @@ export async function mutate(store, run, token, api, input) {
   } else {
     requireValue(false, 'unsupported_operation', 'Unsupported work operation');
   }
-  const operationId = digest([run.request.companyId, run.request.bindingId, kind, key]);
   const request = { kind, method, path, body };
-  if (kind === 'task.create' && input.payload.relayReviewPolicy !== undefined) request.relayReviewPolicy = input.payload.relayReviewPolicy;
+  if (kind === 'task.create') request.relayReviewPolicy = input.payload.relayReviewPolicy ?? 'none';
+  if (reference) request.externalReference = reference;
   if (kind === 'task.create' && input.payload.relayReviewGrantId !== undefined) request.relayReviewGrantId = input.payload.relayReviewGrantId;
   let operation = store.operation(operationId);
   if (operation) {
+    if (kind === 'task.create' && input.payload.relayReviewPolicy === undefined && operation.request.relayReviewPolicy === undefined) delete request.relayReviewPolicy;
     requireValue(canonical(operation.request) === canonical(request), 'operation_conflict', 'Operation key has a different payload', 409);
-    if (operation.state === 'recorded') return operation;
+    if (operation.state === 'recorded') {
+      if (reference) finishTaskReference(store, reference, operationId, operation.receipt.id);
+      return operation;
+    }
     if (!replaySafe) {
       if (kind === 'task.assign' || kind === 'task.update') {
         const current = await api(run, token, 'GET', path);
         if (Object.entries(body).every(([key, value]) => canonical(current[key]) === canonical(value))) {
           return store.saveOperation({ ...operation, state: 'recorded', receipt: current, reconciled: true });
         }
+      } else if (kind === 'task.comment') {
+        const comments = await api(run, token, 'GET', path);
+        requireValue(Array.isArray(comments), 'invalid_backend_response', 'Expected comments array', 502);
+        const matches = comments.filter(comment => comment.body === body.body && comment.authorAgentId === run.request.agentId &&
+          comment.createdByRunId === operation.backendRunId);
+        if (matches.length === 1) return store.saveOperation({ ...operation, state: 'recorded', receipt: matches[0], reconciled: true });
       } else if (kind === 'question.answer') {
         const interactions = await api(run, token, 'GET', `${taskPath}/interactions`);
         const current = interactions.find(item => item.id === input.interactionId);
@@ -239,7 +276,13 @@ export async function mutate(store, run, token, api, input) {
       if (operation.state === 'recorded') return operation;
     }
   }
-  if (!operation) operation = store.saveOperation({ id: operationId, runId: run.id, request, state: 'uncertain' });
+  if (reference) reserveTaskReference(store, reference, operationId);
+  if (!operation) operation = store.saveOperation({ id: operationId, runId: run.id, request, state: 'uncertain',
+    ...(kind === 'task.comment' ? { backendRunId: run.backendRunId ?? run.request.runId } : {}) });
   const receipt = await api(run, token, method, path, body);
+  if (reference) {
+    requireValue(receipt?.id && receipt.companyId === run.request.companyId, 'invalid_backend_response', 'Created task must belong to this company', 502);
+    finishTaskReference(store, reference, operationId, receipt.id);
+  }
   return store.saveOperation({ ...operation, state: 'recorded', receipt });
 }

@@ -37,7 +37,9 @@ const help = `herdr-relay (development)
   work ask RUN --key KEY --question-file FILE
   work interactions RUN
   task list RUN  [worker]
-  task inspect RUN --task CHILD_ID  [worker]
+  task inspect RUN --task TASK_ID  [worker, same-company task and comments]
+  task comment|reference-attach RUN --task TASK_ID --key KEY --file FILE
+  task reference-lookup RUN --namespace NAMESPACE --external-id ID
   work wait-child RUN --task CHILD_ID
   work wait-children RUN --file FILE  (JSON: {"taskIds":["CHILD_ID",...]})
   task create RUN --key KEY --file task.json
@@ -79,6 +81,9 @@ const help = `herdr-relay (development)
   install --paperclip-url URL [--state-dir DIR] [--backend-context FILE] [--herdr-config FILE]
   uninstall [--state-dir DIR]
   schedule create|stop --file schedule.json
+  routine preview --file cron.json
+  routine create|list|inspect|pause|resume|cancel|run --file routine.json
+    Routine files include companyId, plus scheduleId/key as applicable. Create defaults paused.
   placement bind|reconcile --file placement.json
   operation inspect OPERATION_ID
   operation list
@@ -110,7 +115,8 @@ export async function main(args) {
   if (values.company !== undefined) requireValue(group === 'task' && (query || humanMutation || ['create', 'capture', 'inspect'].includes(action)) && positionals.length === 2,
     'invalid_request', '--company is only valid for runless operator task commands');
   for (const option of ['project', 'status', 'agent', 'user', 'parent', 'limit', 'cursor', 'from', 'to', 'namespace', 'external-id']) {
-    if (values[option] !== undefined) requireValue(group === 'task' && values.company && query && queryOptions[action].includes(option),
+    const workerReference = group === 'task' && id && action === 'reference-lookup' && ['namespace', 'external-id'].includes(option);
+    if (values[option] !== undefined) requireValue(workerReference || group === 'task' && values.company && query && queryOptions[action].includes(option),
       'invalid_request', `--${option} is not supported for this command`);
   }
   if (group === 'task' && values.company !== undefined) {
@@ -160,7 +166,7 @@ export async function main(args) {
   const connection = credentials(values.context);
   if (group === 'board') {
     requireValue(!(values.json && values.watch), 'invalid_request', 'Choose --json or --watch');
-    const read = () => call(connection, 'GET', '/task-board');
+    const read = signal => call(connection, 'GET', '/task-board', undefined, { signal });
     if (values.watch) await watchTaskBoard(read);
     else {
       const value = await read();
@@ -191,6 +197,13 @@ export async function main(args) {
   else if (group === 'schedule' && ['create', 'stop'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', action === 'create' ? '/schedules' : '/schedules/stop', JSON.parse(readFileSync(values.file, 'utf8')));
+  }
+  else if (group === 'routine' && ['preview', 'create', 'list', 'inspect', 'pause', 'resume', 'cancel', 'run'].includes(action)) {
+    requireValue(values.file && !id, 'invalid_request', 'Routine commands require --file');
+    const input = JSON.parse(readFileSync(values.file, 'utf8'));
+    requireValue(input && typeof input === 'object' && !Array.isArray(input) && input.action === undefined, 'invalid_request', 'Action comes from the command');
+    result = await call(connection, 'POST', action === 'preview' ? '/routines/preview' : '/routines/manage',
+      action === 'preview' ? input : { ...input, action });
   }
   else if (group === 'runtime' && ['launch', 'stop', 'resume'].includes(action)) {
     requireValue(values.file, 'invalid_request', '--file is required');
@@ -353,6 +366,12 @@ export async function main(args) {
       { ...details, action: action === 'reference-attach' ? 'attach' : action === 'reassign' ? 'assign' : action,
       companyId: values.company, taskId: values.task, ...(action === 'inspect' ? {} : { key: values.key }) });
   }
+  else if (group === 'task' && action === 'reference-lookup' && id) {
+    requireValue(values.namespace && values['external-id'], 'invalid_request', '--namespace and --external-id are required');
+    result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/reference-lookup`, {
+      namespace: values.namespace, externalId: values['external-id'],
+    });
+  }
   else if (group === 'task' && action === 'list' && id) result = await call(connection, 'GET', `/runs/${encodeURIComponent(id)}/tasks`);
   else if (group === 'work' && action === 'wait-children' && id) {
     requireValue(values.file, 'invalid_request', '--file is required');
@@ -368,7 +387,7 @@ export async function main(args) {
       companyId: values.company, key: values.key, payload: JSON.parse(readFileSync(values.file, 'utf8')),
     });
   }
-  else if (id && ((group === 'task' && ['create', 'assign', 'update'].includes(action)) || (group === 'work' && action === 'answer'))) {
+  else if (id && ((group === 'task' && ['create', 'assign', 'update', 'comment', 'reference-attach'].includes(action)) || (group === 'work' && action === 'answer'))) {
     requireValue(values.file, 'invalid_request', '--file is required');
     result = await call(connection, 'POST', `/runs/${encodeURIComponent(id)}/mutate`, {
       key: values.key, kind: group === 'task' ? `task.${action}` : 'question.answer',

@@ -173,15 +173,27 @@ test('deep task chains do not recurse and rendered indentation stays bounded', (
 
 function streams(tty = true) {
   const input = new EventEmitter(); const output = new EventEmitter();
-  input.isTTY = output.isTTY = tty; input.isRaw = false; input.paused = true;
+  input.isTTY = output.isTTY = tty; input.isRaw = false; input.paused = true; input.readableFlowing = null;
   input.raw = []; input.setRawMode = flag => { input.isRaw = flag; input.raw.push(flag); };
-  input.resume = () => { input.paused = false; }; input.pause = () => { input.paused = true; };
+  input.resume = () => { input.paused = false; input.readableFlowing = true; };
+  input.pause = () => { input.paused = true; input.readableFlowing = false; };
   input.isPaused = () => input.paused;
   output.columns = 100; output.rows = 24; output.chunks = [];
   output.write = text => { output.chunks.push(text); output.emit('written', text); return true; };
   return { input, output };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+function screen(output) {
+  let lines = [];
+  for (const chunk of output.chunks) {
+    if (chunk.includes('\x1b[2J')) lines = stripVTControlCharacters(chunk).split('\r\n');
+    else for (const match of chunk.matchAll(/\x1b\[(\d+);1H([\s\S]*?)(?=\x1b\[\d+;1H|$)/g)) {
+      lines[Number(match[1]) - 1] = stripVTControlCharacters(match[2]);
+    }
+  }
+  return lines.join('\n');
+}
 
 test('non-TTY reads exactly once, remains ASCII/plain and never touches raw mode', async () => {
   const io = streams(false); let reads = 0;
@@ -208,7 +220,7 @@ test('TTY navigation, folding, search, details, idle/completed toggles, resize a
   const running = watchTaskBoard(async () => sample(), { ...io, interval: 60_000 });
   t.after(() => io.input.emit('data', 'q'));
   await tick();
-  const latest = () => stripVTControlCharacters(io.output.chunks.at(-1));
+  const latest = () => screen(io.output);
   io.input.emit('data', ' '); assert.doesNotMatch(latest(), /Choose release/);
   io.input.emit('data', '\r'); assert.match(latest(), /Choose release/);
   io.input.emit('data', '\x1b['); io.input.emit('data', 'Bj\t');
@@ -237,16 +249,62 @@ test('failed and malformed refreshes retain the last good snapshot with explicit
   t.after(() => io.input.emit('data', 'q'));
   await tick(); io.input.emit('data', 'r'); await tick();
   assert.match(io.output.chunks.at(-1), /OFFLINE \/ last good 2m ago \/ network unavailable/);
-  assert.match(io.output.chunks.at(-1), /Build engine/);
+  assert.match(screen(io.output), /Build engine/);
   io.input.emit('data', 'r'); await tick();
-  assert.match(io.output.chunks.at(-1), /OFFLINE/); assert.match(io.output.chunks.at(-1), /Build engine/);
+  assert.match(screen(io.output), /OFFLINE/); assert.match(screen(io.output), /Build engine/);
   io.input.emit('data', 'r'); await tick(); assert.doesNotMatch(io.output.chunks.at(-1), /OFFLINE/);
   io.input.emit('data', 'q'); await running;
   assert.equal(calls, 4);
 });
 
+test('unchanged refreshes emit nothing and navigation repaints only the two selected rows', async t => {
+  const io = streams(); const value = { ...sample(), fetchedAt: null };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000 });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick();
+  const writes = io.output.chunks.length;
+  io.input.emit('data', 'r'); await tick();
+  io.input.emit('data', 'x');
+  assert.equal(io.output.chunks.length, writes);
+  io.input.emit('data', 'j');
+  const update = io.output.chunks.at(-1);
+  assert.doesNotMatch(update, /\x1b\[2J|RELAY \/ TASKS/);
+  assert.deepEqual([...update.matchAll(/\x1b\[(\d+);1H/g)].map(match => Number(match[1])), [5, 6]);
+  assert.equal(screen(io.output), stripVTControlCharacters(renderTaskBoard(value, {
+    width: 100, height: 24, colour: true, selectedId: buildBoardRows(value)[1].id,
+  }).text));
+  io.input.emit('data', 'q'); await running;
+});
+
+test('refresh changes and removals overwrite affected rows while resize repaints the viewport', async t => {
+  const io = streams(); let value = { ...sample(), fetchedAt: null };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000 });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'j');
+  const selectedId = buildBoardRows(value)[1].id;
+  value = structuredClone(value); value.tasks[0].title = 'Short';
+  io.input.emit('data', 'r'); await tick();
+  assert.deepEqual([...io.output.chunks.at(-1).matchAll(/\x1b\[(\d+);1H/g)].map(match => Number(match[1])), [6]);
+  assert.equal(screen(io.output), stripVTControlCharacters(renderTaskBoard(value, {
+    width: 100, height: 24, colour: true, selectedId,
+  }).text));
+  value = { ...value, tasks: value.tasks.slice(0, 1) };
+  io.input.emit('data', 'r'); await tick();
+  assert.doesNotMatch(io.output.chunks.at(-1), /\x1b\[2J/);
+  assert.doesNotMatch(screen(io.output), /Build engine|Check valves|Publish notes/);
+  assert.equal(screen(io.output), stripVTControlCharacters(renderTaskBoard(value, {
+    width: 100, height: 24, colour: true, selectedId,
+  }).text));
+  io.output.columns = 50; io.output.rows = 12; io.output.emit('resize');
+  assert.match(io.output.chunks.at(-1), /\x1b\[H\x1b\[2J/);
+  assert.equal(screen(io.output), stripVTControlCharacters(renderTaskBoard(value, {
+    width: 50, height: 12, colour: true, selectedId,
+  }).text));
+  io.input.emit('data', 'q'); await running;
+});
+
 test('quit interrupts a hung read and prevents late writes; prior raw/flowing state is preserved', async () => {
-  const io = streams(); io.input.isRaw = true; io.input.paused = false;
+  const io = streams(); io.input.isRaw = true; io.input.paused = false; io.input.readableFlowing = true;
   let resolve;
   const running = watchTaskBoard(() => new Promise(done => { resolve = done; }), io);
   io.input.emit('data', '\x03'); await running;
@@ -254,6 +312,16 @@ test('quit interrupts a hung read and prevents late writes; prior raw/flowing st
   resolve(sample()); await tick();
   assert.equal(io.output.chunks.length, writes); assert.deepEqual(io.input.raw, [true, true]);
   assert.equal(io.input.paused, false);
+});
+
+test('quit pauses fresh non-flowing stdin and aborts the pending refresh', async () => {
+  const io = streams(); io.input.paused = false;
+  let signal;
+  const running = watchTaskBoard(value => { signal = value; return new Promise(() => {}); }, io);
+  io.input.emit('data', 'q'); await running;
+  assert.equal(signal.aborted, true);
+  assert.equal(io.input.paused, true);
+  assert.equal(io.input.readableFlowing, false);
 });
 
 test('SIGTERM, input end and output failure clean up without waiting for refresh', async () => {

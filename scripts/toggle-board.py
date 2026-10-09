@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 PLUGIN = "quintindk.herdr-relay"
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
 
 def herdr(*args):
@@ -69,7 +70,7 @@ def toggle():
         opened = herdr(
             "plugin", "pane", "open", "--plugin", PLUGIN, "--entrypoint", "work",
             "--placement", "split", "--target-pane", target, "--direction", direction,
-            "--cwd", anchor["cwd"], "--no-focus",
+            "--cwd", str(PLUGIN_ROOT), "--no-focus",
         )["plugin_pane"]["pane"]
         live.append(opened)
         try:

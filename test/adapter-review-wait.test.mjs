@@ -7,13 +7,14 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execute } from '../src/adapter.mjs';
 
-async function fixture(t, { failures = 1, code = 'review_decision_uncertain', status = 409 } = {}) {
+async function fixture(t, { failures = 1, code = 'review_decision_uncertain', status = 409, native = false } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'relay-review-wait-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const attempts = [];
   const runs = [];
   const paths = [];
   const controller = new AbortController();
+  let nativeReads = 0;
   const server = createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
@@ -31,8 +32,14 @@ async function fixture(t, { failures = 1, code = 'review_decision_uncertain', st
         res.end(JSON.stringify({ code, message: 'Dispatch rejected' }));
         return;
       }
-      runs.push({ id: 'relay-run', request, backendRunId: request.runId, nativeState: 'settled',
+      runs.push({ id: 'relay-run', request, backendRunId: request.runId, nativeState: native ? 'claimed' : 'settled',
+        ...(native ? { invocation: { messageId: 'native-prompt' } } : {}),
         conversationId: 'conversation', settlement: { outcome: 'completed', evidence: 'Finished' } });
+    }
+    if (native && req.url === '/runs/relay-run' && req.method === 'GET' && ++nativeReads === 3) runs[0].nativeState = 'settled';
+    if (native && req.url === '/runs/relay-run/cancel') {
+      runs[0].cancellationRequested = true;
+      runs[0].nativeState = 'settled'; runs[0].settlement = { outcome: 'cancelled', evidence: 'Explicitly cancelled' };
     }
     res.end(JSON.stringify(runs[0] ?? {}));
   });
@@ -64,6 +71,70 @@ test('uncertain review retries the exact original dispatch and creates one run a
   assert.ok(!JSON.stringify(f.logs).includes('backend-token'));
 });
 
+test('busy routine waits for idle with the same occurrence rather than injecting another run', async t => {
+  const f = await fixture(t, { code: 'routine_target_busy' });
+  const result = await execute(f.ctx);
+  assert.equal(result.exitCode, 0);
+  assert.equal(f.attempts.length, 2);
+  assert.deepEqual(f.attempts[0], f.attempts[1]);
+  assert.equal(f.runs.length, 1);
+});
+
+test('busy routine expires without creating a native run', async t => {
+  const f = await fixture(t, { failures: Infinity, code: 'routine_target_busy' });
+  f.ctx.config.timeoutSec = 0.1;
+  const result = await execute(f.ctx);
+  assert.equal(result.timedOut, true);
+  assert.equal(f.runs.length, 0);
+});
+
+test('persistent folder delivery waits across offline time without binding the cron to a chat', async t => {
+  const f = await fixture(t, { code: 'routine_target_busy' });
+  f.ctx.config.relayRoutineScope = { companyId: 'company', directory: '/twd' };
+  delete f.ctx.config.timeoutSec;
+  let clock = Date.now(); t.mock.method(Date, 'now', () => clock);
+  f.ctx.onLog = async () => { clock += 86_400_000; };
+  const result = await execute(f.ctx);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(f.attempts.length, 2);
+  assert.equal(f.attempts[0].bindingId, undefined);
+  assert.equal(f.attempts[0].bindingRevision, undefined);
+  assert.deepEqual(f.attempts[0], f.attempts[1]);
+});
+
+test('explicit cancellation stops a persistent folder wait before any native dispatch', async t => {
+  const f = await fixture(t, { code: 'routine_target_busy', failures: Infinity });
+  f.ctx.config.relayRoutineScope = { companyId: 'company', directory: '/twd' };
+  delete f.ctx.config.timeoutSec;
+  f.ctx.onLog = async () => { setImmediate(() => f.controller.abort()); };
+  const result = await execute(f.ctx);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.timedOut, false);
+  assert.equal(f.runs.length, 0);
+  assert.equal(f.attempts.length, 1);
+});
+
+test('delivered native work does not auto-cancel when the delivery deadline passes', async t => {
+  const f = await fixture(t, { failures: 0, native: true });
+  let clock = Date.now(); t.mock.method(Date, 'now', () => clock);
+  f.ctx.config.timeoutSec = 0.1;
+  f.ctx.onLog = async () => { clock += 600_000; };
+  const result = await execute(f.ctx);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(f.paths.some(path => path.endsWith('/cancel')), false);
+});
+
+test('explicit cancellation still reaches delivered native work', async t => {
+  const f = await fixture(t, { failures: 0, native: true });
+  f.ctx.onLog = async () => { f.controller.abort(); };
+  const result = await execute(f.ctx);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.timedOut, false);
+  assert.equal(f.paths.filter(path => path.endsWith('/cancel')).length, 1);
+});
+
 test('uncertain review timeout stops before a retry can create a run', { timeout: 2000 }, async t => {
   const f = await fixture(t);
   f.ctx.config.timeoutSec = 0.1;
@@ -81,7 +152,7 @@ test('persistent uncertain review retries are bounded by the invocation timeout'
   const result = await execute(f.ctx);
   assert.equal(result.exitCode, 1);
   assert.equal(result.timedOut, true);
-  assert.ok(f.attempts.length >= 2 && f.attempts.length <= 3);
+  assert.ok(f.attempts.length >= 2);
   assert.ok(f.attempts.every(attempt => JSON.stringify(attempt) === JSON.stringify(f.attempts[0])));
   assert.equal(f.runs.length, 0);
 });

@@ -185,8 +185,14 @@ test('task and child inspection expose active coordinator authority only in its 
   assert.deepEqual(await request(reviewer, 'POST', 'child', { taskId: 'child' }), { task: f.issues.child, comments: [], relayReview: review });
   assert.deepEqual((await request(other, 'POST', 'child', { taskId: 'child' })).relayReview, { ...review, grantId: null });
   f.issues.child.parentId = 'foreign-parent';
-  await assert.rejects(request(reviewer, 'POST', 'child', { taskId: 'child' }), { code: 'forbidden', status: 403 });
+  assert.deepEqual(await request(reviewer, 'POST', 'child', { taskId: 'child' }),
+    { task: f.issues.child, comments: [], relayReview: { ...review, grantId: null } },
+    'Unrelated same-company tasks remain readable without advertising coordinator authority');
   f.issues.child.parentId = 'parent';
+  f.store.save({ ...reviewer, request: { ...reviewer.request, taskId: 'unrelated-parent' } }, 'test.parent.changed');
+  assert.equal((await request(reviewer, 'POST', 'child', { taskId: 'child' })).relayReview.grantId, null,
+    'Another run in the reviewer binding does not inherit this parent grant');
+  f.store.save(reviewer, 'test.parent.restored');
   for (const change of [{ state: 'revoked' }, { request: { ...grant.request, parentTaskId: 'other-parent' } },
     { request: { ...grant.request, companyId: 'other-company' } }, { request: { ...grant.request, reviewerBindingId: 'other' } }]) {
     f.store.saveOperation({ ...grant, ...change });

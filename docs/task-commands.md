@@ -245,13 +245,27 @@ credentials. They execute under that agent's Paperclip permissions:
 
 ```bash
 herdr-relay task list RUN
-herdr-relay task inspect RUN --task CHILD_ID
+herdr-relay task inspect RUN --task TASK_ID
 herdr-relay work wait-child RUN --task CHILD_ID
 herdr-relay task create RUN --key subnet-request --file task.json
 herdr-relay task assign RUN --key handoff --file assignment.json
 herdr-relay task update RUN --key complete --file changes.json
 herdr-relay work answer RUN --key answer-1 --interaction INTERACTION_ID --file answers.json
 ```
+
+Worker inspection returns full task text and comments for any task in the run's
+company, including unrelated tasks, other owners and terminal statuses. It uses
+the attached backend credential and does not require parent/child relationships.
+Company isolation remains enforced. Reading a task does not grant write, dependency
+wait or review authority; those operations retain their separate contracts.
+
+An assignment is authority for in-scope bookkeeping, not another approval request.
+Use job-context `task create/update/comment/reference-attach` and `reference-lookup`.
+Creation payloads may include `externalReference` to deduplicate intake across
+new jobs and chats. Comments retain agent/run attribution. Ordinary bookkeeping
+completion does not need a candidate review when none was explicitly requested;
+the execution issue itself completes through result submission and verified settlement.
+New execution tasks default to chat output review (`none`). Formal acceptance is opt-in.
 
 Example delegated task:
 
