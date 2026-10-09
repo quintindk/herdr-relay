@@ -110,15 +110,28 @@ scheduler or engagement entity belongs to this tracker contract.
 3. `work read RUN` fetches current task content through Relay.
 4. `work interactions RUN` reads prior questions and answers for that task.
 5. `work acknowledge RUN` claims the turn before executing task work.
-6. If clarification is required, write the question to a file and use
+6. For a task explicitly requiring interactive decisions from a human who is
+   present in this worker conversation, present the complete decision candidate in
+   chat and use the harness's native question tool (`ask_user_questions`, exposed
+   as `question` in OpenCode). Ask one candidate at a time. For finding triage offer
+   `Retain`, `Amend`, `Reject` and `Defer`; if `Amend` is selected, ask a follow-up
+   free-text question for the required wording or treatment. Continue only from the
+   returned human answer and record it in the authorised deliverable. Do not post a
+   task comment and claim the human saw it, and do not use `work ask` for this
+   synchronous in-conversation decision.
+7. If the human is not present in this conversation, or the clarification must
+   survive the current native turn, write the question to a file and use
    `work ask RUN --key QUESTION_KEY --question-file FILE`. Finish your native turn
    after the receipt. Do not poll indefinitely, submit a result or keep working on
    that obligation while waiting. Paperclip owns the answer and continuation.
-7. Otherwise execute the work, verify it and write a summary identifying actual
+8. Otherwise execute the work, verify it and write a summary identifying actual
    deliverables and checks. Submit with
    `work submit RUN --key SUBMISSION_KEY --summary-file FILE --candidate CANDIDATE_ID`.
-8. Stop editing the candidate after submission and finish your turn. Submission is
+9. Stop editing the candidate after submission and finish your turn. Submission is
     not acceptance, commit authority or permission to terminate a runtime.
+
+Native question answers are task decisions, not formal Relay candidate acceptance.
+Final submission and any configured Relay review still happen separately.
 
 `work read` includes `task.relayReviewPolicy`. Respect fixed `human`, `none` or
 `coordinator` policy. For `agent_decides`, submit via `--file` with a `reviewDecision` object

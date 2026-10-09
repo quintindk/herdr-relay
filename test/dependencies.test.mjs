@@ -370,4 +370,7 @@ test('worker prompt requires explicit fan-out authority, exact parentId and endi
   assert.match(prompt, /MUST set parentId to the current task ID "parent"/);
   assert.match(prompt, /work wait-children RUN --file FILE/);
   assert.match(prompt, /Once waiting is recorded, finish this turn without submitting/);
+  assert.match(prompt, /native ask_user_questions\/question tool/);
+  assert.match(prompt, /do not use work ask or relay_answer for that synchronous decision/);
+  assert.match(prompt, /finish this turn immediately without submitting or accepting further native input/);
 });

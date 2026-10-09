@@ -226,6 +226,12 @@ increment has fixture verification, not live Herdr provisioning certification.
    output, checks, constraints and whether edits or further delegation are allowed.
    A peer does not inherit this conversation. Explicitly prohibit commits, pushes,
    installations or external changes unless the user authorised them.
+   For work intended to be interactive in the peer's own conversation, explicitly
+   require the peer to show each complete decision candidate there and use the
+   native `ask_user_questions`/`question` tool. Specify the allowed choices and any
+   amendment follow-up. Do not tell it to use durable `work ask` for synchronous
+   decisions; task comments and worker interactions are not automatically visible
+   in the originating coordinator chat.
 4. State the exact target, task and review policy visibly before calling
    `relay_delegate`. The generic permission popup does not show those details.
 5. Call `relay_delegate` with `key`, `targetBindingId`, `title`, `description` and
@@ -346,9 +352,12 @@ the run. Local native delivery deadlines do not cancel already-persisted turns.
 1. Use the exact CLI and private context path supplied in the invocation. Do not
    read, print or copy the credential file, or substitute operator credentials.
 2. Read the task and prior interactions, then acknowledge the exact run before work.
-3. Follow the task's review policy. Ask through `work ask` if blocked, then finish
-   the turn without submitting or polling. Otherwise execute, verify and submit
-   the actual candidate and summary, then stop editing and finish the turn.
+3. Follow the task's review policy. When the task explicitly requires interactive
+   decisions and the human is present in this worker conversation, show each full
+   candidate and use the native `ask_user_questions`/`question` tool one at a time.
+   Use durable `work ask` only for asynchronous clarification, then finish the turn
+   without submitting or polling. Otherwise execute, verify and submit the actual
+   candidate and summary, then stop editing and finish the turn.
 4. Delegate further only if explicitly authorised by the task. Use the supplied
    worker context with `agent discover` and `task create RUN --key KEY --file FILE`.
    Set each child's `parentId` to the current task ID and assign another prepared

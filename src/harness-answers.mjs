@@ -13,7 +13,10 @@ export function parseRelayAnswer(value) {
 export async function harnessQuestion(store, bridge, action, input, api) {
   requireValue(bridge.state === 'armed', 'bridge_unavailable', 'Question relay requires an armed bridge', 409);
   const runs = store.runs(bridge.identity.bindingId);
-  const waiting = runs.filter(run => run.nativeState === 'settled' && run.settlement?.outcome === 'waiting' &&
+  const conflictedQuestion = run => run.nativeState === 'claimed' && run.native?.state === 'conflict' &&
+    run.native.reason === 'concurrent_native_input' && run.invocation && !run.result && !run.dependency &&
+    !run.cancellationRequested && run.waiting?.state === 'recorded';
+  const waiting = runs.filter(run => (run.nativeState === 'settled' && run.settlement?.outcome === 'waiting' || conflictedQuestion(run)) &&
     run.waiting?.state === 'recorded');
   if (action === 'questions') {
     const questions = [];
@@ -48,7 +51,7 @@ export async function harnessQuestion(store, bridge, action, input, api) {
     if (operation.state === 'recorded') return operation.receipt;
   }
   requireValue(!runs.some(item => item.invocation?.messageId === sourceId) &&
-    !run.invocation?.priorUserIds.includes(sourceId) && source.createdAt > Date.parse(run.createdAt),
+    !run.invocation?.priorUserIds.includes(sourceId) && source.createdAt > Date.parse(run.invocation?.createdAt ?? run.createdAt),
     'invalid_answer_source', 'Answer must originate after the waiting invocation, not from its prompt/history', 409);
   const path = `/api/issues/${encodeURIComponent(run.request.taskId)}`;
   const issue = await api('GET', path);
@@ -75,7 +78,9 @@ export async function harnessQuestion(store, bridge, action, input, api) {
   }
   requireValue(item.status === 'pending', 'question_closed', 'Question is no longer pending', 409);
   requireValue(!operation, 'answer_uncertain', 'An answer was attempted but is not confirmed. Do not repost.', 409);
-  requireValue(!runs.some(item => item.nativeState !== 'settled'), 'conversation_busy', 'Another Relay turn is active', 409);
+  requireValue(!runs.some(item => item.nativeState !== 'settled' && !(item.id === run.id && conflictedQuestion(item))),
+    'conversation_busy', 'Another Relay turn is active', 409);
+  if (conflictedQuestion(run)) store.settleConcurrentQuestion(run.id, interactionId);
   operation = store.saveOperation({ id, runId: run.id, request, state: 'uncertain' });
   await api('POST', `${path}/interactions/${encodeURIComponent(interactionId)}/respond`, {
     answers: [{ questionId: 'answer', optionIds: ['text'], otherText: answer }],

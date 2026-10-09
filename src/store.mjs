@@ -418,6 +418,21 @@ export class Store {
     });
   }
 
+  settleConcurrentQuestion(id, interactionId) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      requireValue(run.nativeState === 'claimed' && run.native?.state === 'conflict' &&
+        run.native.reason === 'concurrent_native_input' && run.invocation && !run.result &&
+        !run.dependency && !run.cancellationRequested && run.waiting?.state === 'recorded' &&
+        run.waiting.interactionId === interactionId,
+      'native_observation_required', 'Only the exact conflicted waiting question can be recovered', 409);
+      run.nativeState = 'settled';
+      run.settlement = { outcome: 'waiting',
+        evidence: `Permission-checked human answer recovered concurrent input for question ${interactionId}; the persisted native conflict remains recorded` };
+      return this.save(run, 'native.question_conflict_recovered', run.settlement);
+    });
+  }
+
   publication(id, publication) {
     return this.transaction(() => {
       const run = this.run(id);

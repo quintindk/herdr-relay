@@ -89,6 +89,79 @@ test('natural-language answer keeps native source attribution without demanding 
   assert.equal(f.writes[0].answers[0].otherText, 'Africa/Johannesburg');
 });
 
+test('exact human answer recovers a waiting turn stuck on concurrent native input before continuation dispatch', async t => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const binding = store.register({ id: 'worker', companyId: 'company', agentId: 'agent', harness: 'opencode',
+    instanceId: 'i', conversationId: 'c', delivery: 'opencode',
+    opencode: { url: 'http://127.0.0.1:1', directory: '/work', projectID: 'project', sessionCreatedAt: 1, exclusive: true } }).binding;
+  let run = store.dispatch({ bindingId: binding.id, bindingRevision: binding.revision, companyId: 'company',
+    agentId: 'agent', taskId: 'task', runId: 'backend' });
+  run = store.beginNative(run.id, 'prompt', ['older-human'], 'cursor');
+  store.acknowledge(run.id); store.ask(run.id, { key: 'candidate-7', question: 'Retain Candidate 7?' });
+  store.questionReceipt(run.id, { state: 'recorded', interactionId: 'question-7' });
+  const conflict = { state: 'conflict', reason: 'concurrent_native_input' };
+  store.nativeStatus(run.id, conflict);
+  const bridge = { state: 'armed', identity: { bindingId: binding.id, conversationId: 'c' } };
+  const item = { id: 'question-7', ...store.run(run.id).waiting.request, status: 'pending' };
+  const issue = { id: 'task', identifier: 'DEF-78', companyId: 'company', status: 'in_progress', assigneeAgentId: 'agent' };
+  let posts = 0, continuation;
+  const api = async (method, path, body) => {
+    if (method === 'POST') {
+      posts++;
+      const recovered = store.run(run.id);
+      assert.equal(recovered.nativeState, 'settled'); assert.equal(recovered.settlement.outcome, 'waiting');
+      assert.deepEqual(recovered.native, conflict, 'Recovery must preserve the sticky native conflict evidence');
+      continuation = store.dispatch({ ...run.request, runId: 'continuation' });
+      item.status = 'answered'; item.result = body; return item;
+    }
+    return path.endsWith('/interactions') ? [item] : issue;
+  };
+  const source = { id: 'candidate-7-human', text: 'Retain Candidate 7 as proposed',
+    createdAt: Date.parse(run.invocation.createdAt) + 1 };
+  const pending = await harnessQuestion(store, bridge, 'questions', {}, api);
+  assert.equal(pending.questions[0].interactionId, 'question-7');
+  const receipt = await harnessQuestion(store, bridge, 'answer', {
+    source, interactionId: 'question-7', answer: 'Retain Candidate 7 as proposed'
+  }, api);
+  assert.equal(receipt.answered, true); assert.equal(posts, 1); assert.equal(continuation.nativeState, 'unclaimed');
+  assert.equal(store.operation(`harness-answer:${digest(['company', 'question-7'])}`).state, 'recorded');
+  assert.deepEqual(await harnessQuestion(store, bridge, 'answer', {
+    source, interactionId: 'question-7', answer: 'Retain Candidate 7 as proposed'
+  }, api), receipt);
+  assert.equal(posts, 1);
+});
+
+test('question conflict recovery rejects every broader conflict state', async t => {
+  for (const variant of ['reason', 'waiting', 'interaction', 'result', 'dependency', 'cancelled', 'old-source']) {
+    const store = new Store(':memory:'); t.after(() => store.close());
+    const binding = store.register({ id: `worker-${variant}`, companyId: 'company', agentId: 'agent', harness: 'opencode',
+      instanceId: 'i', conversationId: 'c', delivery: 'opencode',
+      opencode: { url: 'http://127.0.0.1:1', directory: '/work', projectID: 'project', sessionCreatedAt: 1, exclusive: true } }).binding;
+    let run = store.dispatch({ bindingId: binding.id, bindingRevision: binding.revision, companyId: 'company',
+      agentId: 'agent', taskId: 'task', runId: `backend-${variant}` });
+    run = store.beginNative(run.id, 'prompt', [], 'cursor'); store.acknowledge(run.id);
+    store.ask(run.id, { key: 'question', question: 'Decide?' });
+    store.questionReceipt(run.id, { state: 'recorded', interactionId: 'question' });
+    store.nativeStatus(run.id, { state: 'conflict', reason: variant === 'reason' ? 'other' : 'concurrent_native_input' });
+    const changed = store.run(run.id);
+    if (variant === 'waiting') store.save({ ...changed, waiting: { ...changed.waiting, state: 'uncertain' } }, 'fixture');
+    if (variant === 'interaction') store.save({ ...changed, waiting: { ...changed.waiting, interactionId: 'other' } }, 'fixture');
+    if (variant === 'result') store.save({ ...changed, result: { candidate: 'candidate' } }, 'fixture');
+    if (variant === 'dependency') store.save({ ...changed, dependency: { taskId: 'child' } }, 'fixture');
+    if (variant === 'cancelled') store.save({ ...changed, cancellationRequested: true }, 'fixture');
+    const item = { id: 'question', ...store.run(run.id).waiting.request, status: 'pending' }, writes = [];
+    const api = async (method, path, body) => {
+      if (method === 'POST') writes.push(body);
+      return path.endsWith('/interactions') ? [item] :
+        { id: 'task', companyId: 'company', status: 'in_progress', assigneeAgentId: 'agent' };
+    };
+    const createdAt = variant === 'old-source' ? 0 : Date.parse(run.invocation.createdAt) + 1;
+    await assert.rejects(harnessQuestion(store, { state: 'armed', identity: { bindingId: binding.id, conversationId: 'c' } },
+      'answer', { source: { id: 'human', text: 'retain', createdAt }, interactionId: 'question', answer: 'retain' }, api));
+    assert.equal(writes.length, 0); assert.equal(store.run(run.id).nativeState, 'claimed');
+  }
+});
+
 test('harness review decisions require the exact latest candidate and never replay uncertain writes', async t => {
   for (const scenario of ['accept', 'reject', 'conflict', 'lost', 'uncommitted']) {
     const store = new Store(':memory:'); t.after(() => store.close());

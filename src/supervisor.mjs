@@ -37,7 +37,7 @@ export function promptFor(run, context) {
     `1. Read the assigned task: ${cli} work read ${quote(run.id)}\n` +
     `2. Acknowledge before doing the work: ${cli} work acknowledge ${quote(run.id)}\n` +
     `Read previous questions and answers with: ${cli} work interactions ${quote(run.id)}\n` +
-    `If blocked on clarification, write a question file and run ${cli} work ask ${quote(run.id)} --key question-1 --question-file /absolute/path/question.md, then finish this turn without submitting.\n` +
+    `If the task explicitly requires interactive decisions and the human is present in this conversation, show one complete candidate and use the native ask_user_questions/question tool; do not use work ask or relay_answer for that synchronous decision. If asynchronous clarification is required, write a question file and run ${cli} work ask ${quote(run.id)} --key question-1 --question-file /absolute/path/question.md, then finish this turn immediately without submitting or accepting further native input.\n` +
     `3. Execute the task, write a summary file, then submit using:\n` +
     `${cli} work submit ${quote(run.id)} --key candidate-1 --summary-file /absolute/path/result.md --candidate YOUR_CANDIDATE_ID\n` +
     `Use the task's actual candidate identity. After submission stop editing and finish this turn. Submission is not acceptance.\n` +
