@@ -1,4 +1,8 @@
 import { canonical, digest, requireValue, text } from './protocol.mjs';
+import { execFile } from 'node:child_process';
+import { realpath } from 'node:fs/promises';
+import { isAbsolute, relative, sep } from 'node:path';
+import { promisify } from 'node:util';
 import { createOperatorTask } from './operations.mjs';
 import { resultPolicy } from './task-policy.mjs';
 import { finishTaskReference, reserveTaskReference, taskReferences, validateTaskReference } from './task-references.mjs';
@@ -15,6 +19,35 @@ const object = (value, fields) => requireValue(value && typeof value === 'object
   Object.keys(value).every(field => fields.includes(field) && value[field] !== undefined),
 'invalid_request', 'Unsupported or missing request fields');
 const fresh = (value, limit) => { const age = Date.now() - Date.parse(value); return age >= 0 && age < limit; };
+const runGit = promisify(execFile);
+
+async function verifyMergedEvidence(payload) {
+  object(payload, ['mode', 'repository', 'commit', 'artifactPath', 'branch']);
+  requireValue(payload.mode === 'merged_interactive' && typeof payload.repository === 'string' && isAbsolute(payload.repository),
+    'invalid_request', 'Merged recovery requires an absolute repository');
+  const repository = await realpath(payload.repository);
+  requireValue(repository === payload.repository, 'recovery_not_authorised', 'Repository must be a canonical path', 409);
+  const artifactPath = text(payload.artifactPath, 'artifactPath'), part = relative('.', artifactPath);
+  requireValue(part === artifactPath && part && part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part),
+    'invalid_request', 'artifactPath must be a relative path inside the repository');
+  const commitRef = text(payload.commit, 'commit');
+  requireValue(!commitRef.startsWith('-'), 'invalid_request', 'Commit cannot start with a dash');
+  const branch = text(payload.branch ?? 'main', 'branch');
+  requireValue(!branch.startsWith('-'), 'invalid_request', 'Branch cannot start with a dash');
+  const options = { encoding: 'utf8', timeout: 10000, maxBuffer: 2 * 1024 * 1024,
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))) };
+  const git = async args => (await runGit('git', ['-c', 'safe.directory=', '-C', repository, ...args], options)).stdout;
+  requireValue(await realpath((await git(['rev-parse', '--show-toplevel'])).trim()) === repository,
+    'recovery_not_authorised', 'Repository identity changed', 409);
+  const commit = (await git(['rev-parse', '--verify', '--end-of-options', `${commitRef}^{commit}`])).trim();
+  requireValue(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit), 'recovery_not_authorised', 'Commit did not resolve exactly', 409);
+  try { await git(['merge-base', '--is-ancestor', commit, `refs/heads/${branch}`]); }
+  catch { requireValue(false, 'recovery_not_authorised', 'Commit is not merged into the requested local branch', 409); }
+  const artifact = await git(['show', `${commit}:${artifactPath}`]);
+  requireValue(artifact.length > 0 && artifact.length <= 1024 * 1024,
+    'recovery_not_authorised', 'Merged artefact is missing or too large', 409);
+  return { mode: payload.mode, repository, branch, commit, artifactPath, artifactDigest: digest(artifact), artifact };
+}
 
 // The caller serialises writes per task. Revision checks are best effort: the
 // backend PATCH has no compare-and-swap contract. Uncertain writes are never sent twice
@@ -50,7 +83,8 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     if (action !== 'create') text(input.expectedRevision, 'expectedRevision');
   }
   const payload = input.payload ?? {};
-  if (['complete', 'cancel', 'recover'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'This action accepts no payload');
+  if (['complete', 'cancel'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'This action accepts no payload');
+  if (action === 'recover' && input.payload !== undefined) object(input.payload, ['mode', 'repository', 'commit', 'artifactPath', 'branch']);
   if (['cancel', 'recover'].includes(action)) text(input.reason, 'reason');
   if (action === 'comment') {
     object(input.payload, ['body']);
@@ -227,6 +261,15 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     requireValue(!existing || canonical(persisted) === canonical(value), 'completion_uncertain', 'Recovered completion record conflicts', 409);
     if (!existing) store.saveOperation(value);
   };
+  const recordMergedCompletion = evidence => {
+    const id = `merged-interactive-completion:${taskId}`;
+    const value = { id, runId: '', companyId, taskId, state: 'recorded', status: 'done',
+      repository: evidence.repository, branch: evidence.branch, commit: evidence.commit,
+      artifactPath: evidence.artifactPath, artifactDigest: evidence.artifactDigest };
+    const existing = store.operation(id), { updatedAt, ...persisted } = existing ?? {};
+    requireValue(!existing || canonical(persisted) === canonical(value), 'completion_uncertain', 'Merged completion record conflicts', 409);
+    if (!existing) store.saveOperation(value);
+  };
   const localState = targetId => {
     const runs = runsFor(targetId);
     const decisions = [`review-decision:${digest([companyId, targetId])}`, ...runs.flatMap(run =>
@@ -324,6 +367,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     return response(snapshot, operation);
   }
 
+  let mergedEvidence = action === 'recover' && input.payload !== undefined ? await verifyMergedEvidence(payload) : null;
   let initial = await inspect(taskId);
   check();
   operation = previous();
@@ -337,16 +381,61 @@ export async function humanTask(store, api, input, { check = () => {}, authority
         requireValue(matches(initial, operation.expected), 'operation_uncertain', 'Task changed during comment reconciliation', 409);
       }
       operation = store.saveOperation({ ...operation, ...(commentId ? { commentId } : {}), state: 'recorded', reconciled: true, receipt: initial.publicTask });
-      if (action === 'recover') { recordRecoveredCompletion(); initial = await inspect(taskId); }
+      if (action === 'recover') {
+        if (mergedEvidence) recordMergedCompletion(mergedEvidence); else recordRecoveredCompletion();
+        initial = await inspect(taskId);
+      }
     }
     return response(initial, operation);
   }
   fence(taskId);
   requireValue(initial.revision === input.expectedRevision, 'stale_revision', 'Inspect the task again before changing it', 409);
+  const validateMerged = async (snapshot, evidence) => {
+    const task = snapshot.task, runs = runsFor(taskId), blocker = task.executionBlocker;
+    const cancelled = runs.find(run => (run.backendRunId ?? run.request.runId) === blocker?.runId);
+    const creation = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'operator-task:%'").all()
+      .map(row => JSON.parse(row.data)).find(item => item.state === 'recorded' && item.receipt?.id === taskId);
+    const bindings = store.bindings().filter(item => item.config.companyId === companyId && item.config.agentId === task.assigneeAgentId);
+    const live = bindings.some(binding => {
+      const bridge = store.operation(`opencode-bridge:${binding.id}`), observed = bridge && store.operation(bridge.identity?.observedId);
+      return !binding.lifecycleState && bridge?.state === 'armed' && fresh(bridge.lastSeen, 10000) &&
+        observed?.availability === 'present' && !observed.error && fresh(observed.updatedAt, 15000);
+    });
+    requireValue(task.status === 'blocked' && !task.assigneeUserId && typeof task.assigneeAgentId === 'string' &&
+      !task.executionRunId && !task.checkoutRunId && !task.executionLockedAt && !task.activeRun &&
+      !task.activeRecoveryAction && !task.executionState && blocker?.cause === 'legacy_execution_requires_reconciliation' &&
+      typeof blocker.recoveryActionId === 'string' && blocker.recoveryActionId && cancelled && runs.every(run => run.nativeState === 'settled') &&
+      runs.every(run => !run.result && run.publication?.state === 'none' && !run.dependency && !run.review) &&
+      cancelled.settlement?.outcome === 'cancelled' && cancelled.cancellationRequested === true && cancelled.waiting?.state === 'recorded' &&
+      blocker.agentId === task.assigneeAgentId && cancelled.request.agentId === task.assigneeAgentId &&
+      creation?.request?.relayReviewPolicy === 'human' && creation.request.body?.assigneeAgentId === task.assigneeAgentId &&
+      creation.receipt?.id === taskId && !task.reviewPolicy && !live && task.description.includes(evidence.artifactPath),
+    'recovery_not_authorised', 'Merged interactive recovery identity or execution evidence does not match', 409);
+    const comments = await send('GET', `/api/issues/${encodeURIComponent(taskId)}/comments?order=asc`);
+    requireValue(Array.isArray(comments) && comments.length === 7 && comments.every(comment =>
+      comment.companyId === companyId && comment.issueId === taskId && comment.authorAgentId === task.assigneeAgentId),
+    'recovery_not_authorised', 'Expected exactly seven preserved agent candidate comments', 409);
+    for (let number = 1; number <= 7; number++) {
+      requireValue(comments.filter(comment => comment.body?.includes(`# Candidate ${number}:`)).length === 1 &&
+        evidence.artifact.includes(`### D0${number} -`),
+      'recovery_not_authorised', `Candidate ${number} evidence is not preserved exactly once`, 409);
+    }
+    const interactions = snapshot.interactions.filter(item => item.kind === 'ask_user_questions');
+    const pending = interactions.filter(item => item.status === 'pending');
+    requireValue(interactions.length === 7 && interactions.filter(item => item.status === 'answered').length === 6 && pending.length === 1 &&
+      pending[0].id === cancelled.waiting.interactionId && pending[0].sourceRunId === (cancelled.backendRunId ?? cancelled.request.runId),
+    'recovery_not_authorised', 'Interactive decision history does not match the cancelled final question', 409);
+  };
   const guard = snapshot => {
     check();
     const task = snapshot.task;
     if (action === 'recover') {
+      if (mergedEvidence) {
+        requireValue(snapshot.interactions.every(item => ['answered', 'pending'].includes(item.status)) &&
+          snapshot.local.decisions.every(item => item.state === 'recorded' || item.state === 'skipped'),
+        'recovery_not_authorised', 'Merged interactive recovery has unresolved local decision state', 409);
+        return;
+      }
       const runs = runsFor(taskId), run = runs.find(item => item.result);
       const routed = store.operation(`routine-task:${digest([companyId, taskId])}`);
       const blocker = task.executionBlocker;
@@ -439,6 +528,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
       store.assertWorkerAdmission(binding.id);
     }
   };
+  if (mergedEvidence) await validateMerged(initial, mergedEvidence);
   guard(initial);
   if (action === 'edit') await relations();
   if (desired.assigneeAgentId) scoped(await send('GET', `/api/agents/${encodeURIComponent(desired.assigneeAgentId)}`), desired.assigneeAgentId);
@@ -458,6 +548,13 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   }
   const current = await inspect(taskId);
   requireValue(current.revision === initial.revision, 'stale_revision', 'Task changed while validating the mutation', 409);
+  if (mergedEvidence) {
+    const repeated = await verifyMergedEvidence(payload);
+    requireValue(canonical({ ...repeated, artifact: undefined }) === canonical({ ...mergedEvidence, artifact: undefined }),
+      'recovery_not_authorised', 'Merged evidence changed during recovery', 409);
+    mergedEvidence = repeated;
+    await validateMerged(current, mergedEvidence);
+  }
   guard(current);
   targetReady();
   fence(taskId);
@@ -479,6 +576,9 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   let receipt = await inspect(taskId);
   check();
   operation = store.saveOperation({ ...operation, ...(commentId ? { commentId } : {}), state: 'recorded', receipt: receipt.publicTask });
-  if (action === 'recover') { recordRecoveredCompletion(); receipt = await inspect(taskId); }
+  if (action === 'recover') {
+    if (mergedEvidence) recordMergedCompletion(mergedEvidence); else recordRecoveredCompletion();
+    receipt = await inspect(taskId);
+  }
   return response(receipt, operation);
 }

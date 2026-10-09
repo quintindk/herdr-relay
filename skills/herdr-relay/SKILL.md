@@ -106,6 +106,13 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
   records no-review completion and marks only that task Done. It never reassigns,
   reruns, deletes or broadens ordinary blocked work. Any mismatched result, policy,
   interaction, dependency, routine provenance or execution identity fails closed.
+  For an interactive task completed outside Relay submission, use payload
+  `{mode:"merged_interactive",repository,commit,artifactPath,branch?}`. That mode
+  additionally requires the assigned agent to be absent, the commit to be merged
+  into the named local branch, the declared decision artefact at that commit,
+  exactly seven preserved agent candidate comments and six answered plus one final
+  pending question matching the cancelled run. It records merged-evidence
+  completion without pretending a Relay result existed.
 
 - `relay_task_inspect({taskId})` returns full text, relationships, attached references
   and `revision`. `relay_task_children` reads direct children. `relay_task_comments`

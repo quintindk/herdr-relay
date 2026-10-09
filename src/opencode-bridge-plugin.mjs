@@ -125,8 +125,9 @@ function taskTools(execute) {
       args: writeArgs,
     }],
     ['recover', {
-      description: 'Recover an exact blocked scheduled task whose no-review result was published but whose stale native execution was cancelled. Preserves the result and comment, marks only that task Done, and never reassigns, reruns or deletes it. Inspect first, state the task and reason visibly, and reuse the stable key. Accepts no payload.',
-      args: writeArgs,
+      description: 'Recover an exact blocked task without rerunning work. With no payload, accepts only a published no-review scheduled result whose stale native execution was cancelled. payload.mode=merged_interactive instead verifies an absent-agent interactive task through a commit merged into a local branch, its preserved decision artefact, seven candidate comments and exact decision history. Marks only that task Done; never reassigns or deletes it. Inspect first, state the evidence and reason visibly, and reuse the stable key.',
+      args: { ...writeArgs, payload: tool.schema.object({ mode: tool.schema.literal('merged_interactive'),
+        repository: id, commit: id, artifactPath: id, branch: id.optional() }).strict().optional() },
     }],
     ['reopen', {
       description: 'Reopen a terminal task on explicit human instruction. Before calling, state the exact task, proposed status and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries.',

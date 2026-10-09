@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import './git-fixture.mjs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
@@ -120,6 +122,52 @@ test('recover refuses ordinary blocked tasks and altered cancelled-result eviden
     await assert.rejects(humanTask(f.store, f.api, input), { code: 'recovery_not_authorised' });
     assert.equal(f.writes().length, 0); assert.equal(f.state.task.status, variant === 'ordinary' ? 'todo' : 'blocked');
   }
+});
+
+test('merged_interactive recovery verifies merged artefact, comments, decisions and absent agent without inventing a result', async t => {
+  const f = fixture(t), repository = mkdtempSync(join(tmpdir(), 'relay-merged-recovery-'));
+  t.after(() => rmSync(repository, { recursive: true, force: true }));
+  const git = args => execFileSync('git', ['-C', repository, ...args], { encoding: 'utf8' }).trim();
+  git(['init', '-b', 'main']);
+  const artifactPath = 'docs/review-decisions.md';
+  mkdirSync(join(repository, 'docs'));
+  writeFileSync(join(repository, artifactPath), ['# Decisions', ...Array.from({ length: 7 }, (_, i) => `### D0${i + 1} - Candidate ${i + 1}`)].join('\n'));
+  git(['add', artifactPath]); git(['commit', '-m', 'merge reviewed decisions']);
+  const commit = git(['rev-parse', 'HEAD']);
+  Object.assign(f.state.task, { status: 'blocked', assigneeUserId: null, assigneeAgentId: 'interactive-agent',
+    description: `Decision artefact: ${artifactPath}` });
+  f.store.register({ id: 'interactive-binding', companyId: 'company', agentId: 'interactive-agent', harness: 'opencode',
+    instanceId: 'i', conversationId: 'interactive-chat' });
+  const runs = [];
+  for (let number = 1; number <= 7; number++) {
+    let run = f.store.dispatch({ bindingId: 'interactive-binding', bindingRevision: 1, companyId: 'company',
+      agentId: 'interactive-agent', taskId: 'task', runId: `backend-${number}` });
+    f.store.acknowledge(run.id); f.store.ask(run.id, { key: `candidate-${number}`, question: `Candidate ${number}` });
+    f.store.questionReceipt(run.id, { state: 'recorded', interactionId: `interaction-${number}` });
+    if (number === 7) { f.store.cancel(run.id); run = f.store.settle(run.id, { outcome: 'cancelled', evidence: 'Agent disappeared' }); }
+    else run = f.store.settle(run.id, { outcome: 'waiting', evidence: 'Human decision recorded' });
+    runs.push(run);
+    f.state.interactions.push({ id: `interaction-${number}`, kind: 'ask_user_questions',
+      status: number === 7 ? 'pending' : 'answered', sourceRunId: `backend-${number}` });
+    f.state.comments.push({ id: `candidate-comment-${number}`, companyId: 'company', issueId: 'task',
+      authorAgentId: 'interactive-agent', body: `# Candidate ${number}: Preserved candidate` });
+  }
+  const last = runs.at(-1);
+  f.state.task.executionBlocker = { recoveryActionId: 'recovery', runId: 'backend-7', agentId: 'interactive-agent',
+    cause: 'legacy_execution_requires_reconciliation', nextAction: 'Recorded work is preserved' };
+  f.store.saveOperation({ id: 'operator-task:interactive', runId: '', state: 'recorded',
+    request: { companyId: 'company', relayReviewPolicy: 'human', body: { assigneeAgentId: 'interactive-agent' } },
+    receipt: { id: 'task', companyId: 'company', assigneeAgentId: 'interactive-agent' } });
+  const input = { ...await f.input('recover'), reason: 'Merged interactive work is preserved',
+    payload: { mode: 'merged_interactive', repository, commit: commit.slice(0, 9), artifactPath } };
+  const result = await humanTask(f.store, f.api, input);
+  assert.equal(result.task.status, 'done'); assert.equal(runs.every(run => !run.result), true);
+  const completion = f.store.operation('merged-interactive-completion:task');
+  assert.equal(completion.commit, commit); assert.equal(completion.artifactPath, artifactPath);
+  assert.equal(completion.status, 'done'); assert.equal(completion.state, 'recorded');
+  assert.equal(f.store.operation(`no-review-completion:${last.id}`), null);
+  assert.deepEqual(await humanTask(f.store, f.api, input), result);
+  assert.equal(f.writes().length, 1);
 });
 
 test('external-reference creation reserves by journal identity and exposes references in its receipt', async t => {
