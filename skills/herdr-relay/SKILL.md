@@ -99,7 +99,12 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
 ## Daily Task Tracking
 
 - `relay_task_recover({key,taskId,expectedRevision,reason})` is the self-service
-  terminal recovery for one narrow scheduled-task failure: a published no-review
+  recovery entry point. With no payload it first detects any exact published result
+  stranded by `concurrent_native_input`, settles that run as completed while
+  retaining the conflict evidence, and lets the normal review/no-review lifecycle
+  continue. The affected conversation may invoke this strategy even though that
+  exact conflicted run is active; other active work still blocks it. If no such run
+  exists, it handles one narrow scheduled-task failure: a published no-review
   result whose stale native execution was cancelled and whose task carries the
   matching `legacy_execution_requires_reconciliation` blocker. Inspect first and
   state the exact task and reason. Recovery preserves the result and comment,

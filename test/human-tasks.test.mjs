@@ -170,6 +170,26 @@ test('merged_interactive recovery verifies merged artefact, comments, decisions 
   assert.equal(f.writes().length, 1);
 });
 
+test('published result conflict recovery settles the exact run without changing the task or replaying work', async t => {
+  const f = fixture(t);
+  Object.assign(f.state.task, { status: 'in_progress', assigneeUserId: null, assigneeAgentId: 'agent', executionRunId: 'backend' });
+  f.store.register({ id: 'binding', companyId: 'company', agentId: 'agent', harness: 'opencode', instanceId: 'i', conversationId: 'c',
+    delivery: 'opencode', opencode: { url: 'http://127.0.0.1:1', directory: '/work', projectID: 'project', sessionCreatedAt: 1, exclusive: true } });
+  let run = f.store.dispatch({ bindingId: 'binding', bindingRevision: 1, companyId: 'company', agentId: 'agent', taskId: 'task', runId: 'backend' });
+  f.store.beginNative(run.id, 'prompt', [], 'cursor'); f.store.acknowledge(run.id);
+  f.store.submit(run.id, { key: 'candidate', candidate: 'candidate', summary: 'Published work' });
+  f.store.publication(run.id, { state: 'recorded', commentId: 'comment' });
+  f.store.nativeStatus(run.id, { state: 'conflict', reason: 'concurrent_native_input' });
+  const input = { ...await f.input('recover'), reason: 'Recover exact published result conflict' };
+  const result = await humanTask(f.store, f.api, input);
+  run = f.store.run(run.id);
+  assert.equal(run.nativeState, 'settled'); assert.equal(run.settlement.outcome, 'completed');
+  assert.deepEqual(run.native, { state: 'conflict', reason: 'concurrent_native_input' });
+  assert.equal(result.recovery.strategy, 'published_result_conflict'); assert.equal(result.recovery.candidate, 'candidate');
+  assert.equal(result.task.status, 'in_progress'); assert.equal(f.writes().length, 0);
+  assert.deepEqual(await humanTask(f.store, f.api, input), result);
+});
+
 test('external-reference creation reserves by journal identity and exposes references in its receipt', async t => {
   const f = fixture(t);
   f.state.post = () => {

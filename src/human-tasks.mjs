@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { createOperatorTask } from './operations.mjs';
 import { resultPolicy } from './task-policy.mjs';
 import { finishTaskReference, reserveTaskReference, taskReferences, validateTaskReference } from './task-references.mjs';
+import { concurrentResultConflict } from './store.mjs';
 
 const publicFields = ['id', 'companyId', 'identifier', 'title', 'description', 'parentId', 'projectId',
   'assigneeUserId', 'assigneeAgentId', 'responsibleUserId', 'status', 'priority', 'updatedAt',
@@ -365,6 +366,43 @@ export async function humanTask(store, api, input, { check = () => {}, authority
       return current.state === 'recorded' ? current : store.saveOperation({ ...current, state: 'recorded', receipt: snapshot.publicTask });
     });
     return response(snapshot, operation);
+  }
+
+  if (action === 'recover' && input.payload === undefined) {
+    const runs = runsFor(taskId), conflicted = runs.filter(concurrentResultConflict);
+    if (conflicted.length || operation?.strategy === 'published_result_conflict') {
+      const run = conflicted[0] ?? store.run(operation.relayRunId);
+      let snapshot = await inspect(taskId);
+      if (operation) {
+        requireValue(operation.strategy === 'published_result_conflict' && operation.relayRunId === run.id &&
+          run.nativeState === 'settled' && run.settlement?.outcome === 'completed' && operation.candidate === run.result?.candidate,
+        'operation_uncertain', 'Published-result recovery does not match the settled run', 409);
+        if (operation.state !== 'recorded') operation = store.saveOperation({ ...operation, state: 'recorded', reconciled: true });
+        return { ...response(snapshot, operation), recovery: { strategy: operation.strategy,
+          relayRunId: run.id, candidate: run.result.candidate, settlement: run.settlement } };
+      }
+      fence(taskId);
+      requireValue(snapshot.revision === input.expectedRevision && conflicted.length === 1 &&
+        snapshot.task.assigneeAgentId === run.request.agentId && !snapshot.task.assigneeUserId &&
+        (!snapshot.task.executionRunId || snapshot.task.executionRunId === (run.backendRunId ?? run.request.runId)) &&
+        !snapshot.task.checkoutRunId && !snapshot.task.activeRecoveryAction && !snapshot.task.reviewPolicy &&
+        !snapshot.interactions.some(item => item.status === 'pending') && runs.find(item => item.result)?.id === run.id &&
+        !runs.some(item => item.id !== run.id && item.nativeState !== 'settled') &&
+        ['human', 'none'].includes(resultPolicy(store, run, run.result)) &&
+        snapshot.local.decisions.every(item => item.state === 'recorded' || item.state === 'skipped'),
+      'recovery_not_authorised', 'Published-result conflict recovery scope does not match', 409);
+      const current = await inspect(taskId);
+      requireValue(current.revision === snapshot.revision && concurrentResultConflict(store.run(run.id)),
+        'stale_revision', 'Task or conflicted run changed during recovery', 409);
+      check(); fence(taskId); requireValue(!previous(), 'operation_conflict', 'Concurrent task recovery');
+      operation = store.saveOperation({ id, runId: '', request, state: 'uncertain', strategy: 'published_result_conflict',
+        relayRunId: run.id, candidate: run.result.candidate, expected: pick(current.task, ['id', 'companyId', 'assigneeUserId', 'assigneeAgentId', 'status']) });
+      const settled = store.settleConcurrentResult(run.id);
+      operation = store.saveOperation({ ...operation, state: 'recorded', receipt: current.publicTask });
+      snapshot = await inspect(taskId);
+      return { ...response(snapshot, operation), recovery: { strategy: operation.strategy,
+        relayRunId: run.id, candidate: run.result.candidate, settlement: settled.settlement } };
+    }
   }
 
   let mergedEvidence = action === 'recover' && input.payload !== undefined ? await verifyMergedEvidence(payload) : null;

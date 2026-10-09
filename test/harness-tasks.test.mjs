@@ -97,6 +97,23 @@ test('inspection needs no source or idle worker and records neither authority no
   assert.equal(f.writes().length, 0);
 });
 
+test('exact conflicted published result can recover from its own active conversation', async t => {
+  const f = fixture(t, 'armed');
+  Object.assign(f.task, { status: 'in_progress', assigneeUserId: null, assigneeAgentId: 'agent', executionRunId: 'backend' });
+  f.store.saveOperation({ ...f.bridge, lastSeen: new Date().toISOString() });
+  let run = f.store.dispatch({ bindingId: 'caller', bindingRevision: 1, companyId: 'company', agentId: 'agent', taskId: 'task', runId: 'backend' });
+  f.store.beginNative(run.id, 'prompt', [], 'cursor'); f.store.acknowledge(run.id);
+  f.store.submit(run.id, { key: 'candidate', candidate: 'candidate', summary: 'Published work' });
+  f.store.publication(run.id, { state: 'recorded', commentId: 'comment' });
+  f.store.nativeStatus(run.id, { state: 'conflict', reason: 'concurrent_native_input' });
+  const inspected = await f.inspect();
+  const result = await f.invoke('task-recover', { key: 'recover', taskId: 'task', expectedRevision: inspected.revision,
+    reason: 'Recover exact published result conflict', source: { ...f.source, id: 'human-after-conflict', createdAt: Date.now() } });
+  run = f.store.run(run.id);
+  assert.equal(run.nativeState, 'settled'); assert.equal(run.settlement.outcome, 'completed');
+  assert.equal(result.recovery.strategy, 'published_result_conflict'); assert.equal(f.writes().length, 0);
+});
+
 test('edit, assign and complete preserve humanTask revisions and mutation semantics', async t => {
   const f = fixture(t);
   let inspected = await f.inspect();

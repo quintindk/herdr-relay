@@ -7,6 +7,11 @@ import { hermesConfig } from './hermes.mjs';
 import { questionPayload } from './work.mjs';
 import { resultPolicy } from './task-policy.mjs';
 
+export const concurrentResultConflict = run => run?.nativeState === 'claimed' &&
+  run.native?.state === 'conflict' && run.native.reason === 'concurrent_native_input' &&
+  run.invocation && run.result && run.publication?.state === 'recorded' &&
+  !run.waiting && !run.dependency && !run.cancellationRequested && !run.review;
+
 export class Store {
   constructor(path) {
     this.db = new DatabaseSync(path);
@@ -430,6 +435,18 @@ export class Store {
       run.settlement = { outcome: 'waiting',
         evidence: `Permission-checked human answer recovered concurrent input for question ${interactionId}; the persisted native conflict remains recorded` };
       return this.save(run, 'native.question_conflict_recovered', run.settlement);
+    });
+  }
+
+  settleConcurrentResult(id) {
+    return this.transaction(() => {
+      const run = this.run(id);
+      requireValue(concurrentResultConflict(run), 'native_observation_required',
+        'Only an exact published result conflicted by concurrent human input can be recovered', 409);
+      run.nativeState = 'settled';
+      run.settlement = { outcome: 'completed',
+        evidence: `Permission-checked human recovery settled published candidate ${run.result.candidate}; the persisted native conflict remains recorded` };
+      return this.save(run, 'native.result_conflict_recovered', run.settlement);
     });
   }
 

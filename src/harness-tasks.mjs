@@ -3,6 +3,7 @@ import { humanTask } from './human-tasks.mjs';
 import { isNotificationSource } from './completion-notifications.mjs';
 import { queryTasks } from './task-query.mjs';
 import { attachTaskReference, lookupTaskReference } from './task-references.mjs';
+import { concurrentResultConflict } from './store.mjs';
 
 // The service authenticates and polls the bridge first, then removes only the
 // known transport fields. Native user selection is checked by the plugin.
@@ -37,7 +38,10 @@ export async function harnessTask(store, bridge, action, input, api) {
       current.controlRevision === bridge.controlRevision && canonical(store.binding(caller.id, false)) === bindingProof,
     'bridge_identity_mismatch', 'Human task caller identity or session changed', 409);
     if (reading) return;
-    requireValue(store.runs(caller.id).every(run => run.nativeState === 'settled'), 'conversation_busy',
+    const active = store.runs(caller.id).filter(run => run.nativeState !== 'settled');
+    const recoveringOwnResult = action === 'task-recover' && active.length === 1 &&
+      active[0].request.taskId === input.taskId && concurrentResultConflict(active[0]);
+    requireValue(active.length === 0 || recoveringOwnResult, 'conversation_busy',
       'Active Relay work cannot use the human task operator connector', 409);
     const source = input.source;
     requireValue(source && typeof source.id === 'string' && source.id.trim() && source.id.length <= 65536 &&
