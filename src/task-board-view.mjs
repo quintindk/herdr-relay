@@ -116,7 +116,8 @@ export function buildBoardRows(value, options = {}) {
   const rows = [];
   for (const group of groups.values()) {
     const busy = [group.agent?.availability, group.agent?.nativeState].some(state => /^(busy|working|running|active)$/i.test(state ?? ''));
-    if (!group.assigned.length && (filter || (!showIdle && !busy && group.kind !== 'human'))) continue;
+    const present = group.agent?.availability === 'present';
+    if (!group.assigned.length && !present && (filter || (!showIdle && !busy && group.kind !== 'human'))) continue;
     const included = new Set(); const matched = new Set(group.assigned);
     for (const id of group.assigned) {
       let current = id;

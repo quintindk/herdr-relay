@@ -58,12 +58,15 @@ test('wide colour frame exposes projects, Unicode branches, state colours and se
 test('ownership distinguishes board, humans, unassigned, missing agents and idle agents', () => {
   const value = board([task('board', { assigneeUserId: 'local-board' }), task('human', { assigneeUserId: 'quintin' }),
     task('none'), task('missing', { assigneeAgentId: 'absent' })]);
+  value.agents.push({ id: 'present', companyId: 'c', name: 'Present agent', availability: 'present',
+    bridgeState: 'connected', nativeState: 'idle' });
   const rows = buildBoardRows(value);
   assert.deepEqual(rows.filter(row => row.type === 'group').map(row => row.name), [
-    'Human: Board (local-board)', 'Babbage', 'Human: quintin', 'Unassigned', 'Agent: absent (missing)',
+    'Human: Board (local-board)', 'Babbage', 'Present agent', 'Human: quintin', 'Unassigned', 'Agent: absent (missing)',
   ]);
   assert.equal(rows.filter(row => row.type === 'task').length, 4);
   assert.ok(buildBoardRows(value, { showIdle: true }).some(row => row.name === 'Ada'));
+  assert.deepEqual(buildBoardRows(value, { filter: 'no task matches' }).map(row => row.name), ['Present agent']);
 });
 
 test('completed ancestors remain context across assignment, filters and collapse', () => {
