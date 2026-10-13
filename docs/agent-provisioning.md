@@ -41,6 +41,13 @@ this operator-only endpoint.
 The command below is the explicit **headless, Relay-owned** provisioning path.
 It remains available for exclusive runtimes, not required for Herdr registration.
 
+Persistent and service-lifetime headless OpenCode bindings may be selected as an
+exact recurring-routine target. Admission requires the recorded provisioning
+marker, unchanged binding revision, exclusive native configuration, one dedicated
+ready owned runtime, exact conversation creation identity, an idle native session
+and no unsettled Relay run. Managed admission never falls back to the Herdr
+observation or terminal-placement checks used by reserved pull bindings.
+
 `agent provision --file agent.json` is operator-only and requires Relay's
 `--backend-context` configuration. Install the external Relay adapter in Paperclip
 first. The command creates an independent Paperclip agent with automatic wakes

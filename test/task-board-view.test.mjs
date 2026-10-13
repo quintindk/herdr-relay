@@ -55,6 +55,22 @@ test('wide colour frame exposes projects, Unicode branches, state colours and se
   assert.ok(frame.text.split('\n').every(line => stripVTControlCharacters(line).length === 100));
 });
 
+test('detail crops full text and comments while review actions require review status', () => {
+  const value = sample();
+  const selectedId = buildBoardRows(value).find(row => row.taskId === '1').id;
+  const detailData = { task: { ...value.tasks[0], description: 'A '.repeat(200) }, revision: 'revision',
+    review: { runId: 'run', interactionId: 'interaction', candidate: 'candidate', summary: 'Candidate summary.' },
+    comments: [{ body: 'First comment', createdAt: '2026-10-12', authorUserId: 'human' },
+      { body: 'Last comment', createdAt: '2026-10-13', authorAgentId: 'agent' }] };
+  let frame = renderTaskBoard(value, { width: 100, height: 24, now, detail: true, selectedId, detailData });
+  assert.match(frame.text, /DETAIL \/ REVIEW/); assert.match(frame.text, /LAST COMMENTS/);
+  assert.match(frame.text, /First comment/); assert.match(frame.text, /Last comment/);
+  assert.match(frame.text, /A approve  F feedback  R rej~/);
+  value.tasks[0].status = 'blocked';
+  frame = renderTaskBoard(value, { width: 100, height: 24, now, detail: true, selectedId, detailData });
+  assert.doesNotMatch(frame.text, /A approve|R reject/);
+});
+
 test('ownership distinguishes board, humans, unassigned, missing agents and idle agents', () => {
   const value = board([task('board', { assigneeUserId: 'local-board' }), task('human', { assigneeUserId: 'quintin' }),
     task('none'), task('missing', { assigneeAgentId: 'absent' })]);
@@ -241,6 +257,58 @@ test('TTY navigation, folding, search, details, idle/completed toggles, resize a
   assert.equal(process.listenerCount('SIGTERM'), signals);
 });
 
+test('review feedback and rejection use the fresh detail candidate once', async t => {
+  const io = streams(); const reviews = [];
+  const value = { ...sample(), fetchedAt: null };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    detailTask: async input => ({ task: { ...value.tasks.find(task => task.id === input.taskId), description: 'Full details' },
+      revision: 'review-revision', comments: [{ body: 'Latest comment', createdAt: 'now', authorUserId: 'human' }],
+      review: { runId: 'run', interactionId: 'interaction', candidate: 'candidate', summary: 'Review summary' } }),
+    reviewTask: async input => { reviews.push(input); return { state: 'recorded', receipt: { status: 'rejected' } }; },
+  });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'j\t'); await tick();
+  assert.match(screen(io.output), /DETAIL \/ REVIEW/); assert.match(screen(io.output), /Latest comment/);
+  io.input.emit('data', 'FNeeds evidence\rR\r\r'); await tick();
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].action, 'reject'); assert.equal(reviews[0].reason, 'Needs evidence');
+  assert.equal(reviews[0].expectedRevision, 'review-revision'); assert.equal(reviews[0].candidate, 'candidate');
+  assert.match(screen(io.output), /Rejected R-1/);
+  io.input.emit('data', 'q'); await running;
+});
+
+test('review approval key confirms the exact displayed candidate', async t => {
+  const io = streams(); const reviews = [];
+  const value = { ...sample(), fetchedAt: null };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    detailTask: async input => ({ task: { ...value.tasks.find(task => task.id === input.taskId), description: 'Full details' },
+      revision: 'review-revision', comments: [], review: { runId: 'run', interactionId: 'interaction',
+        candidate: 'candidate', summary: 'Review summary' } }),
+    reviewTask: async input => { reviews.push(input); return { state: 'recorded', receipt: { status: 'accepted' } }; },
+  });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'j\t'); await tick(); io.input.emit('data', 'A\r'); await tick();
+  assert.equal(reviews.length, 1); assert.equal(reviews[0].action, 'accept'); assert.equal(reviews[0].candidate, 'candidate');
+  assert.match(screen(io.output), /Approved R-1/);
+  io.input.emit('data', 'q'); await running;
+});
+
+test('late detail response cannot replace details for a newly selected task', async t => {
+  const io = streams(); const pending = new Map();
+  const value = { ...sample(), fetchedAt: null };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    detailTask: input => new Promise(resolve => pending.set(input.taskId, resolve)),
+  });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'j\t'); await tick();
+  io.input.emit('data', 'jj'); await tick();
+  pending.get('1')?.({ task: { ...value.tasks[0], description: 'STALE DETAIL' }, revision: 'old', comments: [], review: null });
+  pending.get('2')?.({ task: { ...value.tasks[1], description: 'CURRENT DETAIL' }, revision: 'new', comments: [], review: null });
+  await tick();
+  assert.match(screen(io.output), /CURRENT DETAIL/); assert.doesNotMatch(screen(io.output), /STALE DETAIL/);
+  io.input.emit('data', 'q'); await running;
+});
+
 test('failed and malformed refreshes retain the last good snapshot with explicit offline age', async t => {
   const io = streams(); let calls = 0;
   const running = watchTaskBoard(async () => {
@@ -327,24 +395,68 @@ test('quit pauses fresh non-flowing stdin and aborts the pending refresh', async
   assert.equal(io.input.readableFlowing, false);
 });
 
+test('delete shortcut previews only a task, cancels without writing and confirms once with the captured revision', async t => {
+  const io = streams(); let inspected = 0; const deletes = [];
+  const value = { ...sample(), fetchedAt: null }; let finishDelete;
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    inspectTask: async input => { inspected++; return { task: value.tasks.find(task => task.id === input.taskId), revision: 'preview-revision' }; },
+    deleteTask: input => { deletes.push(input); return new Promise(resolve => { finishDelete = resolve; }); },
+  });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'd'); await tick(); assert.equal(inspected, 0, 'Owner groups cannot be deleted');
+  io.input.emit('data', 'jd'); await tick();
+  assert.match(screen(io.output), /DELETE R-1/); assert.match(screen(io.output), /Enter permanently delete/);
+  io.input.emit('data', 'n'); assert.equal(deletes.length, 0);
+  io.input.emit('data', 'd'); await tick(); io.input.emit('data', '\r\r');
+  assert.equal(deletes.length, 1); assert.equal(deletes[0].taskId, '1'); assert.equal(deletes[0].companyId, 'c');
+  assert.equal(deletes[0].expectedRevision, 'preview-revision'); assert.ok(deletes[0].key);
+  finishDelete({ deleted: true, outcome: { confirmed: true } }); await tick();
+  assert.match(screen(io.output), /Deleted R-1/); assert.doesNotMatch(screen(io.output), /Choose release/);
+  assert.match(screen(io.output), /Build engine/);
+  io.input.emit('data', 'q'); await running;
+});
+
+test('unconfirmed deletion retains the row and displays failure rather than claiming success', async t => {
+  const io = streams(); const value = { ...sample(), fetchedAt: null };
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    inspectTask: async () => ({ task: value.tasks[0], revision: 'revision' }),
+    deleteTask: async () => ({ deleted: false, outcome: { confirmed: false } }),
+  });
+  t.after(() => io.input.emit('data', 'q'));
+  await tick(); io.input.emit('data', 'jd'); await tick(); io.input.emit('data', '\r'); await tick();
+  assert.match(screen(io.output), /DELETE FAILED/); assert.match(screen(io.output), /Choose release/);
+  io.input.emit('data', 'q'); await running;
+});
+
+test('delete does not activate during search and quitting aborts a hung preview', async t => {
+  const io = streams(); let signal; let inspected = 0;
+  const running = watchTaskBoard(() => sample(), { ...io, interval: 60_000,
+    inspectTask: (_, value) => { inspected++; signal = value; return new Promise(() => {}); },
+    deleteTask: () => assert.fail('No confirmation, no deletion'),
+  });
+  t.after(() => io.input.emit('data', '\x03'));
+  await tick(); io.input.emit('data', '/d'); assert.equal(inspected, 0);
+  io.input.emit('data', '\x1b'); await new Promise(resolve => setTimeout(resolve, 50));
+  io.input.emit('data', 'jd'); assert.equal(inspected, 1);
+  io.input.emit('data', 'q'); await running; assert.equal(signal.aborted, true);
+});
+
 test('assignment picker lists only present company agents and confirms one guarded assignment', async t => {
-  const io = streams(); const assignments = []; let inspected = 0; let finishAssign;
+  const io = streams(); const assignments = []; let finishAssign;
   const value = { ...sample(), fetchedAt: null, agents: [...sample().agents,
     { id: 'alpha', companyId: 'c', name: 'Alpha', availability: 'present', nativeState: 'idle' },
     { id: 'zulu', companyId: 'c', name: 'Zulu', availability: 'present', nativeState: 'working' },
     { id: 'offline', companyId: 'c', name: 'Offline', availability: 'offline', nativeState: 'idle' },
     { id: 'foreign', companyId: 'other', name: 'Foreign', availability: 'present', nativeState: 'idle' }] };
   const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
-    inspectTask: async input => { inspected++; return { task: value.tasks.find(task => task.id === input.taskId), revision: 'assignment-revision' }; },
+    inspectTask: async input => ({ task: value.tasks.find(task => task.id === input.taskId), revision: 'assignment-revision' }),
     assignTask: input => { assignments.push(input); return new Promise(resolve => { finishAssign = resolve; }); },
   });
   t.after(() => io.input.emit('data', 'q'));
   await tick(); io.input.emit('data', 'ja');
   assert.match(screen(io.output), /ASSIGN R-1/); assert.match(screen(io.output), /Alpha/); assert.match(screen(io.output), /Zulu/);
   assert.doesNotMatch(screen(io.output), /Offline|Foreign/);
-  io.input.emit('data', 'j'); assert.match(screen(io.output), /▸ Zulu/);
-  io.input.emit('data', '\r'); await new Promise(resolve => setTimeout(resolve, 20)); io.input.emit('data', '\r');
-  assert.equal(inspected, 1, screen(io.output)); assert.equal(assignments.length, 1, screen(io.output));
+  io.input.emit('data', 'j\r\r'); await tick(); assert.equal(assignments.length, 1);
   assert.equal(assignments[0].taskId, '1'); assert.equal(assignments[0].expectedRevision, 'assignment-revision');
   assert.deepEqual(assignments[0].payload, { assigneeAgentId: 'zulu' }); assert.ok(assignments[0].key);
   finishAssign({ task: { ...value.tasks[0], assigneeAgentId: 'zulu', assigneeUserId: null }, outcome: { confirmed: true } });

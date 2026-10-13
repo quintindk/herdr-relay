@@ -6,6 +6,7 @@ import { Hermes, observeHermes } from './hermes.mjs';
 import { canonical, digest, requireValue } from './protocol.mjs';
 import { ownedRuntime } from './runtimes.mjs';
 import { reconcilePlacement } from './placement.mjs';
+import { assertRoutineTask } from './routine-execution.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -75,6 +76,7 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
       if (runtimeKey) ownedRuntime(store, runtimeKey);
       if (!run.invocation) {
         if (!ready(id) || run.cancellationRequested) return;
+        assertRoutineTask(store, binding.id, run.request.taskId);
         const snapshot = await native.snapshot();
         if (!snapshot.idle) { store.nativeStatus(id, { state: 'blocked', reason: 'native_busy' }); return; }
         const context = workerContext(directory, socketPath, store, binding);

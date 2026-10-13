@@ -1,26 +1,31 @@
 import { canonical, digest, requireValue } from './protocol.mjs';
 import { routineTargetAdmission } from './routines.mjs';
 import { resolveRoutineFolder } from './persistent-routines.mjs';
+import { ownedRuntime } from './runtimes.mjs';
+import { OpenCode } from './opencode.mjs';
 
-export function assertRoutineTask(store, bindingId, taskId) {
+export function assertRoutineTask(store, bindingId, taskId, { verifyRuntime = ownedRuntime } = {}) {
   const binding = store.binding(bindingId);
   const record = store.operation(`routine-task:${digest([binding.config.companyId, taskId])}`);
   if (!record) return;
   const schedule = store.operation(record.scheduleId);
   const bridge = store.operation(`opencode-bridge:${bindingId}`);
+  const admission = routineTargetAdmission(store, binding, undefined, { allowBusyBridge: true, verifyRuntime });
   requireValue(schedule?.created && !schedule.cancellationRequested && schedule.state !== 'cancelled' &&
     (schedule.persistentScope ? schedule.router?.agentId === record.routingAgentId &&
       schedule.persistentScope.directory === record.target.directory : canonical(schedule.target) === canonical(record.target)) &&
     binding.id === record.target.bindingId &&
     binding.revision === record.target.bindingRevision && digest(binding.config) === record.target.bindingConfig &&
-    bridge?.identity.conversationId === record.target.conversationId && bridge.identity.terminalId === record.target.terminalId &&
-    bridge.sessionCreatedAt === record.target.sessionCreatedAt,
+    admission.ready && canonical(admission.target) === canonical(record.target) &&
+    (record.target.managed || bridge?.identity.conversationId === record.target.conversationId &&
+      bridge.identity.terminalId === record.target.terminalId && bridge.sessionCreatedAt === record.target.sessionCreatedAt),
   'routine_execution_mismatch', 'Routine target or cancellation state changed', 409);
 }
 
 // Called before a new dispatch. The backend issue and native routine-run receipt,
 // not caller-supplied wake metadata, establish provenance.
-export async function admitRoutineExecution(store, api, input, { observationConfig } = {}) {
+export async function admitRoutineExecution(store, api, input, { observationConfig, verifyRuntime = ownedRuntime,
+  nativeSnapshot = binding => new OpenCode(binding.config).snapshot() } = {}) {
   const schedules = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'routine:%'").all()
     .map(row => JSON.parse(row.data));
   if (!schedules.length) return;
@@ -95,10 +100,17 @@ export async function admitRoutineExecution(store, api, input, { observationConf
     'routine_occurrence_reserved', 'This occurrence is already pinned; use exact backend recovery, not another delivery', 409);
   const admission = schedule.persistentScope
     ? resolveRoutineFolder(store, schedule.persistentScope, observationConfig, routineTargetAdmission)
-    : routineTargetAdmission(store, store.binding(input.bindingId), task);
+    : routineTargetAdmission(store, store.binding(input.bindingId), task, { verifyRuntime });
   requireValue(admission.ready, ['conversation_busy', 'routine_bridge_unavailable'].includes(admission.blocker) ? 'routine_target_busy' : admission.blocker,
     'Scheduled work requires the exact idle reserved conversation', 409);
   const target = admission.target;
+  if (target.managed) {
+    const snapshot = await nativeSnapshot(store.binding(target.bindingId));
+    requireValue(snapshot?.idle === true, 'routine_target_busy', 'Managed routine target must have an idle native session', 409);
+    const latest = routineTargetAdmission(store, store.binding(target.bindingId), task, { verifyRuntime });
+    requireValue(latest.ready && canonical(latest.target) === canonical(target),
+      'routine_target_busy', 'Managed routine target changed before admission', 409);
+  }
   const origin = schedule.persistentScope ? {
     bindingId: target.bindingId, conversationId: target.conversationId, sessionCreatedAt: target.sessionCreatedAt,
   } : schedule.authority.kind === 'native' ? {

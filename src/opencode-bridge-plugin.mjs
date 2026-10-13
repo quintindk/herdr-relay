@@ -129,6 +129,10 @@ function taskTools(execute) {
       args: { ...writeArgs, payload: tool.schema.object({ mode: tool.schema.literal('merged_interactive'),
         repository: id, commit: id, artifactPath: id, branch: id.optional() }).strict().optional() },
     }],
+    ['delete', {
+      description: 'Permanently delete the requested task, regardless of its assignee. Use its inspected revision and a stable key. This is not cancellation and does not cascade through children. Active execution must stop first. Lost replies reconcile without another DELETE.',
+      args: { key: id, taskId: id, expectedRevision: id, reason: id.optional() },
+    }],
     ['reopen', {
       description: 'Reopen a terminal task on explicit human instruction. Before calling, state the exact task, proposed status and reason visibly in chat; the permission popup does not show these details. Use the revision token from relay_task_inspect and reuse the key on retries.',
       args: { ...writeArgs, payload: tool.schema.object({ status: tool.schema.enum(['todo', 'in_progress']).optional() }).strict() },
@@ -145,7 +149,9 @@ export default async function relayBridge({ client, directory }, options = {}) {
   if (process.env.HERDR_ENV !== '1') return {};
   if (options.configDirectory !== undefined) {
     if (!isAbsolute(options.configDirectory)) throw new Error('Bridge configDirectory must be absolute');
-    return discoverBridge({ client, directory }, options.configDirectory);
+    const discoveryWaitMs = options.discoveryWaitMs ?? 30000;
+    if (!Number.isSafeInteger(discoveryWaitMs) || discoveryWaitMs < 1) throw new Error('Bridge discoveryWaitMs must be a positive integer');
+    return discoverBridge({ client, directory }, options.configDirectory, discoveryWaitMs);
   }
   const files = options.configFiles ?? (options.configFile ? [options.configFile] : []);
   if (!Array.isArray(files) || files.some(file => typeof file !== 'string')) throw new Error('Bridge configFiles must be an array of paths');
@@ -412,7 +418,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
 }
 
 // Keep one exact-conversation plugin alive. Discovery never grants enrolment authority.
-async function discoverBridge(input, configDirectory) {
+async function discoverBridge(input, configDirectory, discoveryWaitMs) {
   let hooks, selected, conversationId, timer, pending, stopped = false;
   const waiters = new Set();
   const refresh = async () => {
@@ -465,7 +471,7 @@ async function discoverBridge(input, configDirectory) {
         };
         if (stopped) { ready(); return; }
         waiters.add(ready);
-        timeout = setTimeout(() => reject(new Error('Relay bridge is not enrolled for this chat yet. Tool requires the enrolled conversation. Check Relay agent readiness.')), 12000);
+        timeout = setTimeout(() => reject(new Error(`Relay bridge was not ready for this exact chat within ${discoveryWaitMs / 1000} seconds. Enrolment may still be reconciling; check Relay agent readiness.`)), discoveryWaitMs);
         tick();
       });
       if (stopped) throw new Error('Relay bridge is disposed');

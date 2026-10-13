@@ -87,7 +87,7 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
   reads do not arm the bridge or enable incoming assignments. Ready-peer discovery
   still excludes targets that are not ready.
 - With `configDirectory`, a tool invocation triggers credential discovery and waits
-  up to 12 seconds for the exact chat before refusing. Discovery does not grant
+  up to 30 seconds for the exact chat before refusing. Discovery does not grant
   enrolment. On a transient startup timeout, wait briefly and retry the read once.
   If it still fails, report the missing Relay portion and continue independent
   startup checks. Do not skip the entire startup, substitute reviews/delegations
@@ -97,6 +97,15 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
   Do not force a restart or interrupt active work.
 
 ## Daily Task Tracking
+
+- `relay_task_delete({key,taskId,expectedRevision,reason?})` permanently removes the
+  requested same-company task regardless of assignee. Inspect first. It is not
+  cancellation, result acceptance or recursive deletion. Stop active execution
+  first; backend references may prevent deletion. Retry the same key after an
+  uncertain reply for readback only, never a new DELETE. The task pane offers `d`,
+  then Enter to confirm or Esc to cancel. CLI `task delete --company ID --task ID
+  --key KEY` automatically inspects before deletion. No real task should be deleted
+  merely to validate the feature.
 
 - `relay_task_recover({key,taskId,expectedRevision,reason})` is the self-service
   recovery entry point. With no payload it first detects any exact published result

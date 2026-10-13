@@ -16,7 +16,9 @@ export function harnessReviewDecision(run, request, item) {
 
 export function harnessReviewReceipt(request) {
   return { interactionId: request.interactionId, status: request.decision === 'accept' ? 'accepted' : 'rejected',
-    attribution: 'Relay operator connector; native source recorded in private harness-review receipt.',
+    attribution: request.bindingId === 'operator-board'
+      ? 'Relay operator task board; explicit keyboard confirmation recorded in private harness-review receipt.'
+      : 'Relay operator connector; native source recorded in private harness-review receipt.',
     continuation: 'End this turn. Relay/Paperclip own subsequent completion; do not mark the issue Done yourself.' };
 }
 

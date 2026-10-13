@@ -2,6 +2,10 @@
 
 Updated: 2026-10-04. Package `herdr-relay@0.1.0-dev.0`. SQLite schema 4.
 
+OpenCode 2 intentionally breaks both Relay integration surfaces. Read the
+[OpenCode 2 migration assessment](opencode-v2-migration-assessment-2026-10-13.md)
+before upgrading the primary OpenCode installation.
+
 ## Start here
 
 The current interactive direction is **Herdr-first launch and registration**.

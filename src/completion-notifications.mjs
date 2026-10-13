@@ -29,6 +29,14 @@ function hasRecordedOrigin(tasks, notification) {
     ['bindingId', 'conversationId', 'sessionCreatedAt'].every(key => task.request.origin[key] === notification.origin?.[key]));
 }
 
+function quietRoutineCompletion(store, task, run) {
+  if (!task.id.startsWith('routine-task:') || run.result.summary !== 'Inbox sweep: no new actions.' ||
+    canonical(Object.keys(run.result).sort()) !== canonical(['candidate', 'key', 'summary'])) return false;
+  const schedule = store.operation(task.scheduleId);
+  return schedule?.id?.startsWith('routine:') && schedule.created === true && task.routineRunId &&
+    task.request.companyId === schedule.request.companyId;
+}
+
 function pendingReviews(store, tasks = recordedTasks(store)) {
   const runs = store.runs();
   const reviews = [];
@@ -91,6 +99,14 @@ export function reconcileNotifications(store) {
         const origin = { bindingId, conversationId, sessionCreatedAt };
         // Both completion paths and duplicate task receipts share the same identity.
         const id = `completion-notification:${digest([origin, companyId, taskId, run.id, completion.candidate])}`;
+        if (quietRoutineCompletion(store, task, run)) {
+          const existing = store.operation(id);
+          if (existing?.state === 'pending') store.saveOperation({ ...existing, state: 'superseded' });
+          const suppressionId = `completion-notification-suppression:${digest([origin, companyId, taskId, run.id, completion.candidate])}`;
+          if (!store.operation(suppressionId)) store.saveOperation({ id: suppressionId, runId: run.id, state: 'recorded',
+            scheduleId: task.scheduleId, routineRunId: task.routineRunId, companyId, taskId, origin });
+          continue;
+        }
         if (store.operation(id)) continue;
         const identifier = task.receipt.identifier.slice(0, 128);
         const title = task.receipt.title.slice(0, 512);

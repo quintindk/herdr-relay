@@ -52,6 +52,12 @@ function reviewFixture(t) {
   return f;
 }
 
+function routineTask(f) {
+  f.store.db.prepare('DELETE FROM operations WHERE id = ?').run(f.task.id);
+  f.store.saveOperation({ id: 'routine:test', runId: '', state: 'active', created: true, request: { companyId: 'company' } });
+  f.task = f.store.saveOperation({ ...f.task, id: 'routine-task:one', scheduleId: 'routine:test', routineRunId: 'occurrence' });
+}
+
 test('reconciliation joins completion runs to recorded operator tasks and survives restart without duplicates', t => {
   const f = fixture(t);
   const [notification] = reconcileNotifications(f.store);
@@ -88,6 +94,42 @@ test('no-review completion works without a review but conflicting root origins f
   assert.deepEqual(reconcileNotifications(f.store), []);
   assert.deepEqual(f.list(), []);
   assert.deepEqual(f.history(), []);
+});
+
+test('exact no-action routine completion settles without creating a user-facing notification', t => {
+  const f = fixture(t); routineTask(f);
+  f.store.save({ ...f.run, result: { ...f.run.result, summary: 'Inbox sweep: no new actions.' } }, 'test.changed');
+  assert.deepEqual(reconcileNotifications(f.store), []);
+  assert.deepEqual(f.list(), []);
+  assert.equal(f.store.db.prepare("SELECT count(*) AS count FROM operations WHERE id LIKE 'completion-notification-suppression:%'").get().count, 1);
+  f.restart();
+  assert.deepEqual(reconcileNotifications(f.store), []);
+  assert.deepEqual(f.history(), []);
+});
+
+test('quiet routine completion supersedes only a pending notification reserved before suppression', t => {
+  const f = fixture(t);
+  const notification = f.create();
+  routineTask(f);
+  f.store.save({ ...f.run, result: { ...f.run.result, summary: 'Inbox sweep: no new actions.' } }, 'test.changed');
+  assert.deepEqual(reconcileNotifications(f.store), []);
+  assert.equal(f.store.operation(notification.id).state, 'superseded');
+  assert.deepEqual(f.list(), []);
+  assert.deepEqual(f.history(), [f.store.operation(notification.id)]);
+});
+
+for (const [name, result] of [
+  ['ordinary task', null],
+  ['changed summary', { summary: 'Inbox sweep: one action.' }],
+  ['coverage checks', { summary: 'Inbox sweep: no new actions.', checks: [{ outcome: 'not_run', evidence: 'Mailbox unavailable' }] }],
+  ['material deliverable', { summary: 'Inbox sweep: no new actions.', deliverables: ['Created TEST-2'] }],
+]) test(`quiet completion suppression retains ${name} notifications`, t => {
+  const f = fixture(t);
+  if (name !== 'ordinary task') routineTask(f);
+  if (result) f.store.save({ ...f.run, result: { ...f.run.result, ...result } }, 'test.changed');
+  else f.store.save({ ...f.run, result: { ...f.run.result, summary: 'Inbox sweep: no new actions.' } }, 'test.changed');
+  assert.equal(reconcileNotifications(f.store).length, 1);
+  assert.equal(f.list().length, 1);
 });
 
 for (const [name, change] of [

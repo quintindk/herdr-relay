@@ -17,6 +17,7 @@ herdr-relay task list --company COMPANY_ID --status todo,blocked --limit 50
 herdr-relay task list --company COMPANY_ID --status done,cancelled --limit 50
 herdr-relay task children --company COMPANY_ID --task TASK_ID --limit 50
 herdr-relay task inspect --company COMPANY_ID --task TASK_ID
+herdr-relay task delete --company COMPANY_ID --task TASK_ID --key delete-TASK_ID
 herdr-relay task comments --company COMPANY_ID --task TASK_ID --limit 499
 herdr-relay task activity --company COMPANY_ID --from 2026-10-08T00:00:00+02:00 --to 2026-10-09T00:00:00+02:00 --limit 200
 ```
@@ -237,6 +238,34 @@ Paperclip readback showed Done, a succeeded run, zero interaction/review cards,
 and no recovery blocker or missing-disposition handoff. No human acceptance was
 requested. Fixed no-review child creation and policy-override refusal are covered
 by automated tests; the earlier two-agent test still used human review.
+
+## Permanent Deletion
+
+`task delete --company COMPANY_ID --task TASK_ID --key KEY` inspects the selected
+task and permanently deletes it. It does not prompt again because the command
+itself requests deletion. Optional `--file mutation.json` supplies an already
+inspected `expectedRevision` and optional `reason` instead of automatic inspection.
+
+The Relay API is `POST /tasks/manage`:
+
+```json
+{
+  "action": "delete",
+  "companyId": "COMPANY_ID",
+  "taskId": "TASK_ID",
+  "key": "delete-TASK_ID",
+  "expectedRevision": "REVISION_FROM_INSPECT"
+}
+```
+
+The native bridge exposes `relay_task_delete` with the same key, task ID and
+revision; company scope comes from the enrolled chat. This is permanent deletion,
+not cancellation. It works independently of assignee, does not cascade children,
+and does not infer candidate approval. Active execution must stop first. Backend
+references can reject removal. Native deletion removes task-owned backend documents
+and attachments, not Git files. A 404 readback confirms success; transport failure
+never means absence. Retrying an uncertain delete only reads back, never resends.
+Definitive backend rejection retains the task and releases the uncertain-write fence.
 
 ## Worker Commands
 

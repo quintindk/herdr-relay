@@ -75,7 +75,7 @@ async function discoveryFixture(t) {
     promptAsync: async () => assert.fail('Configured tools must not send prompts'),
   } };
   const load = async options => {
-    const hook = await plugin({ client, directory: '/work' }, options ?? { configDirectory });
+    const hook = await plugin({ client, directory: '/work' }, options ?? { configDirectory, discoveryWaitMs: 3000 });
     hooks.push(hook); return hook;
   };
   return { root, configDirectory, inventoryFile, countFile, pane, inventory, requests, approvals, sdkCalls, source, messages, config, load,
@@ -116,11 +116,13 @@ test(`configured busy bridge exposes read-only previews and permission-checked e
   const configFile = f.config('first');
   const hooks = await f.load(discovery ? undefined : { configFile });
   const tools = hooks.tool;
-  assert.equal(Object.keys(tools).length, 38);
+  assert.equal(Object.keys(tools).length, 39);
   assert.deepEqual(tools.relay_tasks.args, {});
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(true), true);
   assert.equal(tools.relay_enrol_agent.args.reserved.parse(undefined), undefined);
   assert.equal(tools.relay_enrol_agent.args.observedId.parse(undefined), undefined);
+  assert.equal(tools.relay_task_delete.args.reason.parse(undefined), undefined);
+  assert.equal(tools.relay_task_delete.args.expectedRevision.parse('revision'), 'revision');
   if (!discovery) {
     for (const entry of Object.values(tools)) {
       await assert.rejects(entry.execute({}, { ...f.context, sessionID: 'foreign' }), /enrolled conversation/);
@@ -457,12 +459,12 @@ test('discovery serialises delayed startup, keeps epochs through read errors and
 
 test('discovery bounds absent-config waits and disposal wakes all callers without invoking stale tools', async t => {
   const f = await discoveryFixture(t);
-  const hooks = await f.load();
+  const hooks = await f.load({ configDirectory: f.configDirectory, discoveryWaitMs: 1200 });
   const start = Date.now();
-  await assert.rejects(hooks.tool.relay_tasks.execute({}, f.context), /not enrolled for this chat yet/);
-  assert.ok(Date.now() - start >= 11500 && Date.now() - start < 14000, 'Discovery wait is bounded at twelve seconds');
+  await assert.rejects(hooks.tool.relay_tasks.execute({}, f.context), /not ready for this exact chat within 1.2 seconds/);
+  assert.ok(Date.now() - start >= 1100 && Date.now() - start < 2500, 'Discovery wait honours the configured bound');
   const calls = readFileSync(f.countFile, 'utf8').trim().split('\n').length;
-  assert.ok(calls >= 10 && calls <= 13, `Expected roughly one refresh per second, got ${calls}`);
+  assert.ok(calls >= 1 && calls <= 3, `Expected bounded discovery refreshes, got ${calls}`);
   f.config('first');
   await hooks.tool.relay_agents.execute({}, f.context);
   const reads = f.requests.filter(request => request.path !== '/bridge/poll').length;
@@ -572,7 +574,7 @@ test('configDirectory discovers enrolments after startup, follows the exact live
   const tools = hooks.tool;
   assert.deepEqual(Object.keys(tools).sort(), ['relay_agents', 'relay_answer', 'relay_coordinator_grant', 'relay_coordinator_revoke', 'relay_delegate', 'relay_delegations', 'relay_enrol_agent', 'relay_enrolment_candidates', 'relay_questions', 'relay_review', 'relay_reviews',
     'relay_schedule_cancel', 'relay_schedule_create', 'relay_schedule_edit', 'relay_schedule_inspect', 'relay_schedule_pause', 'relay_schedule_preview', 'relay_schedule_resume', 'relay_schedule_run', 'relay_schedules',
-    'relay_task_activity', 'relay_task_assign', 'relay_task_cancel', 'relay_task_children', 'relay_task_comment', 'relay_task_comments', 'relay_task_complete', 'relay_task_create', 'relay_task_edit', 'relay_task_inspect', 'relay_task_list', 'relay_task_recover', 'relay_task_reference_attach', 'relay_task_reference_lookup', 'relay_task_reopen',
+    'relay_task_activity', 'relay_task_assign', 'relay_task_cancel', 'relay_task_children', 'relay_task_comment', 'relay_task_comments', 'relay_task_complete', 'relay_task_create', 'relay_task_delete', 'relay_task_edit', 'relay_task_inspect', 'relay_task_list', 'relay_task_recover', 'relay_task_reference_attach', 'relay_task_reference_lookup', 'relay_task_reopen',
     'relay_tasks', 'relay_worker_prepare', 'relay_workers']);
   await hooks.config();
   for (const tool of Object.values(tools)) assert.equal(typeof tool.execute, 'function');

@@ -66,7 +66,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   requireValue(authority && typeof authority === 'object' && !Array.isArray(authority), 'invalid_authority', 'Server authority required');
   text(authority.kind, 'authority.kind');
   const { action, companyId, taskId } = input;
-  requireValue(['create', 'inspect', 'edit', 'assign', 'complete', 'comment', 'reopen', 'cancel', 'recover'].includes(action), 'invalid_request', 'Unknown human task action');
+  requireValue(['create', 'inspect', 'edit', 'assign', 'complete', 'comment', 'reopen', 'cancel', 'recover', 'delete'].includes(action), 'invalid_request', 'Unknown human task action');
   text(companyId, 'companyId');
   let externalReference;
   if (input.externalReference !== undefined) {
@@ -84,7 +84,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     if (action !== 'create') text(input.expectedRevision, 'expectedRevision');
   }
   const payload = input.payload ?? {};
-  if (['complete', 'cancel'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'This action accepts no payload');
+  if (['complete', 'cancel', 'delete'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'This action accepts no payload');
   if (action === 'recover' && input.payload !== undefined) object(input.payload, ['mode', 'repository', 'commit', 'artifactPath', 'branch']);
   if (['cancel', 'recover'].includes(action)) text(input.reason, 'reason');
   if (action === 'comment') {
@@ -167,7 +167,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   };
   const fence = targetId => {
     const pending = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'human-task:%'").all()
-      .map(row => JSON.parse(row.data)).some(item => item.id !== id && item.state !== 'recorded' &&
+       .map(row => JSON.parse(row.data)).some(item => item.id !== id && !['recorded', 'rejected'].includes(item.state) &&
         item.request?.companyId === companyId && (item.request.taskId === targetId || item.taskId === targetId));
     requireValue(!pending, 'operation_uncertain', 'Reconcile the earlier human task write before using a different key', 409);
   };
@@ -366,6 +366,58 @@ export async function humanTask(store, api, input, { check = () => {}, authority
       return current.state === 'recorded' ? current : store.saveOperation({ ...current, state: 'recorded', receipt: snapshot.publicTask });
     });
     return response(snapshot, operation);
+  }
+
+  if (action === 'delete') {
+    const path = `/api/issues/${encodeURIComponent(taskId)}`;
+    const missing = async () => {
+      try { await send('GET', path); return false; }
+      catch (error) { if (error.backendStatus === 404) return true; throw error; }
+    };
+    const deletedResponse = value => ({ task: value.receipt, revision: null, deleted: true,
+      operationId: value.id, state: value.state, outcome: { confirmed: true, deleted: true },
+      ...(value.reconciled ? { reconciled: true } : {}) });
+    if (operation) {
+      requireValue(operation.state !== 'rejected', 'task_delete_rejected',
+        `Backend refused deletion (HTTP ${operation.backendStatus}). Linked records may need removing first.`, 409);
+      requireValue(await missing(), 'operation_uncertain', 'Deletion is not confirmed; no DELETE will be resent', 409);
+      if (operation.state !== 'recorded') operation = store.saveOperation({ ...operation, state: 'recorded', reconciled: true });
+      return deletedResponse(operation);
+    }
+    fence(taskId);
+    let initial;
+    try { initial = await inspect(taskId); }
+    catch (error) {
+      requireValue(error.backendStatus !== 404, 'task_not_found', 'Task does not exist', 404);
+      throw error;
+    }
+    requireValue(initial.revision === input.expectedRevision, 'stale_revision', 'Inspect the task again before deleting it', 409);
+    const idle = snapshot => {
+      const task = snapshot.task;
+      requireValue(!task.executionRunId && !task.checkoutRunId && !task.executionLockedAt && !task.activeRun &&
+        runsFor(taskId).every(run => run.nativeState === 'settled'), 'task_busy', 'Stop active execution before deleting its task', 409);
+    };
+    idle(initial);
+    const current = await inspect(taskId);
+    requireValue(current.revision === initial.revision, 'stale_revision', 'Task changed before deletion', 409);
+    idle(current); check(); fence(taskId);
+    requireValue(!previous(), 'operation_conflict', 'Concurrent task operation', 409);
+    operation = store.saveOperation({ id, runId: '', request, state: 'uncertain', receipt: current.publicTask });
+    try { await send('DELETE', path); }
+    catch (error) {
+      if ([400, 401, 403, 409, 422].includes(error.backendStatus)) {
+        if (await missing()) {
+          operation = store.saveOperation({ ...operation, state: 'recorded' });
+          return deletedResponse(operation);
+        }
+        store.saveOperation({ ...operation, state: 'rejected', backendStatus: error.backendStatus });
+        requireValue(false, 'task_delete_rejected', `Backend refused deletion (HTTP ${error.backendStatus}). Linked records may need removing first.`, 409);
+      }
+      if (error.backendStatus !== 404) throw error;
+    }
+    requireValue(await missing(), 'operation_uncertain', 'Backend has not confirmed task deletion', 409);
+    operation = store.saveOperation({ ...operation, state: 'recorded' });
+    return deletedResponse(operation);
   }
 
   if (action === 'recover' && input.payload === undefined) {

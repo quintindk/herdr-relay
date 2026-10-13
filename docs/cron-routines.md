@@ -86,10 +86,14 @@ while that human turn is busy. Self-setup accepts a fresh configured or armed br
 without advertising it as idle or arming it. Unsettled Relay work, stale identities
 and non-human sources still block management. Manual run-now still requires idle.
 
-Use `relay_agents` to resolve another target, which must have a fresh, armed, idle
-bridge. Both modes require the exact reserved backend adapter and one concurrent
-backend run. Terminal, conversation, native creation identity and binding revision
-are pinned. A new chat or terminal does not silently inherit scheduling authority.
+Use `relay_agents` to resolve another interactive target, which must have a fresh,
+armed, idle bridge. An exact target may instead be a persistent or service-lifetime
+Relay-provisioned headless OpenCode binding. Managed targets pin their provision
+marker, owned runtime key and nonce, binding configuration, conversation creation
+identity and idle native session. They never borrow the observation marker or
+terminal placement checks from interactive bindings. Both modes require one
+concurrent backend run. A new chat, terminal or runtime does not silently inherit
+scheduling authority.
 Actual occurrence delivery always requires idle, including self-targeted routines.
 Use a dedicated automation conversation for frequent jobs; this is not atomic
 protection against simultaneous human input into an explicitly reserved target.
@@ -167,6 +171,10 @@ access in the CLI or plugin.
   Each verified occurrence records its own provenance and preserves the originating
   chat for result and review notifications. Operator-created routines have no
   invented chat return address.
+- A provenance-verified routine result containing only the mandatory result fields
+  and the exact summary `Inbox sweep: no new actions.` still publishes and settles,
+  but does not create a completion toast. Any additional field, changed summary or
+  non-routine task retains normal notification behaviour.
 - The newest 200 native routine-run receipts bound occurrence verification. Very
   old unadmitted tasks outside that window are refused rather than guessed.
 

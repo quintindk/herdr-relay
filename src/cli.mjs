@@ -55,6 +55,7 @@ const help = `herdr-relay (development)
   task reference-attach --company COMPANY_ID --task TASK_ID --key KEY --file reference.json  [runless reference]
     Reference file: {"expectedRevision":"FROM_INSPECT","payload":{"namespace":"...","externalId":"...","url":"https://..."},"reason":"Human instruction"}; url and reason are optional.
   task inspect --company COMPANY_ID --task TASK_ID
+  task delete --company COMPANY_ID --task TASK_ID --key KEY [--file mutation.json]
   task edit|reassign --company COMPANY_ID --task TASK_ID --key KEY --file changes.json
   task complete --company COMPANY_ID --task TASK_ID --key KEY --file completion.json
   task recover --company COMPANY_ID --task TASK_ID --key KEY --file recovery.json
@@ -112,7 +113,7 @@ export async function main(args) {
     'reference-lookup': ['namespace', 'external-id'],
   };
   const query = Object.hasOwn(queryOptions, action);
-  const humanMutation = ['edit', 'reassign', 'complete', 'comment', 'reopen', 'cancel', 'recover', 'reference-attach'].includes(action);
+  const humanMutation = ['edit', 'reassign', 'complete', 'comment', 'reopen', 'cancel', 'recover', 'delete', 'reference-attach'].includes(action);
   if (values.company !== undefined) requireValue(group === 'task' && (query || humanMutation || ['create', 'capture', 'inspect'].includes(action)) && positionals.length === 2,
     'invalid_request', '--company is only valid for runless operator task commands');
   for (const option of ['project', 'status', 'agent', 'user', 'parent', 'limit', 'cursor', 'from', 'to', 'namespace', 'external-id']) {
@@ -170,7 +171,10 @@ export async function main(args) {
     const read = signal => call(connection, 'GET', '/task-board', undefined, { signal });
     if (values.watch) await watchTaskBoard(read, {
       inspectTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'inspect' }, { signal }),
+      detailTask: (input, signal) => call(connection, 'POST', '/task-board/detail', input, { signal }),
+      reviewTask: (input, signal) => call(connection, 'POST', '/task-board/review', input, { signal }),
       assignTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'assign' }, { signal }),
+      deleteTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'delete' }, { signal }),
     });
     else {
       const value = await read();
@@ -356,9 +360,11 @@ export async function main(args) {
     result = await call(connection, 'POST', '/tasks/manage', { ...details, action: 'create', companyId: values.company, key: values.key });
   }
   else if (group === 'task' && (action === 'inspect' || humanMutation) && !id) {
-    requireValue(values.company && values.task && (action === 'inspect' || (values.file && values.key)),
-      'invalid_request', '--company and --task required; mutations also need --key and --file');
-    const details = action === 'inspect' ? {} : JSON.parse(readFileSync(values.file, 'utf8'));
+    requireValue(values.company && values.task && (action === 'inspect' || (values.key && (values.file || action === 'delete'))),
+      'invalid_request', '--company and --task required; mutations need --key and (except delete) --file');
+    const details = action === 'inspect' ? {} : action === 'delete' && !values.file
+      ? { expectedRevision: (await call(connection, 'POST', '/tasks/manage', { action: 'inspect', companyId: values.company, taskId: values.task })).revision,
+        reason: 'Deleted through the task CLI' } : JSON.parse(readFileSync(values.file, 'utf8'));
     requireValue(details && typeof details === 'object' && !Array.isArray(details) &&
       Object.keys(details).every(key => ['expectedRevision', 'payload', 'reason'].includes(key)), 'invalid_request', 'Unsupported mutation file fields');
     if (action === 'reference-attach') requireValue(typeof details.expectedRevision === 'string' && details.expectedRevision.trim() &&

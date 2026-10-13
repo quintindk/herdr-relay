@@ -77,7 +77,7 @@ fresh chats without another config
 edit or restart. It matches the exact current pane, terminal and conversation,
 not just the folder. Tools remain visible while enrolment is pending.
 
-Invoking a tool triggers discovery with a bounded wait of up to 12 seconds for the
+Invoking a tool triggers discovery with a bounded wait of up to 30 seconds for the
 exact chat before refusal. Only discovery is retried internally, not permission
 checks or mutations. Discovery cannot grant enrolment. If a morning startup read
 times out transiently, wait briefly and retry that read once. If it still fails,

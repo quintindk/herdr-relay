@@ -53,7 +53,7 @@ the runtime. The context file holds credentials. Do not print or copy its conten
   `relay_reviews` substitutes for the backlog.
 - Configured busy bridges can read `relay_agents`, task queries,
   `relay_delegations` and notification history without enabling incoming work.
-  Discovery on tool invocation waits up to 12 seconds for the exact credential,
+  Discovery on tool invocation waits up to 30 seconds for the exact credential,
   never grants enrolment. After a transient startup timeout, pause briefly and
   retry the read once, then report the limitation and continue independent startup
   checks. Missing tools need a plugin reload at idle, not a forced restart.

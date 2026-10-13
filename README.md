@@ -89,7 +89,7 @@ retain `fetchedAt` and warnings. Use `relay_task_inspect` for full text,
 report. `relay_delegations` is restricted to work delegated from the
 exact origin chat, not general startup lookup. Configured busy callers can read
 tasks, ready peers, delegations and notification history without enabling incoming
-assignments. Discovery waits up to 12 seconds on invocation and never grants access.
+assignments. Discovery waits up to 30 seconds on invocation and never grants access.
 Retry a transient startup read once after a brief pause, then report the limitation
 and continue independent startup checks. Do not substitute reviews for the backlog.
 

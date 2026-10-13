@@ -33,6 +33,8 @@ async function fixture(t, { configuredCompany = false, backendContext = true } =
     status: 'todo', priority: 'medium', parentId: null, assigneeAgentId: 'agent', assigneeUserId: null,
     projectId: 'project', description: 'Collection description preview', updatedAt: '2026-10-07T08:00:00.000Z',
     executionRunId: 'private-run', executionRun: { token: 'execution-secret' } }];
+  const comments = [{ id: '00000000-0000-4000-8000-000000000002', companyId: company.id, issueId,
+    body: 'Latest comment', createdAt: '2026-10-07T08:01:00.000Z', authorUserId: 'human' }];
   const control = { failure: false, gate: null, entered: null };
   const backend = createServer(async (req, res) => {
     requests.push({ method: req.method, path: req.url, token: req.headers.authorization,
@@ -46,6 +48,8 @@ async function fixture(t, { configuredCompany = false, backendContext = true } =
     const routes = new Map([
       ['/api/companies', [company]], ['/api/companies/company', company],
       [collectionPaths[0], agents], [collectionPaths[1], projects], [collectionPaths[2], tasks],
+      [`/api/issues/${issueId}`, { ...tasks[0], descriptionTruncated: false }],
+      [`/api/issues/${issueId}/interactions`, []], [`/api/issues/${issueId}/comments?order=asc`, comments],
     ]);
     if (req.method !== 'GET' || !routes.has(req.url)) {
       res.writeHead(404); res.end(JSON.stringify({ message: 'Unexpected fixture request' })); return;
@@ -118,6 +122,26 @@ test('task board refuses unknown, worker and bridge credentials before backend o
     ]) await assert.rejects(call({ socketPath: f.service.socketPath, token }, 'GET', '/task-board'), { code, status });
     assert.equal(f.requests.length, before, 'Denied requests must not touch the backend');
   }
+});
+
+test('task board detail is operator-only and returns bounded comments without changing collection caching', async t => {
+  const f = await fixture(t);
+  const input = { companyId: 'company', taskId: issueId };
+  const before = f.requests.length;
+  await assert.rejects(call({ socketPath: f.service.socketPath, token: 'unknown' }, 'POST', '/task-board/detail', input),
+    { code: 'unauthorised', status: 401 });
+  await assert.rejects(call({ socketPath: f.service.socketPath, token: 'unknown' }, 'POST', '/task-board/review', {
+    action: 'accept', ...input, runId: 'run', interactionId: 'interaction', candidate: 'candidate',
+    expectedRevision: 'revision', key: 'key',
+  }), { code: 'unauthorised', status: 401 });
+  assert.equal(f.requests.length, before);
+  const detail = await call(f.service, 'POST', '/task-board/detail', input);
+  assert.equal(detail.task.description, 'Collection description preview');
+  assert.deepEqual(detail.comments.map(comment => comment.body), ['Latest comment']);
+  assert.equal(detail.review, null);
+  await f.read();
+  assert.equal(f.requests.filter(request => request.path === `/api/issues/${issueId}`).length, 2,
+    'Detail reads stay separate from the cached collection snapshot');
 });
 
 test('task board shares concurrent refreshes and caches successful responses for exactly four seconds', async t => {

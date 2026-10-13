@@ -47,6 +47,25 @@ function fit(value, width, unicode = false) {
   return result + (unicode ? '…' : '~') + ' '.repeat(width - used - 1);
 }
 
+function wrap(value, width, maxLines, unicode = false) {
+  const words = clean(value).replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const lines = []; let current = '';
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (widthOf(next) <= width) current = next;
+    else {
+      if (current) lines.push(current);
+      current = word;
+      if (lines.length === maxLines) break;
+    }
+  }
+  if (current && lines.length < maxLines) lines.push(current);
+  if (words.join(' ') !== lines.join(' ') && lines.length) {
+    lines[lines.length - 1] = fit(lines.at(-1), width, unicode).trimEnd().replace(/[~…]?$/, unicode ? '…' : '~');
+  }
+  return lines.map(value => fit(value, width, unicode));
+}
+
 function validate(value) {
   if (!value || ['companies', 'agents', 'projects', 'tasks'].some(name => !Array.isArray(value[name]))) {
     throw new TypeError('Invalid task board data: expected companies, agents, projects and tasks arrays');
@@ -216,17 +235,39 @@ export function renderTaskBoard(value, options = {}) {
   if (value.warnings?.length) header.push(style(line(`WARNING / ${value.warnings.map(warning => clean(typeof warning === 'object' ? warning?.message ?? warning?.code ?? 'source warning' : warning)).join(' / ')}`), '33'));
   header.push(style(rule, '2'));
   const assignment = options.assignmentPrompt;
-  const footer = [style(rule, '2'), line(assignment ? 'j/k select agent  Enter assign / Esc cancel / q quit' : width >= 84
-    ? `j/k move  Enter fold  h done  i idle  / search  Esc clear  r refresh  Tab detail${options.canAssign ? '  a assign' : ''}  q quit`
-    : `j/k move  Enter fold  / find  Tab detail${options.canAssign ? '  a assign' : ''}  q quit`)];
+  const selectedReview = selected?.type === 'task' && review(selected.task) && options.detailData?.review;
+  const actions = `${options.canAssign ? '  a assign' : ''}${options.canDelete ? '  d delete' : ''}${selectedReview ? '  A approve  F feedback  R reject' : ''}`;
+  const footer = [style(rule, '2'), line(assignment ? 'j/k select agent  Enter assign / Esc cancel / q quit'
+    : options.feedbackEditing ? 'Type rejection feedback  Enter save / Esc cancel'
+      : options.reviewPrompt ? `Enter ${options.reviewPrompt.decision} / Esc cancel`
+        : options.deletePrompt ? 'Enter permanently delete / Esc cancel / q quit' : width >= 84
+          ? `j/k move  Enter fold  h done  i idle  / search  r refresh  Tab detail${actions}  q quit`
+          : `j/k move  Enter fold  / find  Tab detail${actions}  q quit`)];
   const detail = [];
   if (!assignment && options.detail && selected && height >= 14) {
-    detail.push(style(line('DETAIL / READ ONLY'), '1;36'));
+    detail.push(style(line(selectedReview ? 'DETAIL / REVIEW' : 'DETAIL / READ ONLY'), '1;36'));
     if (selected.type === 'task') {
-      detail.push(line(`${selected.task.identifier || selected.task.id} / ${selected.task.title || 'Untitled'}`));
-      detail.push(line(`${selected.owner} / ${selected.task.status || 'unknown'} / ${selected.projectName || 'no project'}`));
-      detail.push(line(selected.task.descriptionPreview || 'No description preview.'));
-      if (wide) detail.push(style(line(`Updated ${selected.task.updatedAt || 'unknown'} / ${selected.companyId}`), '2'));
+      const data = options.detailData;
+      const task = data?.task?.id === selected.taskId ? data.task : selected.task;
+      detail.push(line(`${task.identifier || task.id} / ${task.title || 'Untitled'}`));
+      detail.push(line(`${selected.owner} / ${task.status || 'unknown'} / ${selected.projectName || 'no project'}`));
+      if (options.detailLoading) detail.push(style(line('Loading full details and comments...'), '2'));
+      else if (data?.error) detail.push(style(line(`DETAIL FAILED / ${data.error}`), '33'));
+      else {
+        detail.push(...wrap(task.description ?? task.descriptionPreview ?? 'No description.', width, 2, unicode));
+        if (data?.review) {
+          detail.push(style(line(`CANDIDATE ${data.review.candidate}`), '35'));
+          detail.push(...wrap(data.review.summary || 'No candidate summary.', width, 1, unicode));
+        }
+        detail.push(style(line('LAST COMMENTS'), '1;36'));
+        for (const comment of data?.comments ?? []) {
+          const author = comment.authorUserId || comment.authorAgentId || 'system';
+          detail.push(...wrap(`${author} ${comment.createdAt || ''} / ${comment.body}`, width, 1, unicode));
+        }
+        if (!data?.comments?.length) detail.push(style(line('No comments.'), '2'));
+      }
+      if (options.feedbackEditing || options.feedback) detail.push(line(`FEEDBACK ${options.feedback || ''}${options.feedbackEditing ? '_' : ''}`));
+      if (wide) detail.push(style(line(`Updated ${task.updatedAt || 'unknown'} / ${selected.companyId}`), '2'));
     } else {
       detail.push(line(`${selected.name} / ${selected.companyName}`));
       detail.push(line(selected.agent ? `Availability ${selected.agent.availability || 'unknown'} / bridge ${selected.agent.bridgeState || 'unknown'} / native ${selected.agent.nativeState || 'unknown'}` : 'Human-owned tasks. No agent runtime.'));
@@ -276,15 +317,18 @@ export function renderTaskBoard(value, options = {}) {
       ...assignment.agents.slice(0, Math.max(0, capacity - 1)).map((agent, index) => {
         const mark = index === assignment.index ? (unicode ? '▸' : '>') : ' ';
         const state = `${clean(agent.availability || 'unknown')} / ${clean(agent.nativeState || 'unknown')}`;
-        return style(line(pair(`${mark} ${clean(agent.name || agent.id)}`, state)), index === assignment.index ? '36;7' : '0');
+        const text = pair(`${mark} ${clean(agent.name || agent.id)}`, state);
+        return style(line(text), index === assignment.index ? '36;7' : '0');
       })];
   }
   if (!rows.length && capacity) body.push(style(line('No tasks match. / clears search; h shows completed.'), '2'));
   while (body.length < capacity) body.push(' '.repeat(width));
   const position = rows.length && capacity ? `${offset + 1}-${offset + visibleRows.length}/${rows.length}` : `0/${rows.length}`;
-  footer.push(line(assignment ? `AGENT ${assignment.index + 1}/${assignment.agents.length}` : options.notice ||
-    (options.searching ? `/${clean(options.filter)}_  Enter apply / Esc clear`
-      : `${position} / READ ONLY${options.filter ? ` / filter: ${clean(options.filter)}` : ''}${!wide ? ' / h done / i idle / r refresh' : ''}`)));
+  footer.push(line(assignment ? `AGENT ${assignment.index + 1}/${assignment.agents.length}`
+    : options.deletePrompt ? `DELETE ${options.deletePrompt.identifier || options.deletePrompt.id} / ${options.deletePrompt.title}`
+    : options.reviewPrompt ? `${options.reviewPrompt.decision.toUpperCase()} ${options.reviewPrompt.identifier} / ${options.reviewPrompt.candidate}`
+    : options.notice || (options.searching ? `/${clean(options.filter)}_  Enter apply / Esc clear`
+      : `${position} / ${options.canDelete ? 'TASKS' : 'READ ONLY'}${options.filter ? ` / filter: ${clean(options.filter)}` : ''}${!wide ? ' / h done / i idle / r refresh' : ''}`)));
   const lines = [...header, ...body, ...detail, ...footer].slice(0, height);
   while (lines.length < height) lines.push(' '.repeat(width));
   return { text: lines.join('\n'), rows, visibleRows, selectedId, offset };
@@ -292,14 +336,18 @@ export function renderTaskBoard(value, options = {}) {
 
 /** Resolves on quit, signal or stream close. Non-TTY reads once and emits plain text. */
 export async function watchTaskBoard(read, { input = process.stdin, output = process.stdout, interval = 5000,
-  inspectTask, assignTask } = {}) {
+  inspectTask, detailTask, reviewTask, assignTask, deleteTask } = {}) {
   const tty = Boolean(input.isTTY && output.isTTY);
   const empty = { companies: [], agents: [], projects: [], tasks: [], warnings: [], fetchedAt: null };
   let value = empty; let hasSnapshot = false; let offline = '';
   let stopped = false; let timer; let escapeTimer; let reading = false; let again = false;
   let selectedId; let offset = 0; let showDone = false; let showIdle = false; let detail = false;
   let searching = false; let filter = ''; let frame; let pending = '';
-  let assignment; let assigning = false; let notice = '';
+  let assignment; let assigning = false; let deletion; let deleting = false; let notice = '';
+  let detailData; let detailLoading = false; let detailGeneration = 0;
+  let feedback = ''; let feedbackEditing = false; let feedbackBefore = ''; let reviewPrompt; let reviewing = false;
+  const deleted = new Set();
+  const canDelete = typeof inspectTask === 'function' && typeof deleteTask === 'function';
   const canAssign = typeof inspectTask === 'function' && typeof assignTask === 'function';
   let paintedLines; let paintedWidth; let paintedHeight;
   const collapsed = new Set();
@@ -315,7 +363,9 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     if (stopped) return;
     const options = { width: output.columns || 100, height: output.rows || 30, colour: tty,
       selectedId, offset, showDone, showIdle, filter, detail, searching, offline, hasSnapshot,
-      canAssign, assignmentPrompt: assigning ? null : assignment, notice };
+      canAssign, canDelete, assignmentPrompt: assigning ? null : assignment,
+      deletePrompt: deleting ? null : deletion?.task, notice, detailData, detailLoading,
+      feedback, feedbackEditing, reviewPrompt };
     const all = buildBoardRows(value, options);
     options.expanded = new Set(all.filter(row => row.expandable && !collapsed.has(row.id)).map(row => row.id));
     frame = renderTaskBoard(value, options);
@@ -329,6 +379,23 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     if (update) output.write(update);
     paintedLines = lines; paintedWidth = options.width; paintedHeight = options.height;
   };
+  const loadDetail = async () => {
+    const row = frame?.rows.find(row => row.id === selectedId);
+    const generation = ++detailGeneration;
+    detailData = undefined; feedback = ''; reviewPrompt = null;
+    if (!detail || row?.type !== 'task' || typeof detailTask !== 'function') { detailLoading = false; draw(); return; }
+    detailLoading = true; draw();
+    try {
+      const result = await detailTask({ companyId: row.companyId, taskId: row.taskId }, controller.signal);
+      if (stopped || generation !== detailGeneration || selectedId !== row.id) return;
+      if (result.task?.id !== row.taskId || result.task.companyId !== row.companyId || !result.revision) throw Error('Detail identity is not confirmed');
+      detailData = result;
+    } catch (error) {
+      if (!stopped && generation === detailGeneration) detailData = { error: clean(error.message || error.code || 'detail failed') };
+    } finally {
+      if (!stopped && generation === detailGeneration) { detailLoading = false; draw(); }
+    }
+  };
   const refresh = async () => {
     if (stopped) return;
     if (reading) { again = true; return; }
@@ -337,7 +404,10 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
       const next = validate(await read(controller.signal));
       // Reject unusable snapshots before replacing the last frame, not merely on transport success.
       buildBoardRows(next);
-      if (!stopped) { value = next; hasSnapshot = true; offline = ''; }
+      if (!stopped) {
+        value = { ...next, tasks: next.tasks.filter(task => !deleted.has(keyOf(task.companyId, task.id))) };
+        hasSnapshot = true; offline = '';
+      }
     } catch (error) {
       if (!stopped) offline = clean(error?.message || error?.code || 'read failed');
     } finally { reading = false; }
@@ -346,6 +416,18 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     if (!tty) { stop(); return; }
     if (again) { again = false; void refresh(); }
     else timer = setTimeout(() => { void refresh(); }, Math.max(10, Number(interval) || 5000));
+  };
+  const prepareDelete = async () => {
+    const row = frame?.rows.find(row => row.id === selectedId);
+    if (!canDelete || deleting || row?.type !== 'task') return;
+    deleting = true; notice = `Inspecting ${row.task.identifier || row.taskId} for deletion...`; draw();
+    try {
+      const snapshot = await inspectTask({ companyId: row.companyId, taskId: row.taskId }, controller.signal);
+      if (stopped) return;
+      if (snapshot.task?.id !== row.taskId || snapshot.task.companyId !== row.companyId || !snapshot.revision) throw Error('Delete preview identity is not confirmed');
+      deletion = { task: snapshot.task, revision: snapshot.revision, key: randomUUID() }; notice = '';
+    } catch (error) { if (!stopped) notice = `DELETE FAILED / ${clean(error.message)}`; }
+    finally { deleting = false; if (!stopped) draw(); }
   };
   const prepareAssign = () => {
     const row = frame?.rows.find(row => row.id === selectedId);
@@ -359,9 +441,8 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
   const confirmAssign = async () => {
     if (!assignment || assigning) return;
     const selected = assignment, agent = selected.agents[selected.index];
-    assigning = true; notice = `Assigning ${selected.task.identifier || selected.task.id} to ${agent.name || agent.id}...`;
+    assigning = true; notice = `Assigning ${selected.task.identifier || selected.task.id} to ${agent.name || agent.id}...`; draw();
     try {
-      draw();
       const snapshot = await inspectTask({ companyId: selected.companyId, taskId: selected.taskId }, controller.signal);
       if (stopped) return;
       if (snapshot.task?.id !== selected.taskId || snapshot.task.companyId !== selected.companyId || !snapshot.revision) {
@@ -378,15 +459,81 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     } catch (error) { if (!stopped) notice = `ASSIGN FAILED / ${clean(error.message)}`; }
     finally { assignment = null; assigning = false; if (!stopped) { draw(); void refresh(); } }
   };
+  const confirmDelete = async () => {
+    if (!deletion || deleting) return;
+    const selected = deletion;
+    deleting = true; notice = `Deleting ${selected.task.identifier || selected.task.id}...`; draw();
+    try {
+      const result = await deleteTask({ companyId: selected.task.companyId, taskId: selected.task.id,
+        expectedRevision: selected.revision, key: selected.key, reason: 'Deleted from the task board' }, controller.signal);
+      if (stopped) return;
+      if (result.deleted !== true || result.outcome?.confirmed !== true) throw Error('Deletion is not confirmed');
+      deleted.add(keyOf(selected.task.companyId, selected.task.id));
+      const index = frame.rows.findIndex(row => row.id === selectedId);
+      const neighbours = [...frame.rows.slice(index + 1), ...frame.rows.slice(0, index).reverse()];
+      selectedId = neighbours.find(row => row.type !== 'task' || !deleted.has(keyOf(row.companyId, row.taskId)))?.id;
+      value = { ...value, tasks: value.tasks.filter(task => !deleted.has(keyOf(task.companyId, task.id))) };
+      notice = `Deleted ${selected.task.identifier || selected.task.id}`;
+    } catch (error) { if (!stopped) notice = `DELETE FAILED / ${clean(error.message)}`; }
+    finally { deletion = null; deleting = false; if (!stopped) { draw(); void refresh(); } }
+  };
+  const prepareReview = decision => {
+    const row = frame?.rows.find(row => row.id === selectedId);
+    const candidate = detailData?.review;
+    if (reviewing || row?.type !== 'task' || !review(row.task) || !candidate || typeof reviewTask !== 'function') return;
+    if (decision === 'reject' && !feedback.trim()) { notice = 'REJECT NEEDS FEEDBACK / press F first'; draw(); return; }
+    reviewPrompt = { decision, companyId: row.companyId, taskId: row.taskId, identifier: row.task.identifier || row.taskId,
+      runId: candidate.runId, interactionId: candidate.interactionId, candidate: candidate.candidate,
+      expectedRevision: detailData.revision, reason: decision === 'reject' ? feedback.trim() : undefined, key: randomUUID() };
+    notice = ''; draw();
+  };
+  const confirmReview = async () => {
+    if (!reviewPrompt || reviewing) return;
+    const selected = reviewPrompt;
+    reviewing = true; notice = `${selected.decision === 'accept' ? 'Approving' : 'Rejecting'} ${selected.identifier}...`; draw();
+    try {
+      const result = await reviewTask({ action: selected.decision, companyId: selected.companyId, taskId: selected.taskId,
+        runId: selected.runId, interactionId: selected.interactionId, candidate: selected.candidate,
+        expectedRevision: selected.expectedRevision, key: selected.key, ...(selected.reason ? { reason: selected.reason } : {}) }, controller.signal);
+      if (stopped) return;
+      if (result.state !== 'recorded' || result.receipt?.status !== (selected.decision === 'accept' ? 'accepted' : 'rejected')) {
+        throw Error('Review decision is not confirmed');
+      }
+      notice = `${selected.decision === 'accept' ? 'Approved' : 'Rejected'} ${selected.identifier}`;
+      detailData = undefined; feedback = '';
+    } catch (error) { if (!stopped) notice = `REVIEW FAILED / ${clean(error.message)}`; }
+    finally {
+      reviewPrompt = null; reviewing = false;
+      if (!stopped) { draw(); void refresh(); void loadDetail(); }
+    }
+  };
   const handle = key => {
     if (key === '\x03' || (!searching && key === 'q')) { stop(); return; }
-    if (assigning) return;
+    if (deleting || assigning || reviewing) return;
+    if (feedbackEditing) {
+      if (key === '\x1b') { feedback = feedbackBefore; feedbackEditing = false; notice = ''; draw(); }
+      else if (key === '\r' || key === '\n') { feedbackEditing = false; notice = feedback.trim() ? 'Feedback saved; press R to reject' : ''; draw(); }
+      else if (key === '\x7f' || key === '\b') feedback = [...segmenter.segment(feedback)].slice(0, -1).map(part => part.segment).join('');
+      else if (!key.startsWith('\x1b') && !/[\x00-\x1f\x7f]/.test(key) && feedback.length < 4000) feedback += clean(key);
+      if (feedbackEditing) draw();
+      return;
+    }
+    if (reviewPrompt) {
+      if (key === '\x1b') { reviewPrompt = null; notice = ''; draw(); }
+      else if (key === '\r' || key === '\n') void confirmReview();
+      return;
+    }
     if (assignment) {
       if (key === '\x1b') { assignment = null; notice = ''; draw(); }
       else if (['j', 'k', '\x1b[A', '\x1b[B', '\x1bOA', '\x1bOB'].includes(key)) {
         assignment.index = Math.max(0, Math.min(assignment.agents.length - 1,
           assignment.index + (['j', '\x1b[B', '\x1bOB'].includes(key) ? 1 : -1))); draw();
-      } else if (key === '\r' || key === '\n' || key === 'a') void confirmAssign();
+      } else if (key === '\r' || key === '\n') void confirmAssign();
+      return;
+    }
+    if (deletion) {
+      if (key === '\x1b' || key === 'n') { deletion = null; notice = ''; draw(); }
+      else if (key === '\r' || key === '\n') void confirmDelete();
       return;
     }
     notice = '';
@@ -410,12 +557,17 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
       }
     } else if (key === 'h') showDone = !showDone;
     else if (key === 'i') showIdle = !showIdle;
-    else if (key === '\t') detail = !detail;
+    else if (key === '\t') { detail = !detail; if (detail) void loadDetail(); else { detailData = undefined; detailGeneration++; } }
     else if (key === '/') searching = true;
     else if (key === '\x1b') { filter = ''; searching = false; offset = 0; }
     else if (key === 'r') { void refresh(); return; }
     else if (key === 'a') { prepareAssign(); return; }
+    else if (key === 'd') { void prepareDelete(); return; }
+    else if (key === 'A') { prepareReview('accept'); return; }
+    else if (key === 'F' && detailData?.review) { feedbackBefore = feedback; feedbackEditing = true; notice = ''; draw(); return; }
+    else if (key === 'R') { prepareReview('reject'); return; }
     draw();
+    if (detail && ['j', 'k', '\x1b[A', '\x1b[B', '\x1bOA', '\x1bOB'].includes(key)) void loadDetail();
   };
   const onData = chunk => {
     try {

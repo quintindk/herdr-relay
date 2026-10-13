@@ -3,6 +3,8 @@ import { canonical, digest, requireValue, text } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { persistentRoutineScope, ensureRoutineRouter, resolveRoutineFolder } from './persistent-routines.mjs';
 import { useChatReviewForRoutine } from './job-review.mjs';
+import { ownedRuntime } from './runtimes.mjs';
+import { OpenCode } from './opencode.mjs';
 
 const fail = (condition, code, message) => requireValue(condition, code, message, 409);
 const records = store => store.db.prepare("SELECT data FROM operations WHERE id LIKE 'routine:%' ORDER BY rowid")
@@ -27,10 +29,59 @@ export function routineRecords(store) { return records(store).map(projection); }
 
 // A configured/armed bridge is the existing explicit conversation reservation.
 // Its absence must never turn an arbitrary registered agent into a cron target.
-export function routineTargetAdmission(store, binding, task, { allowBusyBridge = false } = {}) {
+function managedRoutineTarget(store, binding, verifyRuntime) {
   const blocked = blocker => ({ ready: false, blocker, target: null });
   if (!binding || binding.lifecycleState || !['persistent', 'service'].includes(binding.config.lifetime ?? 'persistent') ||
-    binding.config.harness !== 'opencode' || binding.config.delivery !== 'pull') return blocked('routine_target_ineligible');
+    binding.config.harness !== 'opencode' || binding.config.delivery !== 'opencode' || binding.config.opencode?.exclusive !== true ||
+    typeof binding.config.opencode.runtimeKey !== 'string' || !binding.config.opencode.runtimeKey) return blocked('routine_target_ineligible');
+  const provisions = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'provision:%'").all().map(row => JSON.parse(row.data))
+    .filter(item => item.state === 'recorded' && item.bindingId === binding.id);
+  const provision = provisions[0], native = binding.config.opencode;
+  if (provisions.length !== 1 || provision.agentId !== binding.config.agentId || provision.conversationId !== binding.config.conversationId ||
+    provision.runtimeKey !== native.runtimeKey || typeof provision.marker !== 'string' || !provision.marker ||
+    provision.request?.bindingId !== binding.id || provision.request.companyId !== binding.config.companyId ||
+    provision.request.harness !== 'opencode' || provision.request.directory !== native.directory ||
+    (provision.request.lifetime ?? 'persistent') !== (binding.config.lifetime ?? 'persistent')) return blocked('routine_managed_identity_mismatch');
+  let runtime;
+  try { runtime = verifyRuntime(store, native.runtimeKey); }
+  catch (error) { return blocked(error.code === 'runtime_not_ready' ? 'runtime_not_ready' : 'runtime_identity_mismatch'); }
+  if (runtime.nonce !== binding.config.instanceId || (runtime.request.harness ?? 'opencode') !== 'opencode' ||
+    runtime.request.directory !== native.directory || native.url !== `http://127.0.0.1:${runtime.port}` ||
+    native.authFile !== `${runtime.directory}/auth.json` || !Number.isSafeInteger(native.sessionCreatedAt) || native.sessionCreatedAt <= 0 ||
+    typeof native.projectID !== 'string' || !native.projectID ||
+    store.bindings().filter(item => item.config.opencode?.runtimeKey === native.runtimeKey).length !== 1) {
+    return blocked('routine_managed_identity_mismatch');
+  }
+  return { ready: true, blocker: null, target: { bindingId: binding.id, bindingRevision: binding.revision,
+    bindingCreatedAt: binding.createdAt, bindingConfig: digest(binding.config), companyId: binding.config.companyId,
+    agentId: binding.config.agentId, conversationId: binding.config.conversationId, sessionCreatedAt: native.sessionCreatedAt,
+    directory: native.directory, managed: { provisionId: provision.id, provisionMarker: provision.marker,
+      runtimeKey: native.runtimeKey, runtimeNonce: runtime.nonce,
+      runtimeIdentity: digest([runtime.request, runtime.directory, runtime.port, runtime.nonce]) } } };
+}
+
+// A configured/armed bridge remains the ordinary exact-conversation path. Managed
+// targets require separate provisioning and owned-runtime proof; neither path falls
+// back to the other.
+export function routineTargetAdmission(store, binding, task, { allowBusyBridge = false, verifyRuntime = ownedRuntime } = {}) {
+  const blocked = blocker => ({ ready: false, blocker, target: null });
+  if (!binding || binding.lifecycleState || !['persistent', 'service'].includes(binding.config.lifetime ?? 'persistent') ||
+    binding.config.harness !== 'opencode') return blocked('routine_target_ineligible');
+  if (binding.config.delivery === 'opencode') {
+    const result = managedRoutineTarget(store, binding, verifyRuntime);
+    if (!result.ready) return result;
+    const { target } = result;
+    if (task) {
+      const matches = records(store).filter(record => record.routineId === task.originId && record.request.companyId === task.companyId);
+      const record = matches[0];
+      if (task.originKind !== 'routine_execution' || !task.originRunId || matches.length !== 1 || !record.created ||
+        record.cancellationRequested || record.state === 'cancelled' || task.assigneeAgentId !== target.agentId || task.assigneeUserId ||
+        canonical(record.target) !== canonical(target)) return blocked('routine_execution_mismatch');
+    }
+    if (!(allowBusyBridge && !task) && store.runs(binding.id).some(run => run.nativeState !== 'settled')) return blocked('conversation_busy');
+    return result;
+  }
+  if (binding.config.delivery !== 'pull') return blocked('routine_target_ineligible');
   const bridge = store.operation(`opencode-bridge:${binding.id}`), identity = bridge?.identity;
   if (!(allowBusyBridge && !task ? ['configured', 'armed'].includes(bridge?.state)
     : bridge?.state === 'armed' && bridge.ready === true) || !fresh(bridge?.lastSeen, 10000) ||
@@ -58,7 +109,7 @@ export function routineTargetAdmission(store, binding, task, { allowBusyBridge =
       record.cancellationRequested || record.state === 'cancelled' || task.assigneeAgentId !== target.agentId || task.assigneeUserId ||
       canonical(record.target) !== canonical(target)) return blocked('routine_execution_mismatch');
   }
-  if (store.runs(binding.id).some(run => run.nativeState !== 'settled')) return blocked('conversation_busy');
+  if (!(allowBusyBridge && !task) && store.runs(binding.id).some(run => run.nativeState !== 'settled')) return blocked('conversation_busy');
   return { ready: true, blocker: null, target };
 }
 
@@ -83,7 +134,8 @@ function verifyTrigger(record, value) {
 
 // companyId and authority are supplied by the authenticated server, never by a timer.
 // check revalidates native human permission/source before and after every backend call.
-export async function manageRoutine(store, api, input, { check = () => {}, authority = { kind: 'operator' }, observationConfig, routingContextFile } = {}) {
+export async function manageRoutine(store, api, input, { check = () => {}, authority = { kind: 'operator' }, observationConfig,
+  routingContextFile, verifyRuntime = ownedRuntime, nativeSnapshot = binding => new OpenCode(binding.config).snapshot() } = {}) {
   input = structuredClone(input);
   requireValue(input && typeof input === 'object' && !Array.isArray(input), 'invalid_request', 'Routine input is required');
   const action = text(input.action, 'action'), companyId = text(input.companyId, 'companyId');
@@ -173,8 +225,8 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
       const self = authority.kind === 'native' && action !== 'run' && authority.bindingId === binding?.id &&
         authority.conversationId === binding.config.conversationId &&
         authority.sessionCreatedAt === store.operation(`opencode-bridge:${binding.id}`)?.sessionCreatedAt;
-      const result = routineTargetAdmission(store, binding, undefined, { allowBusyBridge: self });
-      fail(result.ready, result.blocker, 'Routine target requires a fresh, exactly reserved bridge; other targets must be idle');
+      const result = routineTargetAdmission(store, binding, undefined, { allowBusyBridge: self, verifyRuntime });
+      fail(result.ready, result.blocker, 'Routine target requires an idle reserved bridge or verified managed runtime');
       fail(result.target.companyId === companyId && (!record || canonical(record.target) === canonical(result.target)),
         'routine_target_changed', 'Routine target identity changed. Explicit rebinding is not supported');
       return result.target;
@@ -205,14 +257,45 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
           'routine_router_mismatch', 'Routine router identity changed');
         return router;
       }
-      const agent = await call('GET', `/api/agents/${encodeURIComponent(target.agentId)}`, undefined, true);
-      fail(agent?.id === target.agentId && agent.companyId === companyId && agent.status === 'idle' &&
+      const agentPath = `/api/agents/${encodeURIComponent(target.agentId)}`;
+      let agent = await call('GET', agentPath, undefined, true);
+      const managed = target.managed;
+      fail(agent?.id === target.agentId && agent.companyId === companyId &&
         agent.adapterType === 'herdr_relay' && agent.adapterConfig?.bindingId === target.bindingId &&
-        agent.adapterConfig.bindingRevision === target.bindingRevision && agent.adapterConfig.observationOnly === false &&
-        agent.adapterConfig.relayObservationMarker === target.observationMarker && agent.adapterConfig.requireReviewDisposition === true &&
-        agent.runtimeConfig?.heartbeat?.enabled === true && agent.runtimeConfig.heartbeat.wakeOnDemand === true &&
-        agent.runtimeConfig.heartbeat.maxConcurrentRuns === 1,
-      'routine_backend_target_unavailable', 'Backend agent must match the reserved bridge with one concurrent run');
+        agent.adapterConfig.bindingRevision === target.bindingRevision && agent.adapterConfig.observationOnly !== true &&
+        (managed ? ['idle', 'paused', 'error'].includes(agent.status) && agent.adapterConfig.relayProvisionMarker === managed.provisionMarker
+          : agent.adapterConfig.relayObservationMarker === target.observationMarker &&
+            agent.status === 'idle' &&
+            agent.adapterConfig.requireReviewDisposition === true && agent.runtimeConfig?.heartbeat?.enabled === true &&
+            agent.runtimeConfig.heartbeat.wakeOnDemand === true && agent.runtimeConfig.heartbeat.maxConcurrentRuns === 1),
+      'routine_backend_target_unavailable', 'Backend agent must match the reserved bridge or managed provision with one concurrent run');
+      if (managed) {
+        const configured = value => value.status === 'idle' && value.adapterConfig?.requireReviewDisposition === true && value.adapterConfig.timeoutSec === 600 &&
+          value.runtimeConfig?.heartbeat?.enabled === true && value.runtimeConfig.heartbeat.wakeOnDemand === true &&
+          value.runtimeConfig.heartbeat.intervalSec === 0 && value.runtimeConfig.heartbeat.maxConcurrentRuns === 1;
+        const operationId = `routine-managed-backend:${target.bindingId}`;
+        const body = { status: 'idle', adapterConfig: { ...agent.adapterConfig, observationOnly: false,
+          bindingId: target.bindingId, bindingRevision: target.bindingRevision, relayProvisionMarker: managed.provisionMarker,
+          requireReviewDisposition: true, timeoutSec: 600 },
+          runtimeConfig: { ...agent.runtimeConfig, heartbeat: { ...agent.runtimeConfig?.heartbeat,
+            enabled: true, wakeOnDemand: true, intervalSec: 0, maxConcurrentRuns: 1 } } };
+        let operation = store.operation(operationId);
+        fail(!operation || canonical(operation.request) === canonical({ target, body }),
+          'routine_backend_target_changed', 'Managed backend activation identity changed');
+        if (!configured(agent)) {
+          if (!operation || operation.state === 'recorded') operation = store.saveOperation({ id: operationId, runId: '', state: 'uncertain',
+            request: { target, body }, generation: (operation?.generation ?? 0) + 1, sent: false });
+          fail(!operation.sent, 'operation_uncertain', 'Managed backend activation is not confirmed; no blind resend');
+          operation = store.saveOperation({ ...operation, sent: true });
+          await call('PATCH', agentPath, body);
+          agent = await call('GET', agentPath, undefined, true);
+        }
+        fail(configured(agent), 'operation_uncertain', 'Managed backend activation has not been confirmed');
+        if (operation?.state !== 'recorded') store.saveOperation({ ...operation, state: 'recorded' });
+        const snapshot = await nativeSnapshot(store.binding(target.bindingId));
+        fail(snapshot?.idle === true, 'routine_target_busy', 'Managed routine target must have an idle native session');
+        admission();
+      }
       return target;
     };
     const detail = async (strict = true) => verifyRoutine(record,

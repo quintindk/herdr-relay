@@ -36,6 +36,7 @@ import { notificationRequest, isNotificationSource } from './completion-notifica
 import { harnessDelegation } from './harness-delegation.mjs';
 import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers, workerGrantConfigured } from './herdr-workers.mjs';
 import { taskBoard } from './task-board.mjs';
+import { taskBoardDetail, taskBoardReview } from './task-board-review.mjs';
 import { manageRoutine } from './routines.mjs';
 import { harnessRoutine } from './harness-routines.mjs';
 import { previewCron } from './cron-schedule.mjs';
@@ -134,7 +135,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
           '/bridge/routine-preview', '/bridge/routine-create', '/bridge/routine-list', '/bridge/routine-inspect', '/bridge/routine-pause', '/bridge/routine-resume', '/bridge/routine-cancel', '/bridge/routine-run', '/bridge/routine-edit',
           '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-complete',
-          '/bridge/task-list', '/bridge/task-children', '/bridge/task-comments', '/bridge/task-activity', '/bridge/task-reference-lookup', '/bridge/task-reference-attach', '/bridge/task-comment', '/bridge/task-reopen', '/bridge/task-cancel', '/bridge/task-recover',
+          '/bridge/task-list', '/bridge/task-children', '/bridge/task-comments', '/bridge/task-activity', '/bridge/task-reference-lookup', '/bridge/task-reference-attach', '/bridge/task-comment', '/bridge/task-reopen', '/bridge/task-cancel', '/bridge/task-recover', '/bridge/task-delete',
           '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
           '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
@@ -233,6 +234,17 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
             .then(value => { boardCache = value; return value; }).finally(() => { boardPending = null; });
           result = await boardPending;
         }
+      }
+      else if (req.method === 'POST' && path === '/task-board/detail') {
+        adminOnly(); result = await taskBoardDetail(store, operatorApi, input);
+      }
+      else if (req.method === 'POST' && path === '/task-board/review') {
+        adminOnly();
+        const key = `human-task-write:${text(input.companyId, 'companyId')}:${text(input.taskId, 'taskId')}`;
+        requireValue(!publications.has(key), 'operation_busy', 'Task operation in progress', 409);
+        const pending = taskBoardReview(store, operatorApi, input);
+        publications.set(key, pending);
+        try { result = await pending; } finally { publications.delete(key); boardCache = null; }
       }
       else if (req.method === 'POST' && path === '/tasks') {
         adminOnly();

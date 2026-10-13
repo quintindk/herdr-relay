@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { canonical, digest, requireValue, text } from './protocol.mjs';
+import { canonical, digest, RelayError, requireValue, text } from './protocol.mjs';
 
 export function backendOperator(base, authFile) {
   const origin = new URL(base);
@@ -14,7 +14,11 @@ export function backendOperator(base, authFile) {
       'operator_backend_unavailable', 'Backend operator authentication required', 503);
     const response = await fetch(new URL(path, origin), { method, headers, redirect: 'error', signal: AbortSignal.timeout(10000),
       body: body === undefined ? undefined : JSON.stringify(body) });
-    requireValue(response.ok, 'paperclip_error', `Paperclip operator request returned HTTP ${response.status}`, 502);
+    if (!response.ok) {
+      const error = new RelayError('paperclip_error', `Paperclip operator request returned HTTP ${response.status}`, 502);
+      error.backendStatus = response.status;
+      throw error;
+    }
     return response.json();
   };
 }

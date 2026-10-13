@@ -51,8 +51,14 @@ The existing `view` command remains the low-level Relay run/inbox diagnostic.
 | Esc | Clear search |
 | `h` | Show/hide completed tasks |
 | `i` | Show/hide idle owners with no matching tasks |
-| Tab | Toggle selected item preview |
+| Tab | Load/toggle cropped details and the last three comments |
 | `r` | Refresh |
+| `a` | Assign the selected task to a present agent |
+| `d` | Inspect the selected task and show permanent-delete confirmation |
+| `A` | Confirm approval of the displayed pending candidate |
+| `F` | Enter rejection feedback for the displayed pending candidate |
+| `R` | Confirm rejection using the saved feedback |
+| Enter / Esc | Confirm / cancel deletion while the confirmation is shown |
 | `q` / Ctrl+C | Exit the view |
 
 Refreshes run every five seconds only while the pane is open. Failed refreshes
@@ -74,14 +80,28 @@ returns to that shell instead of closing its pane.
 
 ## API Boundary
 
-The pane talks only to the operator-authorised Relay `GET /task-board` endpoint.
+The pane talks only to operator-authorised Relay task-board endpoints.
 Worker and native bridge credentials cannot read this cross-agent dashboard.
 The Relay connector reads backend collections, paginates issues, and returns an
 allowlisted projection without adapter credentials or runtime configuration.
 Refreshes share a short server-side cache. Collection descriptions are previews,
-not full documents. Agent presence is not task completion.
+not full documents. Opening details lazily fetches the complete selected task and
+its final three comments without turning each board refresh into per-task reads.
+Agent presence is not task completion.
 
-The view offers no edit, assignment, approval, deletion or dispatch controls.
+The view offers guarded assignment, deletion and candidate review through Relay.
+Review keys appear only for an `in_review` task with a fresh exact pending candidate.
+Approval and rejection require Enter confirmation. Rejection requires non-empty
+feedback, which becomes the backend rejection reason rather than an extra comment.
+Relay persists the decision intent before POST and never blindly repeats an
+uncertain decision. Stale task revisions, candidates and interactions fail closed.
+Press `d` on a task row, then Enter to delete or Esc to cancel.
+Owner headings cannot be deleted. The preview captures the task's current revision;
+changes before confirmation fail rather than deleting a different version. Only
+confirmed deletion removes the row. There is no owner-only restriction or recursive
+child deletion. Active execution must stop first, and backend foreign-key references
+can prevent removal. This also removes backend-owned task documents and attachments;
+Git artefacts are not touched. Deleted task IDs stay in Relay's operation history.
 Paperclip 2026.1001.0 may revalidate stale recovery actions during collection GETs;
 therefore read-only describes the Relay/view operations, not a guarantee that the
 upstream backend performs no incidental maintenance writes.

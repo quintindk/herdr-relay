@@ -43,6 +43,28 @@ function fixture(t) {
   return { store, schedule, task, routine, occurrence, api, input };
 }
 
+function managedFixture(t) {
+  const f = fixture(t), runtimeKey = 'managed-runtime';
+  const runtime = { request: { directory: '/managed' }, directory: '/runtime/managed', port: 4321, nonce: 'managed-nonce' };
+  f.store.saveOperation({ id: `runtime:${runtimeKey}`, runId: '', ...runtime, state: 'ready' });
+  const binding = f.store.register({ id: 'headless', companyId: 'company', agentId: 'headless', harness: 'opencode',
+    delivery: 'opencode', instanceId: runtime.nonce, conversationId: 'headless-chat', lifetime: 'persistent', opencode: {
+      url: `http://127.0.0.1:${runtime.port}`, directory: runtime.request.directory, projectID: 'project', sessionCreatedAt: 456,
+      exclusive: true, runtimeKey, authFile: `${runtime.directory}/auth.json`,
+    } }).binding;
+  f.store.saveOperation({ id: 'provision:headless', runId: '', state: 'recorded', marker: 'provision-marker',
+    request: { companyId: 'company', bindingId: 'headless', harness: 'opencode', directory: '/managed', lifetime: 'persistent' },
+    bindingId: 'headless', agentId: 'headless', conversationId: 'headless-chat', runtimeKey });
+  f.task.assigneeAgentId = 'headless';
+  f.routine.assigneeAgentId = 'headless';
+  f.schedule.body.assigneeAgentId = 'headless';
+  f.schedule.request.targetBindingId = 'headless';
+  f.schedule.target = routineTargetAdmission(f.store, binding, undefined, { verifyRuntime: () => runtime }).target;
+  f.store.saveOperation(f.schedule);
+  Object.assign(f.input, { bindingId: 'headless', agentId: 'headless' });
+  return { ...f, binding, runtime, options: { verifyRuntime: () => runtime, nativeSnapshot: async () => ({ idle: true }) } };
+}
+
 test('verified routine occurrence retains policy and exact origin without another task create', async t => {
   const f = fixture(t);
   await admitRoutineExecution(f.store, f.api, f.input);
@@ -73,6 +95,21 @@ test('manual receipt bookkeeping cannot invalidate occurrence admission', async 
   }, f.input);
   assert.equal(taskPolicy(f.store, 'company', 'task'), 'none');
   assert.equal(f.store.runs().length, 0);
+});
+
+test('managed exact routine occurrence is admitted, delivered and settled with the originating chat retained', async t => {
+  const f = managedFixture(t);
+  await admitRoutineExecution(f.store, f.api, f.input, f.options);
+  const task = taskOrigins(f.store)[0];
+  assert.equal(task.request.origin.conversationId, 'origin');
+  assert.equal(task.target.managed.provisionId, 'provision:headless');
+  const run = f.store.dispatch(f.input);
+  f.store.acknowledge(run.id);
+  f.store.submit(run.id, { key: 'result', candidate: 'candidate', summary: 'Inbox sweep: one action.' });
+  f.store.publication(run.id, { state: 'recorded', commentId: 'comment' });
+  const settled = f.store.settle(run.id, { outcome: 'completed', evidence: 'Finished' });
+  assert.equal(settled.conversationId, 'headless-chat');
+  assertRoutineTask(f.store, 'headless', 'task', { verifyRuntime: f.options.verifyRuntime });
 });
 
 for (const change of ['busy', 'cancelled', 'session', 'trigger', 'foreign-run', 'unowned-manual']) {

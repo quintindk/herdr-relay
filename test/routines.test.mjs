@@ -32,7 +32,11 @@ function fixture(t) {
     f.calls.push({ method, path: url, body: structuredClone(body) });
     if (f.before) await f.before(method, url, body);
     let result;
-    if (method === 'GET' && url === `/api/agents/${f.agentId}`) result = f.agent;
+    if (url === `/api/agents/${f.agentId}`) {
+      if (method === 'PATCH') Object.assign(f.agent, structuredClone(body));
+      else assert.equal(method, 'GET');
+      result = f.agent;
+    }
     else if (method === 'GET' && /^\/api\/(projects|issues)\//.test(url)) result = { id: url.split('/').at(-1), companyId: f.resourceCompany ?? f.companyId };
     else if (url === `/api/companies/${f.companyId}/routines`) {
       if (method === 'GET') result = f.routines;
@@ -100,6 +104,30 @@ function fixture(t) {
     scheduleId: routineRecords(f.store)[0]?.scheduleId, ...(['inspect', 'list'].includes(action) ? {} : { key: action }), ...input }, options);
   f.writes = () => f.calls.filter(call => call.method !== 'GET');
   f.offline = () => f.store.saveOperation({ ...f.bridge, ready: false });
+  return f;
+}
+
+function managedFixture(t) {
+  const f = fixture(t);
+  const agentId = randomUUID(), runtimeKey = 'managed-runtime';
+  const runtime = { id: `runtime:${runtimeKey}`, request: { directory: '/work/headless' }, directory: '/runtime/headless',
+    port: 4321, nonce: 'runtime-nonce', state: 'ready' };
+  f.store.saveOperation({ ...runtime, runId: '' });
+  f.binding = f.store.register({ id: 'headless', companyId: f.companyId, agentId, harness: 'opencode', delivery: 'opencode',
+    instanceId: runtime.nonce, conversationId: 'managed-chat', lifetime: 'persistent', opencode: {
+      url: `http://127.0.0.1:${runtime.port}`, directory: runtime.request.directory, projectID: 'project', sessionCreatedAt: 456,
+      exclusive: true, runtimeKey, authFile: `${runtime.directory}/auth.json`,
+    } }).binding;
+  f.store.saveOperation({ id: 'provision:managed', runId: '', state: 'recorded', marker: 'provision-marker',
+    request: { companyId: f.companyId, bindingId: f.binding.id, harness: 'opencode', directory: runtime.request.directory,
+      lifetime: 'persistent' }, bindingId: f.binding.id, agentId, conversationId: 'managed-chat', runtimeKey });
+  f.agentId = agentId;
+  f.agent = { id: agentId, companyId: f.companyId, status: 'idle', adapterType: 'herdr_relay',
+    adapterConfig: { bindingId: f.binding.id, bindingRevision: 1, relayProvisionMarker: 'provision-marker' },
+    runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: false, maxConcurrentRuns: 1 } } };
+  f.input.targetBindingId = f.binding.id;
+  f.verifyRuntime = () => runtime;
+  f.options = { verifyRuntime: f.verifyRuntime, nativeSnapshot: async () => ({ idle: true }) };
   return f;
 }
 
@@ -202,6 +230,61 @@ test('backend adapter identity, readiness and concurrency limits are verified wi
     await assert.rejects(f.create(), { code: 'routine_backend_target_unavailable' });
   }
   assert.equal(f.writes().length, 0);
+});
+
+test('managed persistent OpenCode binding is accepted as an exact paused routine target', async t => {
+  const f = managedFixture(t);
+  const admission = routineTargetAdmission(f.store, f.binding, undefined, { verifyRuntime: f.verifyRuntime });
+  assert.equal(admission.ready, true);
+  assert.deepEqual(admission.target.managed, { provisionId: 'provision:managed', provisionMarker: 'provision-marker',
+    runtimeKey: 'managed-runtime', runtimeNonce: 'runtime-nonce', runtimeIdentity: admission.target.managed.runtimeIdentity });
+  const result = await f.create({}, f.options);
+  assert.equal(result.state, 'paused');
+  assert.equal(result.target.bindingId, 'headless');
+  assert.equal(result.target.managed.provisionMarker, 'provision-marker');
+  assert.equal(f.agent.runtimeConfig.heartbeat.enabled, true);
+  assert.equal(f.agent.adapterConfig.requireReviewDisposition, true);
+});
+
+test('managed routine admission rejects arbitrary, unready, mismatched and non-exclusive native bindings', t => {
+  const f = managedFixture(t);
+  f.store.db.prepare('DELETE FROM operations WHERE id = ?').run('provision:managed');
+  assert.equal(routineTargetAdmission(f.store, f.binding, undefined, { verifyRuntime: f.verifyRuntime }).ready, false);
+  f.store.saveOperation({ id: 'provision:managed', runId: '', state: 'recorded', marker: 'provision-marker',
+    request: { companyId: f.companyId, bindingId: 'headless', harness: 'opencode', directory: '/work/headless', lifetime: 'persistent' },
+    bindingId: 'headless', agentId: f.binding.config.agentId, conversationId: 'managed-chat', runtimeKey: 'managed-runtime' });
+  assert.equal(routineTargetAdmission(f.store, f.binding, undefined, { verifyRuntime: () => { const error = Error(); error.code = 'runtime_not_ready'; throw error; } }).blocker,
+    'runtime_not_ready');
+  assert.equal(routineTargetAdmission(f.store, f.binding, undefined, { verifyRuntime: () => ({
+    request: { directory: '/work/headless' }, directory: '/runtime/headless', port: 4321, nonce: 'wrong',
+  }) }).blocker, 'routine_managed_identity_mismatch');
+  assert.equal(routineTargetAdmission(f.store, { ...f.binding, config: { ...f.binding.config,
+    opencode: { ...f.binding.config.opencode, exclusive: false } } }, undefined, { verifyRuntime: f.verifyRuntime }).ready, false);
+});
+
+test('managed routine target rejects busy backend and native conversations', async t => {
+  const f = managedFixture(t);
+  f.agent.status = 'running';
+  await assert.rejects(f.create({}, f.options), { code: 'routine_backend_target_unavailable' });
+  f.agent.status = 'idle';
+  await assert.rejects(f.create({}, { ...f.options, nativeSnapshot: async () => ({ idle: false }) }), { code: 'routine_target_busy' });
+  const run = f.store.dispatch({ bindingId: f.binding.id, bindingRevision: 1, companyId: f.companyId,
+    agentId: f.binding.config.agentId, taskId: 'busy', runId: 'busy' });
+  assert.equal(routineTargetAdmission(f.store, f.binding, undefined, { verifyRuntime: f.verifyRuntime }).blocker, 'conversation_busy');
+  f.store.cancel(run.id);
+});
+
+test('managed routine activation repairs a settled backend error without weakening running-state refusal', async t => {
+  const f = managedFixture(t);
+  let result = await f.create({}, f.options);
+  assert.equal(result.state, 'paused');
+  assert.equal(f.agent.status, 'idle');
+  assert.equal(f.store.operation('routine-managed-backend:headless').state, 'recorded');
+  f.agent.status = 'error';
+  result = await f.manage('run', {}, f.options);
+  assert.equal(result.state, 'paused');
+  assert.equal(f.agent.status, 'idle');
+  assert.equal(f.store.operation('routine-managed-backend:headless').generation, 2);
 });
 
 test('project and parent scope are checked before persisting or creating', async t => {
