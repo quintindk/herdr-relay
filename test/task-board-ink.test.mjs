@@ -22,6 +22,21 @@ test('Ink status modal overlays a dimmed board with highlighted selection and vi
   assert.match(plain, /Comment \(optional\)/);
 });
 
+test('Ink status comment stays inside a fixed scrolling text box', async t => {
+  const instance = render(h(TaskBoardInkApp, { read: async () => board,
+    inspectTask: async () => ({ task: { ...board.tasks[0], blockedBy: [], blockedByIssueIds: [], unblockDescriptor: null }, interactions: [], revision: 'revision' }),
+    statusTask: async () => assert.fail('No submission in viewport test'), interval: 60000, width: 70, height: 24 }));
+  t.after(() => instance.unmount());
+  await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('s'); await tick(); instance.stdin.write('\t'); await tick();
+  const comment = Array.from({ length: 40 }, (_, index) => `comment-${String(index + 1).padStart(2, '0')}`).join(' ');
+  instance.stdin.write(comment); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame()), lines = frame.split('\n');
+  assert.ok(lines.length <= 24);
+  assert.match(frame, /Comment \(optional\)/); assert.match(frame, /\d+\/4000 · \d+ lines/);
+  assert.doesNotMatch(frame, /comment-01/); assert.match(frame, /comment-40/);
+  assert.match(frame, /┌|└/); assert.match(frame, /Enter review · Esc cancel/);
+});
+
 test('Ink routine detail shows occurrences and opens an exactly correlated task', async t => {
   const routine = { id: 'routine:one', routineId: 'native-routine', companyId: 'company', title: 'Inbox sweep', state: 'active',
     executionMode: 'headless', cron: '0 * * * *', timezone: 'Africa/Johannesburg', nextRunAt: '2026-10-14T11:00:00Z', target: 'agent' };

@@ -17,6 +17,21 @@ const taskCounts = tasks => ({ open: tasks.filter(task => !terminal(task.status)
 function StatusModal({ modal, setModal, submit, width, height }) {
   const status = statuses[modal.index];
   const fields = ['status', ...(status === 'blocked' && modal.needsDescriptor ? ['owner', 'action'] : []), 'comment'];
+  const modalWidth = Math.max(44, Math.min(72, width - 4));
+  const contentWidth = Math.max(1, modalWidth - 8);
+  const commentBoxHeight = Math.min(6, Math.max(3, height - (status === 'blocked' && modal.needsDescriptor ? 19 : 17)));
+  const commentLines = [];
+  for (const paragraph of String(modal.comment ?? '').split(/\r?\n/)) {
+    if (!paragraph) { commentLines.push(''); continue; }
+    let line = '';
+    for (const character of paragraph) {
+      if (line.length >= contentWidth) { commentLines.push(line); line = ''; }
+      line += character;
+    }
+    commentLines.push(line);
+  }
+  const visibleCommentLines = commentLines.slice(-Math.max(1, commentBoxHeight - 2));
+  if (modal.field === 'comment' && visibleCommentLines.length) visibleCommentLines[visibleCommentLines.length - 1] += '▏';
   useInput((input, key) => {
     if (modal.busy) return;
     if (key.escape) {
@@ -46,12 +61,11 @@ function StatusModal({ modal, setModal, submit, width, height }) {
       if (next !== modal[field]) setModal(value => ({ ...value, [field]: next }));
     }
   });
-  const modalWidth = Math.max(44, Math.min(72, width - 4));
-  const modalHeight = Math.min(height - 2, 15 + (status === 'blocked' && modal.needsDescriptor ? 2 : 0));
+  const modalHeight = Math.min(height - 2, 15 + commentBoxHeight + (status === 'blocked' && modal.needsDescriptor ? 2 : 0));
   const selected = (active, text) => h(Text, { inverse: active, color: active ? 'cyan' : undefined, bold: active }, text);
   return h(Box, { position: 'absolute', width: modalWidth, height: modalHeight,
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
-    borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column' },
+    borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
   h(Text, { bold: true, color: 'cyan' }, `Change status · ${modal.task.identifier || modal.task.id}`),
   h(Box, { height: 1 }),
   ...statuses.map((value, index) => selected(modal.field === 'status' && modal.index === index,
@@ -61,9 +75,14 @@ function StatusModal({ modal, setModal, submit, width, height }) {
     selected(modal.field === 'owner', `Waiting on  ${modal.owner === 'board' ? 'Board' : 'Me'}`),
     selected(modal.field === 'action', `Required action  ${modal.action}${modal.field === 'action' ? '▏' : ''}`),
   ] : []),
-  selected(modal.field === 'comment', `Comment (optional)  ${modal.comment}${modal.field === 'comment' ? '▏' : ''}`),
-  modal.confirm ? h(Text, { bold: true, color: 'cyan' }, `Confirm ${labels[modal.task.status] ?? modal.task.status} -> ${labels[status]}`) : null,
-  modal.error ? h(Text, { color: 'red' }, modal.error) : null,
+  h(Box, { justifyContent: 'space-between' },
+    h(Text, { bold: modal.field === 'comment', color: modal.field === 'comment' ? 'cyan' : undefined }, 'Comment (optional)'),
+    h(Text, { dimColor: true }, `${modal.comment.length}/4000 · ${commentLines.length} line${commentLines.length === 1 ? '' : 's'}`)),
+  h(Box, { height: commentBoxHeight, borderStyle: 'single', borderColor: modal.field === 'comment' ? 'cyan' : 'gray',
+    paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
+  ...visibleCommentLines.map((line, index) => h(Text, { key: `${commentLines.length}:${index}`, wrap: 'truncate-end' }, line || ' '))),
+  modal.confirm ? h(Text, { bold: true, color: 'cyan' }, `Confirm ${labels[modal.task.status] ?? modal.task.status} -> ${labels[status]}`)
+    : modal.error ? h(Text, { color: 'red' }, modal.error) : h(Text, null, ' '),
   h(Box, { flexGrow: 1 }),
   h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : '↑↓ select · Tab next · Enter review · Esc cancel'));
 }
