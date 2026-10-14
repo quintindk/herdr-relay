@@ -14,9 +14,21 @@ const locks = new WeakMap();
 const pick = (value, fields) => Object.fromEntries(fields.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]));
 const runView = value => pick(value, ['id', 'routineId', 'companyId', 'status', 'source', 'linkedIssueId', 'triggeredAt', 'completedAt']);
 
+export function routineExecutionMode(record) {
+  return record.request?.executionMode ?? (record.persistentScope || record.request?.targetDirectory
+    ? 'interactive_folder' : record.target?.managed ? 'headless' : 'interactive_exact');
+}
+
+const comparableRequest = (request, record) => {
+  const value = { ...request };
+  if (!record.request?.executionMode && value.executionMode === routineExecutionMode(record)) delete value.executionMode;
+  return value;
+};
+
 function projection(record) {
   return { scheduleId: record.id, routineId: record.routineId ?? null, state: record.state,
-    ...pick(record.request, ['companyId', 'title', 'description', 'targetBindingId', 'targetDirectory', 'cron', 'timezone', 'projectId', 'parentTaskId', 'relayReviewPolicy']),
+    ...pick(record.request, ['companyId', 'title', 'description', 'targetAgentId', 'targetBindingId', 'targetDirectory', 'cron', 'timezone', 'projectId', 'parentTaskId', 'relayReviewPolicy']),
+    executionMode: routineExecutionMode(record),
     ...(record.persistentScope ? { persistentScope: pick(record.persistentScope, ['companyId', 'directory', 'machineId', 'session', 'socketPath']),
       routerAgentId: record.router?.agentId ?? null } : {}),
     target: record.target, origin: pick(record.authority, ['kind', 'bindingId', 'conversationId', 'sessionCreatedAt']), triggerId: record.triggerId ?? null,
@@ -26,6 +38,22 @@ function projection(record) {
 }
 
 export function routineRecords(store) { return records(store).map(projection); }
+
+export async function scheduleTargets(store, api, companyId) {
+  text(companyId, 'companyId');
+  const agents = await api('GET', `/api/companies/${encodeURIComponent(companyId)}/agents`);
+  requireValue(Array.isArray(agents), 'invalid_backend_response', 'Expected Paperclip agents array', 502);
+  const headless = agents.filter(agent => agent?.companyId === companyId &&
+    ['opencode_local', 'paperclip_runner'].includes(agent.adapterType) && !agent.archivedAt)
+    .map(agent => ({ agentId: text(agent.id, 'agent.id'), name: text(agent.name, 'agent.name'),
+      adapterType: agent.adapterType, status: typeof agent.status === 'string' ? agent.status : 'unknown' }))
+    .sort((left, right) => left.name.localeCompare(right.name) || left.agentId.localeCompare(right.agentId));
+  const interactiveExact = store.bindings().filter(binding => binding.config.companyId === companyId &&
+    !binding.lifecycleState && binding.config.delivery === 'pull').map(binding => ({ bindingId: binding.id,
+    label: binding.config.label ?? binding.config.conversationId, conversationId: binding.config.conversationId }))
+    .sort((left, right) => left.label.localeCompare(right.label) || left.bindingId.localeCompare(right.bindingId));
+  return { headless, interactiveExact };
+}
 
 // A configured/armed bridge is the existing explicit conversation reservation.
 // Its absence must never turn an arbitrary registered agent into a cron target.
@@ -153,7 +181,7 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
   requireValue(input && typeof input === 'object' && !Array.isArray(input), 'invalid_request', 'Routine input is required');
   const action = text(input.action, 'action'), companyId = text(input.companyId, 'companyId');
   requireValue(['create', 'list', 'inspect', 'pause', 'resume', 'cancel', 'run', 'edit'].includes(action), 'invalid_request', 'Unknown routine action');
-  const allowed = ['action', 'companyId', ...(action === 'create' ? ['key', 'title', 'description', 'targetBindingId', 'targetDirectory', 'cron', 'timezone',
+  const allowed = ['action', 'companyId', ...(action === 'create' ? ['key', 'title', 'description', 'executionMode', 'targetAgentId', 'targetBindingId', 'targetDirectory', 'cron', 'timezone',
     'projectId', 'parentTaskId', 'relayReviewPolicy', 'enabled'] : action === 'list' ? [] : ['scheduleId',
     ...(['pause', 'resume', 'cancel', 'run', 'edit'].includes(action) ? ['key'] : []), ...(['run', 'edit'].includes(action) ? ['payload'] : [])])];
   requireValue(Object.keys(input).every(key => allowed.includes(key)), 'invalid_request', 'Unsupported routine field');
@@ -189,11 +217,29 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
       'invalid_request', 'Routine title is limited to 200 characters and templates are not supported');
     const relayReviewPolicy = input.relayReviewPolicy ?? 'none';
     requireValue(['human', 'none'].includes(relayReviewPolicy), 'invalid_review_policy', 'Routine review must be human or explicitly none');
-    requireValue(input.targetDirectory === undefined || input.targetBindingId === undefined,
-      'invalid_request', 'targetDirectory and targetBindingId are mutually exclusive');
-    if (input.targetDirectory !== undefined) persistentScope = persistentRoutineScope(store, observationConfig, companyId, input.targetDirectory);
+    requireValue([input.targetAgentId, input.targetDirectory, input.targetBindingId].filter(value => value !== undefined).length <= 1,
+      'invalid_request', 'targetAgentId, targetDirectory and targetBindingId are mutually exclusive');
+    const implicitLegacyManaged = input.executionMode === undefined && input.targetBindingId !== undefined &&
+      store.binding(input.targetBindingId, false)?.config.delivery === 'opencode';
+    let executionMode = input.executionMode;
+    requireValue(executionMode === undefined || ['headless', 'interactive_exact', 'interactive_folder'].includes(executionMode),
+      'invalid_request', 'executionMode must be headless, interactive_exact or interactive_folder');
+    if (executionMode === undefined) {
+      if (input.targetDirectory !== undefined) executionMode = 'interactive_folder';
+      else executionMode = store.binding(input.targetBindingId, false)?.config.delivery === 'opencode' ? 'headless' : 'interactive_exact';
+    }
+    requireValue(executionMode !== 'headless' || implicitLegacyManaged || relayReviewPolicy === 'none', 'invalid_review_policy',
+      'Paperclip-native headless routines use Paperclip review and require relayReviewPolicy none');
+    requireValue(executionMode === 'interactive_folder' ? input.targetDirectory !== undefined && input.targetBindingId === undefined && input.targetAgentId === undefined
+      : executionMode === 'interactive_exact' ? input.targetBindingId !== undefined && input.targetDirectory === undefined && input.targetAgentId === undefined
+        : input.targetAgentId !== undefined && input.targetBindingId === undefined && input.targetDirectory === undefined || implicitLegacyManaged,
+    'invalid_request', 'executionMode does not match its target');
+    if (executionMode === 'interactive_folder') persistentScope = persistentRoutineScope(store, observationConfig, companyId, input.targetDirectory);
     request = { companyId, key: text(input.key, 'key'), title, description,
-      ...(persistentScope ? { targetDirectory: persistentScope.directory } : { targetBindingId: text(input.targetBindingId, 'targetBindingId') }),
+      executionMode,
+      ...(persistentScope ? { targetDirectory: persistentScope.directory }
+        : executionMode === 'headless' && !implicitLegacyManaged ? { targetAgentId: text(input.targetAgentId, 'targetAgentId') }
+          : { targetBindingId: text(input.targetBindingId, 'targetBindingId') }),
       cron: preview.cron, timezone: preview.timezone, enabled: input.enabled === true, relayReviewPolicy,
       ...(input.projectId === undefined ? {} : { projectId: text(input.projectId, 'projectId') }),
       ...(input.parentTaskId === undefined ? {} : { parentTaskId: text(input.parentTaskId, 'parentTaskId') }) };
@@ -217,7 +263,7 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
     if (action !== 'create') fail(record?.id.startsWith('routine:'), 'routine_not_found', 'Unknown Relay scheduleId');
     if (action === 'create' && record) {
       if (input.relayReviewPolicy === undefined) request.relayReviewPolicy = record.request.relayReviewPolicy ?? 'human';
-      fail(canonical(record.request) === canonical(request) && canonical(record.authority) === canonical(authority),
+      fail(canonical(record.request) === canonical(comparableRequest(request, record)) && canonical(record.authority) === canonical(authority),
         'operation_conflict', 'Routine key has a different request or human source');
       if (record.creationComplete || record.cancellationRequested) return projection(record);
     }
@@ -233,6 +279,8 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
           'routine_scope_revoked', 'Routine directory scope changed');
         return null;
       }
+      const mode = record ? routineExecutionMode(record) : request.executionMode;
+      if (mode === 'headless' && (record?.request.targetAgentId ?? request?.targetAgentId)) return null;
       const binding = store.binding(record?.request.targetBindingId ?? request.targetBindingId, false);
       // Human-authorised self-setup may run during this turn; occurrence delivery still requires idle.
       const self = authority.kind === 'native' && action !== 'run' && authority.bindingId === binding?.id &&
@@ -240,6 +288,8 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
         authority.sessionCreatedAt === store.operation(`opencode-bridge:${binding.id}`)?.sessionCreatedAt;
       const result = routineTargetAdmission(store, binding, undefined, { allowBusyBridge: self, verifyRuntime });
       fail(result.ready, result.blocker, 'Routine target requires an idle reserved bridge or verified managed runtime');
+      fail(mode === 'headless' ? Boolean(result.target.managed) : mode === 'interactive_exact' && !result.target.managed,
+        'routine_target_ineligible', 'Routine execution mode does not match the target binding');
       fail(result.target.companyId === companyId && (!record || canonical(record.target) === canonical(result.target)),
         'routine_target_changed', 'Routine target identity changed. Explicit rebinding is not supported');
       return result.target;
@@ -261,6 +311,15 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
     const backendTarget = async () => {
       const target = admission();
       const scope = record?.persistentScope ?? persistentScope;
+      const mode = record ? routineExecutionMode(record) : request.executionMode;
+      if (mode === 'headless' && (record?.request.targetAgentId ?? request?.targetAgentId)) {
+        const agentId = record?.request.targetAgentId ?? request?.targetAgentId;
+        const agent = await call('GET', `/api/agents/${encodeURIComponent(agentId)}`);
+        fail(agent?.id === agentId && agent.companyId === companyId &&
+          ['opencode_local', 'paperclip_runner'].includes(agent.adapterType),
+        'routine_backend_target_unavailable', 'Headless routine requires an independent Paperclip-native agent');
+        return { agentId, native: true, adapterType: agent.adapterType };
+      }
       if (scope) {
         const router = await ensureRoutineRouter(store, api, scope, routingContextFile, async () => {
           await guard();
@@ -407,7 +466,7 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
         const claimed = store.transaction(() => {
           const concurrent = store.operation(scheduleId);
           if (concurrent?.body) return false;
-          fail(!concurrent || canonical(concurrent.request) === canonical(request) && canonical(concurrent.authority) === canonical(authority),
+          fail(!concurrent || canonical(concurrent.request) === canonical(comparableRequest(request, concurrent)) && canonical(concurrent.authority) === canonical(authority),
             'operation_conflict', 'Concurrent routine key has different configuration or source');
           store.saveOperation({ ...concurrent, id: scheduleId, runId: '', request, authority, target, marker, body, state: 'uncertain',
             ...(persistentScope ? { persistentScope, router: backend } : {}),
@@ -415,7 +474,7 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
           return true;
         });
         record = store.operation(scheduleId);
-        fail(canonical(record.request) === canonical(request) && canonical(record.authority) === canonical(authority),
+        fail(canonical(record.request) === canonical(comparableRequest(request, record)) && canonical(record.authority) === canonical(authority),
           'operation_conflict', 'Concurrent routine key has different configuration');
         if (claimed) {
           // There is no native create idempotency. An intent is never POSTed twice.

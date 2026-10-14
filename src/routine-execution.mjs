@@ -1,8 +1,40 @@
 import { canonical, digest, requireValue } from './protocol.mjs';
-import { routineTargetAdmission } from './routines.mjs';
+import { routineExecutionMode, routineTargetAdmission } from './routines.mjs';
 import { resolveRoutineFolder } from './persistent-routines.mjs';
 import { ownedRuntime } from './runtimes.mjs';
 import { OpenCode } from './opencode.mjs';
+import { retireExactRoutine } from './routine-retirement.mjs';
+
+function exactTargetLoss(store, schedule) {
+  if (routineExecutionMode(schedule) !== 'interactive_exact') return null;
+  const target = schedule.target, binding = store.binding(schedule.request.targetBindingId, false);
+  if (!binding) return 'binding_missing';
+  if (binding.lifecycleState) return 'binding_retired';
+  if (binding.id !== target?.bindingId || binding.revision !== target.bindingRevision ||
+    binding.createdAt !== target.bindingCreatedAt || digest(binding.config) !== target.bindingConfig ||
+    binding.config.companyId !== target.companyId || binding.config.agentId !== target.agentId ||
+    binding.config.conversationId !== target.conversationId || binding.config.delivery !== 'pull') return 'binding_identity_changed';
+  const bridge = store.operation(`opencode-bridge:${binding.id}`);
+  if (!bridge) return 'conversation_missing';
+  if (bridge.identity?.conversationId !== target.conversationId || bridge.sessionCreatedAt !== target.sessionCreatedAt) {
+    return 'conversation_identity_changed';
+  }
+  const observed = bridge?.identity?.observedId && store.operation(bridge.identity.observedId);
+  const offlineId = `routine-exact-offline:${schedule.id}`;
+  if (observed?.availability === 'offline') {
+    const evidence = store.operation(offlineId);
+    const identity = digest([target.bindingId, target.conversationId, target.sessionCreatedAt]);
+    if (!evidence || evidence.identity !== identity || evidence.state === 'cleared') {
+      store.saveOperation({ id: offlineId, runId: '', state: 'observed', identity, firstSeenAt: new Date().toISOString() });
+      return null;
+    }
+    if (Date.now() - Date.parse(evidence.firstSeenAt) >= 30000) return 'conversation_offline';
+    return null;
+  }
+  const evidence = store.operation(offlineId);
+  if (evidence?.state === 'observed') store.saveOperation({ ...evidence, state: 'cleared', clearedAt: new Date().toISOString() });
+  return null;
+}
 
 export function assertRoutineTask(store, bindingId, taskId, { verifyRuntime = ownedRuntime } = {}) {
   const binding = store.binding(bindingId);
@@ -98,10 +130,18 @@ export async function admitRoutineExecution(store, api, input, { observationConf
   const claimed = store.operation(recordId);
   requireValue(!schedule.persistentScope || !claimed,
     'routine_occurrence_reserved', 'This occurrence is already pinned; use exact backend recovery, not another delivery', 409);
+  const loss = exactTargetLoss(store, schedule);
+  if (loss) {
+    await retireExactRoutine(store, api, schedule, task, loss);
+    requireValue(false, 'routine_retired', 'Exact interactive conversation is permanently unavailable', 409);
+  }
   const admission = schedule.persistentScope
     ? resolveRoutineFolder(store, schedule.persistentScope, observationConfig, routineTargetAdmission)
     : routineTargetAdmission(store, store.binding(input.bindingId), task, { verifyRuntime });
-  requireValue(admission.ready, ['conversation_busy', 'routine_bridge_unavailable'].includes(admission.blocker) ? 'routine_target_busy' : admission.blocker,
+  const transientExact = routineExecutionMode(schedule) === 'interactive_exact' &&
+    ['conversation_busy', 'routine_bridge_unavailable', 'routine_observation_mismatch', 'worker_grant_inactive'].includes(admission.blocker);
+  requireValue(admission.ready, transientExact || ['conversation_busy', 'routine_bridge_unavailable'].includes(admission.blocker)
+    ? 'routine_target_busy' : admission.blocker,
     'Scheduled work requires the exact idle reserved conversation', 409);
   const target = admission.target;
   if (target.managed) {

@@ -97,7 +97,10 @@ export async function taskBoard(store, api, { companyId } = {}) {
         tasks.push({ id: row.id, companyId, identifier: optional(row.identifier), title: string(row.title),
           status: string(row.status), priority: string(row.priority), parentId: optional(row.parentId),
           assigneeAgentId: optional(row.assigneeAgentId), assigneeUserId: optional(row.assigneeUserId),
-          projectId: optional(row.projectId), descriptionPreview: optional(row.description), updatedAt: optional(row.updatedAt) });
+          projectId: optional(row.projectId), descriptionPreview: optional(row.description), updatedAt: optional(row.updatedAt),
+          origin: row.originKind === 'routine_execution' && typeof row.originId === 'string' && row.originId &&
+            typeof row.originRunId === 'string' && row.originRunId
+            ? { kind: 'routine_execution', routineId: row.originId, runId: row.originRunId } : null });
       }
       count += page.length;
       if (page.length < 1000) break;
@@ -106,9 +109,9 @@ export async function taskBoard(store, api, { companyId } = {}) {
   }
   const visibleCompanies = new Set(companies.map(company => company.id));
   const routines = routineRecords(store).filter(routine => visibleCompanies.has(routine.companyId)).map(routine => ({
-    id: routine.scheduleId, companyId: routine.companyId, title: label(routine.title), state: routine.state,
-    cron: routine.cron, timezone: routine.timezone, nextRunAt: routine.nextRunAt,
-    target: routine.targetBindingId ?? routine.targetDirectory ?? null,
+    id: routine.scheduleId, routineId: routine.routineId, companyId: routine.companyId, title: label(routine.title), state: routine.state,
+    executionMode: routine.executionMode, cron: routine.cron, timezone: routine.timezone, nextRunAt: routine.nextRunAt,
+    target: routine.targetAgentId ?? routine.targetBindingId ?? routine.targetDirectory ?? null,
   })).sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
   // Totals count returned rows, not an invented server count beyond the caps.
   return { companies, agents, projects, tasks, routines,

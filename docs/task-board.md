@@ -47,6 +47,18 @@ herdr plugin pane open --plugin quintindk.herdr-relay --entrypoint work --placem
 ```
 
 The existing `view` command remains the low-level Relay run/inbox diagnostic.
+The interactive board uses Ink 8: the board remains visible and dimmed beneath
+bordered assignment, status and review dialogs, with highlighted selections and
+focused text input. Cron routines are selectable and expose schedule configuration,
+next run and the latest 50 occurrence receipts. Exactly correlated visible
+occurrences can open their task details.
+
+Ink task and cron detail dialogs use a fixed internal viewport. Their header and
+controls remain visible while `j`/`k`, arrows, PageUp/PageDown, Home and End scroll
+the content. The position indicator shows the visible line range. Task detail has
+Overview, Result and Comments tabs; Tab and Shift+Tab switch tabs while preserving
+each tab's scroll position. In cron detail, `o` opens the selected occurrence when
+it exactly correlates to a visible task.
 
 | Key | Action |
 | --- | --- |
@@ -58,13 +70,14 @@ The existing `view` command remains the low-level Relay run/inbox diagnostic.
 | `h` | Show/hide completed tasks |
 | `i` | Show/hide idle owners with no matching tasks |
 | Tab | Load/toggle cropped details and the last three comments |
+| Enter | Open task or cron detail |
 | `r` | Refresh |
 | `a` | Assign the selected task to a present agent |
-| `d` | Inspect the selected task and show permanent-delete confirmation |
+| `s` | Open the status modal for a human-owned task |
 | `A` | Confirm approval of the displayed pending candidate |
 | `F` | Enter rejection feedback for the displayed pending candidate |
 | `R` | Confirm rejection using the saved feedback |
-| Enter / Esc | Confirm / cancel deletion while the confirmation is shown |
+| Enter / Esc | Confirm / move back or cancel while a modal is shown |
 | `q` / Ctrl+C | Exit the view |
 
 Refreshes run every five seconds only while the pane is open. Failed refreshes
@@ -95,19 +108,29 @@ not full documents. Opening details lazily fetches the complete selected task an
 its final three comments without turning each board refresh into per-task reads.
 Agent presence is not task completion.
 
-The view offers guarded assignment, deletion and candidate review through Relay.
+The view offers guarded assignment, status changes and candidate review through Relay.
+The status modal exposes Backlog, Todo, Active, Blocked, In review, Done and
+Cancelled, with an optional comment for every destination. Relay sends status,
+comment and any unblock information in one durable Paperclip update. Active,
+blocked and in-review labels are not blanket refusals; execution, pending review,
+dependencies, children and ownership are checked directly.
+
+Entering Blocked asks only for the evidence Paperclip lacks. If fresh inspection
+already shows an unresolved blocker or unblock descriptor, no extra fields are
+required. Otherwise the modal asks who owns the unblock (`Me` or `Board`) and a
+required action. The ordinary comment remains optional and separate.
+
+Manual In review is an ordinary board status and creates no candidate. `A/F/R`
+appear only for an exact pending agent candidate. While any candidate or interaction
+is pending, modal status changes are refused until that interaction is resolved.
 Review keys appear only for an `in_review` task with a fresh exact pending candidate.
 Approval and rejection require Enter confirmation. Rejection requires non-empty
 feedback, which becomes the backend rejection reason rather than an extra comment.
 Relay persists the decision intent before POST and never blindly repeats an
 uncertain decision. Stale task revisions, candidates and interactions fail closed.
-Press `d` on a task row, then Enter to delete or Esc to cancel.
-Owner headings cannot be deleted. The preview captures the task's current revision;
-changes before confirmation fail rather than deleting a different version. Only
-confirmed deletion removes the row. There is no owner-only restriction or recursive
-child deletion. Active execution must stop first, and backend foreign-key references
-can prevent removal. This also removes backend-owned task documents and attachments;
-Git artefacts are not touched. Deleted task IDs stay in Relay's operation history.
+Permanent deletion is not available in the task pane. The administrative delete
+API/CLI remains available for repair and duplicate cleanup, outside ordinary status
+management.
 Paperclip 2026.1001.0 may revalidate stale recovery actions during collection GETs;
 therefore read-only describes the Relay/view operations, not a guarantee that the
 upstream backend performs no incidental maintenance writes.

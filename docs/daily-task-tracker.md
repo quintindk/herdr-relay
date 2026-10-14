@@ -148,6 +148,7 @@ are optional. Do not send a `payload` to complete or cancel.
 | `reopen` | Only `done` or `cancelled` tasks, currently human-assigned. Payload `{}` defaults to `todo`, or specify `todo` / `in_progress`. |
 | `cancel` | Request `cancelled` for a currently human-assigned task. Required reason is retained in the Relay operation journal, not posted as a backend comment. |
 | `comment` | Payload `{body}` on a currently human-assigned task, including terminal tasks subject to the guards below. No custom author or wake fields. |
+| `status` | Set any task status with an optional comment in one durable update. Blocked may include an unblock descriptor when no blocker evidence exists. Pending candidate interactions block this action. |
 
 Blocked status requires `unblockDescriptor: {owner: "board", action: "..."}` or
 an explicit human `owner: {userId: "..."}`. The action is at most 2,000 characters.
@@ -167,8 +168,8 @@ not block a later accepted result. Merely selecting `none`, clearing ownership,
 or setting a status is not a review bypass. Comments retain the execution and
 interaction guards but do not themselves require acceptance of a settled result.
 
-Completion also refuses native review policy and blocked, in-review or cancelled
-dispositions. Use explicit reopen for terminal status changes, not edit. Agent
+Completion refuses native review policy and cancelled disposition, and directly
+checks execution, interactions, blockers and descendants. Agent
 assignment validates company and any matching OpenCode bridge readiness/admission.
 It does not grant authority to provision or interrupt workers.
 

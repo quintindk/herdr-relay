@@ -11,13 +11,14 @@ import { fileURLToPath } from 'node:url';
 const quit = String.raw`
 import os, pty, select, subprocess, sys, time
 master, slave = pty.openpty()
-process = subprocess.Popen([sys.argv[1], sys.argv[2], "--context", sys.argv[3], "board", "--watch"],
+command = [sys.argv[1], sys.argv[2], "--context", sys.argv[3], "board", "--watch"]
+process = subprocess.Popen(command,
                            stdin=slave, stdout=slave, stderr=slave)
 os.close(slave)
 try:
     data = b""
     deadline = time.monotonic() + 5
-    marker = b"FETCHED" if sys.argv[4] == "ready" else b"WAITING"
+    marker = b"LIVE" if sys.argv[4] == "ready" else b"RELAY / TASKS"
     while marker not in data:
         assert time.monotonic() < deadline, "Board did not render"
         if select.select([master], [], [], 0.1)[0]:
@@ -50,7 +51,20 @@ for (const mode of ['ready', 'hung']) test(`real board CLI exits on q with ${mod
   });
   await new Promise(resolve => server.listen(socketPath, resolve));
   const { stdout } = await promisify(execFile)('python3', ['-c', quit, process.execPath,
-    fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), context, mode], { timeout: 15000 });
+    fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), context, mode, 'ink'], { timeout: 15000 });
   assert.equal(stdout, '');
   assert.equal(requests, 1);
+});
+
+test('board watch refuses non-TTY launch without a React stack trace', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'relay-board-ink-no-tty-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const context = join(directory, 'context.json');
+  writeFileSync(context, JSON.stringify({ socketPath: join(directory, 'missing.sock'), token: 'fixture' }), { mode: 0o600 });
+  const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
+  await assert.rejects(promisify(execFile)(process.execPath, [cli, '--context', context, 'board', '--watch'], { timeout: 5000 }), error => {
+    assert.match(error.stderr, /Task board watch mode requires an interactive terminal/);
+    assert.doesNotMatch(error.stderr, /react-reconciler|node_modules\/ink\/build\/components\/App/);
+    return true;
+  });
 });

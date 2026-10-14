@@ -86,7 +86,7 @@ test('operator task board projects HTTP collections without exposing backend or 
     projects: [{ id: 'project', companyId: 'company', name: 'Fixture project' }],
     tasks: [{ id: issueId, companyId: 'company', identifier: 'FIX-1', title: 'Fixture task',
       status: 'todo', priority: 'medium', parentId: null, assigneeAgentId: 'agent', assigneeUserId: null,
-      projectId: 'project', descriptionPreview: 'Collection description preview', updatedAt: '2026-10-07T08:00:00.000Z' }],
+      projectId: 'project', descriptionPreview: 'Collection description preview', updatedAt: '2026-10-07T08:00:00.000Z', origin: null }],
     routines: [], totals: { companies: 1, agents: 1, projects: 1, tasks: 1, routines: 0 }, fetchedAt: board.fetchedAt, warnings: [],
   });
   assert.ok(Number.isFinite(Date.parse(board.fetchedAt)));

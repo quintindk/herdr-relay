@@ -241,6 +241,10 @@ test('idle status, wrong parents, unfinished tools and intermediate tool respons
   snapshot.messages[1] = response;
   assert.equal(observe({ ...snapshot, idle: false }, invocation).state, 'observed');
   assert.equal(observe(snapshot, invocation).state, 'finished');
+  snapshot.messages.push({ info: { id: 'msg_later', role: 'user', time: { created: 3 } }, parts: [{ type: 'text', text: 'later work' }] });
+  assert.equal(observe(snapshot, invocation).state, 'finished');
+  snapshot.messages[2].info.time.created = 2;
+  assert.equal(observe(snapshot, invocation).reason, 'concurrent_native_input');
 });
 
 test('schema upgrade preserves pull state and rejects future schemas without rewriting them', t => {

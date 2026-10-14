@@ -138,7 +138,7 @@ test('configured busy native bridge reads only its company board and ready peers
   assert.deepEqual(board, {
     tasks: [{ id: issueId, companyId: 'company', identifier: 'TEST-1', title: 'Human backlog',
       status: 'backlog', priority: 'medium', parentId: null, assigneeAgentId: null, assigneeUserId: 'human',
-      projectId: 'project', descriptionPreview: 'Collection preview', updatedAt: null }],
+      projectId: 'project', descriptionPreview: 'Collection preview', updatedAt: null, origin: null }],
     projects: [{ id: 'project', companyId: 'company', name: 'Project' }],
     agents: [{ id: 'agent-origin', companyId: 'company', name: 'origin', availability: 'present',
       bridgeState: 'configured', nativeState: 'busy' }], fetchedAt: board.fetchedAt, warnings: [],

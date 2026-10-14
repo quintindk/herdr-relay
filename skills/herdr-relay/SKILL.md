@@ -29,15 +29,30 @@ Use `relay_schedule_preview` for five-field numeric cron and an explicit timezon
 `relay_schedule_inspect` returns native state and recent execution history.
 Scheduling means NEW Paperclip tasks, not timer prompts in the current chat.
 
-On explicit human instruction, state the target, cron, timezone and review policy,
+Use `relay_schedule_targets` before creating `headless` or `interactive_exact`
+schedules. It is the only authorised target-discovery path and returns a sanitised
+Relay projection. Never call Paperclip directly, inspect its local database, read
+backend context files or use Paperclip credentials to discover schedule targets.
+If Relay returns no suitable target, report the blocker and stop.
+
+On explicit human instruction, `relay_schedule_target_create` may create one
+dedicated Paperclip-native `opencode_local` target through Relay. State the name,
+exact enrolled directory, model and instruction scope visibly. The tool never
+accepts credentials, environment variables, commands or raw adapter configuration.
+Reuse its key on retries. Target creation does not create or enable a schedule;
+use the returned `agentId` with a separate `headless` schedule create.
+
+On explicit human instruction, state the execution mode, target, cron, timezone and review policy,
 then call `relay_schedule_create` with a stable `key`, `title`, `description`,
-`cron` and optional `targetDirectory`, `targetBindingId`, `timezone`, `projectId`, `parentTaskId`.
+`cron`, `executionMode` and its matching target: `targetAgentId` for `headless`,
+`targetBindingId` for `interactive_exact`, or `targetDirectory` for `interactive_folder`.
+Headless routines require `relayReviewPolicy: "none"`; Paperclip owns their review lifecycle.
 Omit both target fields in a standing-enrolled folder to create a persistent cron
 owned by that folder. `targetDirectory` explicitly selects an authorised folder.
 Its stable routing agent selects the unique current enrolled chat for each new
 occurrence, so new chats do not require timer recreation or manual transfer.
 Creation and activation work while the folder is offline or a human turn is busy.
-Use `targetBindingId` only to deliberately pin an exact chat, resolved through
+Use `targetBindingId` only with `interactive_exact` to pin an exact chat, resolved through
 `relay_agents`; never combine both target fields. A manually configured chat with
 no standing folder reservation retains exact-chat default targeting. Creation defaults paused
 and chat output review. `enabled: true` or `relay_schedule_resume` executes the
@@ -144,13 +159,15 @@ does not need to open Paperclip. Peers are separate conversations, not subagents
   Restart to reread earlier edits. Never build precision-sensitive cursors from
   displayed dates. Access errors, stale cursors or limits mean incomplete, not empty.
 - On explicit human instruction use `relay_task_create`, `relay_task_edit`,
-  `relay_task_assign`, `relay_task_comment`, `relay_task_complete`, `relay_task_reopen`
-  or `relay_task_cancel`. State exact task, changes, owner and reason first. Inspect
+  `relay_task_assign`, `relay_task_status`, `relay_task_comment`, `relay_task_complete`,
+  `relay_task_reopen` or `relay_task_cancel`. State exact task, changes, owner and reason first. Inspect
   before existing-task writes, then pass `key`, `expectedRevision`, `reason` and
   action payload. Create takes `key`, `payload`, optional `externalReference`, no
   reason argument; it uses an explicit/default human, never an agent. Add initial
   dependencies through a subsequent edit because the plugin create schema omits them.
 - Complete/cancel omit payload. Reopen takes `{}` for todo or `{status:"in_progress"}`.
+  Status accepts any task status plus an optional comment in one durable update;
+  pending candidate interactions must be resolved through review instead.
   Edit supports independent parent/dependency changes with cycle checks, not review
   policy changes or terminal status escapes. Blocked needs a human unblock owner/action.
   Complete/reopen/cancel/comment require current human ownership. Execution,

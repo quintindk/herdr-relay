@@ -52,8 +52,12 @@ test('board detail returns full text, final comments and exact pending candidate
   assert.deepEqual(detail.comments.map(comment => comment.body), ['Comment 2', 'Comment 3', 'Comment 4']);
   assert.deepEqual(detail.review, { runId: f.run.id, interactionId: f.interactionId,
     candidate: f.candidate, summary: 'Candidate summary with concrete checks.' });
+  assert.deepEqual(detail.result, { runId: f.run.id, candidate: f.candidate,
+    summary: 'Candidate summary with concrete checks.', deliverables: null, checks: null });
   f.task.status = 'blocked';
-  assert.equal((await taskBoardDetail(f.store, f.api, { companyId: f.companyId, taskId: f.taskId })).review, null);
+  const completed = await taskBoardDetail(f.store, f.api, { companyId: f.companyId, taskId: f.taskId });
+  assert.equal(completed.review, null);
+  assert.equal(completed.result.summary, 'Candidate summary with concrete checks.');
 });
 
 for (const action of ['accept', 'reject']) test(`board ${action} records one exact human decision`, async t => {

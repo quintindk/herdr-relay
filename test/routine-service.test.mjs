@@ -27,6 +27,7 @@ test('routine preview/list use Relay routes and preserve credential boundaries',
   const snapshot = { epoch: 'epoch', conversationId: 'conversation', terminalId: 'terminal', sessionCreatedAt: 123, idle: false };
   assert.equal((await call(native, 'POST', '/bridge/routine-preview', { ...snapshot, cron: '0 8 * * 1-5' })).nextRuns.length, 3);
   assert.deepEqual(await call(native, 'POST', '/bridge/routine-list', snapshot), { routines: [] });
+  await assert.rejects(call({ ...native, token: worker.token }, 'POST', '/routines/targets', { companyId: 'company' }), { code: 'forbidden' });
   await assert.rejects(call(native, 'POST', '/routines/manage', { action: 'list', companyId: 'company' }), { code: 'forbidden' });
   await assert.rejects(call({ ...native, token: worker.token }, 'POST', '/routines/preview', { cron: '* * * * *' }), { code: 'forbidden' });
   await assert.rejects(call(native, 'POST', '/bridge/routine-create', { ...snapshot, targetBindingId: 'worker' }), { code: 'invalid_routine_source' });

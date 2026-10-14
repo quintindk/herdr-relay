@@ -440,8 +440,7 @@ test('human completion needs no candidate or run and reports backend review disp
 test('completion refuses non-human ownership, review policy, unresolved dependencies and active children', async t => {
   for (const change of [
     { assigneeUserId: null }, { assigneeUserId: null, assigneeAgentId: 'agent' }, { assigneeAgentId: 'agent' },
-    { reviewPolicy: 'human' }, { executionPolicy: { stages: [] } }, { status: 'in_review' }, { status: 'cancelled' },
-    { status: 'blocked', unblockDescriptor: { owner: 'board', action: 'Resolve access' } }, { liveDescendantCount: 1 },
+    { reviewPolicy: 'human' }, { executionPolicy: { stages: [] } }, { status: 'cancelled' }, { liveDescendantCount: 1 },
   ]) {
     const f = fixture(t); Object.assign(f.state.task, change);
     await assert.rejects(humanTask(f.store, f.api, await f.input('complete')));
@@ -458,6 +457,41 @@ test('completion refuses non-human ownership, review policy, unresolved dependen
   f.state.children.push({ id: 'child', companyId: 'company', parentId: 'task', status: 'todo' });
   await assert.rejects(humanTask(f.store, f.api, await f.input('complete')), { code: 'dependency_unresolved' });
   assert.equal(f.writes().length, 0);
+});
+
+test('human completion may close active, blocked or in-review labels when concrete guards are clear', async t => {
+  for (const status of ['in_progress', 'blocked', 'in_review']) {
+    const f = fixture(t); f.state.task.status = status;
+    const result = await humanTask(f.store, f.api, await f.input('complete'));
+    assert.equal(result.task.status, 'done', status);
+    assert.equal(result.outcome.confirmed, true, status);
+  }
+});
+
+test('status action combines status, optional comment and blocked descriptor in one PATCH', async t => {
+  for (const status of ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled']) {
+    const f = fixture(t);
+    const payload = { status, comment: `Move to ${status}`,
+      ...(status === 'blocked' ? { unblockDescriptor: { owner: { userId: 'local-board' }, action: 'Wait for customer' } } : {}) };
+    const result = await humanTask(f.store, f.api, { ...await f.input('status', payload), reason: 'Status test' });
+    assert.equal(result.task.status, status);
+    assert.equal(result.outcome.confirmed, true);
+    assert.equal(f.writes().length, 1);
+    assert.equal(f.writes()[0].method, 'PATCH');
+    assert.equal(f.writes()[0].body.status, status === 'todo' ? undefined : status);
+    assert.equal(f.writes()[0].body.comment, `Move to ${status}`);
+    assert.equal(typeof f.writes()[0].body.commentClientRequestId, 'string');
+  }
+});
+
+test('status action permits optional comment and rejects pending interactions', async t => {
+  const f = fixture(t);
+  const result = await humanTask(f.store, f.api, { ...await f.input('status', { status: 'cancelled' }), reason: 'Status test' });
+  assert.equal(result.task.status, 'cancelled');
+  assert.deepEqual(f.writes()[0].body, { status: 'cancelled' });
+  const pending = fixture(t); pending.state.interactions.push({ id: 'pending', status: 'pending' });
+  await assert.rejects(humanTask(pending.store, pending.api, { ...await pending.input('status', { status: 'todo' }), reason: 'Status test' }), { code: 'interaction_pending' });
+  assert.equal(pending.writes().length, 0);
 });
 
 test('completion re-reads blockers rather than trusting relationship summaries', async t => {

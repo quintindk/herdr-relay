@@ -30,6 +30,11 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.27"
+    "@opencode-ai/plugin": "1.18.27",
+    "ink": "^8.0.0",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "ink-testing-library": "^4.0.0"
   }
 }

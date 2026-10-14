@@ -3,7 +3,8 @@ import { readTaskComments } from './task-query.mjs';
 import { harnessReviewDecision, harnessReviewReceipt } from './harness-review-reconciliation.mjs';
 
 const publicTask = task => Object.fromEntries(['id', 'companyId', 'identifier', 'title', 'description', 'status', 'priority',
-  'parentId', 'projectId', 'assigneeAgentId', 'assigneeUserId', 'updatedAt'].map(key => [key, task[key] ?? null]));
+  'parentId', 'projectId', 'assigneeAgentId', 'assigneeUserId', 'updatedAt', 'originKind', 'originId', 'originRunId']
+  .map(key => [key, task[key] ?? null]));
 
 function localReview(store, companyId, taskId, runId, interactionId, candidate) {
   const taskRuns = store.runs().filter(run => run.request.companyId === companyId && run.request.taskId === taskId);
@@ -52,6 +53,9 @@ export async function taskBoardDetail(store, api, input) {
   const detail = await inspect(store, api, companyId, taskId);
   const comments = await readTaskComments(api, { companyId, taskId });
   return { task: publicTask(detail.task), revision: detail.revision, review: detail.review,
+    result: detail.run?.result ? { runId: detail.run.id, summary: detail.run.result.summary,
+      candidate: detail.run.result.candidate, deliverables: detail.run.result.deliverables ?? null,
+      checks: detail.run.result.checks ?? null } : null,
     comments: comments.slice(-3).map(comment => ({ id: comment.id, body: comment.body, createdAt: comment.createdAt,
       authorAgentId: comment.authorAgentId ?? null, authorUserId: comment.authorUserId ?? null })) };
 }

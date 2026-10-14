@@ -26,7 +26,7 @@ function fixture(t) {
   const schedule = store.saveOperation({ id: 'routine:test', runId: '', created: true, state: 'active',
     routineId: 'native', triggerId: 'trigger', body, target,
     authority: { kind: 'native', bindingId: 'origin', conversationId: 'origin', sessionCreatedAt: 123 },
-    request: { companyId: 'company', targetBindingId: 'worker', relayReviewPolicy: 'none', cron: '0 8 * * *', timezone: 'Africa/Johannesburg' } });
+    request: { companyId: 'company', executionMode: 'interactive_exact', targetBindingId: 'worker', relayReviewPolicy: 'none', cron: '0 8 * * *', timezone: 'Africa/Johannesburg' } });
   const task = { id: 'task', companyId: 'company', identifier: 'TEST-1', ...body, parentId: null,
     originKind: 'routine_execution', originId: 'native', originRunId: 'occurrence' };
   const routine = { id: 'native', companyId: 'company', ...body,
@@ -59,6 +59,7 @@ function managedFixture(t) {
   f.routine.assigneeAgentId = 'headless';
   f.schedule.body.assigneeAgentId = 'headless';
   f.schedule.request.targetBindingId = 'headless';
+  f.schedule.request.executionMode = 'headless';
   f.schedule.target = routineTargetAdmission(f.store, binding, undefined, { verifyRuntime: () => runtime }).target;
   f.store.saveOperation(f.schedule);
   Object.assign(f.input, { bindingId: 'headless', agentId: 'headless' });
@@ -95,6 +96,137 @@ test('manual receipt bookkeeping cannot invalidate occurrence admission', async 
   }, f.input);
   assert.equal(taskPolicy(f.store, 'company', 'task'), 'none');
   assert.equal(f.store.runs().length, 0);
+});
+
+for (const loss of ['binding', 'bridge']) test(`${loss} exact conversation archives its routine and cancels the unadmitted occurrence`, async t => {
+  const f = fixture(t);
+  if (loss === 'binding') f.store.db.prepare('DELETE FROM bindings WHERE id = ?').run('worker');
+  if (loss === 'bridge') f.store.db.prepare('DELETE FROM operations WHERE id = ?').run('opencode-bridge:worker');
+  f.routine.status = 'active'; f.routine.latestRevisionId = 'revision'; f.task.status = 'todo';
+  const calls = [];
+  const api = async (method, path, body) => {
+    calls.push({ method, path, body });
+    if (method === 'GET' && path === '/api/issues/task') return structuredClone(f.task);
+    if (method === 'GET' && path === '/api/routines/native') return structuredClone(f.routine);
+    if (method === 'GET' && path === '/api/routines/native/runs?limit=200') return [structuredClone(f.occurrence)];
+    if (method === 'PATCH' && path === '/api/routines/native') {
+      Object.assign(f.routine, { status: body.status, latestRevisionId: 'archived-revision' }); return structuredClone(f.routine);
+    }
+    if (method === 'PATCH' && path === '/api/issues/task') {
+      Object.assign(f.task, body); return structuredClone(f.task);
+    }
+    assert.fail(`${method} ${path}`);
+  };
+  await assert.rejects(admitRoutineExecution(f.store, api, f.input), { code: 'routine_retired' });
+  assert.equal(f.routine.status, 'archived'); assert.equal(f.task.status, 'cancelled');
+  assert.equal(f.store.operation(f.schedule.id).state, 'cancelled');
+  assert.equal(f.store.runs().length, 0);
+  assert.deepEqual(calls.filter(call => call.method === 'PATCH').map(call => call.path), ['/api/routines/native', '/api/issues/task']);
+});
+
+test('busy or temporarily unavailable exact conversation waits without retiring', async t => {
+  for (const mode of ['busy', 'stale', 'unknown', 'offline']) {
+    const f = fixture(t);
+    if (mode === 'busy') f.store.dispatch({ ...f.input, taskId: 'other', runId: 'other-run' });
+    else if (mode === 'stale') f.store.saveOperation({ ...f.store.operation('opencode-bridge:worker'), lastSeen: '2020-01-01T00:00:00.000Z' });
+    else f.store.saveOperation({ ...f.store.operation('herdr-agent:worker'), availability: mode });
+    await assert.rejects(admitRoutineExecution(f.store, f.api, f.input), { code: 'routine_target_busy' });
+    assert.equal(f.store.operation(f.schedule.id).cancellationRequested, undefined, mode);
+  }
+});
+
+test('sustained offline exact conversation retires after the grace window', async t => {
+  const f = fixture(t);
+  f.store.saveOperation({ ...f.store.operation('herdr-agent:worker'), availability: 'offline' });
+  await assert.rejects(admitRoutineExecution(f.store, f.api, f.input), { code: 'routine_target_busy' });
+  const evidence = f.store.operation(`routine-exact-offline:${f.schedule.id}`);
+  f.store.saveOperation({ ...evidence, firstSeenAt: new Date(Date.now() - 31000).toISOString() });
+  f.routine.status = 'active'; f.routine.latestRevisionId = 'revision'; f.task.status = 'todo';
+  const api = async (method, path, body) => {
+    if (method === 'GET' && path === '/api/issues/task') return structuredClone(f.task);
+    if (method === 'GET' && path === '/api/routines/native') return structuredClone(f.routine);
+    if (method === 'GET' && path === '/api/routines/native/runs?limit=200') return [structuredClone(f.occurrence)];
+    if (method === 'PATCH' && path === '/api/routines/native') {
+      Object.assign(f.routine, { status: body.status, latestRevisionId: 'archived' }); return structuredClone(f.routine);
+    }
+    if (method === 'PATCH' && path === '/api/issues/task') { Object.assign(f.task, body); return structuredClone(f.task); }
+    assert.fail(`${method} ${path}`);
+  };
+  await assert.rejects(admitRoutineExecution(f.store, api, f.input), { code: 'routine_retired' });
+  assert.equal(f.task.status, 'cancelled');
+  assert.equal(f.store.operation(f.schedule.id).state, 'cancelled');
+});
+
+test('exact retirement preserves a concurrently completed occurrence', async t => {
+  const f = fixture(t); f.store.db.prepare('DELETE FROM bindings WHERE id = ?').run('worker');
+  f.routine.status = 'active'; f.routine.latestRevisionId = 'revision'; f.task.status = 'done';
+  const api = async (method, path, body) => {
+    if (method === 'GET' && path === '/api/issues/task') return structuredClone(f.task);
+    if (method === 'GET' && path === '/api/routines/native') return structuredClone(f.routine);
+    if (method === 'GET' && path === '/api/routines/native/runs?limit=200') return [structuredClone(f.occurrence)];
+    if (method === 'PATCH' && path === '/api/routines/native') {
+      Object.assign(f.routine, { status: body.status, latestRevisionId: 'archived' }); return structuredClone(f.routine);
+    }
+    if (method === 'PATCH' && path === '/api/issues/task') assert.fail('Done occurrence must not be cancelled');
+    assert.fail(`${method} ${path}`);
+  };
+  await assert.rejects(admitRoutineExecution(f.store, api, f.input), { code: 'routine_retired' });
+  assert.equal(f.task.status, 'done');
+  assert.equal(f.store.operation(f.schedule.id).state, 'cancelled');
+});
+
+test('uncommitted lost archive response retries only against the unchanged routine revision', async t => {
+  const f = fixture(t); f.store.db.prepare('DELETE FROM bindings WHERE id = ?').run('worker');
+  f.routine.status = 'active'; f.routine.latestRevisionId = 'revision'; f.task.status = 'todo';
+  let archives = 0;
+  const api = async (method, path, body) => {
+    if (method === 'GET' && path === '/api/issues/task') return structuredClone(f.task);
+    if (method === 'GET' && path === '/api/routines/native') return structuredClone(f.routine);
+    if (method === 'GET' && path === '/api/routines/native/runs?limit=200') return [structuredClone(f.occurrence)];
+    if (method === 'PATCH' && path === '/api/routines/native') {
+      archives++;
+      if (archives === 1) throw Object.assign(new Error('lost before commit'), { code: 'backend_unavailable' });
+      assert.equal(body.baseRevisionId, 'revision');
+      Object.assign(f.routine, { status: 'archived', latestRevisionId: 'archived' }); return structuredClone(f.routine);
+    }
+    if (method === 'PATCH' && path === '/api/issues/task') { Object.assign(f.task, body); return structuredClone(f.task); }
+    assert.fail(`${method} ${path}`);
+  };
+  await assert.rejects(admitRoutineExecution(f.store, api, f.input), { code: 'backend_unavailable' });
+  assert.equal(f.store.operation(f.schedule.id).cancellationRequested, true);
+  const operation = f.store.db.prepare("SELECT data FROM operations WHERE id LIKE 'routine-retirement:%'").get();
+  assert.ok(operation);
+  const { reconcileRoutineRetirements } = await import('../src/routine-retirement.mjs');
+  await reconcileRoutineRetirements(f.store, api);
+  assert.equal(archives, 2);
+  assert.equal(f.routine.status, 'archived');
+  assert.equal(f.task.status, 'cancelled');
+});
+
+test('uncommitted lost occurrence cancellation retries only while the task snapshot is unchanged', async t => {
+  const f = fixture(t); f.store.db.prepare('DELETE FROM bindings WHERE id = ?').run('worker');
+  f.routine.status = 'active'; f.routine.latestRevisionId = 'revision';
+  Object.assign(f.task, { status: 'todo', updatedAt: '2026-10-14T08:00:00.000Z' });
+  let cancellations = 0;
+  const api = async (method, path, body) => {
+    if (method === 'GET' && path === '/api/issues/task') return structuredClone(f.task);
+    if (method === 'GET' && path === '/api/routines/native') return structuredClone(f.routine);
+    if (method === 'GET' && path === '/api/routines/native/runs?limit=200') return [structuredClone(f.occurrence)];
+    if (method === 'PATCH' && path === '/api/routines/native') {
+      Object.assign(f.routine, { status: body.status, latestRevisionId: 'archived' }); return structuredClone(f.routine);
+    }
+    if (method === 'PATCH' && path === '/api/issues/task') {
+      cancellations++;
+      if (cancellations === 1) throw Object.assign(new Error('lost before commit'), { code: 'backend_unavailable' });
+      Object.assign(f.task, body, { updatedAt: '2026-10-14T08:01:00.000Z' }); return structuredClone(f.task);
+    }
+    assert.fail(`${method} ${path}`);
+  };
+  await assert.rejects(admitRoutineExecution(f.store, api, f.input), { code: 'backend_unavailable' });
+  const { reconcileRoutineRetirements } = await import('../src/routine-retirement.mjs');
+  await reconcileRoutineRetirements(f.store, api);
+  assert.equal(cancellations, 2);
+  assert.equal(f.task.status, 'cancelled');
 });
 
 test('managed exact routine occurrence is admitted, delivered and settled with the originating chat retained', async t => {

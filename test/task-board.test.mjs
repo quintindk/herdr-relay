@@ -63,7 +63,7 @@ test('projects actual issues and totals, never Relay runs or private configurati
   assert.deepEqual(result.projects, [{ id: 'project', companyId: 'company', name: 'Project' }]);
   assert.deepEqual(result.agents, [{ id: 'agent', companyId: 'company', name: 'Agent', availability: 'unknown', bridgeState: null, nativeState: 'unknown' }]);
   const { description, ...expected } = issue(1);
-  assert.deepEqual(result.tasks, [{ ...expected, parentId: uuid(2), projectId: 'project', descriptionPreview: description }]);
+  assert.deepEqual(result.tasks, [{ ...expected, parentId: uuid(2), projectId: 'project', descriptionPreview: description, origin: null }]);
   assert.deepEqual(result.routines, []);
   assert.deepEqual(result.totals, { companies: 1, agents: 1, projects: 1, tasks: 1, routines: 0 });
   assert.deepEqual(result.warnings, []);
@@ -79,8 +79,9 @@ test('projects safe local cron routines without backend reads or target secrets'
       cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', relayReviewPolicy: 'none' },
     target: { bindingId: 'headless', managed: { runtimeNonce: 'PRIVATE' } } });
   const result = await taskBoard(f.store, f.api);
-  assert.deepEqual(result.routines, [{ id: 'routine:test', companyId: 'company', title: 'Inbox sweep', state: 'active',
-    cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', nextRunAt: '2026-10-13T11:00:00.000Z', target: 'headless' }]);
+  assert.deepEqual(result.routines, [{ id: 'routine:test', routineId: null, companyId: 'company', title: 'Inbox sweep', state: 'active',
+    executionMode: 'headless', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg',
+    nextRunAt: '2026-10-13T11:00:00.000Z', target: 'headless' }]);
   assert.equal(result.totals.routines, 1);
   assert.ok(!JSON.stringify(result.routines).includes('PRIVATE'));
 });

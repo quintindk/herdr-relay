@@ -7,7 +7,7 @@ import { requireValue } from './protocol.mjs';
 import { candidate } from './candidate.mjs';
 import { systemdUnit, installService, uninstallService } from './installation.mjs';
 import { renderOverview, watchOverview } from './views.mjs';
-import { renderTaskBoard, watchTaskBoard } from './task-board-view.mjs';
+import { renderTaskBoard } from './task-board-view.mjs';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -169,14 +169,22 @@ export async function main(args) {
   if (group === 'board') {
     requireValue(!(values.json && values.watch), 'invalid_request', 'Choose --json or --watch');
     const read = signal => call(connection, 'GET', '/task-board', undefined, { signal });
-    if (values.watch) await watchTaskBoard(read, {
+    const boardOptions = {
       inspectTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'inspect' }, { signal }),
       detailTask: (input, signal) => call(connection, 'POST', '/task-board/detail', input, { signal }),
+      detailRoutine: (input, signal) => call(connection, 'POST', '/routines/manage', {
+        action: 'inspect', companyId: input.companyId, scheduleId: input.scheduleId,
+      }, { signal }),
       reviewTask: (input, signal) => call(connection, 'POST', '/task-board/review', input, { signal }),
       assignTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'assign' }, { signal }),
-      deleteTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'delete' }, { signal }),
-    });
-    else {
+      statusTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'status' }, { signal }),
+    };
+    if (values.watch) {
+      requireValue(process.stdin.isTTY && process.stdout.isTTY, 'tty_required',
+        'Task board watch mode requires an interactive terminal. Open it in a Herdr pane or run it from a TTY.', 400);
+      const { watchTaskBoardInk } = await import('./task-board-ink.mjs');
+      await watchTaskBoardInk(read, { ...boardOptions, exitProcess: true });
+    } else {
       const value = await read();
       console.log(values.json ? JSON.stringify(value, null, 2) : renderTaskBoard(value, {
         width: process.stdout.columns ?? 110, height: process.stdout.rows ?? 40,

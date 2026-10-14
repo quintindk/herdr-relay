@@ -97,6 +97,20 @@ export async function reconcileHerdrAgents(store, api, config, snapshot, current
       const bridged = bridge?.state === 'armed';
       if (bridge) observation.dispatch = bridged && Date.now() - Date.parse(bridge.lastSeen) < 10000 ? 'opencode_bridge' : 'bridge_unavailable';
       operation = store.saveOperation({ ...operation, availability, placement, observation, error: null });
+      for (const row of store.db.prepare("SELECT data FROM operations WHERE id LIKE 'routine:%'").all()) {
+        const routine = JSON.parse(row.data);
+        if (routine.request?.executionMode !== 'interactive_exact' || routine.target?.observedId !== operation.id) continue;
+        const offlineId = `routine-exact-offline:${routine.id}`;
+        const evidence = store.operation(offlineId);
+        const identity = digest([routine.target.bindingId, routine.target.conversationId, routine.target.sessionCreatedAt]);
+        if (availability === 'offline') {
+          if (!evidence || evidence.identity !== identity || evidence.state === 'cleared') {
+            store.saveOperation({ id: offlineId, runId: '', state: 'observed', identity, firstSeenAt: new Date().toISOString() });
+          }
+        } else if (evidence?.state === 'observed') {
+          store.saveOperation({ ...evidence, state: 'cleared', clearedAt: new Date().toISOString() });
+        }
+      }
       const backendMatches = companiesAgents.filter(item => item.adapterConfig?.relayObservationMarker === operation.marker);
       requireValue(backendMatches.length <= 1, 'agent_identity_ambiguous', 'Multiple agents match observed identity', 409);
       let backend = operation.agentId ? companiesAgents.find(item => item.id === operation.agentId) : backendMatches[0];

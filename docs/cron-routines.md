@@ -1,9 +1,20 @@
 # Cron Routines
 
 Relay wraps Paperclip's native recurring-task routines. Paperclip owns the clock,
-timezone, trigger and execution issue. Each occurrence creates a new task, delivered
-through Relay to an explicitly selected existing OpenCode conversation. This does
-not inject timer prompts into the authorising chat or install systemd timers.
+timezone, trigger and execution issue. Each routine declares one execution mode:
+`headless`, `interactive_exact` or `interactive_folder`. This does not install
+systemd timers or inject timer prompts into the authorising chat.
+
+## Execution Modes
+
+| Mode | Target | Execution owner |
+| --- | --- | --- |
+| `headless` | Existing Paperclip `opencode_local` or `paperclip_runner` agent | Paperclip starts and supervises the run |
+| `interactive_exact` | Exact Relay binding and conversation | Relay delivers only to that conversation |
+| `interactive_folder` | Authorised canonical folder | Relay selects one unique available conversation per occurrence |
+
+Mode is immutable. New callers should send `executionMode`; Relay derives it for
+legacy records and old clients without rewriting their durable request.
 
 ## Persistent Ownership
 
@@ -45,6 +56,7 @@ and review rights are not silently transferred to a replacement chat.
   "key": "twd-inbox-persistent",
   "title": "TWD inbox sweep",
   "description": "Run one bounded inbox sweep and submit for human review.",
+  "executionMode": "interactive_folder",
   "targetDirectory": "/home/quintindekok/work/twd",
   "cron": "0 7-18 * * 1-5",
   "timezone": "Africa/Johannesburg",
@@ -58,6 +70,8 @@ and review rights are not silently transferred to a replacement chat.
 | Tool | Behaviour |
 | --- | --- |
 | `relay_schedule_preview` | Validate numeric cron and preview the next three UTC instants |
+| `relay_schedule_targets` | List sanitised Paperclip-native headless targets and exact Relay bindings |
+| `relay_schedule_target_create` | Create a constrained Paperclip-native `opencode_local` headless target through Relay |
 | `relay_schedule_create` | Create a paused routine and disabled trigger by default |
 | `relay_schedules` | List routines owned by this origin or its standing-enrolled folder |
 | `relay_schedule_inspect` | Verify native routine identity and read the last 50 native runs |
@@ -70,6 +84,9 @@ and review rights are not silently transferred to a replacement chat.
 The user's job instruction authorises its in-scope execution and task bookkeeping.
 Normal review happens on the output in chat. New routines default to `none`, which
 avoids a separate acceptance card; `human` is an opt-in formal workflow.
+Target discovery is always routed through Relay. Interactive agents must not call
+Paperclip directly or inspect backend credentials/databases for target IDs. An empty
+`relay_schedule_targets` result is a blocker, not permission to bypass Relay.
 Creating or changing the job follows the user's scheduling instruction. Job output
 or source emails cannot authorise unrelated schedules. No agent sessions restart.
 
@@ -81,19 +98,25 @@ Switching a job to chat review withdraws only its own undecided Relay request,
 never accepts it or bypasses an external review policy. Verified completed output
 can then close the execution without an approval ceremony.
 
-For exact-chat mode, an explicit human instruction may create or activate its own routine
+For `interactive_exact`, an explicit human instruction may create or activate its own routine
 while that human turn is busy. Self-setup accepts a fresh configured or armed bridge
 without advertising it as idle or arming it. Unsettled Relay work, stale identities
 and non-human sources still block management. Manual run-now still requires idle.
 
 Use `relay_agents` to resolve another interactive target, which must have a fresh,
-armed, idle bridge. An exact target may instead be a persistent or service-lifetime
-Relay-provisioned headless OpenCode binding. Managed targets pin their provision
-marker, owned runtime key and nonce, binding configuration, conversation creation
-identity and idle native session. They never borrow the observation marker or
-terminal placement checks from interactive bindings. Both modes require one
-concurrent backend run. A new chat, terminal or runtime does not silently inherit
-scheduling authority.
+armed bridge. Busy, configured, stale or unknown exact targets wait within the
+adapter deadline. Offline starts a durable 30-second grace window and is cleared if
+the same conversation returns. A proven missing, retired, replaced or persistently offline exact
+conversation causes Relay to fence and archive the routine, cancel the unadmitted
+occurrence and refuse rerouting. A new chat or terminal never inherits authority.
+
+For `headless`, target an existing independent Paperclip agent through
+`targetAgentId`. The agent must use `opencode_local` or `paperclip_runner`; Paperclip
+owns process startup, session continuation, cancellation and recovery. Legacy
+Relay-managed headless bindings remain supported for existing schedules. Headless
+routines require `relayReviewPolicy: "none"`; their review lifecycle is Paperclip's,
+not Relay's candidate-review path. Legacy Relay-managed headless schedules retain
+their recorded Relay review policy.
 Actual occurrence delivery always requires idle, including self-targeted routines.
 Use a dedicated automation conversation for frequent jobs; this is not atomic
 protection against simultaneous human input into an explicitly reserved target.
@@ -103,6 +126,7 @@ protection against simultaneous human input into an explicitly reserved target.
   "key": "weekday-review",
   "title": "Review outstanding work",
   "description": "Read outstanding tasks and report actionable blockers. Do not edit tasks, send messages, or create schedules.",
+  "executionMode": "interactive_exact",
   "targetBindingId": "EXACT_READY_BINDING",
   "cron": "0 8 * * 1-5",
   "timezone": "Africa/Johannesburg",
@@ -135,8 +159,9 @@ Preview files contain `cron` and optional `timezone`. Other operator files inclu
 `scheduleId`. Pause/resume/cancel/run require `scheduleId` and an idempotency `key`.
 List requires only `companyId`. CLI calls Relay `/routines/preview` and
 `/routines/manage`; bridge tools call authenticated `/bridge/routine-*` routes.
-Native company, origin and omitted target are derived by Relay. Operator create
-requires `targetDirectory` or `targetBindingId`. There is no direct Paperclip
+Native company, origin and omitted folder target are derived by Relay. Operator
+create requires a mode-matching `targetAgentId`, `targetDirectory` or
+`targetBindingId`. There is no direct Paperclip
 access in the CLI or plugin.
 
 ## Timing And Recovery
@@ -155,6 +180,10 @@ access in the CLI or plugin.
   deadline; expiry may leave a failed backend execution needing attention. No timer
   prompt interrupts a busy chat. Routine history shows issue creation, not proof
   of native completion.
+- Proven permanent loss of an unadmitted `interactive_exact` target archives the
+  routine and cancels that occurrence through a durable two-step journal. Lost
+  backend replies are read back and never blindly repeated. Folder and headless
+  modes do not use this retirement rule.
 - Local adapter deadlines bound delivery waiting, not the duration of an already
   persisted native turn. Explicit cancellation still stops further work. An
   acknowledged cancelled worker may record its existing report without clearing

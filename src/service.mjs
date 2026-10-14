@@ -37,7 +37,7 @@ import { harnessDelegation } from './harness-delegation.mjs';
 import { prepareHerdrWorker, inspectHerdrWorkers, reconcileHerdrWorkers, workerGrantConfigured } from './herdr-workers.mjs';
 import { taskBoard } from './task-board.mjs';
 import { taskBoardDetail, taskBoardReview } from './task-board-review.mjs';
-import { manageRoutine } from './routines.mjs';
+import { manageRoutine, scheduleTargets } from './routines.mjs';
 import { harnessRoutine } from './harness-routines.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { admitRoutineExecution } from './routine-execution.mjs';
@@ -133,7 +133,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       const input = req.method === 'POST' ? await body(req, bridge && path === '/bridge/observe' ? 4 * 1024 * 1024 : undefined) : {};
       if (bridge) {
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
-          '/bridge/routine-preview', '/bridge/routine-create', '/bridge/routine-list', '/bridge/routine-inspect', '/bridge/routine-pause', '/bridge/routine-resume', '/bridge/routine-cancel', '/bridge/routine-run', '/bridge/routine-edit',
+          '/bridge/routine-preview', '/bridge/routine-targets', '/bridge/routine-target-create', '/bridge/routine-create', '/bridge/routine-list', '/bridge/routine-inspect', '/bridge/routine-pause', '/bridge/routine-resume', '/bridge/routine-cancel', '/bridge/routine-run', '/bridge/routine-edit',
           '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-complete',
           '/bridge/task-list', '/bridge/task-children', '/bridge/task-comments', '/bridge/task-activity', '/bridge/task-reference-lookup', '/bridge/task-reference-attach', '/bridge/task-comment', '/bridge/task-reopen', '/bridge/task-cancel', '/bridge/task-recover', '/bridge/task-delete',
           '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
@@ -221,6 +221,9 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       else if (req.method === 'POST' && path === '/routines/preview') {
         adminOnly(); requireValue(Object.keys(input).every(key => ['cron', 'timezone'].includes(key)), 'invalid_request', 'Unsupported preview fields');
         result = previewCron(input.cron, input.timezone);
+      }
+      else if (req.method === 'POST' && path === '/routines/targets') {
+        adminOnly(); result = await scheduleTargets(store, operatorApi, text(input.companyId, 'companyId'));
       }
       else if (req.method === 'POST' && path === '/routines/manage') {
         adminOnly(); result = await manageRoutine(store, operatorApi, input, routineOptions); boardCache = null;

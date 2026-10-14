@@ -30,7 +30,10 @@ function scheduleTools(execute) {
   const id = tool.schema.string().min(1);
   const definitions = {
     preview: { cron: id, timezone: id.optional() },
-    create: { key: id, title: id.max(200), description: id, targetBindingId: id.optional().describe('Optional exact-chat target. Omit both target fields to create a persistent cron for this enrolled folder.'),
+    create: { key: id, title: id.max(200), description: id,
+      executionMode: tool.schema.enum(['headless', 'interactive_exact', 'interactive_folder']).optional().describe('Execution ownership. New callers should set this explicitly.'),
+      targetAgentId: id.optional().describe('Paperclip-native opencode_local or paperclip_runner agent for headless execution.'),
+      targetBindingId: id.optional().describe('Exact Relay binding for interactive_exact execution.'),
       targetDirectory: id.optional().describe('Persistent cron owner: exact enrolled folder. Future occurrences follow its unique current chat across restarts. Do not also supply targetBindingId.'),
       cron: id, timezone: id.optional(), projectId: id.optional(), parentTaskId: id.optional(),
       relayReviewPolicy: tool.schema.enum(['human', 'none']).optional(), enabled: tool.schema.boolean().optional() },
@@ -115,6 +118,15 @@ function taskTools(execute) {
         tool.schema.object({ assigneeUserId: id.nullable() }).strict(),
         tool.schema.object({ assigneeAgentId: id.nullable() }).strict(),
       ]) },
+    }],
+    ['status', {
+      description: 'Change a human-owned task status with an optional comment through one durable Relay operation. Supports backlog, todo, active, blocked, in review, done and cancelled. Pending candidate reviews must be resolved separately. Blocked may include minimal unblock information when no blocker evidence exists.',
+      args: { ...writeArgs, payload: tool.schema.object({
+        status: tool.schema.enum(['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled']),
+        comment: tool.schema.string().max(200000).optional(),
+        unblockDescriptor: tool.schema.object({ owner: tool.schema.union([tool.schema.literal('board'), tool.schema.object({ userId: id }).strict()]),
+          action: id.max(2000) }).strict().optional(),
+      }).strict() },
     }],
     ['complete', {
       description: 'Complete only a currently human-owned task on explicit human instruction. Before calling, state the exact task, proposed completion, human owner and reason visibly in chat; the permission popup does not show these details. Cannot bypass agent result review, pending interactions or dependencies. Use the revision token from relay_task_inspect as expectedRevision and reuse the key on retries. Accepts no payload.',
@@ -242,7 +254,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
       if (!source || source.info.id !== sourceId || !content?.trim()) throw new Error('Current native user message could not be verified');
       await context.ask({ permission: action.startsWith('routine-') ? `relay_schedule_${action.slice(8)}` : action === 'delegate' ? 'relay_delegate' : action === 'prepare-worker' ? 'relay_worker_prepare' :
         action === 'enrol-agent' ? 'relay_enrol_agent' : action.startsWith('task-') ? `relay_${action.replaceAll('-', '_')}` : 'relay_coordinator_review',
-        patterns: [action === 'routine-create' ? args.targetDirectory ?? args.targetBindingId ?? config.directory ?? config.conversationId
+        patterns: [action === 'routine-create' ? args.targetAgentId ?? args.targetDirectory ?? args.targetBindingId ?? config.directory ?? config.conversationId
           : args.scheduleId ?? args.taskId ?? args.payload?.title ?? args.targetBindingId ?? args.repository ?? args.directory ?? args.parentTaskId ?? args.grantId], always: [],
         metadata: { ...args, sourceMessageId: sourceId, sourceText: content } });
       const fresh = await snapshot();
@@ -337,9 +349,18 @@ export default async function relayBridge({ client, directory }, options = {}) {
     tool: {
       ...scheduleTools(action => async (args, context) => {
         if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
-        if (['routine-preview', 'routine-list', 'routine-inspect'].includes(action)) return JSON.stringify(await rpc(action, await snapshot(false), args));
+        if (['routine-preview', 'routine-targets', 'routine-list', 'routine-inspect'].includes(action)) return JSON.stringify(await rpc(action, await snapshot(false), args));
         return delegate(args, context, action);
       }),
+      relay_schedule_targets: tool({ description: 'List safe Relay-routed targets for new schedules. Returns Paperclip-native headless agent IDs and exact interactive Relay bindings without adapter configuration or credentials. Use this instead of direct Paperclip access.', args: {},
+        async execute(_, context) {
+          if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
+          return JSON.stringify(await rpc('routine-targets', await snapshot(false)));
+        } }),
+      relay_schedule_target_create: tool({ description: 'Create a dedicated Paperclip-native opencode_local schedule target through Relay on explicit human instruction. State name, enrolled directory, model and instruction scope visibly. Never accepts credentials or raw adapter configuration. Reuse the same key on retries; creation does not create or enable a schedule.',
+        args: { key: tool.schema.string().min(1), name: tool.schema.string().min(1).max(120), directory: tool.schema.string().min(1),
+          model: tool.schema.string().min(3), instructions: tool.schema.string().min(1).max(65536) },
+        execute: (args, context) => delegate(args, context, 'routine-target-create') }),
       ...taskTools(action => async (args, context) => {
         if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
         if (['task-inspect', 'task-list', 'task-children', 'task-comments', 'task-activity', 'task-reference-lookup'].includes(action)) {
@@ -482,6 +503,10 @@ async function discoverBridge(input, configDirectory, discoveryWaitMs) {
   return {
     tool: {
       ...scheduleTools(action => execute(action === 'routine-list' ? 'relay_schedules' : `relay_schedule_${action.slice(8)}`)),
+      relay_schedule_targets: tool({ description: 'List safe Relay-routed targets for new schedules. Never access Paperclip directly for target discovery.', args: {}, execute: execute('relay_schedule_targets') }),
+      relay_schedule_target_create: tool({ description: 'Create a dedicated Paperclip-native opencode_local schedule target through Relay on explicit human instruction. Never accepts credentials or raw adapter configuration.',
+        args: { key: tool.schema.string().min(1), name: tool.schema.string().min(1).max(120), directory: tool.schema.string().min(1),
+          model: tool.schema.string().min(3), instructions: tool.schema.string().min(1).max(65536) }, execute: execute('relay_schedule_target_create') }),
       ...taskTools(action => execute(`relay_${action.replaceAll('-', '_')}`)),
       relay_enrolment_candidates: tool({ description: 'List exact observed agents available for enrolment. Read-only; listing does not grant enrolment authority.', args: {}, execute: execute('relay_enrolment_candidates') }),
       relay_enrol_agent: tool({ description: 'Enrol an exact observed agent only on explicit human instruction. State the directory, exact candidate and any reservation visibly before calling. Resolve observedId from relay_enrolment_candidates and reuse the key on retries. Enrolment is not task assignment.',

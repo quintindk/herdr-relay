@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Store } from '../src/store.mjs';
 import { digest } from '../src/protocol.mjs';
-import { manageRoutine, routineRecords, routineTargetAdmission } from '../src/routines.mjs';
+import { manageRoutine, routineRecords, routineTargetAdmission, scheduleTargets } from '../src/routines.mjs';
 import { harnessRoutine } from '../src/harness-routines.mjs';
 
 function fixture(t) {
@@ -32,7 +32,8 @@ function fixture(t) {
     f.calls.push({ method, path: url, body: structuredClone(body) });
     if (f.before) await f.before(method, url, body);
     let result;
-    if (url === `/api/agents/${f.agentId}`) {
+    if (f.extraAgents?.has(url.split('/').at(-1)) && method === 'GET') result = f.extraAgents.get(url.split('/').at(-1));
+    else if (url === `/api/agents/${f.agentId}`) {
       if (method === 'PATCH') Object.assign(f.agent, structuredClone(body));
       else assert.equal(method, 'GET');
       result = f.agent;
@@ -142,6 +143,7 @@ test('create provisions paused routine and disabled trigger with a public safe p
   assert.notEqual(result.scheduleId, result.routineId);
   assert.equal(result.pauseStopsRunningWork, false);
   assert.equal(result.description, f.input.description);
+  assert.equal(result.executionMode, 'interactive_exact');
   assert.deepEqual(f.writes().map(call => [call.method, call.path]), [
     ['POST', `/api/companies/${f.companyId}/routines`], ['POST', `/api/routines/${result.routineId}/triggers`],
   ]);
@@ -152,6 +154,70 @@ test('create provisions paused routine and disabled trigger with a public safe p
   f.restart();
   assert.deepEqual(await f.create(), result);
   assert.equal(f.writes().length, 2);
+});
+
+test('explicit headless routine targets a Paperclip-native agent without a Relay binding', async t => {
+  const f = fixture(t), nativeAgentId = randomUUID();
+  f.extraAgents = new Map([[nativeAgentId, { id: nativeAgentId, companyId: f.companyId, status: 'idle', adapterType: 'opencode_local',
+    adapterConfig: { cwd: '/work/project', model: 'openai/gpt-5.5' }, runtimeConfig: { heartbeat: { enabled: true } } }]]);
+  const result = await f.create({ executionMode: 'headless', targetAgentId: nativeAgentId, targetBindingId: undefined });
+  assert.equal(result.executionMode, 'headless');
+  assert.equal(result.targetAgentId, nativeAgentId);
+  assert.equal(f.routines[0].assigneeAgentId, nativeAgentId);
+  assert.equal(result.target.native, true);
+  assert.equal(result.target.adapterType, 'opencode_local');
+});
+
+test('schedule target discovery exposes only safe native and interactive identities', async t => {
+  const f = fixture(t), nativeId = randomUUID();
+  const result = await scheduleTargets(f.store, async (method, path) => {
+    assert.equal(method, 'GET'); assert.equal(path, `/api/companies/${f.companyId}/agents`);
+    return [f.agent, { id: nativeId, companyId: f.companyId, name: 'Native inbox', status: 'idle',
+      adapterType: 'opencode_local', adapterConfig: { token: 'PRIVATE', cwd: '/work' }, runtimeConfig: { secret: 'PRIVATE' } },
+    { id: randomUUID(), companyId: f.companyId, name: 'HTTP', status: 'idle', adapterType: 'http' }];
+  }, f.companyId);
+  assert.deepEqual(result.headless, [{ agentId: nativeId, name: 'Native inbox', adapterType: 'opencode_local', status: 'idle' }]);
+  assert.deepEqual(result.interactiveExact, [{ bindingId: 'worker', label: 'chat', conversationId: 'chat' }]);
+  assert.ok(!JSON.stringify(result).includes('PRIVATE'));
+});
+
+test('native bridge can create explicit Paperclip headless routine', async t => {
+  const f = fixture(t), nativeAgentId = randomUUID();
+  f.extraAgents = new Map([[nativeAgentId, { id: nativeAgentId, companyId: f.companyId, status: 'idle', adapterType: 'paperclip_runner',
+    adapterConfig: { provider: 'opencode' }, runtimeConfig: { heartbeat: { enabled: true } } }]]);
+  const source = { id: 'human-headless', text: 'Run this headlessly', createdAt: Date.now() };
+  const result = await harnessRoutine(f.store, f.bridge, 'routine-create', {
+    key: 'headless-native', executionMode: 'headless', targetAgentId: nativeAgentId,
+    title: 'Headless', description: 'Run unattended', cron: '0 8 * * *', source,
+  }, f.api);
+  assert.equal(result.executionMode, 'headless');
+  assert.equal(result.targetAgentId, nativeAgentId);
+});
+
+test('native bridge preserves legacy Relay-managed headless target inference', async t => {
+  const f = managedFixture(t);
+  const source = { id: 'human-managed', text: 'Run in the managed worker', createdAt: Date.now() };
+  const result = await harnessRoutine(f.store, f.bridge, 'routine-create', {
+    key: 'managed-native', targetBindingId: f.binding.id, title: 'Managed', description: 'Legacy managed target',
+    cron: '0 8 * * *', source,
+  }, f.api, f.options);
+  assert.equal(result.executionMode, 'headless');
+  assert.equal(result.targetBindingId, f.binding.id);
+});
+
+test('execution modes reject mismatched target fields', async t => {
+  for (const input of [
+    { executionMode: 'headless' },
+    { executionMode: 'headless', targetBindingId: 'worker' },
+    { executionMode: 'interactive_exact', targetAgentId: 'native', targetBindingId: undefined },
+    { executionMode: 'interactive_folder', targetBindingId: 'worker' },
+    { executionMode: 'wrong' },
+    { executionMode: 'headless', targetAgentId: 'native', targetBindingId: undefined, relayReviewPolicy: 'human' },
+  ]) {
+    const f = fixture(t);
+    await assert.rejects(f.create(input), { code: input.relayReviewPolicy ? 'invalid_review_policy' : 'invalid_request' });
+    assert.equal(f.writes().length, 0);
+  }
 });
 
 for (const action of ['pause', 'cancel']) {

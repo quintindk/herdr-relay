@@ -66,7 +66,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   requireValue(authority && typeof authority === 'object' && !Array.isArray(authority), 'invalid_authority', 'Server authority required');
   text(authority.kind, 'authority.kind');
   const { action, companyId, taskId } = input;
-  requireValue(['create', 'inspect', 'edit', 'assign', 'complete', 'comment', 'reopen', 'cancel', 'recover', 'delete'].includes(action), 'invalid_request', 'Unknown human task action');
+  requireValue(['create', 'inspect', 'edit', 'assign', 'status', 'complete', 'comment', 'reopen', 'cancel', 'recover', 'delete'].includes(action), 'invalid_request', 'Unknown human task action');
   text(companyId, 'companyId');
   let externalReference;
   if (input.externalReference !== undefined) {
@@ -86,7 +86,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   const payload = input.payload ?? {};
   if (['complete', 'cancel', 'delete'].includes(action)) requireValue(input.payload === undefined, 'invalid_request', 'This action accepts no payload');
   if (action === 'recover' && input.payload !== undefined) object(input.payload, ['mode', 'repository', 'commit', 'artifactPath', 'branch']);
-  if (['cancel', 'recover'].includes(action)) text(input.reason, 'reason');
+  if (['status', 'cancel', 'recover'].includes(action)) text(input.reason, 'reason');
   if (action === 'comment') {
     object(input.payload, ['body']);
     text(payload.body, 'body');
@@ -95,6 +95,27 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     // (even in code/plain text), without a racy company-agent lookup.
     requireValue(!/agent:\/\//i.test(payload.body), 'agent_mention_forbidden',
       'Human task comments cannot contain agent:// references: backend mentions can wake agents');
+  }
+  if (action === 'status') {
+    object(input.payload, ['status', 'comment', 'unblockDescriptor']);
+    requireValue(['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'].includes(payload.status),
+      'invalid_status', 'Unknown task status');
+    if (payload.comment !== undefined) {
+      requireValue(typeof payload.comment === 'string' && payload.comment.length <= 200000, 'invalid_request', 'Comment must be bounded text');
+      payload.comment = payload.comment.trim();
+      if (!payload.comment) delete payload.comment;
+      else requireValue(!/agent:\/\//i.test(payload.comment), 'agent_mention_forbidden',
+        'Human task comments cannot contain agent:// references: backend mentions can wake agents');
+    }
+    if (payload.unblockDescriptor !== undefined) {
+      requireValue(payload.status === 'blocked', 'invalid_request', 'unblockDescriptor requires blocked status');
+      const descriptor = payload.unblockDescriptor;
+      object(descriptor, ['owner', 'action']);
+      requireValue(text(descriptor.action, 'unblockDescriptor.action').length <= 2000, 'invalid_request', 'Unblock action exceeds 2000 characters');
+      if (descriptor.owner !== 'board') {
+        object(descriptor.owner, ['userId']); text(descriptor.owner.userId, 'unblockDescriptor.owner.userId');
+      }
+    }
   }
   if (action === 'reopen') {
     object(input.payload, ['status']);
@@ -138,6 +159,8 @@ export async function humanTask(store, api, input, { check = () => {}, authority
     desired = { assigneeUserId: null, assigneeAgentId: null, ...payload };
     if (desired.assigneeAgentId) text(input.reason, 'reason');
   } else if (['complete', 'recover'].includes(action)) desired = { status: 'done' };
+  else if (action === 'status') desired = { status: payload.status,
+    ...(payload.unblockDescriptor === undefined ? {} : { unblockDescriptor: payload.unblockDescriptor }) };
   else if (action === 'reopen') desired = { status: payload.status ?? 'todo' };
   else if (action === 'cancel') desired = { status: 'cancelled' };
   else if (action === 'comment') desired = {};
@@ -582,15 +605,15 @@ export async function humanTask(store, api, input, { check = () => {}, authority
       }
     }
     // resume:false only suppresses self-comment resumption, not assignee wakes.
-    if (['complete', 'reopen', 'cancel', 'comment'].includes(action)) {
+    if (['status', 'complete', 'reopen', 'cancel', 'comment'].includes(action)) {
       requireValue(typeof task.assigneeUserId === 'string' && task.assigneeUserId.trim() && !task.assigneeAgentId,
         'human_assignment_required', 'Only a currently human-assigned task can change disposition or receive comments here', 409);
     }
     if (action === 'reopen') requireValue(['done', 'cancelled'].includes(task.status), 'invalid_status', 'Only done or cancelled tasks can reopen', 409);
     if (action === 'edit' && desired.status !== undefined) requireValue(!['done', 'cancelled'].includes(task.status),
       'invalid_status', 'Use explicit reopen for terminal tasks', 409);
-    if (action === 'complete') {
-      requireValue(!task.reviewPolicy && !['blocked', 'in_review', 'cancelled'].includes(task.status),
+    if (action === 'complete' || action === 'status' && desired.status === 'done') {
+      requireValue(!task.reviewPolicy && task.status !== 'cancelled',
         'review_required', 'Task policy or disposition requires its dedicated workflow', 409);
       requireValue(!task.liveDescendantCount, 'dependency_unresolved', 'Active descendants prevent completion', 409);
     }
@@ -623,7 +646,7 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   guard(initial);
   if (action === 'edit') await relations();
   if (desired.assigneeAgentId) scoped(await send('GET', `/api/agents/${encodeURIComponent(desired.assigneeAgentId)}`), desired.assigneeAgentId);
-  if (action === 'complete') {
+  if (action === 'complete' || action === 'status' && desired.status === 'done') {
     const blockers = initial.task.blockedBy ?? [];
     const blockerIds = initial.task.blockedByIssueIds ?? [];
     requireValue(Array.isArray(blockers) && Array.isArray(blockerIds), 'invalid_backend_response', 'Invalid task blockers', 502);
@@ -657,8 +680,11 @@ export async function humanTask(store, api, input, { check = () => {}, authority
   check();
   // Cancellation reasons remain in request.reason, not backend comments. Terminal
   // child transitions can still wake parents through Paperclip's own automation.
-  const commentBody = action === 'comment' ? payload.body : undefined;
+  const commentBody = action === 'comment' ? payload.body : action === 'status' ? payload.comment : undefined;
   if (action === 'comment') Object.assign(body, { body: commentBody, clientRequestId, reopen: false, resume: false, interrupt: false });
+  if (action === 'status' && commentBody !== undefined) Object.assign(body, {
+    comment: commentBody, commentClientRequestId: clientRequestId, reopen: false, resume: false, interrupt: false,
+  });
   operation = store.saveOperation({ id, runId: '', request, body, expected, state: 'uncertain',
     ...(commentBody !== undefined ? { clientRequestId, commentBody } : {}) });
   if (Object.keys(body).length) await send(action === 'comment' ? 'POST' : 'PATCH',

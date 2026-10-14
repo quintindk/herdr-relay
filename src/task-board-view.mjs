@@ -78,7 +78,9 @@ function validate(value) {
   }
   if (value.routines !== undefined && (!Array.isArray(value.routines) || value.routines.some(item => !item ||
     typeof item.id !== 'string' || typeof item.companyId !== 'string' || typeof item.title !== 'string' ||
-    typeof item.state !== 'string' || typeof item.cron !== 'string' || typeof item.timezone !== 'string'))) {
+    typeof item.state !== 'string' || (item.executionMode !== undefined &&
+      !['headless', 'interactive_exact', 'interactive_folder'].includes(item.executionMode)) ||
+    typeof item.cron !== 'string' || typeof item.timezone !== 'string'))) {
     throw new TypeError('Invalid task board routines: expected safe routine projections');
   }
   return value;
@@ -246,18 +248,19 @@ export function renderTaskBoard(value, options = {}) {
     for (const routine of routines.slice(0, 4)) {
       const next = routine.nextRunAt ? clean(routine.nextRunAt).replace('T', ' ').replace('.000Z', 'Z') : 'no next run';
       header.push(line(pair(`${clean(routine.state).toUpperCase()} ${routine.title}`,
-        `${routine.cron} / ${routine.timezone} / ${routine.target || 'unresolved'} / ${next}`)));
+        `${routine.executionMode ?? 'legacy'} / ${routine.cron} / ${routine.timezone} / ${routine.target || 'unresolved'} / ${next}`)));
     }
     if (routines.length > 4) header.push(style(line(`+ ${routines.length - 4} more cron routines`), '2'));
   }
   header.push(style(rule, '2'));
   const assignment = options.assignmentPrompt;
   const selectedReview = selected?.type === 'task' && review(selected.task) && options.detailData?.review;
-  const actions = `${options.canAssign ? '  a assign' : ''}${options.canDelete ? '  d delete' : ''}${selectedReview ? '  A approve  F feedback  R reject' : ''}`;
-  const footer = [style(rule, '2'), line(assignment ? 'j/k select agent  Enter assign / Esc cancel / q quit'
-    : options.feedbackEditing ? 'Type rejection feedback  Enter save / Esc cancel'
-      : options.reviewPrompt ? `Enter ${options.reviewPrompt.decision} / Esc cancel`
-        : options.deletePrompt ? 'Enter permanently delete / Esc cancel / q quit' : width >= 84
+  const actions = `${options.canAssign ? '  a assign' : ''}${options.canStatus ? '  s status' : ''}${selectedReview ? '  A approve  F feedback  R reject' : ''}`;
+  const footer = [style(rule, '2'), line(assignment ? 'j/k select agent  Enter assign / Esc cancel'
+    : options.statusModal ? options.statusModal.phase === 'confirm' ? 'Enter apply status / Esc back'
+      : 'j/k select  Tab next field  Enter review  Esc cancel'
+      : options.feedbackEditing ? 'Type rejection feedback  Enter save / Esc cancel'
+      : options.reviewPrompt ? `Enter ${options.reviewPrompt.decision} / Esc cancel` : width >= 84
           ? `j/k move  Enter fold  h done  i idle  / search  r refresh  Tab detail${actions}  q quit`
           : `j/k move  Enter fold  / find  Tab detail${actions}  q quit`)];
   const detail = [];
@@ -338,34 +341,54 @@ export function renderTaskBoard(value, options = {}) {
         return style(line(text), index === assignment.index ? '36;7' : '0');
       })];
   }
+  if (options.statusModal) {
+    const modal = options.statusModal;
+    const labels = { backlog: 'Backlog', todo: 'Todo', in_progress: 'Active', blocked: 'Blocked', in_review: 'In review', done: 'Done', cancelled: 'Cancelled' };
+    const boxWidth = Math.min(width, 72), inner = Math.max(1, boxWidth - 4);
+    const box = text => `│ ${fit(text, inner, unicode)} │`;
+    const top = `┌${(unicode ? '─' : '-').repeat(boxWidth - 2)}┐`, bottom = `└${(unicode ? '─' : '-').repeat(boxWidth - 2)}┘`;
+    const lines = [top, box(`CHANGE STATUS / ${modal.task.identifier || modal.task.id}`), box('')];
+    modal.statuses.forEach((status, index) => lines.push(box(`${modal.field === 'status' && index === modal.index ? '>' : ' '} ${labels[status]}`)));
+    lines.push(box(''));
+    if (modal.statuses[modal.index] === 'blocked' && modal.needsDescriptor) {
+      lines.push(box(`${modal.field === 'owner' ? '>' : ' '} Waiting on: ${modal.owner === 'board' ? 'Board' : 'Me'}`));
+      lines.push(box(`${modal.field === 'action' ? '>' : ' '} Required action: ${modal.action}${modal.field === 'action' ? '_' : ''}`));
+    }
+    lines.push(box(`${modal.field === 'comment' ? '>' : ' '} Comment (optional): ${modal.comment}${modal.field === 'comment' ? '_' : ''}`));
+    if (modal.phase === 'confirm') lines.push(box(`Confirm ${labels[modal.task.status] ?? modal.task.status} -> ${labels[modal.statuses[modal.index]]}`));
+    lines.push(bottom);
+    const left = Math.max(0, Math.floor((width - boxWidth) / 2));
+    body = [...Array(Math.max(0, Math.floor((capacity - lines.length) / 2))).fill(' '.repeat(width)),
+      ...lines.map(value => `${' '.repeat(left)}${value}`.padEnd(width))];
+    while (body.length < capacity) body.push(' '.repeat(width));
+  }
   if (!rows.length && capacity) body.push(style(line('No tasks match. / clears search; h shows completed.'), '2'));
   while (body.length < capacity) body.push(' '.repeat(width));
   const position = rows.length && capacity ? `${offset + 1}-${offset + visibleRows.length}/${rows.length}` : `0/${rows.length}`;
   footer.push(line(assignment ? `AGENT ${assignment.index + 1}/${assignment.agents.length}`
-    : options.deletePrompt ? `DELETE ${options.deletePrompt.identifier || options.deletePrompt.id} / ${options.deletePrompt.title}`
+    : options.statusModal ? `STATUS ${options.statusModal.task.identifier || options.statusModal.task.id}`
     : options.reviewPrompt ? `${options.reviewPrompt.decision.toUpperCase()} ${options.reviewPrompt.identifier} / ${options.reviewPrompt.candidate}`
     : options.notice || (options.searching ? `/${clean(options.filter)}_  Enter apply / Esc clear`
-      : `${position} / ${options.canDelete ? 'TASKS' : 'READ ONLY'}${options.filter ? ` / filter: ${clean(options.filter)}` : ''}${!wide ? ' / h done / i idle / r refresh' : ''}`)));
+    : `${position} / ${options.canStatus ? 'TASKS' : 'READ ONLY'}${options.filter ? ` / filter: ${clean(options.filter)}` : ''}${!wide ? ' / h done / i idle / r refresh' : ''}`)));
   const lines = [...header, ...body, ...detail, ...footer].slice(0, height);
   while (lines.length < height) lines.push(' '.repeat(width));
   return { text: lines.join('\n'), rows, visibleRows, selectedId, offset };
 }
-
-/** Resolves on quit, signal or stream close. Non-TTY reads once and emits plain text. */
+/** Retained for direct library consumers; the CLI no longer exposes this renderer. */
 export async function watchTaskBoard(read, { input = process.stdin, output = process.stdout, interval = 5000,
-  inspectTask, detailTask, reviewTask, assignTask, deleteTask } = {}) {
+  inspectTask, detailTask, reviewTask, assignTask, statusTask } = {}) {
   const tty = Boolean(input.isTTY && output.isTTY);
   const empty = { companies: [], agents: [], projects: [], tasks: [], warnings: [], fetchedAt: null };
   let value = empty; let hasSnapshot = false; let offline = '';
   let stopped = false; let timer; let escapeTimer; let reading = false; let again = false;
   let selectedId; let offset = 0; let showDone = false; let showIdle = false; let detail = false;
   let searching = false; let filter = ''; let frame; let pending = '';
-  let assignment; let assigning = false; let deletion; let deleting = false; let notice = '';
+  let assignment; let assigning = false; let notice = '';
   let detailData; let detailLoading = false; let detailGeneration = 0;
   let feedback = ''; let feedbackEditing = false; let feedbackBefore = ''; let reviewPrompt; let reviewing = false;
-  const deleted = new Set();
-  const canDelete = typeof inspectTask === 'function' && typeof deleteTask === 'function';
+  let statusModal; let changingStatus = false;
   const canAssign = typeof inspectTask === 'function' && typeof assignTask === 'function';
+  const canStatus = typeof inspectTask === 'function' && typeof statusTask === 'function';
   let paintedLines; let paintedWidth; let paintedHeight;
   const collapsed = new Set();
   const controller = new AbortController();
@@ -380,9 +403,8 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     if (stopped) return;
     const options = { width: output.columns || 100, height: output.rows || 30, colour: tty,
       selectedId, offset, showDone, showIdle, filter, detail, searching, offline, hasSnapshot,
-      canAssign, canDelete, assignmentPrompt: assigning ? null : assignment,
-      deletePrompt: deleting ? null : deletion?.task, notice, detailData, detailLoading,
-      feedback, feedbackEditing, reviewPrompt };
+      canAssign, canStatus, assignmentPrompt: assigning ? null : assignment,
+      notice, detailData, detailLoading, feedback, feedbackEditing, reviewPrompt, statusModal };
     const all = buildBoardRows(value, options);
     options.expanded = new Set(all.filter(row => row.expandable && !collapsed.has(row.id)).map(row => row.id));
     frame = renderTaskBoard(value, options);
@@ -422,7 +444,7 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
       // Reject unusable snapshots before replacing the last frame, not merely on transport success.
       buildBoardRows(next);
       if (!stopped) {
-        value = { ...next, tasks: next.tasks.filter(task => !deleted.has(keyOf(task.companyId, task.id))) };
+        value = next;
         hasSnapshot = true; offline = '';
       }
     } catch (error) {
@@ -433,18 +455,6 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     if (!tty) { stop(); return; }
     if (again) { again = false; void refresh(); }
     else timer = setTimeout(() => { void refresh(); }, Math.max(10, Number(interval) || 5000));
-  };
-  const prepareDelete = async () => {
-    const row = frame?.rows.find(row => row.id === selectedId);
-    if (!canDelete || deleting || row?.type !== 'task') return;
-    deleting = true; notice = `Inspecting ${row.task.identifier || row.taskId} for deletion...`; draw();
-    try {
-      const snapshot = await inspectTask({ companyId: row.companyId, taskId: row.taskId }, controller.signal);
-      if (stopped) return;
-      if (snapshot.task?.id !== row.taskId || snapshot.task.companyId !== row.companyId || !snapshot.revision) throw Error('Delete preview identity is not confirmed');
-      deletion = { task: snapshot.task, revision: snapshot.revision, key: randomUUID() }; notice = '';
-    } catch (error) { if (!stopped) notice = `DELETE FAILED / ${clean(error.message)}`; }
-    finally { deleting = false; if (!stopped) draw(); }
   };
   const prepareAssign = () => {
     const row = frame?.rows.find(row => row.id === selectedId);
@@ -476,23 +486,49 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     } catch (error) { if (!stopped) notice = `ASSIGN FAILED / ${clean(error.message)}`; }
     finally { assignment = null; assigning = false; if (!stopped) { draw(); void refresh(); } }
   };
-  const confirmDelete = async () => {
-    if (!deletion || deleting) return;
-    const selected = deletion;
-    deleting = true; notice = `Deleting ${selected.task.identifier || selected.task.id}...`; draw();
+  const prepareStatus = async () => {
+    const row = frame?.rows.find(row => row.id === selectedId);
+    if (!canStatus || changingStatus) return;
+    if (row?.type !== 'task') { notice = 'STATUS UNAVAILABLE / select a task'; draw(); return; }
+    changingStatus = true; notice = `Inspecting ${row.task.identifier || row.taskId}...`; draw();
     try {
-      const result = await deleteTask({ companyId: selected.task.companyId, taskId: selected.task.id,
-        expectedRevision: selected.revision, key: selected.key, reason: 'Deleted from the task board' }, controller.signal);
+      const snapshot = await inspectTask({ companyId: row.companyId, taskId: row.taskId }, controller.signal);
       if (stopped) return;
-      if (result.deleted !== true || result.outcome?.confirmed !== true) throw Error('Deletion is not confirmed');
-      deleted.add(keyOf(selected.task.companyId, selected.task.id));
-      const index = frame.rows.findIndex(row => row.id === selectedId);
-      const neighbours = [...frame.rows.slice(index + 1), ...frame.rows.slice(0, index).reverse()];
-      selectedId = neighbours.find(row => row.type !== 'task' || !deleted.has(keyOf(row.companyId, row.taskId)))?.id;
-      value = { ...value, tasks: value.tasks.filter(task => !deleted.has(keyOf(task.companyId, task.id))) };
-      notice = `Deleted ${selected.task.identifier || selected.task.id}`;
-    } catch (error) { if (!stopped) notice = `DELETE FAILED / ${clean(error.message)}`; }
-    finally { deletion = null; deleting = false; if (!stopped) { draw(); void refresh(); } }
+      if (snapshot.task?.id !== row.taskId || snapshot.task.companyId !== row.companyId || !snapshot.revision) throw Error('Status preview identity is not confirmed');
+      if (!snapshot.task.assigneeUserId || snapshot.task.assigneeAgentId) throw Error('Status change requires a human-owned task');
+      if (snapshot.interactions?.some(item => item.status === 'pending')) throw Error('Resolve the pending candidate or interaction first');
+      const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
+      const needsDescriptor = !(snapshot.task.blockedByIssueIds?.length || snapshot.task.blockedBy?.length || snapshot.task.unblockDescriptor);
+      statusModal = { task: snapshot.task, revision: snapshot.revision, key: randomUUID(), statuses,
+        index: Math.max(0, statuses.indexOf(snapshot.task.status)), field: 'status', phase: 'edit', comment: '',
+        needsDescriptor, owner: snapshot.task.unblockDescriptor?.owner === 'board' ? 'board' : 'me',
+        action: snapshot.task.unblockDescriptor?.action ?? '' };
+      notice = '';
+    } catch (error) { if (!stopped) notice = `STATUS FAILED / ${clean(error.message)}`; }
+    finally { changingStatus = false; if (!stopped) draw(); }
+  };
+  const confirmStatus = async () => {
+    if (!statusModal || changingStatus || statusModal.phase !== 'confirm') return;
+    const selected = statusModal, status = selected.statuses[selected.index];
+    changingStatus = true; notice = `Changing ${selected.task.identifier || selected.task.id} to ${status}...`; draw();
+    try {
+      const payload = { status, ...(selected.comment.trim() ? { comment: selected.comment.trim() } : {}) };
+      if (status === 'blocked' && selected.needsDescriptor) payload.unblockDescriptor = {
+        owner: selected.owner === 'board' ? 'board' : { userId: selected.task.assigneeUserId }, action: selected.action.trim(),
+      };
+      const result = await statusTask({ companyId: selected.task.companyId, taskId: selected.task.id,
+        expectedRevision: selected.revision, key: selected.key, reason: 'Status changed from the task board', payload }, controller.signal);
+      if (stopped) return;
+      if (result.state !== 'recorded' || result.outcome?.confirmed !== true || result.task?.status !== status) throw Error('Status change is not confirmed');
+      value = { ...value, tasks: value.tasks.map(task => task.id === selected.task.id && task.companyId === selected.task.companyId
+        ? { ...task, status } : task) };
+      notice = `Changed ${selected.task.identifier || selected.task.id} to ${status}`; detailData = undefined;
+      statusModal = null;
+    } catch (error) { if (!stopped) notice = `STATUS FAILED / ${clean(error.message)}`; }
+    finally {
+      changingStatus = false;
+      if (!stopped) { draw(); void refresh(); if (detail) void loadDetail(); }
+    }
   };
   const prepareReview = decision => {
     const row = frame?.rows.find(row => row.id === selectedId);
@@ -525,8 +561,30 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     }
   };
   const handle = key => {
-    if (key === '\x03' || (!searching && key === 'q')) { stop(); return; }
-    if (deleting || assigning || reviewing) return;
+    if (key === '\x03') { stop(); return; }
+    if (statusModal) {
+      const modal = statusModal, status = modal.statuses[modal.index];
+      if (key === '\x1b') {
+        if (modal.phase === 'confirm') modal.phase = 'edit'; else statusModal = null;
+        notice = ''; draw(); return;
+      }
+      if (modal.phase === 'confirm') { if (key === '\r' || key === '\n') void confirmStatus(); return; }
+      const fields = ['status', ...(status === 'blocked' && modal.needsDescriptor ? ['owner', 'action'] : []), 'comment'];
+      if (key === '\r' || key === '\n') {
+        if (status === 'blocked' && modal.needsDescriptor && !modal.action.trim()) notice = 'STATUS NEEDS REQUIRED ACTION';
+        else { modal.phase = 'confirm'; notice = ''; }
+      } else if (key === '\t') modal.field = fields[(fields.indexOf(modal.field) + 1) % fields.length];
+      else if (modal.field === 'status' && ['j', 'k', '\x1b[A', '\x1b[B', '\x1bOA', '\x1bOB'].includes(key)) {
+        modal.index = Math.max(0, Math.min(modal.statuses.length - 1, modal.index + (['j', '\x1b[B', '\x1bOB'].includes(key) ? 1 : -1)));
+        modal.field = 'status';
+      } else if (modal.field === 'owner' && ['j', 'k', ' ', '\x1b[A', '\x1b[B'].includes(key)) modal.owner = modal.owner === 'board' ? 'me' : 'board';
+      else if (['action', 'comment'].includes(modal.field)) {
+        if (key === '\x7f' || key === '\b') modal[modal.field] = [...segmenter.segment(modal[modal.field])].slice(0, -1).map(part => part.segment).join('');
+        else if (!key.startsWith('\x1b') && !/[\x00-\x1f\x7f]/.test(key) && modal[modal.field].length < (modal.field === 'action' ? 2000 : 4000)) modal[modal.field] += clean(key);
+      }
+      draw();
+      return;
+    }
     if (feedbackEditing) {
       if (key === '\x1b') { feedback = feedbackBefore; feedbackEditing = false; notice = ''; draw(); }
       else if (key === '\r' || key === '\n') { feedbackEditing = false; notice = feedback.trim() ? 'Feedback saved; press R to reject' : ''; draw(); }
@@ -548,11 +606,8 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
       } else if (key === '\r' || key === '\n') void confirmAssign();
       return;
     }
-    if (deletion) {
-      if (key === '\x1b' || key === 'n') { deletion = null; notice = ''; draw(); }
-      else if (key === '\r' || key === '\n') void confirmDelete();
-      return;
-    }
+    if (!searching && key === 'q') { stop(); return; }
+    if (assigning || reviewing || changingStatus) return;
     notice = '';
     if (searching) {
       if (key === '\x1b') { searching = false; filter = ''; }
@@ -579,7 +634,7 @@ export async function watchTaskBoard(read, { input = process.stdin, output = pro
     else if (key === '\x1b') { filter = ''; searching = false; offset = 0; }
     else if (key === 'r') { void refresh(); return; }
     else if (key === 'a') { prepareAssign(); return; }
-    else if (key === 'd') { void prepareDelete(); return; }
+    else if (key === 's') { void prepareStatus(); return; }
     else if (key === 'A') { prepareReview('accept'); return; }
     else if (key === 'F' && detailData?.review) { feedbackBefore = feedback; feedbackEditing = true; notice = ''; draw(); return; }
     else if (key === 'R') { prepareReview('reject'); return; }

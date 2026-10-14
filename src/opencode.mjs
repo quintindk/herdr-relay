@@ -94,16 +94,17 @@ export function observe(snapshot, invocation) {
   if (user.info.role !== 'user' || canonical(texts) !== canonical([invocation.prompt])) {
     return { state: 'conflict', reason: 'message_payload_mismatch' };
   }
-  // Newly introduced user messages (including compaction continuation) invalidate
-  // attribution. Never infer that a later assistant response belongs to our work.
-  const unexpected = snapshot.messages.some(message => message.info.role === 'user' &&
-    message.info.id !== invocation.messageId && !invocation.priorUserIds.includes(message.info.id));
-  if (unexpected) return { state: 'conflict', reason: 'concurrent_native_input' };
   const replies = snapshot.messages.filter(message => message.info.role === 'assistant' && message.info.parentID === invocation.messageId);
   const last = replies.sort((a, b) => a.info.time.created - b.info.time.created || a.info.id.localeCompare(b.info.id)).at(-1);
   const terminal = last && last.info.time.completed && !last.info.summary &&
     (last.info.error || (last.info.finish && !['tool-calls', 'unknown'].includes(last.info.finish) &&
       !last.parts.some(part => part.type === 'tool' && !part.metadata?.providerExecuted)));
+  // Input introduced before the turn's terminal response invalidates attribution.
+  // Later human turns cannot erase an already completed response after a restart.
+  const unexpected = snapshot.messages.some(message => message.info.role === 'user' &&
+    message.info.id !== invocation.messageId && !invocation.priorUserIds.includes(message.info.id) &&
+    (!terminal || !Number.isFinite(message.info.time?.created) || message.info.time.created <= last.info.time.completed));
+  if (unexpected) return { state: 'conflict', reason: 'concurrent_native_input' };
   const activeTool = replies.some(message => message.parts.some(part => part.type === 'tool' && ['pending', 'running'].includes(part.state?.status)));
   if (!snapshot.idle || !terminal || activeTool) return { state: 'observed', reason: 'awaiting_terminal_response' };
   return {

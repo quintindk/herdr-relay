@@ -25,14 +25,18 @@ Read and acknowledge the supplied run as usual, preserve its review policy and
 finish the turn after submission. A timer is not human authority to create, enable,
 retarget or cancel schedules. Do not invoke `relay_schedule_*` from a worker turn.
 Do not mark future occurrences completed merely because this occurrence finished.
+Schedule target discovery must use Relay's `relay_schedule_targets` tool from an
+authorised human chat. Never access Paperclip directly or inspect backend context
+files to obtain agent IDs.
 
 Outside assigned work, an explicit human instruction may create and activate a cron
-for the current standing-enrolled folder. Omit both target fields on
-`relay_schedule_create` to make the timer persist across new chats, or supply an
-authorised `targetDirectory`. Folder setup does not require an open or idle chat;
+for the current standing-enrolled folder using `executionMode: interactive_folder`.
+Omit `targetDirectory` to use the caller's enrolled folder or supply another
+authorised folder. Folder setup does not require an open or idle chat;
 each occurrence selects one idle chat only when admitted and is then pinned there.
-Never replay an admitted occurrence into a new chat. `targetBindingId` deliberately
-selects exact-chat mode instead. This is not worker authority.
+Never replay an admitted occurrence into a new chat. `interactive_exact` plus
+`targetBindingId` deliberately selects one chat instead. `headless` targets a
+Paperclip-native agent. This is not worker authority.
 
 Use `herdr-relay --context "$RELAY_CONTEXT"` or the exact CLI command supplied by
 the runtime. The context file holds credentials. Do not print or copy its contents.

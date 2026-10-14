@@ -43,9 +43,9 @@ test('plain narrow frame snapshot has a compact hierarchy and fixed geometry', (
 
 test('cron routines render above tasks with cancelled jobs following the completed toggle', () => {
   const value = { ...sample(), routines: [
-    { id: 'routine:active', companyId: 'c', title: 'Inbox sweep', state: 'active', cron: '0 7-18 * * 1-5',
+    { id: 'routine:active', companyId: 'c', title: 'Inbox sweep', state: 'active', executionMode: 'headless', cron: '0 7-18 * * 1-5',
       timezone: 'Africa/Johannesburg', target: 'headless', nextRunAt: '2026-10-13T11:00:00.000Z' },
-    { id: 'routine:old', companyId: 'c', title: 'Old sweep', state: 'cancelled', cron: '0 7 * * *',
+    { id: 'routine:old', companyId: 'c', title: 'Old sweep', state: 'cancelled', executionMode: 'interactive_exact', cron: '0 7 * * *',
       timezone: 'Africa/Johannesburg', target: 'old', nextRunAt: null },
   ] };
   let frame = renderTaskBoard(value, { width: 120, height: 24, now });
@@ -54,6 +54,14 @@ test('cron routines render above tasks with cancelled jobs following the complet
   assert.doesNotMatch(frame.text, /Old sweep/);
   frame = renderTaskBoard(value, { width: 120, height: 24, now, showDone: true });
   assert.match(frame.text, /CRON 2/); assert.match(frame.text, /CANCELLED Old sweep/);
+});
+
+test('legacy routine projections remain readable during a rolling service upgrade', () => {
+  const value = { ...sample(), routines: [{ id: 'routine:legacy', companyId: 'c', title: 'Legacy sweep',
+    state: 'active', cron: '0 8 * * *', timezone: 'Africa/Johannesburg', target: 'old-binding', nextRunAt: null }] };
+  const frame = renderTaskBoard(value, { width: 120, height: 24, now });
+  assert.match(frame.text, /Legacy sweep/);
+  assert.match(frame.text, /legacy \/ 0 8 \* \* \*/);
 });
 
 test('wide colour frame exposes projects, Unicode branches, state colours and selected detail', () => {
@@ -410,52 +418,6 @@ test('quit pauses fresh non-flowing stdin and aborts the pending refresh', async
   assert.equal(io.input.readableFlowing, false);
 });
 
-test('delete shortcut previews only a task, cancels without writing and confirms once with the captured revision', async t => {
-  const io = streams(); let inspected = 0; const deletes = [];
-  const value = { ...sample(), fetchedAt: null }; let finishDelete;
-  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
-    inspectTask: async input => { inspected++; return { task: value.tasks.find(task => task.id === input.taskId), revision: 'preview-revision' }; },
-    deleteTask: input => { deletes.push(input); return new Promise(resolve => { finishDelete = resolve; }); },
-  });
-  t.after(() => io.input.emit('data', 'q'));
-  await tick(); io.input.emit('data', 'd'); await tick(); assert.equal(inspected, 0, 'Owner groups cannot be deleted');
-  io.input.emit('data', 'jd'); await tick();
-  assert.match(screen(io.output), /DELETE R-1/); assert.match(screen(io.output), /Enter permanently delete/);
-  io.input.emit('data', 'n'); assert.equal(deletes.length, 0);
-  io.input.emit('data', 'd'); await tick(); io.input.emit('data', '\r\r');
-  assert.equal(deletes.length, 1); assert.equal(deletes[0].taskId, '1'); assert.equal(deletes[0].companyId, 'c');
-  assert.equal(deletes[0].expectedRevision, 'preview-revision'); assert.ok(deletes[0].key);
-  finishDelete({ deleted: true, outcome: { confirmed: true } }); await tick();
-  assert.match(screen(io.output), /Deleted R-1/); assert.doesNotMatch(screen(io.output), /Choose release/);
-  assert.match(screen(io.output), /Build engine/);
-  io.input.emit('data', 'q'); await running;
-});
-
-test('unconfirmed deletion retains the row and displays failure rather than claiming success', async t => {
-  const io = streams(); const value = { ...sample(), fetchedAt: null };
-  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
-    inspectTask: async () => ({ task: value.tasks[0], revision: 'revision' }),
-    deleteTask: async () => ({ deleted: false, outcome: { confirmed: false } }),
-  });
-  t.after(() => io.input.emit('data', 'q'));
-  await tick(); io.input.emit('data', 'jd'); await tick(); io.input.emit('data', '\r'); await tick();
-  assert.match(screen(io.output), /DELETE FAILED/); assert.match(screen(io.output), /Choose release/);
-  io.input.emit('data', 'q'); await running;
-});
-
-test('delete does not activate during search and quitting aborts a hung preview', async t => {
-  const io = streams(); let signal; let inspected = 0;
-  const running = watchTaskBoard(() => sample(), { ...io, interval: 60_000,
-    inspectTask: (_, value) => { inspected++; signal = value; return new Promise(() => {}); },
-    deleteTask: () => assert.fail('No confirmation, no deletion'),
-  });
-  t.after(() => io.input.emit('data', '\x03'));
-  await tick(); io.input.emit('data', '/d'); assert.equal(inspected, 0);
-  io.input.emit('data', '\x1b'); await new Promise(resolve => setTimeout(resolve, 50));
-  io.input.emit('data', 'jd'); assert.equal(inspected, 1);
-  io.input.emit('data', 'q'); await running; assert.equal(signal.aborted, true);
-});
-
 test('assignment picker lists only present company agents and confirms one guarded assignment', async t => {
   const io = streams(); const assignments = []; let finishAssign;
   const value = { ...sample(), fetchedAt: null, agents: [...sample().agents,
@@ -489,6 +451,57 @@ test('assignment picker reports no present agents and never calls assignment', a
   t.after(() => io.input.emit('data', 'q'));
   await tick(); io.input.emit('data', 'ja');
   assert.match(screen(io.output), /ASSIGN FAILED \/ no present agents/); assert.equal(assignments, 0);
+  io.input.emit('data', 'q'); await running;
+});
+
+test('status modal changes active task with optional comment in one operation', async t => {
+  const io = streams(); const writes = [];
+  const value = board([task('status', { title: 'Change me', assigneeUserId: 'local-board', status: 'todo' })]);
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    inspectTask: async () => ({ task: { ...value.tasks[0], blockedBy: [], blockedByIssueIds: [], unblockDescriptor: null }, interactions: [], revision: 'revision' }),
+    statusTask: async input => { writes.push(input); return { state: 'recorded', outcome: { confirmed: true }, task: { ...value.tasks[0], status: input.payload.status } }; },
+  });
+  t.after(() => io.input.emit('data', '\x03'));
+  await tick(); assert.match(screen(io.output), /s status/); io.input.emit('data', 'js'); await tick();
+  assert.match(screen(io.output), /CHANGE STATUS \/ R-status/);
+  io.input.emit('data', 'j\tUpdated by me\r\r'); await tick();
+  assert.equal(writes.length, 1); assert.equal(writes[0].payload.status, 'in_progress');
+  assert.equal(writes[0].payload.comment, 'Updated by me'); assert.equal(writes[0].expectedRevision, 'revision');
+  assert.match(screen(io.output), /Changed R-status to in_progress/);
+  io.input.emit('data', 'q'); await running;
+});
+
+test('blocked status collects minimal descriptor and cancellation needs no comment', async t => {
+  for (const target of ['blocked', 'cancelled']) {
+    const io = streams(), writes = [];
+    const value = board([task(target, { assigneeUserId: 'local-board', status: 'todo' })]);
+    const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+      inspectTask: async () => ({ task: { ...value.tasks[0], blockedBy: [], blockedByIssueIds: [], unblockDescriptor: null }, interactions: [], revision: 'revision' }),
+      statusTask: async input => { writes.push(input); return { state: 'recorded', outcome: { confirmed: true }, task: { ...value.tasks[0], status: input.payload.status } }; },
+    });
+    t.after(() => io.input.emit('data', '\x03'));
+    await tick(); io.input.emit('data', 'js'); await tick();
+    const moves = target === 'blocked' ? 'jj' : 'jjjjj'; io.input.emit('data', moves);
+    if (target === 'blocked') io.input.emit('data', '\t\tWaiting for customer');
+    io.input.emit('data', '\r\r'); await tick();
+    assert.equal(writes[0].payload.status, target);
+    if (target === 'blocked') assert.deepEqual(writes[0].payload.unblockDescriptor,
+      { owner: { userId: 'local-board' }, action: 'Waiting for customer' });
+    else assert.equal(writes[0].payload.comment, undefined);
+    io.input.emit('data', 'q'); await running;
+  }
+});
+
+test('pending interaction blocks status modal before submission', async t => {
+  const io = streams(); let writes = 0;
+  const value = board([task('review', { assigneeUserId: 'local-board', status: 'in_review' })]);
+  const running = watchTaskBoard(() => value, { ...io, interval: 60_000,
+    inspectTask: async () => ({ task: value.tasks[0], interactions: [{ id: 'pending', status: 'pending' }], revision: 'revision' }),
+    statusTask: async () => { writes++; },
+  });
+  t.after(() => io.input.emit('data', '\x03'));
+  await tick(); io.input.emit('data', 'js'); await tick();
+  assert.equal(writes, 0); assert.match(screen(io.output), /STATUS FAILED \/ Resolve the pending candidate or interaction first/);
   io.input.emit('data', 'q'); await running;
 });
 
