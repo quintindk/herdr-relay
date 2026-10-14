@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import { observedAgents } from './herdr-agents.mjs';
 import { RelayError, requireValue, text } from './protocol.mjs';
+import { routineRecords } from './routines.mjs';
 
 // Called by the operator-authorised Relay service, never by a direct browser client.
 // Only collection/company GETs are issued here. Paperclip 2026.1001.0 can still
@@ -103,8 +104,14 @@ export async function taskBoard(store, api, { companyId } = {}) {
       if (count === 10000) warnings.push(`Issue limit reached for company ${companyId}: 10000 issues returned; more may exist.`);
     }
   }
+  const visibleCompanies = new Set(companies.map(company => company.id));
+  const routines = routineRecords(store).filter(routine => visibleCompanies.has(routine.companyId)).map(routine => ({
+    id: routine.scheduleId, companyId: routine.companyId, title: label(routine.title), state: routine.state,
+    cron: routine.cron, timezone: routine.timezone, nextRunAt: routine.nextRunAt,
+    target: routine.targetBindingId ?? routine.targetDirectory ?? null,
+  })).sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
   // Totals count returned rows, not an invented server count beyond the caps.
-  return { companies, agents, projects, tasks,
-    totals: { companies: companies.length, agents: agents.length, projects: projects.length, tasks: tasks.length },
+  return { companies, agents, projects, tasks, routines,
+    totals: { companies: companies.length, agents: agents.length, projects: projects.length, tasks: tasks.length, routines: routines.length },
     fetchedAt: new Date().toISOString(), warnings };
 }

@@ -76,6 +76,11 @@ function validate(value) {
       throw new TypeError(`Invalid task board ${name}: expected string IDs and company scope`);
     }
   }
+  if (value.routines !== undefined && (!Array.isArray(value.routines) || value.routines.some(item => !item ||
+    typeof item.id !== 'string' || typeof item.companyId !== 'string' || typeof item.title !== 'string' ||
+    typeof item.state !== 'string' || typeof item.cron !== 'string' || typeof item.timezone !== 'string'))) {
+    throw new TypeError('Invalid task board routines: expected safe routine projections');
+  }
   return value;
 }
 
@@ -233,6 +238,18 @@ export function renderTaskBoard(value, options = {}) {
       : `FETCHED ${age} / completed ${options.showDone ? 'shown' : 'hidden'} / idle ${options.showIdle ? 'shown' : 'hidden'}`;
   header.push(style(line(source), options.offline ? '33' : '2'));
   if (value.warnings?.length) header.push(style(line(`WARNING / ${value.warnings.map(warning => clean(typeof warning === 'object' ? warning?.message ?? warning?.code ?? 'source warning' : warning)).join(' / ')}`), '33'));
+  if (value.routines) {
+    const routines = value.routines.filter(routine => options.showDone || routine.state !== 'cancelled')
+      .sort((left, right) => (left.state === 'active' ? 0 : 1) - (right.state === 'active' ? 0 : 1) ||
+        String(left.nextRunAt ?? '').localeCompare(String(right.nextRunAt ?? '')) || left.title.localeCompare(right.title));
+    header.push(style(line(`CRON ${routines.length}${value.routines.length !== routines.length ? ` / ${value.routines.length} including cancelled` : ''}`), '1;35'));
+    for (const routine of routines.slice(0, 4)) {
+      const next = routine.nextRunAt ? clean(routine.nextRunAt).replace('T', ' ').replace('.000Z', 'Z') : 'no next run';
+      header.push(line(pair(`${clean(routine.state).toUpperCase()} ${routine.title}`,
+        `${routine.cron} / ${routine.timezone} / ${routine.target || 'unresolved'} / ${next}`)));
+    }
+    if (routines.length > 4) header.push(style(line(`+ ${routines.length - 4} more cron routines`), '2'));
+  }
   header.push(style(rule, '2'));
   const assignment = options.assignmentPrompt;
   const selectedReview = selected?.type === 'task' && review(selected.task) && options.detailData?.review;

@@ -38,10 +38,22 @@ function managedRoutineTarget(store, binding, verifyRuntime) {
     .filter(item => item.state === 'recorded' && item.bindingId === binding.id);
   const provision = provisions[0], native = binding.config.opencode;
   if (provisions.length !== 1 || provision.agentId !== binding.config.agentId || provision.conversationId !== binding.config.conversationId ||
-    provision.runtimeKey !== native.runtimeKey || typeof provision.marker !== 'string' || !provision.marker ||
+    typeof provision.marker !== 'string' || !provision.marker ||
     provision.request?.bindingId !== binding.id || provision.request.companyId !== binding.config.companyId ||
     provision.request.harness !== 'opencode' || provision.request.directory !== native.directory ||
     (provision.request.lifetime ?? 'persistent') !== (binding.config.lifetime ?? 'persistent')) return blocked('routine_managed_identity_mismatch');
+  let resume;
+  if (provision.runtimeKey !== native.runtimeKey) {
+    const matches = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'resume:%'").all().map(row => JSON.parse(row.data))
+      .filter(item => item.state === 'recorded' && item.request?.bindingId === binding.id &&
+        item.request.runtimeKey === native.runtimeKey && item.request.revision === binding.revision - 1 &&
+        item.revision === binding.revision && item.previousRuntime === provision.runtimeKey &&
+        item.conversationId === binding.config.conversationId && canonical(item.nativeConfig) === canonical(native) &&
+        item.previousConfig?.agentId === binding.config.agentId && item.previousConfig.conversationId === binding.config.conversationId &&
+        item.previousConfig.opencode?.runtimeKey === provision.runtimeKey);
+    if (matches.length !== 1) return blocked('routine_managed_identity_mismatch');
+    resume = matches[0];
+  }
   let runtime;
   try { runtime = verifyRuntime(store, native.runtimeKey); }
   catch (error) { return blocked(error.code === 'runtime_not_ready' ? 'runtime_not_ready' : 'runtime_identity_mismatch'); }
@@ -56,6 +68,7 @@ function managedRoutineTarget(store, binding, verifyRuntime) {
     bindingCreatedAt: binding.createdAt, bindingConfig: digest(binding.config), companyId: binding.config.companyId,
     agentId: binding.config.agentId, conversationId: binding.config.conversationId, sessionCreatedAt: native.sessionCreatedAt,
     directory: native.directory, managed: { provisionId: provision.id, provisionMarker: provision.marker,
+      ...(resume ? { resumeId: resume.id } : {}),
       runtimeKey: native.runtimeKey, runtimeNonce: runtime.nonce,
       runtimeIdentity: digest([runtime.request, runtime.directory, runtime.port, runtime.nonce]) } } };
 }
@@ -280,11 +293,19 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
           runtimeConfig: { ...agent.runtimeConfig, heartbeat: { ...agent.runtimeConfig?.heartbeat,
             enabled: true, wakeOnDemand: true, intervalSec: 0, maxConcurrentRuns: 1 } } };
         let operation = store.operation(operationId);
-        fail(!operation || canonical(operation.request) === canonical({ target, body }),
+        const request = { target, body };
+        if (operation && canonical(operation.request) !== canonical(request)) {
+          fail(operation.state === 'recorded' && managed.resumeId &&
+            target.bindingRevision === operation.request?.target?.bindingRevision + 1,
           'routine_backend_target_changed', 'Managed backend activation identity changed');
+          operation = store.saveOperation({ ...operation,
+            history: [...(operation.history ?? []), { request: operation.request, generation: operation.generation,
+              state: operation.state, updatedAt: operation.updatedAt }],
+            request, state: 'uncertain', generation: (operation.generation ?? 0) + 1, sent: false });
+        }
         if (!configured(agent)) {
           if (!operation || operation.state === 'recorded') operation = store.saveOperation({ id: operationId, runId: '', state: 'uncertain',
-            request: { target, body }, generation: (operation?.generation ?? 0) + 1, sent: false });
+            request, generation: (operation?.generation ?? 0) + 1, sent: false });
           fail(!operation.sent, 'operation_uncertain', 'Managed backend activation is not confirmed; no blind resend');
           operation = store.saveOperation({ ...operation, sent: true });
           await call('PATCH', agentPath, body);

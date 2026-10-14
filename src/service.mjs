@@ -223,7 +223,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
         result = previewCron(input.cron, input.timezone);
       }
       else if (req.method === 'POST' && path === '/routines/manage') {
-        adminOnly(); result = await manageRoutine(store, operatorApi, input, routineOptions);
+        adminOnly(); result = await manageRoutine(store, operatorApi, input, routineOptions); boardCache = null;
       }
       else if (req.method === 'GET' && path === '/bindings') { adminOnly(); result = store.bindings(); }
       else if (req.method === 'GET' && path === '/task-board') {

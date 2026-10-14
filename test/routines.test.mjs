@@ -262,6 +262,45 @@ test('managed routine admission rejects arbitrary, unready, mismatched and non-e
     opencode: { ...f.binding.config.opencode, exclusive: false } } }, undefined, { verifyRuntime: f.verifyRuntime }).ready, false);
 });
 
+test('managed routine admission accepts one exact recorded runtime resume lineage', t => {
+  const f = managedFixture(t), previous = f.binding.config;
+  const runtime = { request: { directory: '/work/headless' }, directory: '/runtime/resumed', port: 5432, nonce: 'resumed-nonce' };
+  const nativeConfig = { ...previous.opencode, url: `http://127.0.0.1:${runtime.port}`,
+    authFile: `${runtime.directory}/auth.json`, runtimeKey: 'managed-runtime-2' };
+  f.store.saveOperation({ id: 'resume:managed-2', runId: '', state: 'recorded', request: {
+    bindingId: 'headless', revision: 1, runtimeKey: 'managed-runtime-2' }, previousConfig: previous,
+    previousRuntime: 'managed-runtime', nativeConfig, revision: 2, conversationId: 'managed-chat' });
+  const binding = f.store.rebind('headless', { revision: 1, harness: 'opencode', conversationId: 'managed-chat',
+    instanceId: runtime.nonce, opencode: nativeConfig }, { managedContinuation: true });
+  const admission = routineTargetAdmission(f.store, binding, undefined, { verifyRuntime: () => runtime });
+  assert.equal(admission.ready, true);
+  assert.equal(admission.target.bindingRevision, 2);
+  assert.equal(admission.target.managed.resumeId, 'resume:managed-2');
+  assert.equal(admission.target.managed.runtimeKey, 'managed-runtime-2');
+});
+
+test('managed routine backend activation advances one generation after recorded resume', async t => {
+  const f = managedFixture(t);
+  await f.create({}, f.options);
+  const previous = f.store.binding('headless').config;
+  const runtime = { request: { directory: '/work/headless' }, directory: '/runtime/resumed', port: 5432, nonce: 'resumed-nonce' };
+  const nativeConfig = { ...previous.opencode, url: `http://127.0.0.1:${runtime.port}`,
+    authFile: `${runtime.directory}/auth.json`, runtimeKey: 'managed-runtime-2' };
+  f.store.saveOperation({ id: 'resume:managed-2', runId: '', state: 'recorded', request: {
+    bindingId: 'headless', revision: 1, runtimeKey: 'managed-runtime-2' }, previousConfig: previous,
+    previousRuntime: 'managed-runtime', nativeConfig, revision: 2, conversationId: 'managed-chat' });
+  f.store.rebind('headless', { revision: 1, harness: 'opencode', conversationId: 'managed-chat',
+    instanceId: runtime.nonce, opencode: nativeConfig }, { managedContinuation: true });
+  f.agent.status = 'error'; f.agent.adapterConfig.bindingRevision = 2;
+  const result = await f.create({ key: 'after-resume' }, { verifyRuntime: () => runtime,
+    nativeSnapshot: async () => ({ idle: true }) });
+  assert.equal(result.state, 'paused');
+  const operation = f.store.operation('routine-managed-backend:headless');
+  assert.equal(operation.state, 'recorded'); assert.equal(operation.generation, 2);
+  assert.equal(operation.request.target.bindingRevision, 2); assert.equal(operation.history.length, 1);
+  assert.equal(operation.history[0].request.target.bindingRevision, 1);
+});
+
 test('managed routine target rejects busy backend and native conversations', async t => {
   const f = managedFixture(t);
   f.agent.status = 'running';

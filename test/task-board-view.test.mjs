@@ -41,6 +41,21 @@ test('plain narrow frame snapshot has a compact hierarchy and fixed geometry', (
   assert.equal(frame.selectedId, frame.rows[0].id);
 });
 
+test('cron routines render above tasks with cancelled jobs following the completed toggle', () => {
+  const value = { ...sample(), routines: [
+    { id: 'routine:active', companyId: 'c', title: 'Inbox sweep', state: 'active', cron: '0 7-18 * * 1-5',
+      timezone: 'Africa/Johannesburg', target: 'headless', nextRunAt: '2026-10-13T11:00:00.000Z' },
+    { id: 'routine:old', companyId: 'c', title: 'Old sweep', state: 'cancelled', cron: '0 7 * * *',
+      timezone: 'Africa/Johannesburg', target: 'old', nextRunAt: null },
+  ] };
+  let frame = renderTaskBoard(value, { width: 120, height: 24, now });
+  assert.match(frame.text, /CRON 1 \/ 2 including cancelled/);
+  assert.match(frame.text, /ACTIVE Inbox sweep/); assert.match(frame.text, /headless/);
+  assert.doesNotMatch(frame.text, /Old sweep/);
+  frame = renderTaskBoard(value, { width: 120, height: 24, now, showDone: true });
+  assert.match(frame.text, /CRON 2/); assert.match(frame.text, /CANCELLED Old sweep/);
+});
+
 test('wide colour frame exposes projects, Unicode branches, state colours and selected detail', () => {
   const value = sample();
   const selectedId = buildBoardRows(value).find(row => row.taskId === '3').id;

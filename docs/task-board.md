@@ -34,6 +34,12 @@ unassigned work have separate groups. Cross-owner parents are shown as context,
 not reassigned or counted twice in the header. Completed parents remain visible
 when needed to explain an open child.
 
+The pane also displays up to four active or paused Relay cron routines above the
+task hierarchy, including state, cadence, timezone, target and next run. Additional
+routines are counted. Cancelled routines follow the existing `h` completed-items
+toggle. Cron data comes from Relay's local durable schedule records and does not add
+Paperclip requests to the board refresh.
+
 ```bash
 herdr-relay board --watch
 herdr-relay board --json

@@ -58,17 +58,31 @@ test('projects actual issues and totals, never Relay runs or private configurati
   f.store.runs = () => assert.fail('Board must not read Relay runs');
   const before = f.store.db.prepare('SELECT total_changes() AS count').get().count;
   const result = await taskBoard(f.store, f.api);
-  assert.deepEqual(Object.keys(result).sort(), ['agents', 'companies', 'fetchedAt', 'projects', 'tasks', 'totals', 'warnings']);
+  assert.deepEqual(Object.keys(result).sort(), ['agents', 'companies', 'fetchedAt', 'projects', 'routines', 'tasks', 'totals', 'warnings']);
   assert.deepEqual(result.companies, [{ id: 'company', name: 'Company' }]);
   assert.deepEqual(result.projects, [{ id: 'project', companyId: 'company', name: 'Project' }]);
   assert.deepEqual(result.agents, [{ id: 'agent', companyId: 'company', name: 'Agent', availability: 'unknown', bridgeState: null, nativeState: 'unknown' }]);
   const { description, ...expected } = issue(1);
   assert.deepEqual(result.tasks, [{ ...expected, parentId: uuid(2), projectId: 'project', descriptionPreview: description }]);
-  assert.deepEqual(result.totals, { companies: 1, agents: 1, projects: 1, tasks: 1 });
+  assert.deepEqual(result.routines, []);
+  assert.deepEqual(result.totals, { companies: 1, agents: 1, projects: 1, tasks: 1, routines: 0 });
   assert.deepEqual(result.warnings, []);
   assert.ok(Number.isFinite(Date.parse(result.fetchedAt)));
   assert.ok(!JSON.stringify(result).includes('PRIVATE'));
   assert.equal(f.store.db.prepare('SELECT total_changes() AS count').get().count, before);
+});
+
+test('projects safe local cron routines without backend reads or target secrets', async t => {
+  const f = fixture(t);
+  f.store.saveOperation({ id: 'routine:test', runId: '', state: 'active', nextRunAt: '2026-10-13T11:00:00.000Z',
+    request: { companyId: 'company', title: 'Inbox sweep', description: 'private description', targetBindingId: 'headless',
+      cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', relayReviewPolicy: 'none' },
+    target: { bindingId: 'headless', managed: { runtimeNonce: 'PRIVATE' } } });
+  const result = await taskBoard(f.store, f.api);
+  assert.deepEqual(result.routines, [{ id: 'routine:test', companyId: 'company', title: 'Inbox sweep', state: 'active',
+    cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', nextRunAt: '2026-10-13T11:00:00.000Z', target: 'headless' }]);
+  assert.equal(result.totals.routines, 1);
+  assert.ok(!JSON.stringify(result.routines).includes('PRIVATE'));
 });
 
 test('explicit configured company excludes all other binding and discovery companies', async t => {
