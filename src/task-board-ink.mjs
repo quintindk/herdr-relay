@@ -13,6 +13,11 @@ const taskCounts = tasks => ({ open: tasks.filter(task => !terminal(task.status)
   active: tasks.filter(task => task.status === 'in_progress').length,
   blocked: tasks.filter(task => task.status === 'blocked').length,
   review: tasks.filter(task => task.status === 'in_review').length });
+export const taskRowStyle = (task, overlay = false, context = false) => ({
+  color: task.status === 'blocked' ? 'yellow' : task.status === 'in_progress' ? 'cyan'
+    : task.status === 'in_review' ? 'magenta' : undefined,
+  dimColor: overlay || terminal(task.status) || context,
+});
 
 function StatusModal({ modal, setModal, submit, width, height }) {
   const status = statuses[modal.index];
@@ -444,13 +449,14 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     h(Box, { borderStyle: 'single', borderColor: modal || assignment || reviewModal ? 'gray' : 'cyan', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' },
       ...visible.map((row, index) => {
         const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail;
-        const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : row.type === 'routine' ? 'magenta'
-          : row.task.status === 'blocked' ? 'yellow' : undefined;
+        const taskStyle = row.type === 'task' ? taskRowStyle(row.task, Boolean(modal || assignment || reviewModal || detail), row.context) : null;
+        const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : row.type === 'routine' ? 'magenta' : taskStyle.color;
+        const dimmed = taskStyle?.dimColor ?? Boolean(modal || assignment || reviewModal || detail);
         return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
           h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, h(Text, { wrap: 'truncate-end', inverse: active,
-            bold: row.type === 'section', dimColor: Boolean(modal || assignment || reviewModal || detail), color: tone }, rowText(row))),
+            bold: row.type === 'section', dimColor: dimmed, color: tone }, rowText(row))),
           row.type === 'task' ? h(Box, { width: 13, flexShrink: 0, justifyContent: 'flex-end' },
-            h(Text, { inverse: active, dimColor: Boolean(modal || assignment || reviewModal || detail), color: tone }, `[${labels[row.task.status] ?? row.task.status}]`)) : null);
+            h(Text, { inverse: active, dimColor: dimmed, color: tone }, `[${labels[row.task.status] ?? row.task.status}]`)) : null);
       })),
     searching ? h(Text, { dimColor: Boolean(modal || detail) }, `/${filter}▏  Enter apply · Esc clear`) : notice
       ? h(Text, { dimColor: Boolean(modal || detail) }, notice)

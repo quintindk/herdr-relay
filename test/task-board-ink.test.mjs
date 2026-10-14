@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { stripVTControlCharacters } from 'node:util';
-import { TaskBoardInkApp } from '../src/task-board-ink.mjs';
+import { TaskBoardInkApp, taskRowStyle } from '../src/task-board-ink.mjs';
 
 const h = React.createElement;
 const tick = () => new Promise(resolve => setTimeout(resolve, 40));
@@ -84,6 +84,28 @@ test('Ink board keeps separate sections, tree guides and the complete working sh
   for (const shortcut of ['Enter/Tab detail', 'Space/←/→ fold', '/ search', 'h done', 'i idle', 'r refresh', 's status', 'q quit']) {
     assert.match(frame, new RegExp(shortcut.replaceAll('/', '\\/').replaceAll('←', '\\u2190').replaceAll('→', '\\u2192')));
   }
+});
+
+test('Ink task rows colour active and review states and dim terminal states', async t => {
+  const tasks = [
+    { ...board.tasks[0], id: 'todo', identifier: 'DEF-20', title: 'Todo task' },
+    { ...board.tasks[0], id: 'active', identifier: 'DEF-21', title: 'Active task', status: 'in_progress' },
+    { ...board.tasks[0], id: 'review', identifier: 'DEF-22', title: 'Review task', status: 'in_review' },
+    { ...board.tasks[0], id: 'blocked', identifier: 'DEF-23', title: 'Blocked task', status: 'blocked' },
+    { ...board.tasks[0], id: 'done', identifier: 'DEF-24', title: 'Done task', status: 'done' },
+  ];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, tasks }),
+    inspectTask: async () => assert.fail('No mutation'), statusTask: async () => assert.fail('No mutation'),
+    detailTask: async () => assert.fail('No detail'), detailRoutine: async () => assert.fail('No routine'),
+    interval: 60000, width: 90, height: 24 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('h'); await tick();
+  const frame = instance.lastFrame(); for (const identifier of ['DEF-20', 'DEF-21', 'DEF-22', 'DEF-23', 'DEF-24']) assert.match(frame, new RegExp(identifier));
+  assert.deepEqual(taskRowStyle(tasks[0]), { color: undefined, dimColor: false });
+  assert.deepEqual(taskRowStyle(tasks[1]), { color: 'cyan', dimColor: false });
+  assert.deepEqual(taskRowStyle(tasks[2]), { color: 'magenta', dimColor: false });
+  assert.deepEqual(taskRowStyle(tasks[3]), { color: 'yellow', dimColor: false });
+  assert.deepEqual(taskRowStyle(tasks[4]), { color: undefined, dimColor: true });
+  assert.deepEqual(taskRowStyle(tasks[0], false, true), { color: undefined, dimColor: true });
 });
 
 test('Ink task detail clips long content and scrolls inside a fixed modal viewport', async t => {
