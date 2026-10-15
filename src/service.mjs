@@ -134,7 +134,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       if (bridge) {
         requireValue(req.method === 'POST' && ['/bridge/poll', '/bridge/begin', '/bridge/observe', '/bridge/questions', '/bridge/answer', '/bridge/reviews', '/bridge/review',
           '/bridge/routine-preview', '/bridge/routine-targets', '/bridge/routine-target-create', '/bridge/routine-create', '/bridge/routine-list', '/bridge/routine-inspect', '/bridge/routine-pause', '/bridge/routine-resume', '/bridge/routine-cancel', '/bridge/routine-run', '/bridge/routine-edit',
-          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-complete',
+          '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-status', '/bridge/task-complete',
           '/bridge/task-list', '/bridge/task-children', '/bridge/task-comments', '/bridge/task-activity', '/bridge/task-reference-lookup', '/bridge/task-reference-attach', '/bridge/task-comment', '/bridge/task-reopen', '/bridge/task-cancel', '/bridge/task-recover', '/bridge/task-delete',
           '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
           '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),

@@ -11,7 +11,7 @@ import { createServer } from 'node:http';
 import { digest } from '../src/protocol.mjs';
 import plugin from '../src/opencode-bridge-plugin.mjs';
 
-const taskMutations = ['create', 'edit', 'assign', 'complete', 'reference-attach', 'cancel', 'reopen', 'comment'];
+const taskMutations = ['create', 'edit', 'assign', 'status', 'complete', 'reference-attach', 'cancel', 'reopen', 'comment'];
 
 async function discoveryFixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'relay-plugin-tools-'));
@@ -238,7 +238,7 @@ test(`task tools preserve payloads, native authority and per-action permissions 
       unblockDescriptor: { owner: { userId: 'human-owner' }, action: 'Approve access' },
       parentId: 'parent', projectId: 'project', assigneeUserId: 'human-owner' }],
     ['edit', { title: 'Renamed task', description: '', status: 'todo', parentId: null, blockedByIssueIds: ['dependency'] }],
-    ['assign', { assigneeAgentId: 'worker' }], ['complete', undefined],
+    ['assign', { assigneeAgentId: 'worker' }], ['status', { status: 'in_progress', comment: 'Implementation started' }], ['complete', undefined],
     ['reference-attach', { namespace: 'github', externalId: 'issue-1', url: 'https://example.com/issue-1' }],
     ['cancel', undefined], ['reopen', { status: 'in_progress' }], ['comment', { body: 'Human comment' }],
   ]) {
@@ -316,7 +316,7 @@ test(`task tools preserve payloads, native authority and per-action permissions 
     const args = { key: `lost-${action}`, ...(action === 'create' ? { payload: { title: 'Task' } } : {
       taskId: 'task', expectedRevision: inspect.revision, reason: 'Human instruction',
       ...(['complete', 'cancel'].includes(action) ? {} : { payload: {
-        edit: { title: 'Renamed' }, assign: { assigneeUserId: 'human' },
+        edit: { title: 'Renamed' }, assign: { assigneeUserId: 'human' }, status: { status: 'in_progress', comment: 'Started' },
         'reference-attach': { namespace: 'github', externalId: 'issue-1' }, reopen: {}, comment: { body: 'Comment' },
       }[action] }),
     }) };
@@ -329,7 +329,7 @@ test(`task tools round-trip through the authenticated service (discovery: ${disc
   const f = await discoveryFixture(t);
   const task = { id: 'task', companyId: 'company', title: 'Human work', description: '',
     status: 'todo', priority: 'medium', assigneeUserId: 'human', assigneeAgentId: null };
-  const requests = [];
+  const requests = [], comments = [];
   const backend = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : undefined;
@@ -339,10 +339,14 @@ test(`task tools round-trip through the authenticated service (discovery: ${disc
       res.end(JSON.stringify({ id: 'company', defaultResponsibleUserId: 'human' }));
     } else if (req.method === 'GET' && req.url === '/api/agents/worker') {
       res.end(JSON.stringify({ id: 'worker', companyId: 'company' }));
+    } else if (req.method === 'GET' && req.url === '/api/issues/task/comments?order=asc') {
+      res.end(JSON.stringify(comments));
     } else if (req.method === 'GET' && (req.url === '/api/issues/task/interactions' || req.url.startsWith('/api/companies/company/issues?'))) {
       res.end('[]');
     } else if ((req.method === 'POST' && req.url === '/api/companies/company/issues') ||
       (req.method === 'PATCH' && req.url === '/api/issues/task')) {
+      if (body.comment) comments.push({ id: `comment-${comments.length}`, companyId: 'company', issueId: 'task', body: body.comment,
+        clientRequestId: body.commentClientRequestId, authorType: 'user', authorUserId: 'human', authorAgentId: null });
       Object.assign(task, body);
       res.end(JSON.stringify(task));
     } else if (req.method === 'GET' && req.url === '/api/issues/task') res.end(JSON.stringify(task));
@@ -384,6 +388,7 @@ test(`task tools round-trip through the authenticated service (discovery: ${disc
     ['edit', { title: 'Renamed task' }, 'Clarify title'],
     ['assign', { assigneeAgentId: 'worker' }, 'Explicit agent assignment'],
     ['assign', { assigneeUserId: 'human' }, 'Return to human'],
+    ['status', { status: 'in_progress', comment: 'Implementation started' }, 'Start implementation'],
     ['complete', undefined, 'Human work finished'],
   ]) {
     result = await inspect();
@@ -402,7 +407,8 @@ test(`task tools round-trip through the authenticated service (discovery: ${disc
   assert.deepEqual(writes().map(({ body: { idempotencyKey, ...body } }) => body), [
     { title: 'Created task', assigneeUserId: 'human', description: '', status: 'todo' },
     { title: 'Renamed task' }, { assigneeUserId: null, assigneeAgentId: 'worker' },
-    { assigneeUserId: 'human', assigneeAgentId: null }, { status: 'done' },
+    { assigneeUserId: 'human', assigneeAgentId: null }, { status: 'in_progress', comment: 'Implementation started',
+      commentClientRequestId: writes()[4].body.commentClientRequestId, reopen: false, resume: false, interrupt: false }, { status: 'done' },
   ]);
 });
 }

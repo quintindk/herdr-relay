@@ -17,7 +17,7 @@ function fixture(t, state = 'configured') {
   const source = { id: 'human-message', text: 'Manage this human task.', createdAt: Date.now() };
   const task = { id: 'task', companyId: 'company', title: 'Human work', description: 'Details',
     assigneeUserId: 'human', assigneeAgentId: null, status: 'todo', priority: 'medium' };
-  const f = { store, bridge, source, task, calls: [], hook: null };
+  const f = { store, bridge, source, task, calls: [], comments: [], hook: null };
   f.api = async (method, path, body) => {
     f.calls.push({ method, path, body: structuredClone(body) });
     await f.hook?.(method, path, body);
@@ -28,12 +28,15 @@ function fixture(t, state = 'configured') {
       value = task;
     } else if (method === 'PATCH') {
       assert.equal(path, '/api/issues/task');
+      if (body.comment) f.comments.push({ id: `comment-${f.comments.length}`, companyId: 'company', issueId: 'task', body: body.comment,
+        clientRequestId: body.commentClientRequestId, authorType: 'user', authorUserId: 'human', authorAgentId: null });
       Object.assign(task, body);
       value = task;
     } else {
       assert.equal(method, 'GET');
       if (path === '/api/companies/company') value = { id: 'company', defaultResponsibleUserId: 'default-human' };
       else if (path === '/api/issues/task') value = task;
+      else if (path === '/api/issues/task/comments?order=asc') value = f.comments;
       else if (path === '/api/issues/task/interactions' || path.startsWith('/api/companies/company/issues?')) value = [];
       else if (path === '/api/agents/other-agent') value = { id: 'other-agent', companyId: 'company' };
       else assert.fail(`Unexpected API call: ${method} ${path}`);
@@ -116,6 +119,27 @@ test('edit, assign and complete preserve humanTask revisions and mutation semant
   assert.equal(f.writes().length, 4);
 });
 
+test('status preserves native authority and combines state and comment in one write', async t => {
+  const f = fixture(t);
+  const inspected = await f.inspect();
+  const input = { key: 'start-work', taskId: 'task', expectedRevision: inspected.revision,
+    reason: 'Begin implementation', payload: { status: 'in_progress', comment: 'Implementation started' }, source: f.source };
+  const result = await f.invoke('task-status', input);
+  assert.equal(result.state, 'recorded');
+  assert.equal(result.outcome.confirmed, true);
+  assert.equal(result.task.status, 'in_progress');
+  assert.equal(f.writes().length, 1);
+  assert.equal(f.writes()[0].method, 'PATCH');
+  assert.equal(f.writes()[0].body.status, 'in_progress');
+  assert.equal(f.writes()[0].body.comment, 'Implementation started');
+  assert.equal(typeof f.writes()[0].body.commentClientRequestId, 'string');
+  const operation = f.store.operation(result.operationId);
+  assert.equal(operation.request.action, 'status');
+  assert.equal(operation.request.authority.kind, 'native');
+  assert.equal(operation.request.authority.bindingId, 'caller');
+  assert.equal(operation.request.authority.sourceMessageId, f.source.id);
+});
+
 test('unknown fields and authority, company, origin or protocol overrides are rejected before API calls', async t => {
   const f = fixture(t);
   for (const field of ['companyId', 'origin', 'authority', 'action', 'bindingId', 'conversationId', 'sessionCreatedAt',
@@ -137,10 +161,11 @@ test('all writes reject an active caller run even when it targets another task',
   const revision = (await f.inspect()).revision;
   f.run();
   f.calls.length = 0;
-  for (const action of ['create', 'edit', 'assign', 'complete']) {
+  for (const action of ['create', 'edit', 'assign', 'status', 'complete']) {
     await assert.rejects(f.invoke(`task-${action}`, action === 'create' ? f.create() : {
       key: action, taskId: 'task', expectedRevision: revision, source: f.source,
-      ...(action === 'complete' ? {} : { payload: action === 'edit' ? { title: 'New' } : { assigneeUserId: 'human' } }),
+      ...(['complete'].includes(action) ? {} : { payload: action === 'edit' ? { title: 'New' }
+        : action === 'status' ? { status: 'in_progress' } : { assigneeUserId: 'human' } }),
     }), { code: 'conversation_busy' });
   }
   assert.equal(f.calls.length, 0);

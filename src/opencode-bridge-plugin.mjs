@@ -120,7 +120,7 @@ function taskTools(execute) {
       ]) },
     }],
     ['status', {
-      description: 'Change a human-owned task status with an optional comment through one durable Relay operation. Supports backlog, todo, active, blocked, in review, done and cancelled. Pending candidate reviews must be resolved separately. Blocked may include minimal unblock information when no blocker evidence exists.',
+      description: 'Change a human-owned task status with an optional comment through one durable Relay operation. Before calling, state the exact task, proposed status, optional comment and reason visibly in chat. Supports backlog, todo, active, blocked, in review, done and cancelled. Pending candidate reviews must be resolved separately. Blocked may include minimal unblock information when no blocker evidence exists.',
       args: { ...writeArgs, payload: tool.schema.object({
         status: tool.schema.enum(['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled']),
         comment: tool.schema.string().max(200000).optional(),
