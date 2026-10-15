@@ -114,7 +114,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   const publications = new Map();
   const runTokens = new Map();
   const operatorApi = backendOperator(paperclipUrl, backendContextFile);
-  const routineOptions = { observationConfig, routingContextFile: join(directory, 'adapter-context.json') };
+  const routineOptions = { observationConfig, routingContextFile: join(directory, 'adapter-context.json'), stateDirectory: directory };
   if (observationConfig) {
     const context = JSON.stringify({ socketPath, token });
     if (!existsSync(routineOptions.routingContextFile)) writeFileSync(routineOptions.routingContextFile, context, { flag: 'wx', mode: 0o600 });

@@ -36,11 +36,13 @@ backend context files or use Paperclip credentials to discover schedule targets.
 If Relay returns no suitable target, report the blocker and stop.
 
 On explicit human instruction, `relay_schedule_target_create` may create one
-dedicated Paperclip-native `opencode_local` target through Relay. State the name,
+dedicated Relay-managed headless OpenCode target. It returns `targetBindingId` and
+installs scoped Relay worker context so occurrences can perform authorised task
+bookkeeping and submit their result. State the name,
 exact enrolled directory, model and instruction scope visibly. The tool never
 accepts credentials, environment variables, commands or raw adapter configuration.
 Reuse its key on retries. Target creation does not create or enable a schedule;
-use the returned `agentId` with a separate `headless` schedule create.
+use the returned `targetBindingId` with a separate `headless` schedule create.
 
 On explicit human instruction, state the execution mode, target, cron, timezone and review policy,
 then call `relay_schedule_create` with a stable `key`, `title`, `description`,

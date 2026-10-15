@@ -31,9 +31,10 @@ export function workerContext(directory, socketPath, store, binding) {
   return path;
 }
 
-export function promptFor(run, context) {
+export function promptFor(run, context, instructions) {
   const cli = `${quote(process.execPath)} ${quote(fileURLToPath(new URL('./cli.mjs', import.meta.url)))} --context ${quote(context)}`;
   return `Herdr Relay work invocation ${run.id}. Continue in this existing conversation.\n` +
+    (instructions ? `Standing instructions for this worker:\n${instructions}\n\n` : '') +
     `Use the Relay CLI below. Credentials are already in its context file. Do not read or print that file.\n` +
     `1. Read the assigned task: ${cli} work read ${quote(run.id)}\n` +
     `2. Acknowledge before doing the work: ${cli} work acknowledge ${quote(run.id)}\n` +
@@ -85,7 +86,7 @@ export function supervise({ store, directory, socketPath, ready, interval = 250 
         const priorUserIds = hermes
           ? snapshot.session.messages.filter(message => message.role === 'user').map(message => message.row_id)
           : snapshot.messages.filter(message => message.info.role === 'user').map(message => message.info.id);
-        run = store.beginNative(id, promptFor(run, context).trim(), priorUserIds, hermes ? snapshot.events.latest_seq : undefined);
+        run = store.beginNative(id, promptFor(run, context, binding.config.instructions).trim(), priorUserIds, hermes ? snapshot.events.latest_seq : undefined);
         if (!run.invocation) return; // Cancelled while preflight was in flight.
         await native.send(run.invocation);
       }

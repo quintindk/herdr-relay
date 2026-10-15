@@ -71,7 +71,7 @@ and review rights are not silently transferred to a replacement chat.
 | --- | --- |
 | `relay_schedule_preview` | Validate numeric cron and preview the next three UTC instants |
 | `relay_schedule_targets` | List sanitised Paperclip-native headless targets and exact Relay bindings |
-| `relay_schedule_target_create` | Create a constrained Paperclip-native `opencode_local` headless target through Relay |
+| `relay_schedule_target_create` | Create a Relay-managed headless OpenCode target with scoped worker context and result submission |
 | `relay_schedule_create` | Create a paused routine and disabled trigger by default |
 | `relay_schedules` | List routines owned by this origin or its standing-enrolled folder |
 | `relay_schedule_inspect` | Verify native routine identity and read the last 50 native runs |
@@ -110,13 +110,13 @@ the same conversation returns. A proven missing, retired, replaced or persistent
 conversation causes Relay to fence and archive the routine, cancel the unadmitted
 occurrence and refuse rerouting. A new chat or terminal never inherits authority.
 
-For `headless`, target an existing independent Paperclip agent through
-`targetAgentId`. The agent must use `opencode_local` or `paperclip_runner`; Paperclip
-owns process startup, session continuation, cancellation and recovery. Legacy
-Relay-managed headless bindings remain supported for existing schedules. Headless
-routines require `relayReviewPolicy: "none"`; their review lifecycle is Paperclip's,
-not Relay's candidate-review path. Legacy Relay-managed headless schedules retain
-their recorded Relay review policy.
+For `headless`, target either an existing independent Paperclip agent through
+`targetAgentId`, or a Relay-managed headless worker through `targetBindingId`.
+Independent agents use `opencode_local` or `paperclip_runner`; Paperclip owns their
+process and review lifecycle and they require `relayReviewPolicy: "none"`. Managed
+workers are provisioned by `relay_schedule_target_create`, receive a scoped Relay
+worker context for task bookkeeping and result submission, and retain Relay's
+recorded review policy.
 Actual occurrence delivery always requires idle, including self-targeted routines.
 Use a dedicated automation conversation for frequent jobs; this is not atomic
 protection against simultaneous human input into an explicitly reserved target.

@@ -48,11 +48,15 @@ export async function scheduleTargets(store, api, companyId) {
     .map(agent => ({ agentId: text(agent.id, 'agent.id'), name: text(agent.name, 'agent.name'),
       adapterType: agent.adapterType, status: typeof agent.status === 'string' ? agent.status : 'unknown' }))
     .sort((left, right) => left.name.localeCompare(right.name) || left.agentId.localeCompare(right.agentId));
+  const managedHeadless = store.bindings().filter(binding => binding.config.companyId === companyId &&
+    !binding.lifecycleState && binding.config.delivery === 'opencode').map(binding => ({ bindingId: binding.id,
+    label: binding.config.label ?? binding.config.conversationId, agentId: binding.config.agentId }))
+    .sort((left, right) => left.label.localeCompare(right.label) || left.bindingId.localeCompare(right.bindingId));
   const interactiveExact = store.bindings().filter(binding => binding.config.companyId === companyId &&
     !binding.lifecycleState && binding.config.delivery === 'pull').map(binding => ({ bindingId: binding.id,
     label: binding.config.label ?? binding.config.conversationId, conversationId: binding.config.conversationId }))
     .sort((left, right) => left.label.localeCompare(right.label) || left.bindingId.localeCompare(right.bindingId));
-  return { headless, interactiveExact };
+  return { headless, managedHeadless, interactiveExact };
 }
 
 // A configured/armed bridge is the existing explicit conversation reservation.
@@ -219,26 +223,30 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
     requireValue(['human', 'none'].includes(relayReviewPolicy), 'invalid_review_policy', 'Routine review must be human or explicitly none');
     requireValue([input.targetAgentId, input.targetDirectory, input.targetBindingId].filter(value => value !== undefined).length <= 1,
       'invalid_request', 'targetAgentId, targetDirectory and targetBindingId are mutually exclusive');
-    const implicitLegacyManaged = input.executionMode === undefined && input.targetBindingId !== undefined &&
-      store.binding(input.targetBindingId, false)?.config.delivery === 'opencode';
+    const managedHeadless = input.targetBindingId !== undefined && store.binding(input.targetBindingId, false)?.config.delivery === 'opencode';
     let executionMode = input.executionMode;
     requireValue(executionMode === undefined || ['headless', 'interactive_exact', 'interactive_folder'].includes(executionMode),
       'invalid_request', 'executionMode must be headless, interactive_exact or interactive_folder');
     if (executionMode === undefined) {
       if (input.targetDirectory !== undefined) executionMode = 'interactive_folder';
-      else executionMode = store.binding(input.targetBindingId, false)?.config.delivery === 'opencode' ? 'headless' : 'interactive_exact';
+      else executionMode = managedHeadless ? 'headless' : 'interactive_exact';
     }
-    requireValue(executionMode !== 'headless' || implicitLegacyManaged || relayReviewPolicy === 'none', 'invalid_review_policy',
+    requireValue(executionMode !== 'headless' || managedHeadless || relayReviewPolicy === 'none', 'invalid_review_policy',
       'Paperclip-native headless routines use Paperclip review and require relayReviewPolicy none');
-    requireValue(executionMode === 'interactive_folder' ? input.targetDirectory !== undefined && input.targetBindingId === undefined && input.targetAgentId === undefined
-      : executionMode === 'interactive_exact' ? input.targetBindingId !== undefined && input.targetDirectory === undefined && input.targetAgentId === undefined
-        : input.targetAgentId !== undefined && input.targetBindingId === undefined && input.targetDirectory === undefined || implicitLegacyManaged,
+    const targetMatchesMode = executionMode === 'interactive_folder'
+      ? input.targetDirectory !== undefined && input.targetBindingId === undefined && input.targetAgentId === undefined
+      : executionMode === 'interactive_exact'
+        ? input.targetBindingId !== undefined && input.targetDirectory === undefined && input.targetAgentId === undefined
+        : managedHeadless
+          ? input.targetBindingId !== undefined && input.targetAgentId === undefined && input.targetDirectory === undefined
+          : input.targetAgentId !== undefined && input.targetBindingId === undefined && input.targetDirectory === undefined;
+    requireValue(targetMatchesMode,
     'invalid_request', 'executionMode does not match its target');
     if (executionMode === 'interactive_folder') persistentScope = persistentRoutineScope(store, observationConfig, companyId, input.targetDirectory);
     request = { companyId, key: text(input.key, 'key'), title, description,
       executionMode,
       ...(persistentScope ? { targetDirectory: persistentScope.directory }
-        : executionMode === 'headless' && !implicitLegacyManaged ? { targetAgentId: text(input.targetAgentId, 'targetAgentId') }
+        : executionMode === 'headless' && !managedHeadless ? { targetAgentId: text(input.targetAgentId, 'targetAgentId') }
           : { targetBindingId: text(input.targetBindingId, 'targetBindingId') }),
       cron: preview.cron, timezone: preview.timezone, enabled: input.enabled === true, relayReviewPolicy,
       ...(input.projectId === undefined ? {} : { projectId: text(input.projectId, 'projectId') }),
@@ -290,7 +298,14 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
       fail(result.ready, result.blocker, 'Routine target requires an idle reserved bridge or verified managed runtime');
       fail(mode === 'headless' ? Boolean(result.target.managed) : mode === 'interactive_exact' && !result.target.managed,
         'routine_target_ineligible', 'Routine execution mode does not match the target binding');
-      fail(result.target.companyId === companyId && (!record || canonical(record.target) === canonical(result.target)),
+      const resumedManaged = record && result.target.managed?.resumeId && record.target?.managed &&
+        result.target.bindingRevision === record.target.bindingRevision + 1 &&
+        result.target.bindingId === record.target.bindingId && result.target.bindingCreatedAt === record.target.bindingCreatedAt &&
+        result.target.companyId === record.target.companyId && result.target.agentId === record.target.agentId &&
+        result.target.conversationId === record.target.conversationId && result.target.sessionCreatedAt === record.target.sessionCreatedAt &&
+        result.target.directory === record.target.directory && result.target.managed.provisionId === record.target.managed.provisionId &&
+        result.target.managed.provisionMarker === record.target.managed.provisionMarker;
+      fail(result.target.companyId === companyId && (!record || canonical(record.target) === canonical(result.target) || resumedManaged),
         'routine_target_changed', 'Routine target identity changed. Explicit rebinding is not supported');
       return result.target;
     };
@@ -375,6 +390,7 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
         const snapshot = await nativeSnapshot(store.binding(target.bindingId));
         fail(snapshot?.idle === true, 'routine_target_busy', 'Managed routine target must have an idle native session');
         admission();
+        if (record && canonical(record.target) !== canonical(target)) save({ target });
       }
       return target;
     };

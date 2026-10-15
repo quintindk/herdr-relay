@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import './git-fixture.mjs';
 import { test } from 'node:test';
 import { Store } from '../src/store.mjs';
-import { provisionAgent } from '../src/provisioning.mjs';
+import { provisionAgent, provisionRuntimeKey } from '../src/provisioning.mjs';
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,11 @@ test('a matching display name never authorises adopting another backend agent', 
   await assert.rejects(provisionAgent(store, '/state', api, { key: 'worker', companyId: 'company', bindingId: 'worker', harness: 'opencode', directory: '/work' }));
   assert.equal(created, true);
   assert.equal(store.operation('provision:worker').agentId, undefined);
+});
+
+test('owned runtime identity includes the durable provision marker', async t => {
+  t.assert.notEqual(provisionRuntimeKey('provision:worker', 'first'), provisionRuntimeKey('provision:worker', 'second'));
+  t.assert.equal(provisionRuntimeKey('provision:worker', 'first'), provisionRuntimeKey('provision:worker', 'first'));
 });
 
 test('integrated provisioning retains the same owned worktree across a lost agent-create response', async t => {

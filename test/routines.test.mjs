@@ -177,6 +177,7 @@ test('schedule target discovery exposes only safe native and interactive identit
     { id: randomUUID(), companyId: f.companyId, name: 'HTTP', status: 'idle', adapterType: 'http' }];
   }, f.companyId);
   assert.deepEqual(result.headless, [{ agentId: nativeId, name: 'Native inbox', adapterType: 'opencode_local', status: 'idle' }]);
+  assert.deepEqual(result.managedHeadless, []);
   assert.deepEqual(result.interactiveExact, [{ bindingId: 'worker', label: 'chat', conversationId: 'chat' }]);
   assert.ok(!JSON.stringify(result).includes('PRIVATE'));
 });
@@ -198,7 +199,7 @@ test('native bridge preserves legacy Relay-managed headless target inference', a
   const f = managedFixture(t);
   const source = { id: 'human-managed', text: 'Run in the managed worker', createdAt: Date.now() };
   const result = await harnessRoutine(f.store, f.bridge, 'routine-create', {
-    key: 'managed-native', targetBindingId: f.binding.id, title: 'Managed', description: 'Legacy managed target',
+    key: 'managed-native', executionMode: 'headless', targetBindingId: f.binding.id, title: 'Managed', description: 'Managed target',
     cron: '0 8 * * *', source,
   }, f.api, f.options);
   assert.equal(result.executionMode, 'headless');
@@ -347,7 +348,8 @@ test('managed routine admission accepts one exact recorded runtime resume lineag
 
 test('managed routine backend activation advances one generation after recorded resume', async t => {
   const f = managedFixture(t);
-  await f.create({}, f.options);
+  const created = await f.create({}, f.options);
+  assert.equal(created.state, 'paused');
   const previous = f.store.binding('headless').config;
   const runtime = { request: { directory: '/work/headless' }, directory: '/runtime/resumed', port: 5432, nonce: 'resumed-nonce' };
   const nativeConfig = { ...previous.opencode, url: `http://127.0.0.1:${runtime.port}`,
@@ -358,13 +360,15 @@ test('managed routine backend activation advances one generation after recorded 
   f.store.rebind('headless', { revision: 1, harness: 'opencode', conversationId: 'managed-chat',
     instanceId: runtime.nonce, opencode: nativeConfig }, { managedContinuation: true });
   f.agent.status = 'error'; f.agent.adapterConfig.bindingRevision = 2;
-  const result = await f.create({ key: 'after-resume' }, { verifyRuntime: () => runtime,
+  const result = await f.manage('resume', { key: 'after-resume' }, { verifyRuntime: () => runtime,
     nativeSnapshot: async () => ({ idle: true }) });
-  assert.equal(result.state, 'paused');
+  assert.equal(result.state, 'active');
   const operation = f.store.operation('routine-managed-backend:headless');
   assert.equal(operation.state, 'recorded'); assert.equal(operation.generation, 2);
   assert.equal(operation.request.target.bindingRevision, 2); assert.equal(operation.history.length, 1);
   assert.equal(operation.history[0].request.target.bindingRevision, 1);
+  assert.equal(routineRecords(f.store)[0].target.bindingRevision, 2);
+  assert.equal(routineRecords(f.store)[0].target.managed.runtimeKey, 'managed-runtime-2');
 });
 
 test('managed routine target rejects busy backend and native conversations', async t => {

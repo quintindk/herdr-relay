@@ -96,6 +96,10 @@ export class Store {
     }
     if (input.worktreeKey !== undefined) config.worktreeKey = text(input.worktreeKey, 'worktreeKey');
     if (input.label !== undefined) config.label = text(input.label, 'label');
+    if (input.instructions !== undefined) {
+      config.instructions = text(input.instructions, 'instructions');
+      requireValue(config.instructions.length <= 65536, 'invalid_instructions', 'Instructions are limited to 65536 characters');
+    }
     if (input.capabilities !== undefined) {
       requireValue(Array.isArray(input.capabilities) && input.capabilities.length <= 64, 'invalid_capabilities', 'Capabilities must be an array of at most 64 labels');
       config.capabilities = [...new Set(input.capabilities.map(value => text(value, 'capability')))];

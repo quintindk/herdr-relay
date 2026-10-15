@@ -365,7 +365,10 @@ test('CLI sends wait-children file payload to the new route and preserves wait-c
 
 test('worker prompt requires explicit fan-out authority, exact parentId and ending the waiting turn', t => {
   const { run } = fixture(t);
-  const prompt = promptFor(run, '/context.json');
+  const prompt = promptFor(run, '/context.json', 'Review today\'s inbox and apply authorised task bookkeeping.');
+  assert.match(prompt, /Standing instructions for this worker:/);
+  assert.match(prompt, /Review today's inbox and apply authorised task bookkeeping/);
+  assert.ok(prompt.indexOf('Standing instructions') < prompt.indexOf('Use the Relay CLI below'));
   assert.match(prompt, /explicitly authorises delegation or fan-out/);
   assert.match(prompt, /MUST set parentId to the current task ID "parent"/);
   assert.match(prompt, /work wait-children RUN --file FILE/);

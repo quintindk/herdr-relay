@@ -8,6 +8,8 @@ import { Hermes } from './hermes.mjs';
 import { provisionWorktree } from './resources.mjs';
 import { randomUUID } from 'node:crypto';
 
+export const provisionRuntimeKey = (id, marker) => `provision-${digest([id, marker]).slice(0, 24)}`;
+
 export async function provisionAgent(store, directory, api, input) {
   const key = text(input.key, 'key');
   const request = { companyId: text(input.companyId, 'companyId'), bindingId: text(input.bindingId, 'bindingId'),
@@ -16,6 +18,10 @@ export async function provisionAgent(store, directory, api, input) {
     taskId: input.taskId ?? null, worktreeKey: input.worktreeKey ?? null,
     model: input.model ?? null, executable: input.executable ?? input.harness,
     worktree: input.worktree ?? null, label: input.label ?? null, capabilities: input.capabilities ?? null };
+  if (input.instructions !== undefined) {
+    request.instructions = text(input.instructions, 'instructions');
+    requireValue(request.instructions.length <= 65536, 'invalid_instructions', 'Instructions are limited to 65536 characters');
+  }
   requireValue(['opencode', 'hermes'].includes(request.harness), 'invalid_harness', 'Use OpenCode or Hermes');
   const id = `provision:${key}`;
   let operation = store.operation(id);
@@ -60,7 +66,7 @@ export async function provisionAgent(store, directory, api, input) {
   const skillPath = join(skillDirectory, 'SKILL.md');
   if (existsSync(skillPath)) requireValue(readFileSync(skillPath, 'utf8') === skill, 'skill_conflict', 'Existing Relay skill differs. Resolve it explicitly.', 409);
   else writeFileSync(skillPath, skill, { flag: 'wx' });
-  const runtimeKey = `provision-${digest(id).slice(0, 24)}`;
+  const runtimeKey = provisionRuntimeKey(id, operation.marker);
   const runtime = await launchRuntime(store, directory, { key: runtimeKey, directory: request.directory,
     harness: request.harness, executable: request.executable });
   const nativeConfig = { directory: request.directory, runtimeKey, exclusive: true,
@@ -104,6 +110,7 @@ export async function provisionAgent(store, directory, api, input) {
     lifetime: request.lifetime, ...(request.controllerBindingId ? { controllerBindingId: request.controllerBindingId } : {}),
     ...(request.taskId ? { taskId: request.taskId } : {}), ...(request.worktreeKey ? { worktreeKey: request.worktreeKey } : {}),
     ...(request.label ? { label: request.label } : {}), ...(request.capabilities ? { capabilities: request.capabilities } : {}),
+    ...(request.instructions ? { instructions: request.instructions } : {}),
     [request.harness]: nativeConfig }).binding;
   const operatorFile = join(directory, 'adapter-context.json');
   const context = JSON.stringify({ socketPath: join(directory, 'relay.sock'), token: readFileSync(join(directory, 'admin-token'), 'utf8').trim() });

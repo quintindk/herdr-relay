@@ -33,7 +33,7 @@ function scheduleTools(execute) {
     create: { key: id, title: id.max(200), description: id,
       executionMode: tool.schema.enum(['headless', 'interactive_exact', 'interactive_folder']).optional().describe('Execution ownership. New callers should set this explicitly.'),
       targetAgentId: id.optional().describe('Paperclip-native opencode_local or paperclip_runner agent for headless execution.'),
-      targetBindingId: id.optional().describe('Exact Relay binding for interactive_exact execution.'),
+      targetBindingId: id.optional().describe('Relay binding for interactive_exact or Relay-managed headless execution.'),
       targetDirectory: id.optional().describe('Persistent cron owner: exact enrolled folder. Future occurrences follow its unique current chat across restarts. Do not also supply targetBindingId.'),
       cron: id, timezone: id.optional(), projectId: id.optional(), parentTaskId: id.optional(),
       relayReviewPolicy: tool.schema.enum(['human', 'none']).optional(), enabled: tool.schema.boolean().optional() },
@@ -357,7 +357,7 @@ export default async function relayBridge({ client, directory }, options = {}) {
           if (context.sessionID !== config.conversationId) throw new Error('Tool requires the enrolled conversation');
           return JSON.stringify(await rpc('routine-targets', await snapshot(false)));
         } }),
-      relay_schedule_target_create: tool({ description: 'Create a dedicated Paperclip-native opencode_local schedule target through Relay on explicit human instruction. State name, enrolled directory, model and instruction scope visibly. Never accepts credentials or raw adapter configuration. Reuse the same key on retries; creation does not create or enable a schedule.',
+      relay_schedule_target_create: tool({ description: 'Create a dedicated Relay-managed headless OpenCode schedule target on explicit human instruction. Returns targetBindingId with scoped Relay worker context and submission protocol. State name, enrolled directory, model and instruction scope visibly. Never accepts credentials or raw adapter configuration. Reuse the same key on retries; creation does not create or enable a schedule.',
         args: { key: tool.schema.string().min(1), name: tool.schema.string().min(1).max(120), directory: tool.schema.string().min(1),
           model: tool.schema.string().min(3), instructions: tool.schema.string().min(1).max(65536) },
         execute: (args, context) => delegate(args, context, 'routine-target-create') }),
@@ -504,7 +504,7 @@ async function discoverBridge(input, configDirectory, discoveryWaitMs) {
     tool: {
       ...scheduleTools(action => execute(action === 'routine-list' ? 'relay_schedules' : `relay_schedule_${action.slice(8)}`)),
       relay_schedule_targets: tool({ description: 'List safe Relay-routed targets for new schedules. Never access Paperclip directly for target discovery.', args: {}, execute: execute('relay_schedule_targets') }),
-      relay_schedule_target_create: tool({ description: 'Create a dedicated Paperclip-native opencode_local schedule target through Relay on explicit human instruction. Never accepts credentials or raw adapter configuration.',
+      relay_schedule_target_create: tool({ description: 'Create a dedicated Relay-managed headless OpenCode schedule target with scoped worker context on explicit human instruction. Returns targetBindingId. Never accepts credentials or raw adapter configuration.',
         args: { key: tool.schema.string().min(1), name: tool.schema.string().min(1).max(120), directory: tool.schema.string().min(1),
           model: tool.schema.string().min(3), instructions: tool.schema.string().min(1).max(65536) }, execute: execute('relay_schedule_target_create') }),
       ...taskTools(action => execute(`relay_${action.replaceAll('-', '_')}`)),

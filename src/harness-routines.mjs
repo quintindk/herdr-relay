@@ -5,7 +5,8 @@ import { previewCron } from './cron-schedule.mjs';
 import { enrolmentDirectories } from './enrolment.mjs';
 import { createScheduleTarget } from './schedule-targets.mjs';
 
-export async function harnessRoutine(store, bridge, action, input, api, { observationConfig, routingContextFile, verifyRuntime, nativeSnapshot } = {}) {
+export async function harnessRoutine(store, bridge, action, input, api, { observationConfig, routingContextFile, stateDirectory, verifyRuntime, nativeSnapshot,
+  provisionAgent: provision } = {}) {
   const reading = ['routine-preview', 'routine-targets', 'routine-list', 'routine-inspect'].includes(action);
   requireValue(['routine-preview', 'routine-targets', 'routine-target-create', 'routine-list', 'routine-inspect', 'routine-create', 'routine-pause',
     'routine-resume', 'routine-cancel', 'routine-run', 'routine-edit'].includes(action), 'invalid_request', 'Unknown routine action');
@@ -43,7 +44,8 @@ export async function harnessRoutine(store, bridge, action, input, api, { observ
   }
   if (action === 'routine-target-create') {
     return createScheduleTarget(store, api, observationConfig, args, { kind: 'native', bindingId: binding.id,
-      conversationId: bridge.identity.conversationId, sessionCreatedAt: bridge.sessionCreatedAt }, check);
+      conversationId: bridge.identity.conversationId, sessionCreatedAt: bridge.sessionCreatedAt }, check,
+    { stateDirectory, ...(provision ? { provision } : {}) });
   }
   if (action === 'routine-create' && args.executionMode === undefined && args.targetAgentId === undefined) {
     if (args.targetDirectory !== undefined) args.executionMode = 'interactive_folder';
