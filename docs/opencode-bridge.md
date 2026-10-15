@@ -60,11 +60,14 @@ messages belonging to the exact invocation, not unrelated assistant history.
 
 ### Daily Use
 
-Automatic enrolment accepts exact `bridgeDirectories` in the service's Herdr
-configuration or persisted, explicitly human-authorised standing folder grants
-from the enrolment tools/CLI below. There is no broad default. This authorises
-Relay to reserve the unique observed OpenCode chat in each granted folder. Other
-folders remain observation-only. Configure the global OpenCode plugin with:
+Automatic enrolment accepts exact `bridgeDirectories`, canonical non-linked chat
+directories below explicit `bridgeDirectoryRoots`, or persisted, explicitly
+human-authorised standing folder grants from the enrolment tools/CLI below. There
+is no filesystem-wide default. Root expansion follows only recent same-machine,
+same-session OpenCode observations and excludes linked worktrees and recorded worker
+directories. This authorises Relay to reserve the unique observed OpenCode chat in
+each granted folder. Other folders remain observation-only. Configure the global
+OpenCode plugin with:
 
 ```json
 ["file:///absolute/path/herdr-relay/src/opencode-bridge-plugin.mjs",

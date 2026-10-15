@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
 import { digest } from '../src/protocol.mjs';
-import { enrolAgent, enrolmentCandidates, enrolmentDirectories } from '../src/enrolment.mjs';
+import { bridgeEnrolmentDirectories, enrolAgent, enrolmentCandidates, enrolmentDirectories } from '../src/enrolment.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'relay-directory-enrolment-'));
@@ -93,6 +93,36 @@ test('effective directories are deduplicated exact paths and grants survive a st
   }
   f.store.saveOperation({ ...f.store.operation(grant.enrolmentId), state: 'blocked' });
   assert.deepEqual(enrolmentDirectories(f.store, f.config), ['/explicit']);
+});
+
+test('trusted roots expand only recent canonical non-linked chat directories outside worker reservations', async t => {
+  const f = fixture(t), sibling = join(f.root, 'sibling'), linked = join(f.root, 'linked'), worker = join(f.root, 'worker');
+  for (const directory of [sibling, linked, worker]) mkdirSync(directory);
+  f.config.bridgeDirectoryRoots = [f.root];
+  f.observe('sibling-chat', { placement: { directory: sibling, terminalId: 'sibling-terminal' } });
+  f.observe('linked-chat', { placement: { directory: linked, terminalId: 'linked-terminal' } });
+  f.observe('worker-chat', { placement: { directory: worker, terminalId: 'worker-terminal' } });
+  f.store.saveOperation({ id: 'herdr-worker:reserved', runId: '', state: 'prepared', request: { directory: worker } });
+  const inspected = [];
+  const directories = await bridgeEnrolmentDirectories(f.store, f.config, { inspect: async directory => {
+    inspected.push(directory); return { canonical: directory, linked: directory === linked };
+  } });
+  assert.deepEqual(new Set(directories), new Set([f.directory, sibling]));
+  assert.deepEqual(new Set(inspected), new Set([f.directory, sibling, linked]));
+  assert.equal(enrolmentCandidates(f.store, f.config).find(item => item.directory === sibling).enrolled, false,
+    'Root eligibility is not reported as enrolment until reconciliation creates the exact bridge');
+  assert.equal(enrolmentDirectories(f.store, f.config).includes(sibling), false,
+    'Trusted roots grant chat bridge enrolment, not persistent-folder routine ownership');
+});
+
+test('trusted roots reject siblings, aliases and stale observations', async t => {
+  const f = fixture(t), trusted = join(f.root, 'trusted'), outside = join(tmpdir(), `relay-outside-${Date.now()}`);
+  mkdirSync(trusted); mkdirSync(outside);
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  f.config.bridgeDirectoryRoots = [trusted];
+  f.observe('outside-chat', { placement: { directory: outside, terminalId: 'outside-terminal' } });
+  f.stale(f.observe('stale-chat', { placement: { directory: join(trusted, 'stale'), terminalId: 'stale-terminal' } }));
+  assert.deepEqual(await bridgeEnrolmentDirectories(f.store, f.config, { inspect: async directory => ({ canonical: directory, linked: false }) }), []);
 });
 
 test('unchanged retries retain the original optional observed ID payload without inspection, reselection or writes', async t => {

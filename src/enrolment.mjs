@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { lstat, realpath } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { promisify, stripVTControlCharacters } from 'node:util';
 import { observedAgents } from './herdr-agents.mjs';
 import { isNotificationSource } from './completion-notifications.mjs';
@@ -57,12 +57,37 @@ async function inspectDirectory(directory) {
   return { canonical: canonicalPath, linked: await realpath(paths[0]) !== await realpath(paths[1]) };
 }
 
+const underRoot = (directory, root) => {
+  const path = relative(root, directory);
+  return path === '' || path && !path.startsWith('..') && !isAbsolute(path);
+};
+
 export function enrolmentDirectories(store, config) {
   const scope = scopeOf(config);
   const recorded = records(store, 'directory-enrolment').filter(item => item.state === 'recorded' &&
     canonical(item.scope) === canonical(scope) && item.request?.reserved === true).map(item => item.request.directory);
   const workers = new Set(records(store, 'herdr-worker').flatMap(item => [item.request?.directory, item.target?.directory]));
   return [...new Set([...(config.bridgeDirectories ?? []), ...recorded].filter(path => exactPath(path) && !workers.has(path)))];
+}
+
+export async function bridgeEnrolmentDirectories(store, config, { inspect = inspectDirectory } = {}) {
+  const exact = enrolmentDirectories(store, config);
+  const roots = [...new Set((config.bridgeDirectoryRoots ?? []).filter(exactPath))];
+  if (!roots.length) return exact;
+  const scope = scopeOf(config);
+  const workers = new Set(records(store, 'herdr-worker').flatMap(item => [item.request?.directory, item.target?.directory]));
+  const candidates = observedAgents(store).filter(item => inScope(item, scope) && item.identity.harness === 'opencode' &&
+    item.identity.sessionKind === 'id' && item.availability === 'present' && fresh(item.updatedAt, 15000) &&
+    exactPath(item.placement?.directory) && roots.some(root => underRoot(item.placement.directory, root)) &&
+    !workers.has(item.placement.directory)).map(item => item.placement.directory);
+  const trusted = [];
+  for (const directory of new Set(candidates)) {
+    try {
+      const result = await inspect(directory);
+      if (result?.canonical === directory && result.linked === false) trusted.push(directory);
+    } catch {}
+  }
+  return [...new Set([...exact, ...trusted])];
 }
 
 function statusFor(store, scope, directory, observedId) {
@@ -84,9 +109,12 @@ export function enrolmentCandidates(store, config) {
   const scope = scopeOf(config), directories = enrolmentDirectories(store, config);
   return observedAgents(store).filter(item => inScope(item, scope) && item.identity.harness === 'opencode' &&
     item.identity.sessionKind === 'id' && item.availability === 'present' && fresh(item.updatedAt, 15000) &&
-    exactPath(item.placement?.directory)).map(item => ({ observedId: item.id, directory: item.placement.directory,
-    label: clean(item.observation?.display?.name), availability: item.availability, state: clean(item.observation?.state),
-    enrolled: directories.includes(item.placement.directory), ...statusFor(store, scope, item.placement.directory, item.id) }));
+    exactPath(item.placement?.directory)).map(item => {
+    const status = statusFor(store, scope, item.placement.directory, item.id);
+    return { observedId: item.id, directory: item.placement.directory,
+      label: clean(item.observation?.display?.name), availability: item.availability, state: clean(item.observation?.state),
+      enrolled: directories.includes(item.placement.directory) || status.status !== null, ...status };
+  });
 }
 
 function nativeOrigin(store, bridge, scope, source) {

@@ -45,7 +45,7 @@ import { humanTask } from './human-tasks.mjs';
 import { queryTasks } from './task-query.mjs';
 import { attachTaskReference, lookupTaskReference } from './task-references.mjs';
 import { harnessTask } from './harness-tasks.mjs';
-import { enrolAgent, enrolmentCandidates, enrolmentDirectories } from './enrolment.mjs';
+import { bridgeEnrolmentDirectories, enrolAgent, enrolmentCandidates, enrolmentDirectories } from './enrolment.mjs';
 import { coordinatorGrant, coordinatorReviewGrant, validateCoordinatorGrant } from './coordinator-review.mjs';
 
 async function body(req, limit = 128 * 1024) {
@@ -645,7 +645,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   const lifecycle = backendContextFile ? lifecycleRunner(store, operatorApi, publications) : null;
   const observer = observationConfig ? watchHerdrAgents(store, operatorApi, observationConfig, {
     afterReconcile: async current => {
-      const directories = enrolmentDirectories(store, observationConfig);
+      const directories = await bridgeEnrolmentDirectories(store, observationConfig);
       if (!directories.length || publications.has('observed-delivery')) return;
       const pending = reconcileBridgeEnrolment(store, directory, operatorApi, {
         ...observationConfig, directories, current,

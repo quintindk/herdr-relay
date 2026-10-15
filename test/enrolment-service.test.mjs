@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startService } from '../src/service.mjs';
 import { call } from '../src/client.mjs';
 import { digest } from '../src/protocol.mjs';
-import { enrolmentDirectories } from '../src/enrolment.mjs';
+import { bridgeEnrolmentDirectories, enrolmentDirectories } from '../src/enrolment.mjs';
 
 const issueId = '00000000-0000-4000-8000-000000000001';
 const collectionPaths = ['/api/companies/company', '/api/companies/company/agents',
@@ -225,6 +225,16 @@ test('operator enrolment inspects a real directory and persists an idempotent sc
   });
   assert.deepEqual(f.requests, []);
   assert.deepEqual(f.service.store.runs(), []);
+});
+
+test('trusted bridge roots automatically reconcile an exact observed child chat', async t => {
+  const f = await fixture(t, { configured: true });
+  f.config.bridgeDirectoryRoots = [f.root];
+  writeFileSync(f.herdrConfigFile, JSON.stringify(f.config));
+  const directories = await bridgeEnrolmentDirectories(f.service.store, f.config, {
+    inspect: async directory => ({ canonical: directory, linked: false }),
+  });
+  assert.deepEqual(new Set(directories), new Set([f.origin.directory, f.target.directory]));
 });
 
 test('configured busy bridge enrolment requires native human input and cannot override enrolment scope', async t => {

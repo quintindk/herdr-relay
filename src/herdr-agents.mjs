@@ -9,6 +9,7 @@ export function herdrConfig(input) {
     machineId: text(input.machineId, 'machineId'), session: text(input.session, 'session'),
     companyId: text(input.companyId, 'companyId'), excludedWorkspaces: input.excludedWorkspaces ?? [],
     ...(input.bridgeDirectories === undefined ? {} : { bridgeDirectories: input.bridgeDirectories }),
+    ...(input.bridgeDirectoryRoots === undefined ? {} : { bridgeDirectoryRoots: input.bridgeDirectoryRoots }),
     ...(input.workerRepositories === undefined ? {} : { workerRepositories: input.workerRepositories }),
     ...(input.workerProvisioning === undefined ? {} : { workerProvisioning: input.workerProvisioning }) };
   requireValue(isAbsolute(config.socketPath), 'invalid_herdr_config', 'Herdr socket path must be absolute');
@@ -17,6 +18,9 @@ export function herdrConfig(input) {
   requireValue(config.bridgeDirectories === undefined || (Array.isArray(config.bridgeDirectories) &&
     config.bridgeDirectories.every(path => typeof path === 'string' && isAbsolute(path))),
   'invalid_herdr_config', 'bridgeDirectories must contain absolute directory paths');
+  requireValue(config.bridgeDirectoryRoots === undefined || (Array.isArray(config.bridgeDirectoryRoots) &&
+    config.bridgeDirectoryRoots.every(path => typeof path === 'string' && isAbsolute(path))),
+  'invalid_herdr_config', 'bridgeDirectoryRoots must contain absolute directory paths');
   requireValue(config.workerRepositories === undefined || (Array.isArray(config.workerRepositories) &&
     config.workerRepositories.every(item => item && Object.keys(item).every(key => ['repository', 'worktreeRoot'].includes(key)) &&
       typeof item.repository === 'string' && isAbsolute(item.repository) && typeof item.worktreeRoot === 'string' && isAbsolute(item.worktreeRoot))),

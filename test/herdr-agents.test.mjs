@@ -208,6 +208,8 @@ test('Herdr source config requires an explicit scoped socket and company', () =>
   assert.throws(() => herdrConfig({ ...config, socketPath: 'relative' }), { code: 'invalid_herdr_config' });
   assert.throws(() => herdrConfig({ ...config, bridgeDirectories: ['relative'] }), { code: 'invalid_herdr_config' });
   assert.deepEqual(herdrConfig({ ...config, bridgeDirectories: ['/work'] }).bridgeDirectories, ['/work']);
+  assert.throws(() => herdrConfig({ ...config, bridgeDirectoryRoots: ['relative'] }), { code: 'invalid_herdr_config' });
+  assert.deepEqual(herdrConfig({ ...config, bridgeDirectoryRoots: ['/home/user/play'] }).bridgeDirectoryRoots, ['/home/user/play']);
   assert.deepEqual(herdrConfig({ ...config, workerProvisioning: { mode: 'localUser', maxActiveWorkers: 10 } }).workerProvisioning,
     { mode: 'localUser', maxActiveWorkers: 10 });
   for (const workerProvisioning of [{ mode: 'strict' }, { mode: 'localUser', extra: true },
