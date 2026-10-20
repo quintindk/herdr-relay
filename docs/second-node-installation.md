@@ -32,6 +32,7 @@ node scripts/enrol-native-node.mjs \
   --owner "$HOME/.local/state/herdr-relay-backend/owner.json" \
   --id second-node --name "Second machine" \
   --state-dir /absolute/remote/private/relay-node \
+  --backend-url http://127.0.0.1:3210 \
   --url https://relay.synthswarm.com \
   --output /private/transfer/second-node.json
 ```
@@ -49,6 +50,11 @@ the file. Confirm the Cloudflare Access application enforces those credentials
 for this hostname before treating the public deployment as complete.
 
 ### Portcullis shim transport
+
+Enrolment contacts the owner context's URL or `--backend-url`, defaulting to local
+loopback. `--url` configures only the generated node's endpoint. For a shim config,
+use `--url http://relay.shim:3999 --trusted-http-proxy-origin http://relay.shim:3999`
+on the backend host alongside `--backend-url http://127.0.0.1:3210`.
 
 When Portcullis on the remote machine provides `relay.shim:3999`, edit only the
 transport fields in that machine's private node configuration:
