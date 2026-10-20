@@ -290,3 +290,13 @@ old approval and retain the open question. The session switch uses a separate
 disposable smoke-only plugin, never normal runtime configuration.
 Latest full verification: 1,442 root tests passed, one skipped, zero failures, and
 20 v2 tests passed. See [acceptance commands and limits](acceptance-v3.md).
+
+The user's laptop cutover now depends on Paperclip task migration. A separate
+read-only export/plan and offline owner-authenticated import path preserves task
+graphs, comment bodies/source attribution, original metadata and immutable ID
+mappings. Identical imports do not overwrite native edits. Active execution,
+pending/unknown interactions and execution/review policies block import. The
+complete import commits atomically under the backend service lock. No agent,
+execution or schedule is activated. Fixture tests pass. Live source inventory,
+local legacy Relay state/reference/schedule migration and actual cutover remain
+open. See [task migration](paperclip-task-migration.md).

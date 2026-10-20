@@ -69,7 +69,10 @@ and retained [`evidence/`](evidence/) for bounded claims.
   [second-node installation](second-node-installation.md). No SSH is required.
 - Real-model, actual-human and physical-machine checks are distinct from fixtures.
   Do not close those gates based on process emulation or synthetic keyboard input.
-- Existing Paperclip data import is deferred by the deployment decision.
+- The user now requires a Paperclip task migration path before laptop v2 setup.
+  [Task migration](paperclip-task-migration.md) supplies read-only export/plan and
+  owner-authenticated atomic import. Live import and full installation cutover
+  remain unverified. Pending obligations/schedules are not silently migrated.
 
 ## Outstanding implementation, not external blockers
 

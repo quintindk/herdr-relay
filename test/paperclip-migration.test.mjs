@@ -1,0 +1,92 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { BackendStore } from '../src/backend-store.mjs';
+import { migrationDigest, planPaperclipImport, importPaperclipTasks, exportPaperclipTasks } from '../src/paperclip-migration.mjs';
+
+function bundle() {
+  const task = (id, extra = {}) => ({ task: { id, companyId: 'company', title: id, description: 'Full body', status: 'todo', priority: 'high',
+    createdAt: '2026-01-01T00:00:00Z', labels: [{ id: 'label', name: 'Customer work' }], ...extra }, dependencies: [], comments: [], interactions: [] });
+  const root = task('parent', { status: 'done' }), child = task('child', { parentId: 'parent', assigneeAgentId: 'legacy-agent', projectId: 'project' });
+  child.dependencies = ['parent'];
+  child.comments = [{ id: 'comment', companyId: 'company', issueId: 'child', body: 'Original comment', authorUserId: 'legacy-human', createdAt: '2026-01-01T00:00:00Z' }];
+  child.interactions = [{ id: 'history', kind: 'question', status: 'answered', body: 'History', result: { body: 'Answer' } }];
+  const result = { format: 'relay-paperclip-tasks/1', source: { provider: 'paperclip', url: 'http://127.0.0.1:3100', companyId: 'company' },
+    exportedAt: '2026-10-20T00:00:00Z', coverage: { schedules: 'not_exported', localRelayState: 'not_exported' }, tasks: [child, root] };
+  return { ...result, digest: migrationDigest(result) };
+}
+
+test('migration atomically preserves tasks, graphs, historical attribution and immutable source mappings without executing work', t => {
+  const store = new BackendStore(':memory:');
+  t.after(() => store.close());
+  const owner = store.authenticate(store.bootstrap().token), input = bundle();
+  const plan = planPaperclipImport(input);
+  assert.equal(plan.ready, true);
+  const receipt = importPaperclipTasks(store, owner, input);
+  const child = store.get('task', receipt.mappings.child);
+  assert.equal(child.parentId, receipt.mappings.parent);
+  assert.deepEqual(child.dependencies, [receipt.mappings.parent]);
+  assert.equal(child.source.metadata.assigneeAgentId, 'legacy-agent');
+  assert.equal(child.source.interactions[0].status, 'answered');
+  const comment = store.all('comment')[0];
+  assert.equal(comment.author.type, 'external');
+  assert.equal(comment.author.userId, 'legacy-human');
+  assert.equal(comment.source.createdAt, '2026-01-01T00:00:00Z');
+  assert.equal(store.all('execution').length, 0);
+  assert.equal(store.all('schedule').length, 0);
+  const count = store.events({ limit: 500 }).items.length;
+  store.command(owner, { key: 'edit', action: 'task.update', payload: { id: child.id, expectedRevision: child.revision, changes: { title: 'Native edit' } } });
+  assert.deepEqual(importPaperclipTasks(store, owner, input), receipt);
+  assert.equal(store.get('task', child.id).title, 'Native edit');
+  assert.equal(store.events({ limit: 500 }).items.length, count + 1);
+});
+
+test('migration refuses source obligations, changed exports, incomplete graphs and foreign comments without partial writes', t => {
+  const store = new BackendStore(':memory:');
+  t.after(() => store.close());
+  const owner = store.authenticate(store.bootstrap().token);
+  for (const change of [b => { b.tasks[0].task.executionRunId = 'running'; }, b => { b.tasks[0].interactions[0].status = 'pending'; }]) {
+    const input = bundle(); change(input); input.digest = migrationDigest(input);
+    assert.equal(planPaperclipImport(input).ready, false);
+    assert.throws(() => importPaperclipTasks(store, owner, input), { code: 'migration_blocked' });
+  }
+  const foreign = bundle(); foreign.tasks[0].comments[0].companyId = 'other'; foreign.digest = migrationDigest(foreign);
+  assert.throws(() => importPaperclipTasks(store, owner, foreign), { code: 'invalid_migration' });
+  assert.equal(store.all('task').length, 0);
+  assert.equal(store.events().items.length, 0);
+  const incomplete = bundle(); incomplete.tasks.pop(); incomplete.digest = migrationDigest(incomplete);
+  assert.throws(() => planPaperclipImport(incomplete), { code: 'incomplete_graph' });
+  const original = bundle(); importPaperclipTasks(store, owner, original);
+  const changed = bundle(); changed.tasks[0].task.title = 'Changed'; changed.digest = migrationDigest(changed);
+  assert.throws(() => importPaperclipTasks(store, owner, changed), { code: 'migration_conflict' });
+  assert.throws(() => planPaperclipImport({ ...original, exportedAt: 'tampered' }), { code: 'invalid_migration' });
+});
+
+test('read-only export traverses company tasks and strips runtime configuration while retaining full task/comment text', async () => {
+  const taskId = '00000000-0000-4000-8000-000000000001';
+  const task = { id: taskId, companyId: 'company', title: 'Task', description: 'Full text', status: 'todo', priority: 'medium',
+    adapterConfig: { secret: 'never-export' } };
+  const api = async (method, path) => {
+    assert.equal(method, 'GET');
+    if (path.includes('/audit/')) return { accessTier: 'full', items: [] };
+    if (path.includes('/comments?')) return [];
+    if (path.endsWith('/interactions')) return [];
+    if (path.startsWith('/api/companies/')) return [task];
+    return task;
+  };
+  const result = await exportPaperclipTasks(api, { sourceUrl: 'http://127.0.0.1:3100', companyId: 'company' });
+  assert.equal(result.tasks[0].task.description, 'Full text');
+  assert.equal(JSON.stringify(result).includes('never-export'), false);
+  assert.equal(planPaperclipImport(result).ready, true);
+});
+
+test('migration cannot use a node credential and cycles never reach native writes', t => {
+  const store = new BackendStore(':memory:');
+  t.after(() => store.close());
+  const owner = store.authenticate(store.bootstrap().token);
+  store.command(owner, { key: 'node', action: 'node.enrol', payload: { id: 'node', name: 'Node' } });
+  const node = store.authenticate(store.enrolCredential(owner, 'node', 'credential').token);
+  assert.throws(() => importPaperclipTasks(store, node, bundle()), { code: 'forbidden' });
+  const cyclic = bundle(); cyclic.tasks[1].task.parentId = 'child'; cyclic.digest = migrationDigest(cyclic);
+  assert.throws(() => planPaperclipImport(cyclic), { code: 'invalid_graph' });
+  assert.equal(store.all('task').length, 0);
+});

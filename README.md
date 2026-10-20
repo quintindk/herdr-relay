@@ -30,6 +30,8 @@ development backend is installed locally. The complete 0.2.0 contract remains
 under implementation.
 The [acceptance ledger](docs/acceptance-v3.md) lists passed, partial and outstanding
 release gates, including the manual second-machine installation.
+The [Paperclip task migration guide](docs/paperclip-task-migration.md) describes
+read-only export/planning and explicit native import before laptop v2 cutover.
 
 ## Implemented
 
