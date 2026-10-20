@@ -55,7 +55,9 @@ Take a new final export after the source is frozen for cutover.
 
 Parentage and dependencies are checked as separate graphs. A parent waiting on a
 child is valid. Cycles within either graph are refused. Empty review-attention
-containers are not pending reviews. Expired interactions remain historical records,
+containers and the explicit `{"state":"none","paths":[],"reason":null}` projection
+are not pending reviews. Unknown states/fields and non-empty paths/reasons remain
+blockers. Expired interactions remain historical records,
 not answers or accepted candidates.
 
 ### Explicit disposition of source blockers

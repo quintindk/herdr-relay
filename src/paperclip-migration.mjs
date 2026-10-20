@@ -9,10 +9,16 @@ const taskFields = ['id', 'companyId', 'identifier', 'title', 'description', 'st
   'executionBlocker', 'executionState', 'executionPolicy', 'reviewPolicy', 'reviewAttention', 'unblockDescriptor'];
 const pick = (row, fields) => Object.fromEntries(fields.filter(key => row[key] !== undefined).map(key => [key, row[key]]));
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\s\x00-\x1f]/.test(value);
-// Empty attention containers are projections, not pending obligations. Unknown
-// non-empty structures remain blockers until their semantics are verified.
-const hasAttention = value => value !== null && value !== undefined && value !== false && value !== '' && value !== 0 &&
-  (Array.isArray(value) ? value.length > 0 : typeof value === 'object' ? Object.keys(value).length > 0 : true);
+// Paperclip's explicit no-attention projection is not an obligation. Unknown
+// fields/states and contradictory paths/reasons still require inspection.
+const hasAttention = value => {
+  if (value == null || value === false || value === '' || value === 0) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value !== 'object') return true;
+  if (!Object.keys(value).length) return false;
+  return !(Object.keys(value).every(key => ['state', 'paths', 'reason'].includes(key)) && value.state === 'none' &&
+    Array.isArray(value.paths) && value.paths.length === 0 && value.reason === null);
+};
 
 // Read-only inventory. Do not use a model/worker credential for this company-wide export.
 export async function exportPaperclipTasks(api, { sourceUrl, companyId }) {

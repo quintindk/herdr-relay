@@ -107,14 +107,17 @@ test('parent waiting on child imports both graphs without a false combined cycle
 });
 
 test('empty review attention and expired interactions are historical while real attention and active work still block', () => {
-  for (const attention of [{}, [], null, false]) {
+  for (const attention of [{}, [], null, false, { state: 'none', paths: [], reason: null }]) {
     const input = bundle();
     input.tasks[0].task.reviewAttention = attention;
     input.tasks[0].interactions[0].status = 'expired';
     input.digest = migrationDigest(input);
     assert.equal(planPaperclipImport(input).ready, true);
   }
-  for (const value of [{ pending: true }, ['review'], { status: 'pending' }]) {
+  for (const value of [{ pending: true }, ['review'], { status: 'pending' },
+    { state: 'pending', paths: [], reason: null }, { state: 'none', paths: ['candidate'], reason: null },
+    { state: 'none', paths: [], reason: 'Requires review' }, { state: 'none', paths: [], reason: null, pending: true },
+    { state: 'none', paths: null, reason: null }]) {
     const input = bundle(); input.tasks[0].task.reviewAttention = value; input.digest = migrationDigest(input);
     assert.equal(planPaperclipImport(input).blockers[0].field, 'reviewAttention');
   }
