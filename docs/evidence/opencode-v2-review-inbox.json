@@ -1,0 +1,13 @@
+{
+  "date": "2026-10-20",
+  "command": "npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --review-tui",
+  "runtime": "opencode v2.1.0",
+  "realTuiReviewInbox": true,
+  "exactCandidateDisplayed": true,
+  "reviewReasonCollected": true,
+  "explicitKeyboardConfirmation": true,
+  "acceptedCandidateCompletedTask": true,
+  "input": "synthetic disposable PTY keyboard input",
+  "model": "local deterministic fixture",
+  "realHumanApproval": false
+}

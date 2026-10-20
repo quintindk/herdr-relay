@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-20",
+  "runtime": "opencode v2.1.0",
+  "plugin": "2.1.0",
+  "client": "2.1.0",
+  "realTuiClients": 2,
+  "sharedServer": true,
+  "diagnosticConfirmation": true,
+  "confirmationInput": "synthetic disposable PTY keyboard input",
+  "model": "local deterministic fixture",
+  "modelRequests": 4,
+  "regressionTestsPassed": 12,
+  "receiptAuthority": "unverified_client_local",
+  "humanAuthorityVerified": false,
+  "backendMutationAuthorised": false,
+  "primaryOpenCodeChanged": false
+}

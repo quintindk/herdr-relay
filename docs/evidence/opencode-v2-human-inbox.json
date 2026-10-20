@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-20",
+  "command": "npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --human-inbox",
+  "runtime": "opencode v2.1.0",
+  "backendWorkflow": true,
+  "nativeWorkerAskAndSubmit": true,
+  "realTuiHumanInbox": true,
+  "questionAnswerConfirmedInDialog": true,
+  "answerPublishedWithOwnerCredential": true,
+  "input": "synthetic disposable PTY keyboard input",
+  "model": "local deterministic fixture",
+  "realHumanApproval": false,
+  "naturalChatSourceAttribution": false
+}

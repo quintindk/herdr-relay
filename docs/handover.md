@@ -3,10 +3,18 @@
 Updated: 2026-10-04. Package `herdr-relay@0.1.0-dev.0`. SQLite schema 4.
 
 OpenCode 2 intentionally breaks both Relay integration surfaces. Read the
-[OpenCode 2 migration assessment](opencode-v2-migration-assessment-2026-10-13.md)
+[OpenCode 2 migration assessment](opencode-v2-migration-assessment.md)
 before upgrading the primary OpenCode installation.
 
 ## Start here
+
+The next implementation contract is [specification v3 for 0.2.0](spec-v3.md),
+agreed on 2026-10-20. It supersedes the mandatory Paperclip architecture with a
+native backend, equal multi-machine nodes, first-class interactions and local
+offline scheduling. OpenCode v2 is the target, with server/TUI plugins and native
+runtime migration required by the specification. The implementation notes and
+authority table below describe the current 0.1.x build, not the completed 0.2.0
+architecture.
 
 The current interactive direction is **Herdr-first launch and registration**.
 See [Herdr agent registration](herdr-agent-registration.md). Relay now subscribes
@@ -38,7 +46,8 @@ Do not rewrite history.
 
 ## Required reading
 
-1. [Specification v2](spec-v2.md) and [implementation status](implementation-status.md).
+1. [Specification v3](spec-v3.md), [OpenCode v2 migration assessment](opencode-v2-migration-assessment.md)
+   and [current 0.1.x implementation status](implementation-status.md).
 2. [Scenario verification](scenario-verification.md).
 3. [Managed runtimes](managed-runtimes.md), [native OpenCode](native-opencode-v1.md),
    and [native Hermes](native-hermes-v1.md).
@@ -48,9 +57,9 @@ Do not rewrite history.
    [worktrees](worktree-resources.md), [schedules](schedules.md),
    [installation/inbox](inbox-and-installation.md), and [placement](placement.md).
 
-`build-v1.md`, the earlier evaluation documents and `spec-v1.md` are historical
-milestone records. Their original limitations are superseded by later feature
-documents. Do not copy the historical process-holder bridge into production code.
+Earlier specifications, build milestones, evaluations and the superseded scheduling
+plan are in the [documentation archive](archive/README.md). Their limitations are
+historical. Do not copy the process-holder bridge into production code.
 
 ## Authorities and invariants
 

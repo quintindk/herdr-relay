@@ -1,6 +1,24 @@
 # Specification implementation and evidence
 
-Updated: 2026-10-04. Contract: [specification v2](spec-v2.md).
+Updated: 2026-10-04. Implemented contract: [archived specification v2](archive/spec-v2.md).
+
+The next contract is [specification v3 for 0.2.0](spec-v3.md), targeting OpenCode
+v2 and a native backend. The evidence below describes the current 0.1.x build and
+does not certify that target.
+
+The [OpenCode v2 spike](opencode-v2-spike.md) records initial 2.1.0 server/tool/RPC,
+native prompt/settlement and two-real-TUI results. It is isolated from the current
+bridge. Human confirmation, production integration and native backend work remain
+pending.
+
+The [native backend development slice](backend-native.md) adds transactional
+Tasks/Collaboration records, an authenticated loopback API, local event/publication
+journals, execution-admission primitives and an offline schedule clock. Focused
+tests pass. This is not a deployed node/backend or complete spec-v3 workflow.
+
+The [v3 implementation ledger](implementation-v3.md) tracks subsequent native
+node, scheduling, provider and local deployment work without conflating it with
+the historical evidence below.
 
 **The approved Linux owned-runtime workflow is implemented and extensively verified.**
 The user selected dedicated owned runtimes and per-node Relay services on 2026-10-04.

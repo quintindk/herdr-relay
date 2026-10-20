@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-20",
+  "command": "npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --offline --daemon",
+  "runtime": "opencode v2.1.0",
+  "backend": "native Relay SQLite and HTTP",
+  "model": "local deterministic fixture",
+  "modelRequests": 8,
+  "workerToolCalls": 3,
+  "taskExecutionQuestionAnswerContinuationResultReviewCompletion": true,
+  "backendStoppedDuringScheduledExecution": true,
+  "separateNodeDaemon": true,
+  "offlineAutomation": true,
+  "reconnectedOccurrenceCount": 1,
+  "realModel": false,
+  "humanAuthorityVerified": false,
+  "physicalMachines": 1,
+  "primaryOpenCodeChanged": false
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Herdr Relay native backend
+After=network.target
+
+[Service]
+Type=simple
+# Override these absolute paths during installation for the local Node/check-out.
+ExecStart=/usr/bin/node /srv/herdr-relay/src/backend-cli.mjs serve --state-dir %h/.local/state/herdr-relay-backend --port 3210
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

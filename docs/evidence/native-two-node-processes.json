@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-20",
+  "command": "npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --daemon --mesh",
+  "runtime": "opencode v2.1.0",
+  "backend": "native Relay",
+  "nodeDaemonProcesses": 2,
+  "nativeServices": 2,
+  "directRelayPeerConnection": false,
+  "workerQuestionDeliveredThroughBackend": true,
+  "initiatingAgentAnsweredThroughNativeTool": true,
+  "answerAttribution": "agent:initiator",
+  "workerContinuedAndSubmitted": true,
+  "model": "local deterministic fixture",
+  "workerToolCalls": 3,
+  "physicalMachines": 1,
+  "realModel": false
+}

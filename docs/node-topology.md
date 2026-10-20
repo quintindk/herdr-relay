@@ -1,5 +1,9 @@
 # Owned-runtime node topology
 
+> Current 0.1.x implementation. [Specification v3](spec-v3.md) defines
+> the next topology: equal nodes collaborating through a shared backend, with
+> Paperclip optional and no required direct node connections.
+
 Decision approved on 2026-10-04: dedicated Relay-owned runtimes are the automatic
 control boundary. Each machine runs a local Relay service against a shared
 Paperclip backend. Shared human-controlled conversations remain an opt-in,

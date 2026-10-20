@@ -1,0 +1,7 @@
+# Merge into an authenticated named tunnel's ingress. No tunnel credentials here.
+# Cloudflare Access must protect relay.synthswarm.com with the existing service
+# token policy before traffic is routed. Relay still requires its own Bearer token.
+ingress:
+  - hostname: relay.synthswarm.com
+    service: http://127.0.0.1:3210
+  - service: http_status:404

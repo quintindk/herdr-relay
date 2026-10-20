@@ -7,6 +7,30 @@ adapter. Paperclip owns tasks and review. Relay owns native bindings, delivery
 receipts and verified runtime/resource lifecycle. Agents do not need a manager,
 team hierarchy or project to participate.
 
+## Version 0.2.0 direction
+
+The [v3 specification for 0.2.0](docs/spec-v3.md) defines the next implementation
+contract: a native Tasks and Collaboration backend, equal multi-machine Relay
+nodes, backend-mediated delegation, first-class questions and human escalation,
+and local offline scheduling. Paperclip becomes optional through provider
+contracts, with GitHub Issues as the next independent provider. OpenCode v2 is
+the target, including separate server/TUI plugins and managed runtime migration.
+See the [migration assessment](docs/opencode-v2-migration-assessment.md).
+This is planned architecture. The implementation and requirements below describe
+the current build.
+
+The isolated [OpenCode v2 spike](docs/opencode-v2-spike.md) now verifies a real
+2.1.0 service, read-only tool, typed RPC, native settlement and two TUI clients.
+See [the spike package](packages/opencode-relay/README.md) for reproducible checks
+and remaining migration gates.
+
+The [v3 implementation ledger](docs/implementation-v3.md) tracks the native
+backend, node journal/execution, offline scheduling and provider work. A separate
+development backend is installed locally. The complete 0.2.0 contract remains
+under implementation.
+The [acceptance ledger](docs/acceptance-v3.md) lists passed, partial and outstanding
+release gates, including the manual second-machine installation.
+
 ## Implemented
 
 - Separate native agent identities, existing conversations and revisioned resume.
@@ -121,8 +145,8 @@ directories, bounded by the service account and an active-worker limit. See
 - [Daily task tracker](docs/daily-task-tracker.md): query limits and completeness,
   human capture/edit/comment/complete/reopen/cancel, external references, revision
   checks and uncertain writes. Fixture coverage is not live workflow certification.
-- [Deferred scheduling plan](docs/scheduling-plan.md): Horology-style tools over
-  native Paperclip routines, with safe busy-agent and reminder semantics.
+- [Version 0.2.0 scheduling direction](docs/spec-v3.md#10-local-scheduling):
+  node-owned clocks, offline execution and durable occurrence reconciliation.
 - [Task hierarchy pane](docs/task-board.md): browse tasks by agent or human owner
   through Relay, with folding, search and live refresh.
 - [Herdr Relay skill](skills/herdr-relay/SKILL.md) replaces the former envoy skill.
@@ -130,7 +154,9 @@ directories, bounded by the service account and an active-worker limit. See
   OpenCode when idle without interrupting active workers. It teaches paginated
   task reads, explicit enrolment, Relay chat tools, origin-bound human review and safe
   recovery. [Relay work](skills/relay-work/SKILL.md) remains the worker CLI protocol.
-- [Current handover](docs/handover.md) and [specification](docs/spec-v2.md).
+- [Specification v3 for version 0.2.0](docs/spec-v3.md),
+  [current handover](docs/handover.md) and
+  [archived designs and evaluations](docs/archive/README.md).
 - [Optional local model gateway](docs/model-gateway.md).
 - [Local Paperclip service](docs/paperclip-service.md).
 - [Herdr-first agent registration](docs/herdr-agent-registration.md).

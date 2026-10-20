@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-20",
+  "command": "npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --daemon --monitor",
+  "runtime": "opencode v2.1.0",
+  "separateNodeDaemon": true,
+  "standingTaskCount": 1,
+  "repeatedCheckResults": true,
+  "windowExpiryCancelledExecution": true,
+  "newIssuePerTick": false,
+  "workerToolCalls": 5,
+  "modelRequests": 12,
+  "model": "local deterministic fixture",
+  "realModel": false,
+  "offlineExpiryRealRuntime": false
+}

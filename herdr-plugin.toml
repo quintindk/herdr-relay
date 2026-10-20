@@ -40,3 +40,15 @@ id = "observed"
 title = "Relay: Herdr agent registrations"
 contexts = ["global"]
 command = ["bash", "scripts/plugin-launch.sh", "agent", "observed"]
+
+[[actions]]
+id = "native-work"
+title = "Relay: native 0.2 task board"
+contexts = ["global"]
+command = ["node", "scripts/native-board-launch.mjs", "--json"]
+
+[[panes]]
+id = "native-work"
+title = "Relay native tasks"
+placement = "split"
+command = ["node", "scripts/native-board-launch.mjs"]

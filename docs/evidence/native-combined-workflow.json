@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-20",
+  "command": "npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --offline --daemon --mesh --escalate --human-inbox",
+  "runtime": "opencode v2.1.0",
+  "nodeDaemonProcesses": 2,
+  "backendMediatedQuestionEscalation": true,
+  "realTuiInbox": true,
+  "workerContinuationAndResult": true,
+  "backendStoppedDuringScheduledExecution": true,
+  "singleOccurrenceAfterReconnect": true,
+  "workerToolCalls": 4,
+  "modelRequests": 10,
+  "model": "local deterministic fixture",
+  "humanInput": "synthetic PTY",
+  "physicalMachines": 1,
+  "realModel": false,
+  "realHumanApproval": false
+}

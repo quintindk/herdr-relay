@@ -15,9 +15,13 @@
   },
   "files": [
     "src",
+    "packages/opencode-relay/*.mjs",
+    "packages/opencode-relay/package.json",
+    "packages/opencode-relay/package-lock.json",
     "skills",
     "scripts/plugin-launch.sh",
     "scripts/toggle-board.py",
+    "scripts/native-board-launch.mjs",
     "herdr-plugin.toml",
     "docs/*.md"
   ],
@@ -27,7 +31,9 @@
   "scripts": {
     "start": "node src/cli.mjs service",
     "check": "node scripts/check.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:v2": "npm --prefix packages/opencode-relay test",
+    "smoke:v2": "npm --prefix packages/opencode-relay run smoke -- --tui"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.27",
