@@ -277,7 +277,9 @@ A replacement chat in the same folder does not inherit that return path.
 
 This inheritance is routing and review scope, not human authorisation. Child
 output and notifications cannot authorise preparation, delegation or acceptance.
-Toasts are UI-only and do not start model turns. Use `relay_delegations` and
+Descendant toasts are UI-only and do not start model turns. Direct source-bound
+chat delegations without a parent task have a separate completion-result turn;
+see [opencode-bridge.md](opencode-bridge.md). Use `relay_delegations` and
 `relay_reviews` in the exact origin chat to inspect results.
 
 Human review is the default, including when a child's policy is omitted. `none`

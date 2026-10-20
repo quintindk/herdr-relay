@@ -57,7 +57,7 @@ export function assertRoutineTask(store, bindingId, taskId, { verifyRuntime = ow
 // Called before a new dispatch. The backend issue and native routine-run receipt,
 // not caller-supplied wake metadata, establish provenance.
 export async function admitRoutineExecution(store, api, input, { observationConfig, verifyRuntime = ownedRuntime,
-  nativeSnapshot = binding => new OpenCode(binding.config).snapshot() } = {}) {
+  nativeSnapshot = binding => new OpenCode(binding.config).snapshot(), recoverManaged } = {}) {
   const schedules = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'routine:%'").all()
     .map(row => JSON.parse(row.data));
   if (!schedules.length) return;
@@ -77,7 +77,7 @@ export async function admitRoutineExecution(store, api, input, { observationConf
   if (task.originKind !== 'routine_execution') return;
   const matching = schedules.filter(r => r.routineId === task.originId && r.request.companyId === input.companyId &&
     (r.persistentScope ? r.router?.agentId === input.agentId : r.request.targetBindingId === input.bindingId));
-  const schedule = matching[0];
+  let schedule = matching[0];
   const priorClaim = store.operation(`routine-task:${digest([task.companyId, task.id])}`);
   if (schedule?.persistentScope && priorClaim?.scheduleId === schedule.id && priorClaim.routineRunId === task.originRunId) {
     const priorRun = priorClaim.relayRunId && store.run(priorClaim.relayRunId);
@@ -126,6 +126,13 @@ export async function admitRoutineExecution(store, api, input, { observationConf
     'routine_execution_mismatch', 'Routine authority changed during admission', 409);
   requireValue(!schedule.cancellationRequested && schedule.state !== 'cancelled',
     'routine_cancelled', 'Cancelled routine cannot admit new work', 409);
+  if (schedule.target?.managed && recoverManaged) {
+    await recoverManaged();
+    schedule = store.operation(schedule.id);
+    const health = store.operation(`routine-runtime-health:${schedule.id}`);
+    requireValue(health?.state !== 'unavailable', 'routine_target_busy',
+      `Managed scheduled runtime unavailable: ${health?.reason}. Recovery is pending; no native work has started.`, 409);
+  }
   const recordId = `routine-task:${digest([task.companyId, task.id])}`;
   const claimed = store.operation(recordId);
   requireValue(!schedule.persistentScope || !claimed,
@@ -142,7 +149,7 @@ export async function admitRoutineExecution(store, api, input, { observationConf
     ['conversation_busy', 'routine_bridge_unavailable', 'routine_observation_mismatch', 'worker_grant_inactive'].includes(admission.blocker);
   requireValue(admission.ready, transientExact || ['conversation_busy', 'routine_bridge_unavailable'].includes(admission.blocker)
     ? 'routine_target_busy' : admission.blocker,
-    'Scheduled work requires the exact idle reserved conversation', 409);
+    `Scheduled target unavailable: ${admission.blocker}. Managed runtime recovery is reported by routine inspect.`, 409);
   const target = admission.target;
   if (target.managed) {
     const snapshot = await nativeSnapshot(store.binding(target.bindingId));
@@ -178,4 +185,5 @@ export async function admitRoutineExecution(store, api, input, { observationConf
     return store.dispatch({ ...input, bindingId: target.bindingId, bindingRevision: target.bindingRevision }, operation);
   }
   if (!saved) store.saveOperation(operation);
+  if (target.managed) return store.dispatch({ ...input, bindingRevision: target.bindingRevision });
 }

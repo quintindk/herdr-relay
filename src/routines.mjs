@@ -37,7 +37,8 @@ function projection(record) {
     pauseStopsRunningWork: false };
 }
 
-export function routineRecords(store) { return records(store).map(projection); }
+export function routineRecords(store) { return records(store).map(record => ({ ...projection(record),
+  ...(store.operation(`routine-runtime-health:${record.id}`) ? { runtimeHealth: store.operation(`routine-runtime-health:${record.id}`) } : {}) })); }
 
 export async function scheduleTargets(store, api, companyId) {
   text(companyId, 'companyId');
@@ -76,15 +77,21 @@ function managedRoutineTarget(store, binding, verifyRuntime) {
     (provision.request.lifetime ?? 'persistent') !== (binding.config.lifetime ?? 'persistent')) return blocked('routine_managed_identity_mismatch');
   let resume;
   if (provision.runtimeKey !== native.runtimeKey) {
-    const matches = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'resume:%'").all().map(row => JSON.parse(row.data))
-      .filter(item => item.state === 'recorded' && item.request?.bindingId === binding.id &&
-        item.request.runtimeKey === native.runtimeKey && item.request.revision === binding.revision - 1 &&
-        item.revision === binding.revision && item.previousRuntime === provision.runtimeKey &&
-        item.conversationId === binding.config.conversationId && canonical(item.nativeConfig) === canonical(native) &&
+    const history = store.db.prepare("SELECT data FROM operations WHERE id LIKE 'resume:%'").all().map(row => JSON.parse(row.data));
+    let key = native.runtimeKey, revision = binding.revision, config = native;
+    const visited = new Set();
+    while (key !== provision.runtimeKey) {
+      if (visited.has(key) || visited.size >= 64) return blocked('routine_managed_identity_mismatch');
+      visited.add(key);
+      const matches = history.filter(item => item.state === 'recorded' && item.request?.bindingId === binding.id &&
+        item.request.runtimeKey === key && item.request.revision === revision - 1 && item.revision === revision &&
+        item.conversationId === binding.config.conversationId && canonical(item.nativeConfig) === canonical(config) &&
         item.previousConfig?.agentId === binding.config.agentId && item.previousConfig.conversationId === binding.config.conversationId &&
-        item.previousConfig.opencode?.runtimeKey === provision.runtimeKey);
-    if (matches.length !== 1) return blocked('routine_managed_identity_mismatch');
-    resume = matches[0];
+        item.previousConfig.opencode?.runtimeKey === item.previousRuntime);
+      if (matches.length !== 1) return blocked('routine_managed_identity_mismatch');
+      resume ??= matches[0];
+      key = matches[0].previousRuntime; revision--; config = matches[0].previousConfig.opencode;
+    }
   }
   let runtime;
   try { runtime = verifyRuntime(store, native.runtimeKey); }
@@ -551,7 +558,9 @@ export async function manageRoutine(store, api, input, { check = () => {}, autho
             conversationId: resolved.target?.conversationId ?? null };
         } catch (error) { delivery = { state: 'blocked', reason: error.code, conversationId: null }; }
       }
-      return { ...projection(record), backendStatus: current.status, runs: runs.map(runView), ...(delivery ? { delivery } : {}) };
+      const runtimeHealth = store.operation(`routine-runtime-health:${record.id}`);
+      return { ...projection(record), backendStatus: current.status, runs: runs.map(runView), ...(delivery ? { delivery } : {}),
+        ...(runtimeHealth ? { runtimeHealth } : {}) };
     }
     if (action === 'create' && !request.enabled) {
       if (record.persistentScope) await backendTarget();

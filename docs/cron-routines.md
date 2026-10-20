@@ -248,3 +248,55 @@ received worker acknowledgement. Native result completion was still pending at
 that readback. Chat rotation, offline waiting, ambiguity, coordinator restart and
 no-replay claims have fixture coverage; the production new-chat rotation itself
 has not yet been observed after this activation.
+
+## Managed reboot recovery verification, 2026-10-16
+
+The active TWD managed target lost its native server after host startup. The
+07:14 and 08:00 SAST occurrences failed before Relay dispatch, leaving blocked
+backend tasks. Restoring the exact stored conversation and resuming the existing
+routine completed verification task DEF-166 at 08:47:24 SAST, including the
+overnight interval. The result explicitly retained a Teams coverage gap.
+
+Relay now reconciles active managed schedule runtimes on lifecycle ticks and
+before admission. Verified-dead process groups use the durable managed-resume
+protocol, retaining the same conversation and schedule. Resume lineage supports
+multiple successive incarnations. Unavailability is visible through
+`runtimeHealth`; three failed recovery attempts pause the routine.
+
+All 1,360 tests passed with `--test-concurrency=1`; parallel execution exposed
+timing-sensitive bridge and Ink fixture failures. A controlled live stop of the
+idle TWD runtime at 08:55:06 SAST was automatically recovered by 08:55:09 SAST.
+The original conversation and routine remained active at binding revision 3.
+This verifies recovery from a stopped process, not a physical host reboot.
+The follow-up sweep on the automatically recovered runtime completed DEF-167 at
+08:57:41 SAST with one published result and no duplicate intake changes.
+
+## Published-result conflict diagnosis, 2026-10-19
+
+The last completed automatic occurrence finished on 2026-10-16 at 12:03:05 SAST.
+The 13:00 SAST occurrence, DEF-173, acknowledged and published its result at
+13:03:16 SAST, but its Relay run retained `nativeState: claimed` with
+`concurrent_native_input`. That unsettled run prevents subsequent admission and
+managed runtime recovery. On 2026-10-19 the stored runtime port had no listener,
+while the old `runtimeHealth: ready` still dated from 2026-10-16 at 08:55:09 SAST.
+Six later hourly tasks, DEF-178 through DEF-183, were blocked before Relay dispatch.
+
+Runtime reconciliation now reports unsettled work as blocked health, including
+the exact blocking run and task and native conflict reason. It preserves the
+recovery fence and does not count that condition towards automatic timer pausing.
+The initial diagnosis left live state unchanged. The operator subsequently
+authorised recovery. Paperclip had also raised a board-owned
+`stranded_assigned_issue` hold for DEF-173, which the original recovery guard
+refused. The supported task recovery path now verifies the exact failed backend
+run, published no-review result, unchanged ownership, absence of pending review
+or dependencies and stopped managed process group before resolving that hold as
+Done. Durable intent is reconciled after uncertain replies without another POST.
+
+Live recovery marked DEF-173 Done at 14:47:15 SAST and settled its Relay run while
+preserving the native conflict. Automatic runtime recovery restored the same
+conversation at binding revision 4 by 14:48:16 SAST. Native idle state was verified.
+A single manual verification occurrence, DEF-184, was created at 14:48:51 SAST.
+It was admitted at binding revision 4, acknowledged by the worker and observed
+executing native tool calls. At the bounded follow-up it remained In Progress
+without a result or native conflict. Its result must be checked separately before
+claiming completed inbox coverage.

@@ -185,15 +185,28 @@ metadata. Active Relay workers must use their worker-scoped child-task protocol.
 Each created task records its exact originating binding, conversation, native
 creation time and user-message attribution. Once Relay confirms accepted or
 no-review completion, it queues one durable return notice. The origin plugin
-waits until idle and shows a 15-second completion toast. `relay_delegations`
-returns task results and notification history, including missed or uncertain
-announcements. Notifications never append to model history, change model settings,
-start a model turn or count as human approval.
+waits until idle and shows a 15-second completion toast. For source-attributed
+direct delegations without a parent task, it also delivers a result turn into that
+exact chat using its current agent, model and variant. The caller reads the full
+attributed result with `relay_delegations`, reports completion and blockers, and
+continues within the original authority. Result events cannot authorise new human
+operations. Parent-linked delegations and worker-created descendants retain their
+backend dependency continuation rather than receiving a second model wake.
+
+`relay_delegations` returns task results and notification history. Completion-turn
+delivery is tracked separately from toast announcement: `turnState` is `pending`,
+`uncertain` or `delivered`. Delivered proves the exact native user message ID,
+session and text were read back, not that the model successfully finished its
+response. The intent is persisted before sending. Lost responses are reconciled
+from native history across plugin epochs, never blindly resent. An unresolved
+send blocks subsequent result turns in that chat while toasts remain available.
+Review-ready notices remain UI-only and require explicit human acceptance.
 
 The outbox survives service restarts and does not follow replacement chats.
 `announced` means the TUI API accepted the toast, not that a human read it. A lost
 send or acknowledgement remains `uncertain` and is not resent automatically.
-Later notices are still attempted. Legacy tasks created without an origin are
+Later toasts are still attempted. Existing notification records are not upgraded
+or replayed as model turns. Legacy tasks created without an origin are
 not retrospectively assigned a return address. CLI/operator callers must include
 an explicit validated origin through the task API to receive return notices.
 

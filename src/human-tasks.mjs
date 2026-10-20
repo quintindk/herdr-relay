@@ -7,6 +7,7 @@ import { createOperatorTask } from './operations.mjs';
 import { resultPolicy } from './task-policy.mjs';
 import { finishTaskReference, reserveTaskReference, taskReferences, validateTaskReference } from './task-references.mjs';
 import { concurrentResultConflict } from './store.mjs';
+import { stoppedRuntime } from './runtimes.mjs';
 
 const publicFields = ['id', 'companyId', 'identifier', 'title', 'description', 'parentId', 'projectId',
   'assigneeUserId', 'assigneeAgentId', 'responsibleUserId', 'status', 'priority', 'updatedAt',
@@ -445,9 +446,66 @@ export async function humanTask(store, api, input, { check = () => {}, authority
 
   if (action === 'recover' && input.payload === undefined) {
     const runs = runsFor(taskId), conflicted = runs.filter(concurrentResultConflict);
-    if (conflicted.length || operation?.strategy === 'published_result_conflict') {
+    if (conflicted.length || ['published_result_conflict', 'published_result_hold'].includes(operation?.strategy)) {
       const run = conflicted[0] ?? store.run(operation.relayRunId);
       let snapshot = await inspect(taskId);
+      if (snapshot.task.activeRecoveryAction || operation?.strategy === 'published_result_hold') {
+        const hold = snapshot.task.activeRecoveryAction;
+        const backendId = run.backendRunId ?? run.request.runId;
+        const backend = await send('GET', `/api/heartbeat-runs/${encodeURIComponent(backendId)}`);
+        requireValue(backend.id === backendId && backend.companyId === companyId && backend.agentId === run.request.agentId &&
+          (backend.contextSnapshot?.taskId ?? backend.contextSnapshot?.issueId) === taskId &&
+          ['failed', 'cancelled', 'timed_out', 'interrupted'].includes(backend.status) &&
+          snapshot.task.assigneeAgentId === run.request.agentId && !snapshot.task.assigneeUserId &&
+          !snapshot.task.executionRunId && !snapshot.task.checkoutRunId && !snapshot.task.executionBlocker &&
+          !snapshot.task.executionState && !snapshot.task.reviewPolicy && !dependencyIds(snapshot.task).length &&
+          !snapshot.interactions.some(item => item.status === 'pending') && resultPolicy(store, run, run.result) === 'none' &&
+          snapshot.local.decisions.every(item => item.state === 'recorded' || item.state === 'skipped') &&
+          runs.find(item => item.result)?.id === run.id &&
+          !runs.some(item => item.id !== run.id && item.nativeState !== 'settled'),
+        'recovery_not_authorised', 'Published-result recovery hold identity does not match', 409);
+        if (!operation) {
+          requireValue(snapshot.revision === input.expectedRevision && conflicted.length === 1 &&
+            hold.companyId === companyId && hold.sourceIssueId === taskId && hold.status === 'active' &&
+            hold.kind === 'stranded_assigned_issue' && hold.cause === 'stranded_assigned_issue' &&
+            hold.ownerType === 'board' && hold.returnOwnerAgentId === run.request.agentId &&
+            hold.evidence?.latestRunId === backendId && snapshot.task.status === 'blocked',
+          'recovery_not_authorised', 'Only the exact stranded published result can resolve this hold', 409);
+          const binding = store.binding(run.request.bindingId);
+          requireValue(binding.config.delivery === 'opencode' && binding.config.agentId === run.request.agentId &&
+            binding.config.companyId === companyId && binding.config.conversationId === run.conversationId,
+          'recovery_not_authorised', 'Recovery requires the original managed runtime', 409);
+          stoppedRuntime(store, binding.config.opencode?.runtimeKey);
+          const current = await inspect(taskId);
+          requireValue(current.revision === snapshot.revision && concurrentResultConflict(store.run(run.id)),
+            'stale_revision', 'Task changed before recovery', 409);
+          check(); fence(taskId);
+          operation = store.saveOperation({ id, runId: '', request, state: 'uncertain', strategy: 'published_result_hold',
+            relayRunId: run.id, candidate: run.result.candidate, recoveryActionId: hold.id,
+            expected: { id: taskId, companyId, assigneeAgentId: run.request.agentId, assigneeUserId: null, status: 'done' } });
+          await send('POST', `/api/issues/${encodeURIComponent(taskId)}/recovery-actions/resolve`, {
+            actionId: hold.id, outcome: 'restored', sourceIssueStatus: 'done',
+            resolutionNote: `Human-authorised recovery of published candidate ${run.result.candidate}. ` +
+              `Relay run ${run.id} retained concurrent_native_input; the exact managed runtime process group was verified stopped. ` +
+              'The existing result is preserved and no sweep is replayed.',
+          });
+        }
+        snapshot = await inspect(taskId);
+        const recovery = await send('GET', `/api/issues/${encodeURIComponent(taskId)}/recovery-actions`);
+        // Paperclip exposes active actions only, not resolved action history.
+        // Reconcile the persisted exact resolution intent against task ownership,
+        // terminal status and independent absence of an active recovery hold.
+        requireValue(!recovery.active && !snapshot.task.activeRecoveryAction && matches(snapshot, operation.expected),
+        'operation_uncertain', 'Exact recovery resolution is not confirmed; no replay is authorised', 409);
+        if (concurrentResultConflict(store.run(run.id))) store.settleConcurrentResult(run.id);
+        requireValue(store.run(run.id).nativeState === 'settled' && store.run(run.id).settlement?.outcome === 'completed',
+          'operation_uncertain', 'Published result settlement is not confirmed', 409);
+        store.saveOperation({ id: `no-review-completion:${run.id}`, runId: run.id, companyId, taskId,
+          state: 'recorded', policy: 'none', candidate: run.result.candidate, status: 'done', recoveredFrom: 'published_result_hold' });
+        operation = store.saveOperation({ ...operation, state: 'recorded', receipt: snapshot.publicTask });
+        return { ...response(await inspect(taskId), operation), recovery: { strategy: operation.strategy, relayRunId: run.id,
+          candidate: run.result.candidate, settlement: store.run(run.id).settlement } };
+      }
       if (operation) {
         requireValue(operation.strategy === 'published_result_conflict' && operation.relayRunId === run.id &&
           run.nativeState === 'settled' && run.settlement?.outcome === 'completed' && operation.candidate === run.result?.candidate,

@@ -73,7 +73,7 @@ it exactly correlates to a visible task.
 | Enter | Open task or cron detail |
 | `r` | Refresh |
 | `a` | Assign the selected task to a present agent |
-| `s` | Open the status modal for a human-owned task |
+| `s` | Open task status and deletion options |
 | `A` | Confirm approval of the displayed pending candidate |
 | `F` | Enter rejection feedback for the displayed pending candidate |
 | `R` | Confirm rejection using the saved feedback |
@@ -91,6 +91,8 @@ display and terminal size changes repaint the full viewport. Polling still reads
 the complete cached Relay projection, rather than fetching individual tasks.
 Close and reopen an existing board pane to load updated display code. No Relay
 service or agent restart is needed.
+Status-bar feedback clears after two seconds and restores the shortcut legend.
+Each new message restarts that timer, including a repeated identical error.
 
 Quit restores the terminal, stops the input read started by the view and aborts
 any pending Relay refresh. A directly launched plugin pane then closes through
@@ -108,8 +110,8 @@ not full documents. Opening details lazily fetches the complete selected task an
 its final three comments without turning each board refresh into per-task reads.
 Agent presence is not task completion.
 
-The view offers guarded assignment, status changes and candidate review through Relay.
-The status modal exposes Backlog, Todo, Active, Blocked, In review, Done and
+The view offers guarded assignment, status changes, deletion and candidate review through Relay.
+For human-owned tasks, the status modal exposes Backlog, Todo, Active, Blocked, In review, Done and
 Cancelled, with an optional comment for every destination. Relay sends status,
 comment and any unblock information in one durable Paperclip update. Active,
 blocked and in-review labels are not blanket refusals; execution, pending review,
@@ -128,9 +130,12 @@ Approval and rejection require Enter confirmation. Rejection requires non-empty
 feedback, which becomes the backend rejection reason rather than an extra comment.
 Relay persists the decision intent before POST and never blindly repeats an
 uncertain decision. Stale task revisions, candidates and interactions fail closed.
-Permanent deletion is not available in the task pane. The administrative delete
-API/CLI remains available for repair and duplicate cleanup, outside ordinary status
-management.
+The modal also offers **Delete permanently** regardless of task ownership,
+including blocked agent-owned routine occurrences. Select it, press Enter to
+review the exact task identifier, then Enter again to delete. Deletion uses the
+dedicated Relay delete operation, checks the inspected revision and refuses active
+execution. The board removes the task only after confirmed deletion. It does not
+delete children or the source routine.
 Paperclip 2026.1001.0 may revalidate stale recovery actions during collection GETs;
 therefore read-only describes the Relay/view operations, not a guarantee that the
 upstream backend performs no incidental maintenance writes.

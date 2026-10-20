@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { call } from './client.mjs';
 import { tool } from '@opencode-ai/plugin';
 import { digest } from './protocol.mjs';
+import { deliverCompletionTurn } from './completion-turn.mjs';
 
 const delegationArgs = {
   key: tool.schema.string().min(1), targetBindingId: tool.schema.string().min(1),
@@ -266,6 +267,11 @@ export default async function relayBridge({ client, directory }, options = {}) {
   };
   const notify = async snap => {
     const { notifications } = await rpc('notification-list', snap, { includeReviews: true });
+    const turn = notifications.find(item => item.turnState === 'uncertain') ?? notifications.find(item => item.turnState === 'pending');
+    if (turn) {
+      await deliverCompletionTurn({ notification: turn, snapshot, rpc, client, sdkOptions,
+        conversationId: config.conversationId, unavailable: () => answering || stopped });
+    }
     const notification = notifications.find(item => item.state === 'pending');
     if (!notification) return;
     const fresh = await snapshot(false);

@@ -46,7 +46,8 @@ to disappear. Repeated successful stop is a no-op. It preserves the stored nativ
 conversation. There is no force-kill fallback or shared-server shutdown.
 
 The owner survives Relay restart. Its descriptor is reconciled on subsequent
-operations. Runtime relaunch is explicit through the verified resume command below.
+operations. Runtime relaunch normally uses the verified resume command below.
+Active managed cron targets also have scoped automatic recovery, described below.
 Herdr placement is reconciled separately through [placement commands](placement.md).
 Task-scoped acceptance invokes the controller's retirement path. See
 [lifetimes and rebinding](lifetimes-and-rebinding.md) for prerequisites.
@@ -76,3 +77,33 @@ stored conversation, verifies native idle state, advances binding revision and
 updates the matching Paperclip adapter revision. Hermes auto-continuation of an
 interrupted turn blocks this path. Identical retries reconcile the same operation.
 Both managed native smoke scripts now verify this resume path with real servers.
+
+## Scheduled runtime recovery
+
+Relay reconciles active, provisioned managed OpenCode schedule targets on its
+lifecycle tick and before occurrence admission. If the owner and native process
+group are verified gone, it resumes the exact stored conversation under a durable
+replacement key and advances the existing schedule target through verified resume
+lineage. Repeated reboots validate the whole chain back to provisioning. Recovery
+does not create a new schedule or replay missed or failed sweeps.
+
+Paused/cancelled schedules, unsettled native work, changed ownership and live or
+ambiguous process groups prevent recovery. Unknown launch outcomes retain the
+same key. `routine inspect` and `routine list` expose `runtimeHealth` with the
+recovery state, blocker and retry time. After three failed attempts Relay pauses
+the existing routine, preserving its definition and evidence, instead of admitting
+hourly failures indefinitely. Repair and explicit resume are then required.
+
+Unsettled work replaces any previous ready health with `state: blocked`, reason
+`conversation_busy` and the blocking run/task identities and native conflict reason.
+This does not count as a failed runtime recovery attempt or automatically settle
+the work. A published `concurrent_native_input` result requires the supported
+human-authorised task recovery operation before runtime recovery can proceed.
+For an exact board-owned `stranded_assigned_issue` hold, recovery additionally
+requires the matching terminal backend run, published no-review result, unchanged
+ownership, no pending interactions or dependencies and a verified stopped managed
+process group. It resolves the existing hold as Done and preserves conflict
+evidence, with read-only reconciliation after an uncertain response.
+
+Native message completion remains separately verified. Runtime health does not
+prove inbox source coverage or successful task completion.

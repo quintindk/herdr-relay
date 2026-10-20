@@ -349,8 +349,14 @@ Example human-reviewed delegation after resolving the live binding:
   and durable notification history. The creation receipt's `status` is historical, not a
   current task status. Read run, review and completion evidence separately.
 - A review-ready toast means a result awaits human decision, not that the task is
-  Done. A completion toast follows confirmed completion. Toasts do not wake a
-  model turn; the latest 50 notices are available through the tools. `announced`
+  Done. A completion toast follows confirmed completion. Direct source-bound chat
+  delegations without a parent task also deliver a result turn to the exact idle
+  origin chat. Read the attributed result and report blockers, then continue only
+  within the original request. Parent/child waits retain backend continuation.
+  Result events are not human authorisation. `turnState: delivered` proves native
+  message readback, not successful model completion. Uncertain sends reconcile
+  without automatic resend. Existing notices are not replayed as result turns.
+  The latest 50 notices are available through the tools. `announced`
   means the UI accepted a toast, not that the human read it.
 - Call `relay_reviews` to retrieve the exact pending candidates, including results
   delegated from this chat and verified worker-created descendants. Recorded

@@ -52,6 +52,53 @@ function reviewFixture(t) {
   return f;
 }
 
+test('source-bound direct delegations deliver a durable exact-message completion turn', t => {
+  const f = fixture(t);
+  f.store.saveOperation({ ...f.task, request: { ...f.task.request,
+    origin: { ...f.origin, sourceMessageId: 'human' } } });
+  const notification = f.create();
+  assert.equal(notification.turnState, 'pending');
+  assert.match(notification.turnText, /not a new human instruction/);
+  assert.equal(f.invoke('notification-turn-begin', { id: notification.id, idle: true }).dispatch, true);
+  f.restart();
+  f.bridge = f.store.saveOperation({ ...f.bridge, epoch: 'reconnected' });
+  assert.equal(f.invoke('notification-turn-begin', { id: notification.id, idle: true }).dispatch, false);
+  const message = { info: { id: notification.messageId, role: 'user', sessionID: 'session-origin' },
+    parts: [{ type: 'text', text: notification.turnText }] };
+  for (const bad of [{ ...message, info: { ...message.info, sessionID: 'other' } },
+    { ...message, parts: [{ type: 'text', text: 'changed' }] }]) {
+    assert.throws(() => f.invoke('notification-turn-observe', { id: notification.id, message: bad }), { code: 'notification_receipt_mismatch' });
+  }
+  assert.equal(f.invoke('notification-turn-observe', { id: notification.id, message }).notification.turnState, 'delivered');
+  assert.equal(isNotificationSource(f.store, f.bridge, notification.messageId), true);
+  assert.equal(f.invoke('notification-turn-begin', { id: notification.id, idle: true }).dispatch, false);
+});
+
+test('parent-linked delegations retain backend continuation without a second result turn', t => {
+  const f = fixture(t);
+  f.store.saveOperation({ ...f.task, request: { ...f.task.request, body: { parentId: 'parent' },
+    origin: { ...f.origin, sourceMessageId: 'human' } } });
+  assert.equal(f.create().turnState, undefined);
+});
+
+test('completion turns enforce idle, exact origin and one unresolved send per chat', t => {
+  const f = fixture(t);
+  f.store.saveOperation({ ...f.task, request: { ...f.task.request, origin: { ...f.origin, sourceMessageId: 'human' } } });
+  const notification = f.create();
+  for (const change of [{ conversationId: 'replacement' }, { sessionCreatedAt: 999 }, { epoch: 'stale' }]) {
+    assert.throws(() => f.invoke('notification-turn-begin', { id: notification.id, idle: true, ...change }), { code: 'bridge_identity_mismatch' });
+  }
+  assert.throws(() => f.invoke('notification-turn-begin', { id: notification.id, idle: false }), { code: 'native_busy' });
+  f.store.saveOperation({ ...notification, id: 'completion-notification:earlier', messageId: 'earlier', turnState: 'uncertain' });
+  assert.throws(() => f.invoke('notification-turn-begin', { id: notification.id, idle: true }), { code: 'notification_delivery_uncertain' });
+  assert.equal(f.store.operation(notification.id).turnState, 'pending');
+  f.store.saveOperation({ ...f.store.operation('completion-notification:earlier'), turnState: 'delivered' });
+  f.store.db.prepare('DELETE FROM operations WHERE id = ?').run(f.bridge.id);
+  f.store.dispatch({ bindingId: 'origin', bindingRevision: 1, companyId: 'company', agentId: 'origin', taskId: 'busy', runId: 'busy' });
+  f.store.saveOperation(f.bridge);
+  assert.throws(() => f.invoke('notification-turn-begin', { id: notification.id, idle: true }), { code: 'conversation_busy' });
+});
+
 function routineTask(f) {
   f.store.db.prepare('DELETE FROM operations WHERE id = ?').run(f.task.id);
   f.store.saveOperation({ id: 'routine:test', runId: '', state: 'active', created: true, request: { companyId: 'company' } });

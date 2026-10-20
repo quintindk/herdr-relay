@@ -7,6 +7,7 @@ import { reconcileNotifications } from './completion-notifications.mjs';
 import { reconcileCoordinatorNotices } from './coordinator-notices.mjs';
 import { reconcileHarnessReviews } from './harness-review-reconciliation.mjs';
 import { reconcileRoutineRetirements } from './routine-retirement.mjs';
+import { reconcileRoutineRuntimes } from './routine-runtime-recovery.mjs';
 
 export async function retireAccepted(store, caller, target, token, api) {
   const binding = store.binding(target.request.bindingId);
@@ -76,7 +77,7 @@ export async function reconcileRetirements(store, operatorApi, locks = new Map()
   }
 }
 
-export function lifecycleRunner(store, operatorApi, locks) {
+export function lifecycleRunner(store, operatorApi, locks, directory) {
   let stopped = false;
   let pending = Promise.resolve();
   let timer;
@@ -84,6 +85,7 @@ export function lifecycleRunner(store, operatorApi, locks) {
     if (stopped) return;
     timer = setTimeout(() => {
       pending = reconcileHarnessReviews(store, operatorApi, locks).then(() => reconcileCompletions(store, operatorApi, locks)).then(async () => {
+        if (directory) await reconcileRoutineRuntimes(store, directory, operatorApi, locks);
         await reconcileRoutineRetirements(store, operatorApi, locks);
         await reconcileCoordinatorNotices(store, operatorApi, locks);
         reconcileNotifications(store);

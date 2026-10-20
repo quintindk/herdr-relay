@@ -863,7 +863,13 @@ test(`discovery delegates native requests, announces UI-only results and accepts
     get: async () => ({ data: nativeSession }),
     messages: async () => { historyReads++; return { data: structuredClone(messages) }; },
     status: async () => ({ data: busy ? { conversation: { type: 'busy' } } : {} }),
-    promptAsync: async request => { normalPrompts.push(request); },
+    promptAsync: async request => {
+      normalPrompts.push(request);
+      assert.equal(store.operation(notifications().find(item => item.messageId === request.body.messageID).id).turnState, 'uncertain');
+      messages.push({ info: { id: request.body.messageID, role: 'user', sessionID: 'conversation', time: { created: Date.now() } },
+        parts: request.body.parts });
+      throw new Error('Lost completion prompt response');
+    },
     prompt: async request => { prompts.push(request); },
   }, tui: {
     showToast: async request => {
@@ -927,6 +933,10 @@ test(`discovery delegates native requests, announces UI-only results and accepts
   const historyBeforeNotifications = structuredClone(messages);
   const sessionBeforeNotifications = structuredClone(nativeSession);
   const readsBeforeNotifications = historyReads;
+  // Legacy origins retain UI-only delivery. Direct source-bound delegations use
+  // completion turns, covered by completion-turn.test.mjs.
+  store.saveOperation({ ...operation, request: { ...operation.request,
+    origin: { bindingId: configured.origin.bindingId, conversationId: 'conversation', sessionCreatedAt: 123 } } });
 
   // Seed the completed worker result and exact backend completion receipt, not a notification.
   const binding = store.binding(configured.worker.bindingId);
@@ -1145,10 +1155,28 @@ test(`discovery delegates native requests, announces UI-only results and accepts
   assert.deepEqual(JSON.parse(await tools.relay_reviews.execute({}, reviewContext)),
     { reviews: [], decisions: [{ ...decision, state: 'recorded', receipt }] });
   assert.equal(store.operation(delegated.id).request.relayReviewPolicy, 'none');
+  assert.deepEqual(messages, historyBeforeAcceptance, 'Legacy acceptance and toasts do not alter history');
+  store.saveOperation(operation);
+  const returnRun = store.dispatch({ ...run.request, runId: 'backend-return' });
+  store.acknowledge(returnRun.id);
+  store.submit(returnRun.id, { key: 'return', candidate: 'return-candidate', summary: 'Direct delegation finished' });
+  store.publication(returnRun.id, { state: 'recorded' });
+  store.settle(returnRun.id, { outcome: 'completed', evidence: 'Finished' });
+  store.saveOperation({ id: `no-review-completion:${returnRun.id}`, runId: returnRun.id,
+    state: 'recorded', status: 'done', candidate: 'return-candidate' });
+  await until(() => notifications().some(item => item.runId === returnRun.id && item.turnState === 'delivered'),
+    'Direct delegation did not reconcile its result turn after a lost native response');
+  assert.equal(normalPrompts.length, 1);
+  assert.deepEqual(normalPrompts[0].path, { id: 'conversation' });
+  assert.equal(normalPrompts[0].body.agent, 'build');
+  assert.deepEqual(normalPrompts[0].body.model, { providerID: 'litellm', modelID: 'fixture-model' });
+  assert.match(normalPrompts[0].body.parts[0].text, /Direct delegation finished/);
+  const returnedMessage = messages.at(-1);
+  await assert.rejects(tools.relay_delegate.execute({ ...args, key: 'result-is-not-authority' },
+    { ...context, messageID: returnedMessage.info.id }), { code: 'invalid_delegation_source' });
   await hooks.dispose();
   assert.deepEqual(prompts, [], 'Notifications and reviews must never call the native prompt endpoint, even with noReply');
-  assert.deepEqual(normalPrompts, [], 'Notifications and reviews must never start a promptAsync model turn');
-  assert.deepEqual(messages, historyBeforeAcceptance, 'Acceptance and completion must not alter native conversation history');
+  assert.equal(normalPrompts.length, 1, 'Completion reconciliation must not resend a lost prompt');
   assert.deepEqual(nativeSession, sessionBeforeNotifications, 'Notifications and reviews must not alter the native model, variant or agent');
 });
 }

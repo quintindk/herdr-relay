@@ -23,6 +23,7 @@ import { bindPlacement, reconcilePlacement } from './placement.mjs';
 import { recoverBackend } from './backend-recovery.mjs';
 import { serviceLock } from './service-lock.mjs';
 import { resumeRuntime } from './resume.mjs';
+import { reconcileRoutineRuntimes } from './routine-runtime-recovery.mjs';
 import { provisionCompany } from './companies.mjs';
 import { herdrConfig, observedAgents, watchHerdrAgents } from './herdr-agents.mjs';
 import { prepareObservedPull, releaseObservedPull } from './observed-delivery.mjs';
@@ -137,7 +138,8 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           '/bridge/agents', '/bridge/delegate', '/bridge/delegation-status', '/bridge/tasks', '/bridge/task-inspect', '/bridge/task-create', '/bridge/task-edit', '/bridge/task-assign', '/bridge/task-status', '/bridge/task-complete',
           '/bridge/task-list', '/bridge/task-children', '/bridge/task-comments', '/bridge/task-activity', '/bridge/task-reference-lookup', '/bridge/task-reference-attach', '/bridge/task-comment', '/bridge/task-reopen', '/bridge/task-cancel', '/bridge/task-recover', '/bridge/task-delete',
           '/bridge/enrolment-candidates', '/bridge/enrol-agent', '/bridge/workers', '/bridge/prepare-worker', '/bridge/grant-review', '/bridge/revoke-review',
-          '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe'].includes(path),
+          '/bridge/notification-list', '/bridge/notification-history', '/bridge/notification-begin', '/bridge/notification-observe',
+          '/bridge/notification-turn-begin', '/bridge/notification-turn-observe'].includes(path),
           'forbidden', 'Bridge credential cannot access worker or operator routes', 403);
         const action = path.split('/').at(-1);
         let result;
@@ -466,7 +468,8 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
       }
       else if (req.method === 'POST' && path === '/runs') {
         adminOnly();
-        result = await admitRoutineExecution(store, operatorApi, input, routineOptions) ?? store.dispatch(input);
+        result = await admitRoutineExecution(store, operatorApi, input, { ...routineOptions,
+          recoverManaged: () => reconcileRoutineRuntimes(store, directory, operatorApi, publications) }) ?? store.dispatch(input);
       }
       else {
         const match = path.match(/^\/runs\/([^/]+)(?:\/(acknowledge|submit|settle|cancel|publish|task|attach|recover|ask|interactions|publish-question|mutate|tasks|reference-lookup|diagnostics|review|retire|progress|reviewer-check|disposition|wait-child|wait-children|child))?$/);
@@ -642,7 +645,7 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
   } catch (error) { store.close(); throw error; }
   const supervisor = supervise({ store, directory, socketPath, ready: id => runTokens.has(id) });
   const scheduler = scheduleRunner(store, operatorApi);
-  const lifecycle = backendContextFile ? lifecycleRunner(store, operatorApi, publications) : null;
+  const lifecycle = backendContextFile ? lifecycleRunner(store, operatorApi, publications, directory) : null;
   const observer = observationConfig ? watchHerdrAgents(store, operatorApi, observationConfig, {
     afterReconcile: async current => {
       const directories = await bridgeEnrolmentDirectories(store, observationConfig);

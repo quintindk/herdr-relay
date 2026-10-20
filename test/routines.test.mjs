@@ -9,6 +9,7 @@ import { Store } from '../src/store.mjs';
 import { digest } from '../src/protocol.mjs';
 import { manageRoutine, routineRecords, routineTargetAdmission, scheduleTargets } from '../src/routines.mjs';
 import { harnessRoutine } from '../src/harness-routines.mjs';
+import { reconcileRoutineRuntimes } from '../src/routine-runtime-recovery.mjs';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'relay-routines-'));
@@ -131,6 +132,110 @@ function managedFixture(t) {
   f.options = { verifyRuntime: f.verifyRuntime, nativeSnapshot: async () => ({ idle: true }) };
   return f;
 }
+
+test('active managed schedules recover a dead runtime once, preserve the chat and survive another reboot', async t => {
+  const f = managedFixture(t);
+  await f.create({ enabled: true }, f.options);
+  let alive = false, launches = 0;
+  const deps = {
+    verify: (store, key) => { if (!alive) throw Object.assign(new Error('Dead'), { code: 'runtime_identity_mismatch' }); return store.operation(`runtime:${key}`); },
+    stopped: () => {},
+    resume: async (store, directory, api, input) => {
+      launches++;
+      const before = store.binding(input.bindingId);
+      const runtime = store.saveOperation({ id: `runtime:${input.runtimeKey}`, runId: '', state: 'ready', nonce: `nonce-${launches}`,
+        request: { directory: '/work/headless' }, port: 4321 + launches, directory: `/runtime/${launches}` });
+      const nativeConfig = { ...before.config.opencode, runtimeKey: input.runtimeKey, url: `http://127.0.0.1:${runtime.port}`,
+        authFile: `${runtime.directory}/auth.json` };
+      const binding = store.rebind(before.id, { revision: before.revision, harness: 'opencode', conversationId: before.config.conversationId,
+        instanceId: runtime.nonce, opencode: nativeConfig }, { managedContinuation: true });
+      store.saveOperation({ id: `resume:${input.key}`, runId: '', state: 'recorded', request: input, revision: binding.revision,
+        previousRuntime: before.config.opencode.runtimeKey, previousConfig: before.config, nativeConfig, conversationId: before.config.conversationId });
+      f.agent.adapterConfig.bindingRevision = binding.revision;
+      alive = true;
+    },
+    manage: (store, api, input) => manageRoutine(store, api, input, { ...f.options, verifyRuntime: deps.verify }),
+  };
+  for (let reboot = 0; reboot < 2; reboot++) {
+    alive = false;
+    await Promise.all([reconcileRoutineRuntimes(f.store, '/state', f.api, f.locks ??= new Map(), deps),
+      reconcileRoutineRuntimes(f.store, '/state', f.api, f.locks, deps)]);
+    assert.equal(launches, reboot + 1);
+    const schedule = routineRecords(f.store)[0];
+    assert.equal(schedule.target.conversationId, 'managed-chat');
+    assert.equal(schedule.target.bindingRevision, reboot + 2);
+    assert.equal(schedule.runtimeHealth.state, 'ready');
+    await reconcileRoutineRuntimes(f.store, '/state', f.api, f.locks, deps);
+    assert.equal(launches, reboot + 1);
+  }
+  assert.equal(f.runs.length, 0, 'Recovery never executes or replays a sweep');
+});
+
+for (const reason of ['paused', 'cancelled', 'unsettled', 'still alive', 'invalid provision']) test(`managed recovery refuses ${reason}`, async t => {
+  const f = managedFixture(t);
+  const schedule = await f.create({ enabled: true }, f.options);
+  if (['paused', 'cancelled'].includes(reason)) {
+    const record = f.store.operation(schedule.scheduleId);
+    f.store.saveOperation({ ...record, state: reason, cancellationRequested: reason === 'cancelled' });
+  }
+  if (reason === 'unsettled') f.store.dispatch({ bindingId: f.binding.id, bindingRevision: 1, companyId: f.companyId,
+    agentId: f.agentId, runId: 'active', taskId: 'active' });
+  if (reason === 'invalid provision') f.store.saveOperation({ ...f.store.operation('provision:managed'), marker: '' });
+  let checks = 0;
+  const deps = { verify: () => { checks++; throw new Error('Dead'); },
+    stopped: () => { throw Object.assign(new Error('Process still exists'), { code: 'runtime_still_alive' }); },
+    resume: () => assert.fail('Must not launch a replacement') };
+  await reconcileRoutineRuntimes(f.store, '/state', f.api, new Map(), deps);
+  if (['paused', 'cancelled', 'unsettled'].includes(reason)) assert.equal(checks, 0);
+  else {
+    const health = routineRecords(f.store)[0].runtimeHealth;
+    assert.equal(health.state, 'unavailable');
+    assert.equal(health.reason, reason === 'still alive' ? 'runtime_still_alive' : 'routine_managed_identity_mismatch');
+    const before = checks;
+    await reconcileRoutineRuntimes(f.store, '/state', f.api, new Map(), deps);
+    assert.equal(checks, before, 'Failure backs off rather than launching repeatedly');
+  }
+});
+
+test('repeated runtime recovery failures pause the existing timer with an explicit blocker', async t => {
+  const f = managedFixture(t);
+  const schedule = await f.create({ enabled: true }, f.options);
+  const deps = { verify: () => { throw new Error('Unavailable'); },
+    stopped: () => { throw Object.assign(new Error('Unsafe to resume'), { code: 'runtime_still_alive' }); },
+    manage: (store, api, input) => manageRoutine(store, api, input, f.options) };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const health = f.store.operation(`routine-runtime-health:${schedule.scheduleId}`);
+    if (health) f.store.saveOperation({ ...health, retryAt: new Date(0).toISOString() });
+    await reconcileRoutineRuntimes(f.store, '/state', f.api, new Map(), deps);
+  }
+  const result = await f.manage('inspect');
+  assert.equal(result.state, 'paused');
+  assert.equal(result.runtimeHealth.schedulingPaused, true);
+  assert.equal(result.runtimeHealth.reason, 'runtime_still_alive');
+  assert.equal(f.routines[0].status, 'paused');
+  assert.equal(f.runs.length, 0);
+});
+
+test('unsettled published conflict replaces stale ready health without attempting runtime recovery', async t => {
+  const f = managedFixture(t);
+  const schedule = await f.create({ enabled: true }, f.options);
+  const statusId = `routine-runtime-health:${schedule.scheduleId}`;
+  f.store.saveOperation({ id: statusId, runId: '', state: 'ready', bindingId: f.binding.id });
+  const run = f.store.dispatch({ bindingId: f.binding.id, bindingRevision: 1, companyId: f.companyId,
+    agentId: f.agentId, runId: 'conflicted', taskId: 'published-task' });
+  f.store.nativeStatus(run.id, { state: 'conflict', reason: 'concurrent_native_input' });
+  const deps = { verify: () => assert.fail('Unsettled work must prevent runtime checks'),
+    resume: () => assert.fail('Unsettled work must prevent resume'),
+    manage: () => assert.fail('Unsettled work must not pause or resume scheduling') };
+  for (let tick = 0; tick < 4; tick++) await reconcileRoutineRuntimes(f.store, '/state', f.api, new Map(), deps);
+  const health = routineRecords(f.store)[0].runtimeHealth;
+  assert.equal(health.state, 'blocked');
+  assert.equal(health.reason, 'conversation_busy');
+  assert.deepEqual(health.blockingRuns, [{ runId: run.id, taskId: 'published-task', nativeState: run.nativeState,
+    reason: 'concurrent_native_input' }]);
+  assert.equal(health.failures, undefined);
+  assert.equal(routineRecords(f.store)[0].state, 'active');
+});
 
 test('create provisions paused routine and disabled trigger with a public safe projection', async t => {
   const f = fixture(t);

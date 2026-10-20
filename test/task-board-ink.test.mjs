@@ -11,6 +11,73 @@ const board = { companies: [{ id: 'company', name: 'Acme' }], agents: [], projec
   tasks: [{ id: 'task', companyId: 'company', identifier: 'DEF-1', title: 'Review costs', status: 'todo', priority: 'medium',
     assigneeUserId: 'local-board', assigneeAgentId: null, parentId: null, projectId: null }] };
 
+test('Ink board permanently deletes a blocked agent-owned occurrence after explicit confirmation', async t => {
+  const task = { ...board.tasks[0], status: 'blocked', assigneeUserId: null, assigneeAgentId: 'sweep-agent' };
+  const sibling = { ...task, id: 'sibling', identifier: 'DEF-2', title: 'Another sweep' };
+  const writes = []; let deleted = false;
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, tasks: deleted ? [sibling] : [task, sibling] }),
+    inspectTask: async input => ({ task: input.taskId === task.id ? task : sibling, interactions: [], revision: 'delete-revision' }),
+    statusTask: async () => assert.fail('Deletion must not use human status mutation'),
+    deleteTask: async input => { writes.push(input); deleted = true; return { state: 'recorded', deleted: true,
+      outcome: { confirmed: true, deleted: true }, task }; }, interval: 60000, width: 100, height: 26 }));
+  t.after(() => instance.unmount());
+  await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('s'); await tick();
+  let frame = stripVTControlCharacters(instance.lastFrame());
+  assert.match(frame, /Delete permanently/); assert.doesNotMatch(frame, /● Todo|○ Todo/);
+  instance.stdin.write('\r'); await tick();
+  assert.equal(writes.length, 0);
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /Confirm permanent deletion of DEF-1/);
+  instance.stdin.write('\r'); await tick();
+  assert.equal(writes.length, 1); assert.equal(writes[0].taskId, 'task');
+  assert.equal(writes[0].companyId, 'company'); assert.equal(writes[0].expectedRevision, 'delete-revision');
+  assert.ok(writes[0].key);
+  frame = stripVTControlCharacters(instance.lastFrame());
+  assert.match(frame, /Deleted DEF-1/); assert.match(frame, /DEF-2/); assert.match(frame, /TASKS · 1/);
+});
+
+test('Ink board reports refused deletion without removing the task', async t => {
+  const task = { ...board.tasks[0], status: 'blocked', assigneeUserId: null, assigneeAgentId: 'agent' };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, tasks: [task] }),
+    inspectTask: async () => ({ task, revision: 'revision', interactions: [] }),
+    deleteTask: async () => { throw Error('Stop active execution before deleting its task'); },
+    interval: 60000, width: 100, height: 26 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('j'); await tick();
+  instance.stdin.write('s'); await tick(); instance.stdin.write('\r'); await tick(); instance.stdin.write('\r'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /Stop active execution before deleting its task/);
+  instance.stdin.write('\u001b'); await tick(); instance.stdin.write('\u001b'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /TASKS · 1/);
+});
+
+test('Ink human-owned task picker retains status changes alongside deletion', async t => {
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => board,
+    inspectTask: async () => ({ task: board.tasks[0], revision: 'status-revision', interactions: [] }),
+    statusTask: async input => { writes.push(input); return { state: 'recorded', outcome: { confirmed: true },
+      task: { ...board.tasks[0], status: input.payload.status } }; },
+    deleteTask: async () => assert.fail('Status change must not delete'), interval: 60000, width: 100, height: 26 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('s'); await tick();
+  let frame = stripVTControlCharacters(instance.lastFrame());
+  assert.match(frame, /● Todo/); assert.match(frame, /Delete permanently/);
+  instance.stdin.write('j'); await tick(); instance.stdin.write('\r'); await tick(); instance.stdin.write('\r'); await tick();
+  assert.equal(writes.length, 1); assert.deepEqual(writes[0].payload, { status: 'in_progress' });
+  frame = stripVTControlCharacters(instance.lastFrame()); assert.match(frame, /Changed DEF-1 to Active/);
+});
+
+test('Ink status notice resets to the default legend two seconds after the latest identical error', async t => {
+  const instance = render(h(TaskBoardInkApp, { read: async () => board,
+    inspectTask: async () => { throw Error('Backend unavailable'); }, interval: 60000, width: 100, height: 26 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('j'); await tick();
+  instance.stdin.write('s'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /Status unavailable: Backend unavailable/);
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  instance.stdin.write('s'); await tick();
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /Status unavailable: Backend unavailable/);
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  assert.doesNotMatch(frame, /Status unavailable/); assert.match(frame, /s status · q quit/);
+});
+
 test('Ink status modal overlays a dimmed board with highlighted selection and visible text cursor', async t => {
   const instance = render(h(TaskBoardInkApp, { read: async () => board,
     inspectTask: async () => ({ task: { ...board.tasks[0], blockedBy: [], blockedByIssueIds: [], unblockDescriptor: null }, interactions: [], revision: 'revision' }),

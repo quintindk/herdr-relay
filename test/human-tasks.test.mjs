@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
@@ -76,6 +76,65 @@ function fixture(t, file = ':memory:') {
 const externalReference = { namespace: 'crm', externalId: 'CASE-1', url: 'https://example.com/cases/1' };
 const referenceCreate = { action: 'create', companyId: 'company', key: 'create-reference',
   externalReference, payload: { title: 'Follow-up' } };
+
+for (const variant of ['success', 'lost reply', 'wrong run', 'live runtime', 'pending review']) {
+  test(`published-result stranded hold recovery: ${variant}`, async t => {
+    const f = fixture(t), directory = mkdtempSync(join(tmpdir(), 'relay-hold-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    writeFileSync(join(directory, 'runtime.json'), JSON.stringify({ nonce: 'nonce', state: 'running',
+      ownerPid: variant === 'live runtime' ? process.pid : 2147483646, ownerStart: 'gone',
+      childPid: 2147483645, childStart: 'gone' }));
+    if (variant === 'live runtime') {
+      // Matching the process group is not required: a matching owner identity alone fences recovery.
+      const { readFileSync } = await import('node:fs');
+      const start = readFileSync(`/proc/${process.pid}/stat`, 'utf8').split(') ')[1].split(' ')[19];
+      writeFileSync(join(directory, 'runtime.json'), JSON.stringify({ nonce: 'nonce', ownerPid: process.pid,
+        ownerStart: start, childPid: 2147483645, childStart: 'gone' }));
+    }
+    f.store.saveOperation({ id: 'runtime:owned', runId: '', directory, nonce: 'nonce', state: 'ready' });
+    f.store.register({ id: 'binding', companyId: 'company', agentId: 'router', harness: 'opencode', delivery: 'opencode',
+      instanceId: 'i', conversationId: 'c', opencode: { url: 'http://127.0.0.1:1234', directory: '/work',
+        projectID: 'project', sessionCreatedAt: 123, exclusive: true, runtimeKey: 'owned' } });
+    let run = f.store.dispatch({ bindingId: 'binding', bindingRevision: 1, companyId: 'company', agentId: 'router', taskId: 'task', runId: 'backend' });
+    f.store.acknowledge(run.id);
+    f.store.submit(run.id, { key: 'candidate', candidate: 'candidate', summary: 'Published work' });
+    f.store.publication(run.id, { state: 'recorded', commentId: 'comment' });
+    run = f.store.save({ ...f.store.run(run.id), invocation: { messageId: 'native' },
+      native: { state: 'conflict', reason: 'concurrent_native_input' } }, 'fixture');
+    f.store.saveOperation({ id: `routine-task:${digest(['company', 'task'])}`, runId: '', state: 'recorded',
+      request: { companyId: 'company', relayReviewPolicy: 'none' }, receipt: { id: 'task', companyId: 'company' } });
+    const hold = { id: 'hold', companyId: 'company', sourceIssueId: 'task', status: 'active', kind: 'stranded_assigned_issue',
+      cause: 'stranded_assigned_issue', ownerType: 'board', returnOwnerAgentId: 'router',
+      evidence: { latestRunId: variant === 'wrong run' ? 'other' : 'backend' } };
+    Object.assign(f.state.task, { status: 'blocked', assigneeAgentId: 'router', assigneeUserId: null, activeRecoveryAction: hold });
+    if (variant === 'pending review') f.state.interactions.push({ status: 'pending' });
+    let posts = 0;
+    const api = async (method, path, body) => {
+      if (path === '/api/heartbeat-runs/backend') return { id: 'backend', companyId: 'company', agentId: 'router',
+        status: 'failed', contextSnapshot: { taskId: 'task' } };
+      if (path === '/api/issues/task/recovery-actions/resolve') {
+        posts++; assert.equal(body.sourceIssueStatus, 'done'); assert.equal(body.actionId, 'hold');
+        f.state.task.activeRecoveryAction = null; f.state.task.status = 'done';
+        if (variant === 'lost reply') throw new Error('Lost reply');
+        return {};
+      }
+      if (path === '/api/issues/task/recovery-actions') return { active: null, actions: [] };
+      return f.api(method, path, body);
+    };
+    const input = { ...await f.input('recover'), reason: 'Recover published work' };
+    if (['wrong run', 'live runtime', 'pending review'].includes(variant)) {
+      await assert.rejects(humanTask(f.store, api, input));
+      assert.equal(posts, 0); assert.equal(f.store.run(run.id).nativeState, 'claimed'); return;
+    }
+    if (variant === 'lost reply') await assert.rejects(humanTask(f.store, api, input), /Lost reply/);
+    const result = await humanTask(f.store, api, input);
+    assert.equal(result.task.status, 'done'); assert.equal(result.outcome.confirmed, true);
+    assert.equal(f.store.run(run.id).nativeState, 'settled');
+    assert.equal(f.store.run(run.id).native.reason, 'concurrent_native_input');
+    assert.equal((await humanTask(f.store, api, input)).state, 'recorded');
+    assert.equal(posts, 1);
+  });
+}
 
 function cancelledRoutineResult(f) {
   f.state.task.status = 'blocked'; f.state.task.assigneeUserId = null; f.state.task.assigneeAgentId = 'router';

@@ -178,6 +178,7 @@ export async function main(args) {
       reviewTask: (input, signal) => call(connection, 'POST', '/task-board/review', input, { signal }),
       assignTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'assign' }, { signal }),
       statusTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'status' }, { signal }),
+      deleteTask: (input, signal) => call(connection, 'POST', '/tasks/manage', { ...input, action: 'delete' }, { signal }),
     };
     if (values.watch) {
       requireValue(process.stdin.isTTY && process.stdout.isTTY, 'tty_required',

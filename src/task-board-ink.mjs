@@ -6,7 +6,7 @@ import { buildBoardRows } from './task-board-view.mjs';
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
 const labels = { backlog: 'Backlog', todo: 'Todo', in_progress: 'Active', blocked: 'Blocked',
-  in_review: 'In review', done: 'Done', cancelled: 'Cancelled' };
+  in_review: 'In review', done: 'Done', cancelled: 'Cancelled', delete: 'Delete permanently' };
 const terminal = status => ['done', 'cancelled'].includes(status);
 const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').trim();
 const taskCounts = tasks => ({ open: tasks.filter(task => !terminal(task.status)).length,
@@ -20,8 +20,8 @@ export const taskRowStyle = (task, overlay = false, context = false) => ({
 });
 
 function StatusModal({ modal, setModal, submit, width, height }) {
-  const status = statuses[modal.index];
-  const fields = ['status', ...(status === 'blocked' && modal.needsDescriptor ? ['owner', 'action'] : []), 'comment'];
+  const status = modal.options[modal.index];
+  const fields = ['status', ...(status === 'blocked' && modal.needsDescriptor ? ['owner', 'action'] : []), ...(status === 'delete' ? [] : ['comment'])];
   const modalWidth = Math.max(44, Math.min(72, width - 4));
   const contentWidth = Math.max(1, modalWidth - 8);
   const commentBoxHeight = Math.min(6, Math.max(3, height - (status === 'blocked' && modal.needsDescriptor ? 19 : 17)));
@@ -47,7 +47,7 @@ function StatusModal({ modal, setModal, submit, width, height }) {
     if (key.tab) { setModal(value => ({ ...value, field: fields[(fields.indexOf(value.field) + 1) % fields.length] })); return; }
     if (modal.field === 'status' && (key.upArrow || key.downArrow || input === 'j' || input === 'k')) {
       const delta = key.downArrow || input === 'j' ? 1 : -1;
-      setModal(value => ({ ...value, index: Math.max(0, Math.min(statuses.length - 1, value.index + delta)) })); return;
+      setModal(value => ({ ...value, index: Math.max(0, Math.min(modal.options.length - 1, value.index + delta)) })); return;
     }
     if (modal.field === 'owner' && (key.upArrow || key.downArrow || input === 'j' || input === 'k' || input === ' ')) {
       setModal(value => ({ ...value, owner: value.owner === 'board' ? 'me' : 'board' })); return;
@@ -66,28 +66,31 @@ function StatusModal({ modal, setModal, submit, width, height }) {
       if (next !== modal[field]) setModal(value => ({ ...value, [field]: next }));
     }
   });
-  const modalHeight = Math.min(height - 2, 15 + commentBoxHeight + (status === 'blocked' && modal.needsDescriptor ? 2 : 0));
+  const modalHeight = Math.min(height - 2, 15 + commentBoxHeight + Math.max(0, modal.options.length - statuses.length) + (status === 'blocked' && modal.needsDescriptor ? 2 : 0));
   const selected = (active, text) => h(Text, { inverse: active, color: active ? 'cyan' : undefined, bold: active }, text);
   return h(Box, { position: 'absolute', width: modalWidth, height: modalHeight,
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
     borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
   h(Text, { bold: true, color: 'cyan' }, `Change status · ${modal.task.identifier || modal.task.id}`),
   h(Box, { height: 1 }),
-  ...statuses.map((value, index) => selected(modal.field === 'status' && modal.index === index,
+  ...modal.options.map((value, index) => selected(modal.field === 'status' && modal.index === index,
     `${modal.index === index ? '●' : '○'} ${labels[value]}`)),
   h(Box, { height: 1 }),
   ...(status === 'blocked' && modal.needsDescriptor ? [
     selected(modal.field === 'owner', `Waiting on  ${modal.owner === 'board' ? 'Board' : 'Me'}`),
     selected(modal.field === 'action', `Required action  ${modal.action}${modal.field === 'action' ? '▏' : ''}`),
   ] : []),
+  status === 'delete' ? h(Text, { color: 'red' }, 'Permanently remove this task. This cannot be undone.') : h(Box, { flexDirection: 'column' },
   h(Box, { justifyContent: 'space-between' },
     h(Text, { bold: modal.field === 'comment', color: modal.field === 'comment' ? 'cyan' : undefined }, 'Comment (optional)'),
     h(Text, { dimColor: true }, `${modal.comment.length}/4000 · ${commentLines.length} line${commentLines.length === 1 ? '' : 's'}`)),
   h(Box, { height: commentBoxHeight, borderStyle: 'single', borderColor: modal.field === 'comment' ? 'cyan' : 'gray',
     paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
-  ...visibleCommentLines.map((line, index) => h(Text, { key: `${commentLines.length}:${index}`, wrap: 'truncate-end' }, line || ' '))),
-  modal.confirm ? h(Text, { bold: true, color: 'cyan' }, `Confirm ${labels[modal.task.status] ?? modal.task.status} -> ${labels[status]}`)
-    : modal.error ? h(Text, { color: 'red' }, modal.error) : h(Text, null, ' '),
+  ...visibleCommentLines.map((line, index) => h(Text, { key: `${commentLines.length}:${index}`, wrap: 'truncate-end' }, line || ' ')))),
+  modal.error ? h(Text, { color: 'red' }, modal.error)
+    : modal.confirm ? h(Text, { bold: true, color: status === 'delete' ? 'red' : 'cyan' }, status === 'delete'
+      ? `Confirm permanent deletion of ${modal.task.identifier || modal.task.id}` : `Confirm ${labels[modal.task.status] ?? modal.task.status} -> ${labels[status]}`)
+      : h(Text, null, ' '),
   h(Box, { flexGrow: 1 }),
   h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : '↑↓ select · Tab next · Enter review · Esc cancel'));
 }
@@ -265,7 +268,7 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
       h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
 }
 
-export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, reviewTask, assignTask, statusTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, reviewTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
   const [board, setBoard] = useState({ companies: [], agents: [], projects: [], tasks: [], routines: [], fetchedAt: null, warnings: [] });
@@ -274,7 +277,13 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
   const [assignment, setAssignment] = useState(null); const [reviewModal, setReviewModal] = useState(null);
   const [reviewFeedback, setReviewFeedback] = useState('');
   const [quitting, setQuitting] = useState(false);
-  const [notice, setNotice] = useState(''); const [showDone, setShowDone] = useState(false);
+  const [notice, updateNotice] = useState(null); const [showDone, setShowDone] = useState(false);
+  const setNotice = text => updateNotice(text ? { text } : null);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => updateNotice(null), 2000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const [showIdle, setShowIdle] = useState(false); const [filter, setFilter] = useState(''); const [searching, setSearching] = useState(false);
   const [collapsed, setCollapsed] = useState(() => new Set()); const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [detail, setDetail] = useState(null); const [occurrence, setOccurrence] = useState(0);
@@ -312,8 +321,18 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     return next >= 0 ? next : Math.max(0, rows.findLastIndex(row => row.type !== 'section'));
   }); }, [rows]);
   const submit = async current => {
-    const status = statuses[current.index]; setModal({ ...current, busy: true, error: '' });
+    const status = current.options[current.index]; setModal({ ...current, busy: true, error: '' });
     try {
+      if (status === 'delete') {
+        const result = await deleteTask({ companyId: current.task.companyId, taskId: current.task.id,
+          expectedRevision: current.revision, key: current.key, reason: 'Deleted from the Ink task board' });
+        if (result.state !== 'recorded' || result.deleted !== true || result.outcome?.confirmed !== true ||
+          result.task?.id !== current.task.id || result.task?.companyId !== current.task.companyId) throw Error('Deletion is not confirmed');
+        setBoard(value => ({ ...value, tasks: value.tasks.filter(task => task.id !== current.task.id || task.companyId !== current.task.companyId) }));
+        setNotice(`Deleted ${current.task.identifier || current.task.id}`); setModal(null);
+        setRefreshGeneration(value => value + 1);
+        return;
+      }
       const payload = { status, ...(current.comment.trim() ? { comment: current.comment.trim() } : {}) };
       if (status === 'blocked' && current.needsDescriptor) payload.unblockDescriptor = {
         owner: current.owner === 'board' ? 'board' : { userId: current.task.assigneeUserId }, action: current.action.trim(),
@@ -397,9 +416,12 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
       const row = rows[selectedIndex];
       if (row?.type !== 'task') { setNotice('Select a task'); return; }
       void inspectTask({ companyId: row.companyId, taskId: row.taskId }).then(snapshot => {
-        if (!snapshot.task.assigneeUserId || snapshot.task.assigneeAgentId) throw Error('Task must be human-owned');
-        if (snapshot.interactions?.some(item => item.status === 'pending')) throw Error('Resolve pending candidate or interaction first');
-        setModal({ task: snapshot.task, revision: snapshot.revision, key: randomUUID(), index: Math.max(0, statuses.indexOf(snapshot.task.status)),
+        if (snapshot.task?.id !== row.taskId || snapshot.task.companyId !== row.companyId || !snapshot.revision) throw Error('Status preview identity is not confirmed');
+        const humanOwned = snapshot.task.assigneeUserId && !snapshot.task.assigneeAgentId;
+        const pending = snapshot.interactions?.some(item => item.status === 'pending');
+        const options = [...(humanOwned && !pending ? statuses : []), ...(deleteTask ? ['delete'] : [])];
+        if (!options.length) throw Error(pending ? 'Resolve pending candidate or interaction first' : 'Task must be human-owned');
+        setModal({ task: snapshot.task, revision: snapshot.revision, key: randomUUID(), options, index: Math.max(0, options.indexOf(snapshot.task.status)),
           field: 'status', comment: '', action: snapshot.task.unblockDescriptor?.action ?? '',
           owner: snapshot.task.unblockDescriptor?.owner === 'board' ? 'board' : 'me',
           needsDescriptor: !(snapshot.task.blockedByIssueIds?.length || snapshot.task.blockedBy?.length || snapshot.task.unblockDescriptor),
@@ -459,7 +481,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
             h(Text, { inverse: active, dimColor: dimmed, color: tone }, `[${labels[row.task.status] ?? row.task.status}]`)) : null);
       })),
     searching ? h(Text, { dimColor: Boolean(modal || detail) }, `/${filter}▏  Enter apply · Esc clear`) : notice
-      ? h(Text, { dimColor: Boolean(modal || detail) }, notice)
+      ? h(Text, { dimColor: Boolean(modal || detail) }, notice.text)
       : h(Box, { flexDirection: 'column' },
         h(Text, { dimColor: Boolean(modal || detail) }, 'j/k move · Enter/Tab detail · Space/←/→ fold · / search'),
         h(Text, { dimColor: Boolean(modal || assignment || reviewModal || detail) }, 'h done · i idle · r refresh · a assign · s status · q quit')));
