@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { exportPaperclipTasks, planPaperclipImport, importPaperclipTasks } from '../src/paperclip-migration.mjs';
 import { BackendStore } from '../src/backend-store.mjs';
@@ -38,13 +38,19 @@ try {
     requireValue(values.file, 'invalid_request', 'Explicit --file export.json required');
     const bundle = JSON.parse(readFileSync(resolve(values.file), 'utf8'));
     const { ordered, ...plan } = planPaperclipImport(bundle);
-    if (action === 'plan') console.log(JSON.stringify(plan, null, 2));
+    if (action === 'plan') {
+      if (values.output) {
+        writeFileSync(resolve(values.output), `${JSON.stringify(plan, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+        console.log(JSON.stringify({ state: 'planned', file: resolve(values.output), ready: plan.ready, counts: plan.counts, digest: plan.digest }));
+      } else console.log(JSON.stringify(plan, null, 2));
+    }
     else {
       requireValue(values.owner && values['state-dir'] && values['confirm-digest'] === bundle.digest &&
         values['source-frozen'] && values['legacy-relay-settled'], 'cutover_required',
       'Import requires --owner FILE --state-dir DIR --confirm-digest DIGEST --source-frozen --legacy-relay-settled');
       const owner = JSON.parse(readFileSync(values.owner, 'utf8'));
       const directory = resolve(values['state-dir']);
+      requireValue(existsSync(join(directory, 'backend.sqlite')), 'backend_not_found', 'Import requires an existing initialised backend database');
       const unlock = serviceLock(directory);
       let store;
       try {

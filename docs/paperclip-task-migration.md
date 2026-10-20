@@ -44,13 +44,52 @@ node scripts/migrate-paperclip-tasks.mjs export \
   --output /private/paperclip-tasks.json
 
 node scripts/migrate-paperclip-tasks.mjs plan \
-  --file /private/paperclip-tasks.json
+  --file /private/paperclip-tasks.json \
+  --output /private/paperclip-migration-plan.json
 ```
 
 These commands write no backend state. The report includes counts, blockers,
 warnings, stable ID mappings and the export digest. Export reads backend-visible
 company issues and bounded comments/interactions. It is not a database snapshot.
 Take a new final export after the source is frozen for cutover.
+
+Parentage and dependencies are checked as separate graphs. A parent waiting on a
+child is valid. Cycles within either graph are refused. Empty review-attention
+containers are not pending reviews. Expired interactions remain historical records,
+not answers or accepted candidates.
+
+### Explicit disposition of source blockers
+
+The private plan includes each blocking task ID, source field/value and source-task
+digest, plus unresolved interaction IDs/states. Review these through the original
+Paperclip/Relay installation:
+
+- For `in_progress` tasks, inspect the native execution and outstanding publication.
+  Settle through its original Relay path. If there is genuinely no active execution
+  or pending result/review, explicitly return unfinished work to `todo` or `blocked`.
+  Choose `done` only from actual completion evidence.
+- For execution-recovery blockers, verify the original run/process identity and
+  use the existing recovery/cancellation path. Clearing a status label alone does
+  not settle the run. Record the disposition and evidence on the source task.
+- Resolve actual pending questions/reviews through their original interaction.
+  An expired interaction needs no invented answer.
+- Create a new export after these dispositions and rerun the plan. Keep the old
+  export unchanged as evidence. There is no `--ignore-blockers` option.
+
+### Laptop-to-home handoff
+
+The laptop can export and plan with its current OpenCode. It needs no native owner
+credential. After the final plan is ready, privately transfer the export and plan
+to the home backend host using your existing file-transfer mechanism. The path
+`/tmp/opencode/paperclip-tasks-20261020.json` is local to the laptop and is not
+automatically available on the home machine. Prefer a persistent private directory
+for the final transfer so temporary-file cleanup cannot remove the only export.
+
+Run section 3 in a terminal on the home host, or through an already authorised
+administrative session. Keep `owner.json` on that host. The laptop's `.node_token`
+cannot import or authorise a host operation. No SSH or other host access is created
+by Relay enrolment. If a home-host session is unavailable, transfer the files and
+defer import until you have one. Do not send the owner credential to a worker.
 
 ## 2. Freeze source work before final export
 

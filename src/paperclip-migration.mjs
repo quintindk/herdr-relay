@@ -9,6 +9,10 @@ const taskFields = ['id', 'companyId', 'identifier', 'title', 'description', 'st
   'executionBlocker', 'executionState', 'executionPolicy', 'reviewPolicy', 'reviewAttention', 'unblockDescriptor'];
 const pick = (row, fields) => Object.fromEntries(fields.filter(key => row[key] !== undefined).map(key => [key, row[key]]));
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\s\x00-\x1f]/.test(value);
+// Empty attention containers are projections, not pending obligations. Unknown
+// non-empty structures remain blockers until their semantics are verified.
+const hasAttention = value => value !== null && value !== undefined && value !== false && value !== '' && value !== 0 &&
+  (Array.isArray(value) ? value.length > 0 : typeof value === 'object' ? Object.keys(value).length > 0 : true);
 
 // Read-only inventory. Do not use a model/worker credential for this company-wide export.
 export async function exportPaperclipTasks(api, { sourceUrl, companyId }) {
@@ -70,12 +74,18 @@ export function planPaperclipImport(bundle) {
       comments.add(comment.id);
     }
     for (const field of ['executionRunId', 'checkoutRunId', 'executionLockedAt', 'activeRun', 'activeRecoveryAction', 'executionBlocker', 'executionState', 'reviewPolicy', 'reviewAttention']) {
-      if (task[field]) blockers.push({ taskId: task.id, field, reason: 'Resolve source execution/review obligation before migration' });
+      if (field === 'reviewAttention' ? hasAttention(task[field]) : task[field]) blockers.push({ taskId: task.id, field,
+        sourceValue: task[field], sourceTaskDigest: digest(task), reason: 'Resolve source execution/review obligation before migration' });
     }
-    if (task.status === 'in_progress' || task.status === 'in_review') blockers.push({ taskId: task.id, field: 'status', reason: 'Settle or explicitly disposition source work before migration' });
-    if (task.executionPolicy) blockers.push({ taskId: task.id, field: 'executionPolicy', reason: 'Source execution policy needs explicit migration or retirement' });
-    if (row.interactions.some(item => !['answered', 'resolved', 'accepted', 'rejected', 'cancelled', 'withdrawn', 'superseded'].includes(item.status))) {
-      blockers.push({ taskId: task.id, field: 'interactions', reason: 'Unresolved or unknown interaction state cannot become historical evidence' });
+    if (task.status === 'in_progress' || task.status === 'in_review') blockers.push({ taskId: task.id, field: 'status',
+      sourceValue: task.status, sourceTaskDigest: digest(task), reason: 'Settle or explicitly disposition source work before migration' });
+    if (task.executionPolicy) blockers.push({ taskId: task.id, field: 'executionPolicy', sourceValue: task.executionPolicy,
+      sourceTaskDigest: digest(task), reason: 'Source execution policy needs explicit migration or retirement' });
+    if (row.interactions.some(item => !['answered', 'resolved', 'accepted', 'rejected', 'cancelled', 'withdrawn', 'superseded', 'expired'].includes(item.status))) {
+      blockers.push({ taskId: task.id, field: 'interactions',
+        interactions: row.interactions.filter(item => !['answered', 'resolved', 'accepted', 'rejected', 'cancelled', 'withdrawn', 'superseded', 'expired'].includes(item.status))
+          .map(item => ({ id: item.id, kind: item.kind, status: item.status })),
+        reason: 'Unresolved or unknown interaction state cannot become historical evidence' });
     }
     if (task.assigneeAgentId) warnings.push({ taskId: task.id, field: 'assigneeAgentId', reason: 'Preserved as source metadata, not an execution assignment' });
   }
@@ -83,17 +93,24 @@ export function planPaperclipImport(bundle) {
     requireValue(map.has(link), 'incomplete_graph', 'Export must include every referenced parent/dependency');
   }
   const byId = new Map(bundle.tasks.map(row => [row.task.id, row]));
-  const visiting = new Set(), visited = new Set(), ordered = [];
-  const visit = taskId => {
-    requireValue(!visiting.has(taskId), 'invalid_graph', 'Source task graph contains a cycle');
-    if (visited.has(taskId)) return;
-    requireValue(visiting.size < 100, 'invalid_graph', 'Source graph exceeds native depth bound');
-    visiting.add(taskId);
-    const row = byId.get(taskId);
-    for (const link of [row.task.parentId, ...row.dependencies].filter(Boolean)) visit(link);
-    visiting.delete(taskId); visited.add(taskId); ordered.push(row);
+  // Parentage and dependency edges are different graphs. A parent depending on
+  // its child is valid even though combining the two creates a directed cycle.
+  const orderGraph = links => {
+    const visiting = new Set(), visited = new Set(), ordered = [];
+    const visit = taskId => {
+      requireValue(!visiting.has(taskId), 'invalid_graph', 'Source task graph contains a cycle');
+      if (visited.has(taskId)) return;
+      requireValue(visiting.size < 100, 'invalid_graph', 'Source graph exceeds native depth bound');
+      visiting.add(taskId);
+      const row = byId.get(taskId);
+      for (const link of links(row)) visit(link);
+      visiting.delete(taskId); visited.add(taskId); ordered.push(row);
+    };
+    for (const taskId of map.keys()) visit(taskId);
+    return ordered;
   };
-  for (const taskId of map.keys()) visit(taskId);
+  const ordered = orderGraph(row => row.task.parentId ? [row.task.parentId] : []);
+  orderGraph(row => row.dependencies);
   return { format: migrationFormat, digest: bundle.digest, sourceScope: scope, ready: blockers.length === 0,
     counts: { tasks: bundle.tasks.length, comments: bundle.tasks.reduce((n, row) => n + row.comments.length, 0),
       interactions: bundle.tasks.reduce((n, row) => n + row.interactions.length, 0) },
@@ -118,7 +135,7 @@ export function importPaperclipTasks(store, actor, bundle) {
       requireValue(!store.get('task', taskId, false), 'migration_conflict', 'Native task identity already exists');
       let task = store.command(actor, { key: `import:${taskId}`, action: 'task.create', payload: {
         id: taskId, title: source.title, description: source.description ?? '', status: source.status, priority: source.priority,
-        parentId: source.parentId ? plan.mappings[source.parentId] : null, dependencies: row.dependencies.map(id => plan.mappings[id]),
+        parentId: source.parentId ? plan.mappings[source.parentId] : null, dependencies: [],
         // Provider labels need not satisfy native label-ID syntax. Preserve them losslessly in source metadata.
         labels: [], externalReference: { namespace: `paperclip:${plan.sourceScope}`, externalId: source.id },
       } });
@@ -139,6 +156,15 @@ export function importPaperclipTasks(store, actor, bundle) {
         requireValue(!store.get('comment', imported.id, false), 'migration_conflict', 'Source comment identity already exists');
         store.save('comment', imported); store.event('comment.imported', imported, actor, key);
       }
+    }
+    // All identities now exist. Apply dependency edges without requiring a joint
+    // topological order across parentage and dependencies, within this transaction.
+    for (const row of plan.ordered) {
+      if (!row.dependencies.length) continue;
+      const task = store.get('task', plan.mappings[row.task.id]);
+      const updated = { ...task, dependencies: row.dependencies.map(id => plan.mappings[id]), revision: task.revision + 1, updatedAt: now() };
+      store.validateTask(updated);
+      store.save('task', updated); store.event('task.imported_relationships', updated, actor, key);
     }
     const receipt = { id: key, revision: 1, digest: bundle.digest, source: bundle.source, counts: plan.counts,
       mappings: plan.mappings, importedAt: now(), importedBy: actor.id, executionActivated: false,

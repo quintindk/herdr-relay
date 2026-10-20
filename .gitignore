@@ -6,3 +6,5 @@ coverage/
 .venv/
 __pycache__/
 .firecrawl/
+.env
+.envrc

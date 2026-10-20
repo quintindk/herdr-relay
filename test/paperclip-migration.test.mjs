@@ -90,3 +90,43 @@ test('migration cannot use a node credential and cycles never reach native write
   assert.throws(() => planPaperclipImport(cyclic), { code: 'invalid_graph' });
   assert.equal(store.all('task').length, 0);
 });
+
+test('parent waiting on child imports both graphs without a false combined cycle', t => {
+  const store = new BackendStore(':memory:');
+  t.after(() => store.close());
+  const owner = store.authenticate(store.bootstrap().token);
+  const input = bundle();
+  input.tasks[0].dependencies = [];
+  input.tasks[1].task.status = 'blocked';
+  input.tasks[1].dependencies = ['child'];
+  input.digest = migrationDigest(input);
+  assert.equal(planPaperclipImport(input).ready, true);
+  const receipt = importPaperclipTasks(store, owner, input);
+  assert.deepEqual(store.get('task', receipt.mappings.parent).dependencies, [receipt.mappings.child]);
+  assert.equal(store.get('task', receipt.mappings.child).parentId, receipt.mappings.parent);
+});
+
+test('empty review attention and expired interactions are historical while real attention and active work still block', () => {
+  for (const attention of [{}, [], null, false]) {
+    const input = bundle();
+    input.tasks[0].task.reviewAttention = attention;
+    input.tasks[0].interactions[0].status = 'expired';
+    input.digest = migrationDigest(input);
+    assert.equal(planPaperclipImport(input).ready, true);
+  }
+  for (const value of [{ pending: true }, ['review'], { status: 'pending' }]) {
+    const input = bundle(); input.tasks[0].task.reviewAttention = value; input.digest = migrationDigest(input);
+    assert.equal(planPaperclipImport(input).blockers[0].field, 'reviewAttention');
+  }
+  const input = bundle(); input.tasks[0].task.status = 'in_progress'; input.tasks[0].task.executionBlocker = { reason: 'recovery' };
+  input.digest = migrationDigest(input);
+  const plan = planPaperclipImport(input);
+  assert.equal(plan.ready, false);
+  assert.ok(plan.blockers.some(item => item.field === 'status'));
+  assert.deepEqual(plan.blockers.find(item => item.field === 'executionBlocker').sourceValue, { reason: 'recovery' });
+});
+
+test('true dependency cycles are rejected independently of parentage', () => {
+  const input = bundle(); input.tasks[1].dependencies = ['child']; input.digest = migrationDigest(input);
+  assert.throws(() => planPaperclipImport(input), { code: 'invalid_graph' });
+});

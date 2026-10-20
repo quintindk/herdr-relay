@@ -300,3 +300,12 @@ complete import commits atomically under the backend service lock. No agent,
 execution or schedule is activated. Fixture tests pass. Live source inventory,
 local legacy Relay state/reference/schedule migration and actual cutover remain
 open. See [task migration](paperclip-task-migration.md).
+
+Remote migration planning exposed three validation defects, now covered by
+regressions: parent/dependency graphs were wrongly merged, empty attention objects
+were treated as pending, and expired interactions were rejected. Import now creates
+parent-ordered tasks then applies dependency edges in the same transaction. Plans
+include blocker field values/source digests and can be saved privately with
+`--output`. Active task/recovery obligations remain blocking. The laptop's private
+166-task export is not present on this host, so these fixes have fixture coverage,
+not readback of that actual inventory. Home-host transfer/import remains explicit.
