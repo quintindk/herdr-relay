@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { requireValue } from '../src/protocol.mjs';
+import { ingressCheckPassed } from '../src/backend-ingress.mjs';
 
 const { values } = parseArgs({ options: { url: { type: 'string' }, owner: { type: 'string' }, access: { type: 'string' } } });
 const origin = new URL(values.url ?? 'https://relay.synthswarm.com');
@@ -29,13 +30,14 @@ for (const [name, headers] of [
     const response = await fetch(new URL('/v1/info', origin), { headers, redirect: 'manual', signal: AbortSignal.timeout(15000) });
     const contentType = response.headers.get('content-type') ?? '';
     let protocol;
+    let relayDenied = false;
     if (contentType.includes('application/json')) {
       const body = await response.json();
       if (body.protocol === 'relay/0.2') protocol = body.protocol;
+      relayDenied = body.code === 'unauthorised' && body.message === 'Valid node or user credential required';
     } else await response.body?.cancel();
-    const passed = name === 'access_and_actor' ? response.status === 200 && protocol === 'relay/0.2' :
-      name === 'access_only' ? response.status === 401 : [301, 302, 303, 307, 308, 401, 403].includes(response.status);
-    console.log(JSON.stringify({ hostname: origin.hostname, check: name, status: response.status, protocol, passed }));
+    const passed = ingressCheckPassed(name, { status: response.status, protocol, relayDenied });
+    console.log(JSON.stringify({ hostname: origin.hostname, check: name, status: response.status, protocol, relayDenied, passed }));
     if (!passed) failed = true;
   } catch (error) {
     console.log(JSON.stringify({ hostname: origin.hostname, check: name, error: error.cause?.code ?? error.name, passed: false }));

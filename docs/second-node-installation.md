@@ -48,6 +48,31 @@ secret source, not source control or terminal command arguments. Do not print
 the file. Confirm the Cloudflare Access application enforces those credentials
 for this hostname before treating the public deployment as complete.
 
+### Portcullis shim transport
+
+When Portcullis on the remote machine provides `relay.shim:3999`, edit only the
+transport fields in that machine's private node configuration:
+
+```json
+{
+  "backend": {
+    "url": "http://relay.shim:3999",
+    "trustedHttpProxyOrigin": "http://relay.shim:3999",
+    "token": "REPLACE_WITH_ENROLLED_NODE_TOKEN"
+  }
+}
+```
+
+`trustedHttpProxyOrigin` explicitly trusts this exact HTTP origin to carry the
+node credential. Portcullis owns HTTPS forwarding and Cloudflare Access headers.
+Relay still sends its distinct scoped Bearer credential. A shim response saying
+`Valid node or user credential required` confirms connectivity only.
+
+Choose this transport before the node's first start. Existing node journals pin
+the backend URL and refuse changing it silently. Do not delete an existing journal
+to bypass that guard. Use a fresh node identity/state directory for this remote
+test if it was already initialised against another URL.
+
 ## 3. Start with no native bindings
 
 The enrolment file has `bindings: []`. This verifies backend connectivity without
