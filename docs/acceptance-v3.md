@@ -206,3 +206,25 @@ syntax/whitespace/Python syntax checks and the OpenCode 2.1.2
 backend/tool/daemon/two-TUI smoke passed. Read-only deployed-backend enrolment and
 schedule readback preserved the existing binding and paused revision 2. Evidence:
 [native CLI and schedule board](evidence/native-cli-board.json).
+
+## Existing Wright chat: actual-human operator decisions, 2026-10-21
+
+The newly enrolled existing Wright interactive conversation completed a real
+blocking-question/answer/continuation/candidate-review workflow. The worker asked
+for a human-selected label and reached local `settled_waiting` before Quintin
+selected `cobalt` through the controlling conversation's interactive question
+tool. The controller published that explicit answer through `native command`.
+The worker continued in the same native conversation with a distinct run, submitted
+the label and settled. Both task and execution remained `in_review` until Quintin
+explicitly accepted the displayed exact candidate through a second interactive
+question. Owner-authenticated `execution.review` then completed the execution and
+task. Identical answer/review retries returned their original receipts. Read-only
+local journal inspection showed the archived initial turn and one continuation.
+
+These were genuine human selections, not synthetic keyboard input, but they were
+**operator-relayed decisions**, not the source-bound v2 plugin/natural-chat path.
+The backend answer has no native-chat source proof. This closes only that bounded
+live workflow, not the full human-escalation/provenance gate. Initiating-agent
+routing, closed-origin answering, plugin confirmation, failure injection and
+resource retirement remain open. No process retirement was authorised. Evidence:
+[Wright human workflow](evidence/native-wright-human-workflow.json).

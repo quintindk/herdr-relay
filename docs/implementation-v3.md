@@ -417,3 +417,26 @@ submission without fabricated settlement, rejected privilege escalation,
 idempotent enrolment, lost credential replies and real PTY schedule detail/quit.
 The three original temporary setup/watch scripts were retired after verification.
 Evidence: [native CLI and board](evidence/native-cli-board.json).
+
+## Existing Wright chat and human review, 2026-10-21
+
+The maintained enrolment CLI reserved the exact existing Wright conversation,
+then installed its separate native Relay node with explicit CLI worker transport.
+A bounded read/submit execution completed before the human workflow. OpenCode,
+its model, plugins and permissions were not restarted or changed.
+
+The subsequent human-review execution asked one blocking question, settled its
+native turn and waited. Quintin selected `cobalt` through the controlling chat's
+interactive question tool. The controller recorded that answer with the maintained
+`native command` API and owner credential. The worker resumed the original native
+conversation with a new run, read the answer and submitted the expected candidate.
+Task and execution remained in review until Quintin explicitly accepted that exact
+candidate. Review completed the task without a manual Done transition. Identical
+answer/review retries reused receipts. Read-only journal inspection showed two
+correlated successful native turns: one initial question and one continuation.
+
+This adds actual-human **operator-relayed** answer/review evidence. It does not
+certify source-bound v2 plugin confirmations, natural-chat provenance, agent
+escalation, closed-origin recovery, crash/replay or Git/resource retirement. Those
+remain implementation/acceptance work, not inferred from this successful run.
+Evidence: [Wright human workflow](evidence/native-wright-human-workflow.json).
