@@ -124,12 +124,64 @@ test('empty review attention and expired interactions are historical while real 
   const input = bundle(); input.tasks[0].task.status = 'in_progress'; input.tasks[0].task.executionBlocker = { reason: 'recovery' };
   input.digest = migrationDigest(input);
   const plan = planPaperclipImport(input);
-  assert.equal(plan.ready, false);
-  assert.ok(plan.blockers.some(item => item.field === 'status'));
-  assert.deepEqual(plan.blockers.find(item => item.field === 'executionBlocker').sourceValue, { reason: 'recovery' });
+  assert.equal(plan.ready, true);
+  assert.equal(plan.dispositions[0].toStatus, 'todo');
+  assert.deepEqual(plan.dispositions[0].retiredExecutionFields, ['executionBlocker']);
 });
 
 test('true dependency cycles are rejected independently of parentage', () => {
   const input = bundle(); input.tasks[1].dependencies = ['child']; input.digest = migrationDigest(input);
   assert.throws(() => planPaperclipImport(input), { code: 'invalid_graph' });
+});
+
+test('explicit human-work disposition imports todo for the owner and preserves original progress as history', t => {
+  const store = new BackendStore(':memory:');
+  t.after(() => store.close());
+  const owner = store.authenticate(store.bootstrap().token), input = bundle();
+  input.tasks[0].task.status = 'in_progress';
+  input.digest = migrationDigest(input);
+  const plan = planPaperclipImport(input);
+  assert.equal(plan.ready, true);
+  assert.equal(plan.dispositions.length, 1);
+  const receipt = importPaperclipTasks(store, owner, input);
+  const task = store.get('task', receipt.mappings.child);
+  assert.equal(task.status, 'todo');
+  assert.equal(task.responsibleUserId, owner.id);
+  assert.equal(task.source.metadata.status, 'in_progress');
+  assert.equal(task.source.metadata.assigneeAgentId, 'legacy-agent');
+  assert.equal(task.migrationDisposition.authorisedBy, owner.id);
+  assert.equal(receipt.dispositionDigest, plan.dispositionDigest);
+  assert.equal(store.all('execution').length, 0);
+  assert.deepEqual(importPaperclipTasks(store, owner, input), receipt);
+});
+
+test('personal board migration archives recovery metadata but never clears active runs or pending reviews', () => {
+  const input = bundle();
+  input.tasks[0].task.status = 'in_progress';
+  input.tasks[0].task.executionBlocker = { reason: 'recovery' };
+  input.tasks[0].task.executionRunId = 'active-run';
+  input.tasks[0].interactions[0].status = 'pending';
+  input.digest = migrationDigest(input);
+  const plan = planPaperclipImport(input);
+  assert.equal(plan.ready, false);
+  assert.equal(plan.blockers.some(item => item.field === 'status'), false);
+  assert.equal(plan.blockers.some(item => item.field === 'executionBlocker'), false);
+  assert.equal(plan.blockers.some(item => item.field === 'executionRunId'), true);
+  assert.equal(plan.blockers.some(item => item.field === 'interactions'), true);
+});
+
+test('default import retains recovery evidence without creating native execution obligations', t => {
+  const store = new BackendStore(':memory:');
+  t.after(() => store.close());
+  const owner = store.authenticate(store.bootstrap().token), input = bundle();
+  input.tasks[0].task.executionBlocker = { reason: 'legacy-recovery', runId: 'historical' };
+  input.tasks[0].task.executionState = 'recovery_required';
+  input.digest = migrationDigest(input);
+  const receipt = importPaperclipTasks(store, owner, input);
+  const task = store.get('task', receipt.mappings.child);
+  assert.equal(task.responsibleUserId, owner.id);
+  assert.equal(task.executionBlocker, undefined);
+  assert.deepEqual(task.source.metadata.executionBlocker, input.tasks[0].task.executionBlocker);
+  assert.deepEqual(task.migrationDisposition.retiredExecutionFields, ['executionBlocker', 'executionState']);
+  assert.equal(store.all('execution').length, 0);
 });

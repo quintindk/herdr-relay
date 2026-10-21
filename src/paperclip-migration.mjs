@@ -62,7 +62,7 @@ export function planPaperclipImport(bundle) {
   requireValue(['http:', 'https:'].includes(source.protocol) && !source.username && !source.password &&
     source.pathname === '/' && !source.search && !source.hash, 'invalid_migration', 'Source origin must not contain credentials, paths or query parameters');
   const scope = digest([source.origin, bundle.source.companyId]);
-  const map = new Map(), blockers = [], warnings = [];
+  const map = new Map(), blockers = [], warnings = [], dispositions = [];
   for (const row of bundle.tasks) {
     const task = row.task;
     requireValue(task && id(task.id) && task.companyId === bundle.source.companyId && !map.has(task.id) &&
@@ -79,11 +79,15 @@ export function planPaperclipImport(bundle) {
       'invalid_migration', 'Invalid, duplicate or foreign source comment');
       comments.add(comment.id);
     }
-    for (const field of ['executionRunId', 'checkoutRunId', 'executionLockedAt', 'activeRun', 'activeRecoveryAction', 'executionBlocker', 'executionState', 'reviewPolicy', 'reviewAttention']) {
+    for (const field of ['executionRunId', 'checkoutRunId', 'executionLockedAt', 'activeRun', 'activeRecoveryAction', 'reviewPolicy', 'reviewAttention']) {
       if (field === 'reviewAttention' ? hasAttention(task[field]) : task[field]) blockers.push({ taskId: task.id, field,
         sourceValue: task[field], sourceTaskDigest: digest(task), reason: 'Resolve source execution/review obligation before migration' });
     }
-    if (task.status === 'in_progress' || task.status === 'in_review') blockers.push({ taskId: task.id, field: 'status',
+    const retiredFields = ['executionBlocker', 'executionState'].filter(field => task[field]);
+    if (task.status === 'in_progress' || retiredFields.length) dispositions.push({ taskId: task.id, sourceTaskDigest: digest(task),
+      fromStatus: task.status, toStatus: task.status === 'in_progress' ? 'todo' : task.status, responsibility: 'native_owner',
+      retiredExecutionFields: retiredFields, reason: 'Migrate personal board work to the native owner. Preserve legacy execution recovery as history without restarting it.' });
+    if (task.status === 'in_review') blockers.push({ taskId: task.id, field: 'status',
       sourceValue: task.status, sourceTaskDigest: digest(task), reason: 'Settle or explicitly disposition source work before migration' });
     if (task.executionPolicy) blockers.push({ taskId: task.id, field: 'executionPolicy', sourceValue: task.executionPolicy,
       sourceTaskDigest: digest(task), reason: 'Source execution policy needs explicit migration or retirement' });
@@ -120,7 +124,8 @@ export function planPaperclipImport(bundle) {
   return { format: migrationFormat, digest: bundle.digest, sourceScope: scope, ready: blockers.length === 0,
     counts: { tasks: bundle.tasks.length, comments: bundle.tasks.reduce((n, row) => n + row.comments.length, 0),
       interactions: bundle.tasks.reduce((n, row) => n + row.interactions.length, 0) },
-    blockers, warnings, mappings: Object.fromEntries(map), ordered };
+    blockers, warnings, dispositions, dispositionDigest: digest(dispositions),
+    policy: 'personal_board_v1', mappings: Object.fromEntries(map), ordered };
 }
 
 // Offline, owner-authenticated import into an exclusively locked backend. All
@@ -134,20 +139,24 @@ export function importPaperclipTasks(store, actor, bundle) {
     const previous = store.get('migration', key, false);
     if (previous) {
       requireValue(previous.digest === bundle.digest, 'migration_conflict', 'Source scope already imported with another export');
+      requireValue((previous.dispositionDigest ?? digest([])) === plan.dispositionDigest,
+        'migration_conflict', 'Source scope already imported with different dispositions');
       return previous;
     }
     for (const row of plan.ordered) {
       const source = row.task, taskId = plan.mappings[source.id];
+      const disposition = plan.dispositions.find(item => item.taskId === source.id);
       requireValue(!store.get('task', taskId, false), 'migration_conflict', 'Native task identity already exists');
       let task = store.command(actor, { key: `import:${taskId}`, action: 'task.create', payload: {
-        id: taskId, title: source.title, description: source.description ?? '', status: source.status, priority: source.priority,
+        id: taskId, title: source.title, description: source.description ?? '', status: disposition?.toStatus ?? source.status, priority: source.priority,
         parentId: source.parentId ? plan.mappings[source.parentId] : null, dependencies: [],
         // Provider labels need not satisfy native label-ID syntax. Preserve them losslessly in source metadata.
         labels: [], externalReference: { namespace: `paperclip:${plan.sourceScope}`, externalId: source.id },
       } });
       requireValue(task.id === taskId, 'migration_conflict', 'Source reference is already mapped to another native task');
       task = store.save('task', { ...task, source: { provider: 'paperclip', scope: plan.sourceScope, id: source.id,
-        metadata: source, interactions: row.interactions }, migrationDigest: bundle.digest });
+        metadata: source, interactions: row.interactions }, migrationDigest: bundle.digest,
+        ...(disposition ? { migrationDisposition: { ...disposition, authorisedBy: actor.id } } : {}) });
       store.event('task.imported', task, actor, key);
       const commentIds = new Set();
       for (const comment of row.comments) {
@@ -174,7 +183,7 @@ export function importPaperclipTasks(store, actor, bundle) {
     }
     const receipt = { id: key, revision: 1, digest: bundle.digest, source: bundle.source, counts: plan.counts,
       mappings: plan.mappings, importedAt: now(), importedBy: actor.id, executionActivated: false,
-      coverage: bundle.coverage };
+      coverage: bundle.coverage, dispositions: plan.dispositions, dispositionDigest: plan.dispositionDigest };
     store.save('migration', receipt); store.event('migration.imported', receipt, actor, key);
     return receipt;
   });

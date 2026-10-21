@@ -41,7 +41,8 @@ try {
     if (action === 'plan') {
       if (values.output) {
         writeFileSync(resolve(values.output), `${JSON.stringify(plan, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-        console.log(JSON.stringify({ state: 'planned', file: resolve(values.output), ready: plan.ready, counts: plan.counts, digest: plan.digest }));
+        console.log(JSON.stringify({ state: 'planned', file: resolve(values.output), ready: plan.ready, counts: plan.counts,
+          digest: plan.digest, dispositions: plan.dispositions.length, dispositionDigest: plan.dispositionDigest }));
       } else console.log(JSON.stringify(plan, null, 2));
     }
     else {

@@ -6,7 +6,8 @@ be upgraded to export, inspect or import task data.
 
 ## Preserved data and explicit limits
 
-- Tasks retain full title/description, status, priority and parent/dependency graph.
+- Tasks retain full title/description, priority and parent/dependency graph. Personal
+  board work marked `in_progress` imports as owner-held `todo` by default.
 - Source instance origin/company/task IDs produce stable opaque native IDs and
   immutable external references. The import receipt contains the complete mapping.
 - Comments retain full bodies and original author/timestamp metadata. Their author
@@ -21,7 +22,7 @@ be upgraded to export, inspect or import task data.
   and agent credentials are not migrated by this command. Source project IDs are
   preserved, but project records are not imported. The export declares this coverage.
 - Unresolved/unknown interactions, active runs/checkouts, execution policies,
-  review obligations and `in_progress`/`in_review` tasks block import. Resolve those
+  review obligations and `in_review` tasks block import. Resolve those
   through the existing installation first. Do not edit an export to hide them.
 
 ## 1. Read-only export and plan
@@ -66,17 +67,26 @@ The private plan includes each blocking task ID, source field/value and source-t
 digest, plus unresolved interaction IDs/states. Review these through the original
 Paperclip/Relay installation:
 
-- For `in_progress` tasks, inspect the native execution and outstanding publication.
-  Settle through its original Relay path. If there is genuinely no active execution
-  or pending result/review, explicitly return unfinished work to `todo` or `blocked`.
-  Choose `done` only from actual completion evidence.
-- For execution-recovery blockers, verify the original run/process identity and
-  use the existing recovery/cancellation path. Clearing a status label alone does
-  not settle the run. Record the disposition and evidence on the source task.
+- `in_progress` labels become `todo` automatically. Actual `executionRunId`,
+  checkout, lock, active-run or active-recovery-action fields still require their
+  original settlement path. A task status alone is not proof of a live process.
+- Legacy `executionBlocker` and `executionState` are archived in source metadata,
+  with the retirement recorded in each task's migration disposition. They do not
+  create native execution holds or restart old work.
 - Resolve actual pending questions/reviews through their original interaction.
   An expired interaction needs no invented answer.
 - Create a new export after these dispositions and rerun the plan. Keep the old
   export unchanged as evidence. There is no `--ignore-blockers` option.
+
+### Default personal-board migration
+
+The ordinary `plan` and `import` commands apply policy `personal_board_v1`.
+No extra mapping flags or second digest confirmation are needed. Every exported
+`in_progress` task becomes native `todo`, assigned to the native owner's board.
+Original status/assignee and legacy execution-recovery metadata remain unchanged
+under `source.metadata`. The report and import receipt list all dispositions and
+the import records the author on each affected task. Completed/cancelled statuses
+remain unchanged. This does not edit Paperclip or claim a source process stopped.
 
 ### Laptop-to-home handoff
 
