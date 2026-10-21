@@ -1,0 +1,80 @@
+{
+  "verifiedOn": "2026-10-21",
+  "scope": "Actual-human answer and exact candidate acceptance entirely through the native task board. Original interaction passed; the subsequently streamlined editor has automated coverage, not a second human acceptance run.",
+  "runtimeCodeCommit": "f135c36",
+  "taskId": "wright-native-board-20261021",
+  "executionId": "wright-native-board-run-20261021",
+  "workerSessionId": "ses_ea25a17a4ffeoGDK66M9ecexgj",
+  "question": {
+    "id": "question_ff04d69b5eabbf9ba2d2c96291a14d2926b6b9464b63ba37dd51c82cd24b8fe6",
+    "answer": "make it so",
+    "author": { "type": "user", "id": "owner" },
+    "at": "2026-10-21T10:41:55.859Z",
+    "source": {
+      "conversationId": "terminal:5136b165-5b00-4458-a677-eba5e37a8ebe",
+      "messageId": "dialog:human-board:bfde47f3-1f6a-4d89-bb0f-54af26fbb7d4",
+      "digest": "d2b2e1569676c9721d9f178c7d9624d0ae5365d6cdd4dd5f679a4e191c92933f"
+    }
+  },
+  "nativeTurns": [
+    {
+      "purpose": "initial blocking question",
+      "runId": "run_d8fdf1e7ed97398d02758db06a4045c7fd65c0b018bd34c4a8026068ab6cc3dc",
+      "state": "settled_waiting",
+      "terminalMessageId": "msg_15e0c484a001lpNHIJN4FulKgO",
+      "outcome": "succeeded"
+    },
+    {
+      "purpose": "continuation after direct human board answer",
+      "runId": "run_2052d760af800a8e71c117ce941d807d534d0cf6b5bdd414b6396b65cf44444b",
+      "state": "native_finished",
+      "terminalMessageId": "msg_15e0def0a002T8MI1JgRpsfZST",
+      "outcome": "succeeded"
+    }
+  ],
+  "result": {
+    "candidate": "wright-native-board-candidate-20261021",
+    "summary": "Native board answer: make it so. Terminal dialogue provenance verified. Awaiting human board review.",
+    "digest": "d29f8347068eee24266385190e7e9bfca79f0de7e64331fa9e1785e62a504295"
+  },
+  "review": {
+    "decision": "accept",
+    "candidate": "wright-native-board-candidate-20261021",
+    "reason": "okay",
+    "at": "2026-10-21T10:42:50.302Z",
+    "resultDigest": "d29f8347068eee24266385190e7e9bfca79f0de7e64331fa9e1785e62a504295",
+    "source": {
+      "conversationId": "terminal:5136b165-5b00-4458-a677-eba5e37a8ebe",
+      "messageId": "dialog:human-board:751b3f36-2605-40ac-88d0-93b93ea5e20f",
+      "digest": "bcc5c7291abfc44aafa8eb0873cbf85d414279d999d0c8df58a89dad56b76105"
+    }
+  },
+  "durableBoardDecisions": [
+    { "action": "question.answer", "key": "human-board:bfde47f3-1f6a-4d89-bb0f-54af26fbb7d4", "state": "recorded" },
+    { "action": "execution.review", "key": "human-board:751b3f36-2605-40ac-88d0-93b93ea5e20f", "state": "recorded" }
+  ],
+  "finalState": { "execution": "completed", "executionRevision": 7, "task": "done", "taskRevision": 4 },
+  "controllerPublishedHumanDecisions": false,
+  "openCodeSlashCommandsUsedForHumanDecisions": false,
+  "manualDoneTransition": false,
+  "humanFeedback": "Workflow passed but felt clunky. Simplification approved after the live run.",
+  "streamlinedInterface": {
+    "questionsOpenDirectlyInEditor": true,
+    "reviewChoiceAndReasonShareOneView": true,
+    "explicitFinalConfirmationRetained": true,
+    "returnToInboxAndPersistentAcknowledgement": true,
+    "focusedTestsPassed": 43,
+    "rootTestsPassed": 1511,
+    "rootTestsSkipped": 1,
+    "rootTestsFailed": 0,
+    "v2TestsPassed": 30,
+    "syntaxAndWhitespaceChecks": "passed",
+    "actualHumanRetest": false
+  },
+  "limitations": [
+    "One bounded actual-human board workflow, not full specification v3 certification.",
+    "Terminal-dialog provenance, not natural-chat user-message authentication.",
+    "No crash, closed-origin, physical second-machine or retirement failure was injected.",
+    "The streamlined editor was verified with fixtures and synthetic PTY input rather than a second live human decision."
+  ]
+}

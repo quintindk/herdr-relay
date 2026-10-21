@@ -121,7 +121,12 @@ export function nativeBoard(api, { decisionJournal } = {}) {
         conversationId: terminalId, messageId: `dialog:${key}`, digest: digest(payload),
       };
       await decisionJournal.submit(api, { key, action: item.action, payload }, item.instanceId);
-      return { state: 'recorded', message: item.kind === 'review' ? decision === 'accept' ? item.acceptEffect : item.rejectEffect : item.effect };
+      const message = item.kind === 'review' ? item.action === 'execution.monitor_review'
+        ? decision === 'accept' ? 'Check accepted. Monitoring can continue within its existing window.' : 'Check rejected. Monitoring is blocked.'
+        : item.action === 'occurrence.review' ? decision === 'accept' ? 'Scheduled result accepted.' : 'Scheduled result rejected. Future scheduled runs are unchanged.'
+          : decision === 'accept' ? 'Result accepted. Task completed.' : 'Changes requested. Task returned to Todo; no new turn started.'
+        : item.kind === 'reminder' ? 'Reminder acknowledged. No model turn started.' : item.effect;
+      return { state: 'recorded', message };
     },
     async detailRoutine({ scheduleId }) {
       const schedule = await api('GET', `/v1/schedules/${encodeURIComponent(scheduleId)}`);

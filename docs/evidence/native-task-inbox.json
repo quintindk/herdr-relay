@@ -1,6 +1,6 @@
 {
   "verifiedOn": "2026-10-21",
-  "scope": "First native task-board human Inbox slice. Fixture API, persistent journal, Ink and real disposable PTY verification. Actual-human live decision test of this board is pending.",
+  "scope": "First native task-board human Inbox slice. Fixture API, persistent journal, Ink and real disposable PTY verification. Subsequent actual-human workflow evidence is in native-board-live.json.",
   "entryPoint": "npm run board, node src/cli.mjs tui, or installed herdr-relay tui",
   "explicitContextEntryPoint": "node src/cli.mjs native board --context PRIVATE_OWNER_JSON",
   "views": ["Tasks", "Agents", "Inbox", "Schedule"],
@@ -69,7 +69,7 @@
   "deployedServicesRestarted": false,
   "liveMachineLabels": "Not advertised: running backend/node processes have not been restarted to use the new optional metadata",
   "limitations": [
-    "No actual-human live Inbox decision is claimed for this new native board.",
+    "Actual-human board acceptance for the original flow is recorded separately in native-board-live.json. The streamlined editor has automated coverage only.",
     "Advanced grant, transfer, adoption and local daemon recovery controls are not included in this slice.",
     "Shared backend state does not contain every local native uncertainty or admission state.",
     "Request changes does not automatically dispatch another ordinary worker turn.",

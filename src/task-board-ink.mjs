@@ -333,6 +333,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const [view, setView] = useState('tasks');
   const [selectedNativeId, setSelectedNativeId] = useState(null);
   const [decisionModal, setDecisionModal] = useState(null);
+  const [decisionReceipt, setDecisionReceipt] = useState(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
   const [assignment, setAssignment] = useState(null); const [reviewModal, setReviewModal] = useState(null);
@@ -400,7 +401,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       text: '', scroll: 0, technical: false, key: `human-board:${randomUUID()}`, error: '', busy: true });
     try {
       const fresh = await detailInbox({ id: item.id });
-      setDecisionModal(value => value?.requestId === requestId ? { ...value, item: fresh, busy: false } : value);
+      setDecisionModal(value => value?.requestId === requestId ? { ...value, item: fresh, busy: false,
+        stage: !fresh.disabled && ['question', 'review'].includes(fresh.kind) ? 'edit' : 'inspect', field: fresh.kind === 'review' ? 'decision' : 'text' } : value);
     } catch (error) {
       setDecisionModal(value => value?.requestId === requestId ? { ...value, busy: false, error: decisionText(error.message) } : value);
     }
@@ -411,7 +413,10 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       const result = await decideInbox({ item: current.item, key: current.key, body: current.text,
         decision: current.index === 0 ? 'accept' : 'reject', reason: current.text });
       if (result.state !== 'recorded') throw Error('Decision is not confirmed');
-      setDecisionModal(null); setDetail(null); setNotice(result.message || 'Decision recorded');
+      setDecisionModal(null); setDetail(null); setNotice('');
+      setDecisionReceipt({ message: result.message || 'Decision recorded', title: current.item.title, kind: current.item.kind });
+      setView('inbox'); setFilter(''); setSearching(false); setSelected(0); setSelectedNativeId(null);
+      setBoard(value => ({ ...value, inbox: (value.inbox ?? []).filter(item => item.id !== current.item.id) }));
       setRefreshGeneration(value => value + 1);
     } catch (error) {
       setDecisionModal({ ...current, busy: false, locked: true, error: decisionText(error.message || 'Publication is not confirmed. Inspect Inbox.') });
@@ -488,6 +493,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       else if (input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input)) setFilter(value => value + input);
       setSelected(0); setSelectedNativeId(null); return;
     }
+    if (key.escape && decisionReceipt) { setDecisionReceipt(null); return; }
     if (input === 'q' || key.escape) { setQuitting(true); (onQuit ?? exit)(); return; }
     if (input === 'h') { setShowDone(value => !value); return; }
     if (input === 'i') { if (native) setNotice('All enrolled agents, including stale reports, are listed in Agents'); else setShowIdle(value => !value); return; }
@@ -558,7 +564,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         .catch(error => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
     }
   });
-  const visibleHeight = Math.max(1, Math.floor((height - (native ? 8 : 6)) / (native && ['inbox', 'agents', 'schedules'].includes(view) ? 4 : 1))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
+  const visibleHeight = Math.max(1, Math.floor((height - (native ? decisionReceipt ? 9 : 8 : 6)) / (native && ['inbox', 'agents', 'schedules'].includes(view) ? 4 : 1))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
   const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
@@ -626,6 +632,10 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       })),
     searching ? h(Text, { dimColor: Boolean(modal || detail) }, `/${filter}▏  Enter apply · Esc clear`) : notice
       ? h(Text, { dimColor: Boolean(modal || detail) }, notice.text)
+      : native && decisionReceipt ? h(Box, { flexDirection: 'column', height: 3, overflow: 'hidden' },
+        h(Text, { color: 'cyan', wrap: 'truncate-end' }, `✓ ${clean(decisionReceipt.message)}`),
+        h(Text, { dimColor: true, wrap: 'truncate-end' }, decisionReceipt.kind === 'question' ? 'Any required review will appear in this Inbox.' : clean(decisionReceipt.title)),
+        h(Text, { dimColor: true, wrap: 'truncate-end' }, 'Esc dismiss acknowledgement · Tab view · Enter open · q quit'))
       : h(Box, { flexDirection: 'column' },
         h(Text, { dimColor: Boolean(modal || detail) }, native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search'),
         h(Text, { dimColor: Boolean(modal || assignment || reviewModal || detail) }, native && !assignTask

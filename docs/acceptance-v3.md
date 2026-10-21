@@ -291,7 +291,7 @@ No live work or existing pane was replaced. Evidence:
 
 Verification checkpoint: 1,501 root tests passed, one skipped, zero failed. All
 30 v2 tests, syntax/whitespace and Python syntax checks passed. The separate
-native-board actual-human decision test remains pending.
+native-board actual-human decision test was subsequently verified below.
 
 The CLI/Agents/node-machine follow-up passes 1,506 root tests, one skipped, zero
 failed, plus all 30 v2 tests and syntax/whitespace checks. The isolated OpenCode
@@ -300,3 +300,30 @@ advertisement. The CLI opens Tasks, Agents, Inbox, Schedule without a context
 argument for the local native board only. Older deployed services were not
 restarted and continue showing machine metadata as not advertised. This does not
 claim rollout or actual-human board acceptance.
+
+## Actual-human native board acceptance and interaction follow-up
+
+After the authorised machine-label rollout, Quintin answered the live Wright
+question entirely in the native board, choosing `make it so`. The recorded source
+is a `terminal:` session and `dialog:human-board:` identifier. Wright verified
+that provenance, resumed its original conversation once and submitted the exact
+answer. Quintin accepted that candidate in the board with reason `okay`. The
+review references the same result digest and a distinct board dialog. Backend
+readback shows execution `completed` at revision 7 and task `done` at revision 4.
+Both human operations are `recorded` in the durable board journal. Neither was
+published by the controller or an OpenCode slash-command dialog.
+
+This passes the bounded actual-human board answer/review path and completes the
+two requested immediate follow-ups: live machine metadata rollout and live board
+decisions. It does not certify crash recovery, closed-origin answering or
+initiating-agent escalation. Evidence: [native board live](evidence/native-board-live.json).
+
+Human feedback identified unnecessary interaction steps. The streamlined UI now
+opens questions directly into the answer editor, keeps review choice/reason and
+result in one view, retains a final exact confirmation and returns to Inbox with
+a persistent acknowledgement. Existing revision/authority guards, durable
+publication and original-key retry are unchanged. The new interaction has
+automated keyboard/PTY coverage, not a second actual-human acceptance run.
+
+Streamlined-flow checkpoint: 1,511 root tests passed, one skipped, zero failed.
+All 30 v2 tests and syntax/whitespace checks passed.

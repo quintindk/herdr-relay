@@ -1,6 +1,6 @@
 {
   "verifiedOn": "2026-10-21",
-  "scope": "User-authorised live machine-label rollout and preparation of the actual-human native board test. Board answer and review remain pending.",
+  "scope": "User-authorised live machine-label rollout and preparation of the actual-human native board test. Subsequent successful answer/review is recorded in native-board-live.json.",
   "sourceCommit": "f135c36",
   "preflight": {
     "outstandingBackendExecutions": 0,
@@ -34,7 +34,8 @@
     "executionId": "wright-native-board-run-20261021",
     "questionId": "question_ff04d69b5eabbf9ba2d2c96291a14d2926b6b9464b63ba37dd51c82cd24b8fe6",
     "workerSessionId": "ses_ea25a17a4ffeoGDK66M9ecexgj",
-    "state": "waiting for actual-human answer in native board",
+    "state": "completed after actual-human native board answer and acceptance",
+    "completionEvidence": "native-board-live.json",
     "reviewPolicy": "human",
     "controllerMayPublishAnswerOrReview": false,
     "requiredAnswerSource": "terminal: conversation ID and dialog:human-board: message ID",
@@ -42,7 +43,7 @@
     "owningNodeAndMachineVisible": true
   },
   "limitations": [
-    "Actual-human board answer/review is not yet certified by this preparation record.",
+    "Actual-human board answer/review is recorded separately in native-board-live.json.",
     "Orderly deployment restarts do not certify crash-during-execution recovery.",
     "Three Relay nodes on one host are not physical two-machine evidence.",
     "The manually started local node remains a foreground daemon, not a newly installed persistent user service."

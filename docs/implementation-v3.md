@@ -545,3 +545,29 @@ question. Only the human board may publish its answer/review; the worker checks
 terminal/dialog provenance. These orderly restarts are rollout evidence, not
 crash-recovery or physical-machine certification. Evidence:
 [rollout and board preparation](evidence/native-machine-rollout-board-live.json).
+
+## Live board acceptance and streamlined decisions, 2026-10-21
+
+The actual-human native board test completed. Quintin answered `make it so` and
+accepted the resulting exact candidate with reason `okay`, both directly in the
+board. Distinct terminal/dialog source records and durable operation keys agree
+with the backend receipts. The local worker history has one settled initial turn
+and one successful continuation in the same conversation. Execution and task are
+completed/done. The controller read the receipts but published neither decision.
+
+The accepted interaction was unnecessarily indirect. Questions now open straight
+into their editor. Review choice/reason and submitted result share a single view,
+with typing focusing the reason and Tab switching fields. The final exact
+confirmation is still mandatory. Esc returns to editing without changing the
+preview or abandons an unconfirmed draft without publication. Successful decisions
+return to Inbox with an acknowledgement that persists until dismissed or replaced.
+Question acknowledgements explain where a required review will appear. Lost-reply
+payload locking, durable journalling, backend revision checks and original-key
+retry remain unchanged. Terminal keyboard/PTY tests cover the streamlined flow;
+the live human evidence covers the preceding interaction, not a second live run.
+Evidence: [native board live](evidence/native-board-live.json).
+
+Final verification: 1,511 root tests passed, one skipped, zero failed. All 30 v2
+tests and syntax/whitespace checks passed. The focused 43-test keyboard/PTY group
+includes direct editing, combined review fields, explicit confirmation, persistent
+acknowledgement, original-key uncertain retry and cancelled-draft refusal.

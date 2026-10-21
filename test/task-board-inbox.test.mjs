@@ -30,8 +30,8 @@ test('native board Inbox answers only after exact preview and confirmation, with
   assert.match(frame(instance), /Inbox \(1\)/); assert.match(frame(instance), /Waiting for your answer/);
   await inbox(instance); assert.match(frame(instance), /Question · Prepare deployment/);
   await input(instance, '\r'); assert.match(frame(instance), /Which region should I use/);
-  assert.match(frame(instance), /Answer question/); assert.doesNotMatch(frame(instance), /Identity: q/);
-  await input(instance, '\r'); await input(instance, 'South Africa North'); await input(instance, '\r');
+  assert.match(frame(instance), /Your answer/); assert.doesNotMatch(frame(instance), /Identity: q/);
+  await input(instance, 'South Africa North'); await input(instance, '\r');
   assert.equal(writes.length, 0); assert.match(frame(instance), /Confirm this exact decision/);
   assert.match(frame(instance), /South Africa North/);
   await input(instance, '\r');
@@ -51,7 +51,7 @@ test('task Actions opens the same answer flow and keeps responsibility separate 
   await input(instance, '\t'); assert.match(frame(instance), /Responsible: owner/); assert.match(frame(instance), /Worker: Wright/);
   await input(instance, '\t'); await input(instance, '\t'); await input(instance, '\t'); await input(instance, '\t');
   await input(instance, '\r'); assert.deepEqual(opened, [question.id]);
-  assert.match(frame(instance), /Enter open/);
+  assert.match(frame(instance), /Enter preview/);
 });
 
 test('review requires a reason and explains that request changes does not dispatch another turn', async t => {
@@ -61,8 +61,8 @@ test('review requires a reason and explains that request changes does not dispat
   t.after(() => instance.unmount()); await tick();
   await inbox(instance); await input(instance, '\r');
   assert.doesNotMatch(frame(instance), /long-opaque-candidate/);
-  await input(instance, 't'); assert.match(frame(instance), /long-opaque-candidate-identity/);
-  await input(instance, 'j'); await input(instance, '\r'); await input(instance, '\r');
+  await input(instance, '\x14'); assert.match(frame(instance), /long-opaque-candidate-identity/);
+  await input(instance, '\x1b[B'); await input(instance, '\r'); await input(instance, '\r');
   assert.equal(writes.length, 0); assert.match(frame(instance), /review reason is required/);
   await input(instance, 'Use the requested region'); await input(instance, '\r');
   assert.match(frame(instance), /No revision turn is started automatically/);
@@ -80,7 +80,7 @@ test('native inbox selection follows identity across refresh reorder and a modal
   items = [review, question]; await input(instance, 'r'); await input(instance, '\r');
   assert.equal(opened[0], question.id);
   items = [{ ...question, revision: 99, summary: 'A different question' }];
-  await input(instance, '\r'); await input(instance, 'Original answer'); await input(instance, '\r'); await input(instance, '\r');
+  await input(instance, 'Original answer'); await input(instance, '\r'); await input(instance, '\r');
   assert.equal(writes[0].item.revision, 1); assert.equal(writes[0].item.summary, question.summary);
 });
 
@@ -89,7 +89,7 @@ test('uncertain publication locks the confirmed payload and retries with the ori
   const instance = render(h(TaskBoardInkApp, { read: async () => base, detailInbox: async () => question,
     decideInbox: async value => { writes.push(value); if (writes.length === 1) throw Error('Publication uncertain'); return { state: 'recorded', message: 'Original decision published' }; },
     interval: 60000, width: 110, height: 28 }));
-  t.after(() => instance.unmount()); await tick(); await inbox(instance); await input(instance, '\r'); await input(instance, '\r');
+  t.after(() => instance.unmount()); await tick(); await inbox(instance); await input(instance, '\r');
   await input(instance, 'Pinned answer'); await input(instance, '\r'); await input(instance, '\r');
   assert.match(frame(instance), /Publication uncertain/);
   await input(instance, 'Do not change it'); await input(instance, '\r');
@@ -107,7 +107,7 @@ test('narrow native decision viewport sanitises source text and scrolls without 
   const text = frame(instance);
   assert.doesNotMatch(text, /\u202e/); assert.ok(text.split('\n').length <= 18);
   assert.ok(text.split('\n').every(line => [...line].length <= 54));
-  assert.match(text, /Esc later/);
+  assert.match(text, /Esc cancel/);
 });
 
 test('offline Inbox retains cached work and fetch time instead of reporting empty success', async t => {
@@ -166,4 +166,48 @@ test('native cards and header remain inside a narrow terminal without changing n
   assert.ok(lines.length <= 18); assert.ok(lines.every(line => [...line].length <= 54));
   assert.match(frame(instance), /RELAY \/ AGENTS/);
   await input(instance, '\t'); assert.match(frame(instance), /Question · Prepare deployment/);
+});
+
+test('answering from task detail returns to Inbox with persistent acknowledgement and the next review visible', async t => {
+  let answered = false;
+  const writes = [], quit = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, inbox: answered ? [review] : [question] }),
+    detailTask: async () => ({ task, actions: [question], comments: [], activity: [], revision: 2 }),
+    detailInbox: async () => question, decideInbox: async value => { writes.push(value); answered = true; return { state: 'recorded', message: question.effect }; },
+    onQuit: () => quit.push(true), interval: 60000, width: 110, height: 28 }));
+  t.after(() => instance.unmount()); await tick();
+  await input(instance, 'j'); await input(instance, '\r'); await input(instance, '\r');
+  await input(instance, 't'); await input(instance, 'est word'); await input(instance, '\r');
+  assert.equal(writes.length, 0);
+  await input(instance, '\r');
+  assert.equal(writes[0].body, 'test word');
+  assert.match(frame(instance), /RELAY \/ INBOX/); assert.match(frame(instance), /Review · Review configuration/);
+  assert.match(frame(instance), /Any required review will appear in this Inbox/);
+  await new Promise(resolve => setTimeout(resolve, 2200));
+  assert.match(frame(instance), /Answer recorded/);
+  await input(instance, '\u001b'); assert.doesNotMatch(frame(instance), /Any required review will appear/); assert.equal(quit.length, 0);
+  await input(instance, 'q'); assert.equal(quit.length, 1);
+});
+
+test('review choice and reason share one editor and survive returning from confirmation', async t => {
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, inbox: [review] }), detailInbox: async () => review,
+    decideInbox: async value => { writes.push(value); return { state: 'recorded', message: 'Changes requested.' }; }, interval: 60000, width: 110, height: 28 }));
+  t.after(() => instance.unmount()); await tick(); await inbox(instance); await input(instance, '\r');
+  assert.match(frame(instance), /Configuration prepared/); assert.match(frame(instance), /Review reason/);
+  assert.match(frame(instance), /Accept result/); assert.match(frame(instance), /Request changes/);
+  await input(instance, 'Correct the region');
+  await input(instance, '\t'); await input(instance, '\x1b[B'); await input(instance, '\t'); await input(instance, '\r');
+  assert.equal(writes.length, 0); assert.match(frame(instance), /Confirm this exact decision/);
+  await input(instance, '\u001b'); assert.match(frame(instance), /Correct the region/);
+  await input(instance, ' please'); await input(instance, '\r'); await input(instance, '\r');
+  assert.equal(writes[0].decision, 'reject'); assert.equal(writes[0].reason, 'Correct the region please');
+});
+
+test('escaping the direct answer editor leaves the question unresolved without publishing a decision', async t => {
+  const instance = render(h(TaskBoardInkApp, { read: async () => base, detailInbox: async () => question,
+    decideInbox: async () => assert.fail('Unconfirmed draft must not be published'), interval: 60000, width: 54, height: 18 }));
+  t.after(() => instance.unmount()); await tick(); await inbox(instance); await input(instance, '\r');
+  await input(instance, 'Draft only'); await input(instance, '\u001b');
+  assert.match(frame(instance), /Question · Prepare deployment/); assert.doesNotMatch(frame(instance), /Draft only/);
 });

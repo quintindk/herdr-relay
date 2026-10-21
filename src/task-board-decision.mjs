@@ -9,14 +9,15 @@ export const decisionText = value => stripVTControlCharacters(String(value ?? ''
 export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
   const item = modal.item;
   const accent = item.kind === 'review' ? 'magenta' : item.kind === 'question' ? 'yellow' : 'cyan';
-  const actions = item.disabled ? [] : item.kind === 'question' ? ['Answer question'] : item.kind === 'review'
+  const actions = item.disabled || item.kind === 'question' ? [] : item.kind === 'review'
     ? ['Accept result', 'Request changes'] : item.kind === 'reminder' ? ['Acknowledge reminder']
       : [item.action === 'dismiss' ? 'Dismiss refused decision' : 'Retry original decision'];
   useInput((input, key) => {
     if (modal.busy) return;
+    if (key.ctrl && input === 't') { setModal(value => ({ ...value, technical: !value.technical, scroll: 0 })); return; }
     if (key.escape) {
-      if (modal.stage === 'inspect' || modal.locked) setModal(null);
-      else setModal(value => ({ ...value, stage: modal.stage === 'confirm' && ['question', 'review'].includes(item.kind) ? 'edit' : 'inspect', error: '', scroll: 0 }));
+      if (modal.stage !== 'confirm' || modal.locked) setModal(null);
+      else setModal(value => ({ ...value, stage: ['question', 'review'].includes(item.kind) ? 'edit' : 'inspect', field: 'text', error: '', scroll: 0 }));
       return;
     }
     if (key.pageDown || key.pageUp) { setModal(value => ({ ...value, scroll: Math.max(0, value.scroll + (key.pageDown ? 5 : -5)) })); return; }
@@ -28,13 +29,20 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
       return;
     }
     if (modal.stage === 'confirm') { if (key.return) void submit(modal); return; }
+    if (item.kind === 'review') {
+      if (key.tab) { setModal(value => ({ ...value, field: value.field === 'decision' ? 'text' : 'decision' })); return; }
+      if (modal.field === 'decision' && (key.downArrow || key.upArrow || key.leftArrow || key.rightArrow)) {
+        setModal(value => ({ ...value, index: key.downArrow || key.rightArrow ? 1 : 0, scroll: 0 })); return;
+      }
+      if (key.return && modal.field === 'decision') { setModal(value => ({ ...value, field: 'text' })); return; }
+    }
     if (key.return && !key.shift) {
       if (!modal.text.trim()) { setModal(value => ({ ...value, error: item.kind === 'question' ? 'An answer is required.' : 'A review reason is required.' })); return; }
       setModal(value => ({ ...value, stage: 'confirm', error: '', scroll: 0 })); return;
     }
     const text = key.backspace || key.delete ? [...modal.text].slice(0, -1).join('') : key.return && key.shift ? `${modal.text}\n`
       : input && !key.ctrl && !key.meta ? `${modal.text}${decisionText(input)}` : modal.text;
-    if (text.length <= 4000) setModal(value => ({ ...value, text, error: '', scroll: 0 }));
+    if (text.length <= 4000) setModal(value => ({ ...value, text, field: 'text', error: '', scroll: 0 }));
   });
   const w = Math.max(32, Math.min(100, width - 2)), size = Math.max(10, Math.min(height - 2, 27));
   const columns = Math.max(8, w - 6), viewport = Math.max(2, size - actions.length - 9);
@@ -46,7 +54,7 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
     ...(modal.technical ? ['', ...lines(`Identity: ${item.entityId}`), ...lines(`Revision: ${item.revision ?? 'stored operation'}`),
       ...lines(`Candidate: ${item.candidate ?? 'none'}`), ...lines(`Digest: ${item.resultDigest ?? 'not supplied'}`)] : []),
     ...(modal.stage !== 'inspect' && ['question', 'review'].includes(item.kind) ? ['', item.kind === 'question' ? 'Your answer' : 'Review reason',
-      ...lines(`${modal.text}${modal.stage === 'edit' ? '▏' : ''}`)] : []),
+      ...lines(`${modal.text}${modal.stage === 'edit' && modal.field !== 'decision' ? '▏' : ''}`)] : []),
     ...(modal.stage === 'confirm' ? ['', ...lines(effect ?? item.summary)] : [])];
   const start = Math.min(modal.scroll, Math.max(0, content.length - viewport));
   const editStart = modal.stage === 'edit' && modal.scroll === 0 ? Math.max(0, content.length - viewport) : start;
@@ -56,12 +64,13 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
   h(Text, { bold: true, color: accent, wrap: 'truncate-end' }, decisionText(item.title)),
   h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' },
     ...content.slice(editStart, editStart + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line || ' '))),
-  ...actions.map((action, i) => h(Text, { key: action, inverse: modal.index === i, bold: modal.index === i,
-    color: modal.index === i ? accent : undefined, dimColor: modal.index !== i }, `[ ${action} ]`)),
+  ...actions.map((action, i) => h(Text, { key: action, inverse: modal.index === i && (modal.field === 'decision' || modal.stage !== 'edit'), bold: modal.index === i,
+    color: modal.index === i ? accent : undefined, dimColor: modal.index !== i }, `${item.kind === 'review' ? modal.index === i ? '● ' : '○ ' : ''}[ ${action} ]`)),
   h(Text, { color: modal.error ? 'red' : accent, wrap: 'truncate-end' }, modal.error || (modal.stage === 'confirm' ? 'Confirm this exact decision' : modal.stage === 'edit' ? `${modal.text.length}/4000` : `${editStart + 1}–${Math.min(content.length, editStart + viewport)} / ${content.length}`)),
   h(Box, { flexGrow: 1 }),
   h(Text, { dimColor: true, wrap: 'truncate-end' }, modal.busy ? 'Publishing confirmed decision…' : modal.locked ? 'Enter retry original decision · Esc close'
     : modal.stage === 'inspect' ? 'Enter open · t details · PgUp/PgDn · Esc later'
-      : modal.stage === 'edit' ? w < 80 ? 'Type · Enter preview · Esc back' : 'Type · Shift+Enter newline · Enter preview · Esc back'
+      : modal.stage === 'edit' ? item.kind === 'review' && modal.field === 'decision' ? '↑↓ choose · Type reason · Enter reason · Esc cancel'
+        : w < 80 ? 'Type · Enter preview · Esc cancel' : `Type · ${item.kind === 'review' ? 'Tab decision' : 'Ctrl+T details'} · Enter preview · Esc cancel`
         : 'Enter confirm · PgUp/PgDn · Esc back'));
 }

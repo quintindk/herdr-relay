@@ -38,8 +38,6 @@ try:
     send(b"\t")
     until(b"Which region?" if sys.argv[4] == "answer" else b"Prepared configuration")
     send(b"\r")
-    until(b"Answer question" if sys.argv[4] == "answer" else b"Accept result")
-    send(b"\r")
     until(b"Your answer" if sys.argv[4] == "answer" else b"Review reason")
     send(sys.argv[5].encode())
     until(sys.argv[5].encode())

@@ -34,17 +34,29 @@ stay in the agent's inbox unless explicitly forwarded to the human.
 
 - `Tab` / `Shift+Tab` switches views from the board. `j/k` or arrows selects an
   item. `/` searches the current task/inbox list. `Enter` opens fresh detail.
-- An open question offers **Answer question**. Enter an answer, preview the exact
-  question/answer and confirm with a separate Enter.
-- A pending review offers **Accept result** or **Request changes**. Both require
-  a reason and a separate confirmation. For ordinary tasks, Request changes returns
+- Opening a question goes straight to its answer editor. Type the answer, press
+  Enter to preview the exact question/answer, then Enter once to confirm. There is
+  no separate screen for selecting the only available action.
+- A pending review shows its result, **Accept result** / **Request changes**, and
+  reason together. Arrow keys select the decision while that field is focused.
+  Typing starts the reason directly; Tab switches between choice and reason.
+  Enter previews, then a separate Enter confirms. Both decisions require a
+  reason. For ordinary tasks, Request changes returns
   the task to Todo. It does **not** dispatch another model turn. Monitoring and
   taskless scheduled-result reviews show their own effects.
 - A reminder offers acknowledgement, without starting a model turn.
-- `t` expands technical identity/revision/candidate details in the decision view.
+- `Ctrl+T` expands technical identity/revision/candidate details in an editor.
+  `t` remains available in read-only decision inspection.
   `PgUp/PgDn` scrolls long context. `Esc` goes back or leaves the item pending.
 - Editing supports ordinary typing, backspace and Shift+Enter for a newline.
   Answers/reasons are bounded to 4,000 characters.
+
+After a confirmed decision the board returns to Inbox, even when opened from task
+detail. The acknowledgement stays visible until dismissed with Esc, replaced by
+another decision, or the board exits. For answers it explains that any required
+review will appear in Inbox. The board does not automatically open or approve the
+next review. Escape from an unconfirmed editor cancels only the draft; Escape from
+confirmation returns to the same editor with the choice/reason preserved.
 
 Selection follows item identity across refreshes, not its former list position.
 An open editor/confirmation pins its own preview. A changed backend revision is
