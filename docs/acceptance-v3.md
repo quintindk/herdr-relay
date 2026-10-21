@@ -251,3 +251,22 @@ decision flows. Input remains synthetic in that smoke. Root regression passed
 passed. The live Wright direct-human test has been started, but an actual human
 answer and review are not yet claimed. Evidence:
 [human inbox installation](evidence/native-human-inbox-install.json).
+
+### Actual-human direct inbox follow-up
+
+Quintin answered Wright's question directly through `/relay-questions`, choosing
+`rumplestiltskin`. The backend records human authorship, the actual human session,
+a keyboard-dialog ID and answer digest. The controller did not publish the answer.
+Wright continued once in its original conversation, verified the human/dialog
+source and submitted the exact answer. Both task and execution remained in review
+until Quintin accepted the candidate directly through `/relay-reviews` with reason
+`Please go ahead`. Review has its own session/dialog/digest provenance and matching
+result digest. Execution is `completed` at revision 7 and task `done` at revision 4.
+The controller did not publish the review or manually change task status.
+
+Local journal readback contains one settled initial question turn and one successful
+continuation. TUI evidence records question/review notifications and both direct
+keyboard decisions from the same client. This passes the bounded actual-human
+direct inbox answer/review path. It does not close natural-chat message provenance,
+initiating-agent escalation, closed-origin recovery, crash/replay or physical-node
+gates. Evidence: [actual-human inbox workflow](evidence/native-human-inbox-live.json).

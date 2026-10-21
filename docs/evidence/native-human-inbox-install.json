@@ -1,6 +1,6 @@
 {
   "verifiedOn": "2026-10-21",
-  "scope": "Maintained live OpenCode human inbox installation, read-only session-scoped notifications and automated TUI answer/review verification. Actual-human live test is pending.",
+  "scope": "Maintained live OpenCode human inbox installation, read-only session-scoped notifications and automated TUI answer/review verification. The subsequent actual-human live test passed, recorded separately.",
   "command": "node src/cli.mjs native inbox install --here --context PRIVATE_OWNER_JSON --evidence-file PRIVATE_JSONL",
   "runtime": "OpenCode 2.1.2",
   "installation": {
@@ -34,12 +34,13 @@
     "questionId": "question_974bd939a159d78a9516e38b93340f2ab10eb38e98a393bd66d5b9c851ebd8b7",
     "workerSessionId": "ses_ea25a17a4ffeoGDK66M9ecexgj",
     "reviewPolicy": "human",
-    "status": "waiting, actual-human answer/review pending",
+    "status": "completed after direct actual-human TUI answer and review",
+    "evidence": "native-human-inbox-live.json",
     "questionNotificationEmittedInConfiguredHumanTui": true,
     "controllerMayPublishHumanAnswerOrReview": false
   },
   "limitations": [
-    "No actual-human live decision is claimed by this installation evidence.",
+    "Actual-human live decisions are recorded in native-human-inbox-live.json, separately from the automated smoke.",
     "Human interaction uses keyboard dialogs with session/dialog provenance, not arbitrary natural-chat user-message authentication.",
     "Automatic notifications appear only when the configured human session is selected. The durable inbox remains available from other authorised local TUIs.",
     "This does not certify coordinator escalation, closed-origin recovery, crash replay or two physical machines."

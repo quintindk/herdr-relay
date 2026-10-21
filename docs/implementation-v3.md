@@ -465,3 +465,14 @@ The live configured human TUI reported `human_inbox_ready`; the actual-human
 Wright workflow is started but not yet certified. The controller must not publish
 its answer or review. Evidence:
 [human inbox installation](evidence/native-human-inbox-install.json).
+
+Actual-human follow-up passed: Quintin supplied `rumplestiltskin` in the native
+`/relay-questions` dialog and later accepted the exact candidate in `/relay-reviews`.
+Backend source records and local TUI evidence agree on the human session, client,
+distinct dialog IDs and immutable operation keys. The worker retained its native
+conversation and made one continuation with the supplied answer. Execution/task
+completed only after direct human review. The controller performed readback, not
+answer/review publication. This is keyboard-dialog provenance rather than arbitrary
+natural-chat source authentication. Escalation, closed-origin and failure recovery
+remain separate gates. Evidence:
+[actual-human inbox workflow](evidence/native-human-inbox-live.json).

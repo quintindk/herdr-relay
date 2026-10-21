@@ -1,0 +1,73 @@
+{
+  "verifiedOn": "2026-10-21",
+  "scope": "Actual-human direct OpenCode TUI question answer and exact candidate review, with a real existing interactive worker and one continuation. Not full specification v3 certification.",
+  "runtime": "OpenCode 2.1.2",
+  "workerSessionId": "ses_ea25a17a4ffeoGDK66M9ecexgj",
+  "humanSessionId": "ses_ea2a99094ffekBIQCnm5whxK0D",
+  "humanClientId": "8c89b3cb-f6f8-48ec-be33-96ce370b9b18",
+  "taskId": "wright-human-inbox-20261021",
+  "executionId": "wright-human-inbox-run-20261021",
+  "question": {
+    "id": "question_974bd939a159d78a9516e38b93340f2ab10eb38e98a393bd66d5b9c851ebd8b7",
+    "humanRequired": true,
+    "status": "answered",
+    "answer": "rumplestiltskin",
+    "author": { "type": "user", "id": "owner" },
+    "at": "2026-10-21T09:47:52.763Z",
+    "source": {
+      "conversationId": "ses_ea2a99094ffekBIQCnm5whxK0D",
+      "messageId": "dialog:d22e13ff-205b-4cf0-bbdc-ea92a6bd318d",
+      "digest": "e68722d9d5c161b9913b3100a712a22148f11edee64ba714a6518f199d78fb8b"
+    },
+    "tuiCommandKey": "human-answer:86acdb7d-187b-4837-93d8-e4c74f5003eb",
+    "humanConfirmedUiWorked": true
+  },
+  "turns": [
+    {
+      "kind": "initial question",
+      "runId": "run_c21e447217c2e9a3a04335b82169db341f77818f0052a5a4676141661263692f",
+      "archivedState": "settled_waiting",
+      "terminalMessageId": "msg_15dd95eb1001qg5aJkfGrEjv0X",
+      "outcome": "succeeded"
+    },
+    {
+      "kind": "continuation with human answer",
+      "runId": "run_87b3b4b6267381b485859e06a88449f31ee938ebe4f6f3b8c86769b5bd0ffbd9",
+      "localState": "native_finished",
+      "terminalMessageId": "msg_15ddc71270022pzcVL2zvUC7iQ",
+      "outcome": "succeeded"
+    }
+  ],
+  "candidate": {
+    "id": "wright-human-inbox-candidate-20261021",
+    "summary": "Human inbox answer: rumplestiltskin. Answer source: ses_ea2a99094ffekBIQCnm5whxK0D / dialog:d22e13ff-205b-4cf0-bbdc-ea92a6bd318d. Awaiting human candidate review.",
+    "digest": "9cb1ed33d9ad92ede05d2e2c5b6c8b2c849232736293251897bbc07b1d8290a6",
+    "stateBeforeHumanReview": "in_review"
+  },
+  "review": {
+    "decision": "accept",
+    "candidate": "wright-human-inbox-candidate-20261021",
+    "resultDigest": "9cb1ed33d9ad92ede05d2e2c5b6c8b2c849232736293251897bbc07b1d8290a6",
+    "reason": "Please go ahead",
+    "userId": "owner",
+    "at": "2026-10-21T09:49:50.782Z",
+    "source": {
+      "conversationId": "ses_ea2a99094ffekBIQCnm5whxK0D",
+      "messageId": "dialog:1de30f86-ff2d-4c84-8cd9-fb64252d691d",
+      "digest": "12f45cf91a5b09fa8f3036f4555ef88d31c0342bb3e6757f1f3400d110da2f5c"
+    },
+    "tuiCommandKey": "human-review:f4224e7e-cd52-4062-bd79-28a829d41243"
+  },
+  "finalState": { "execution": "completed", "executionRevision": 7, "task": "done", "taskRevision": 4 },
+  "controllerPublishedAnswer": false,
+  "controllerPublishedReview": false,
+  "manualDoneTransition": false,
+  "questionAndReviewNotificationsObserved": true,
+  "backendAndLocalJournalReadbackVerified": true,
+  "limitations": [
+    "Keyboard-dialog provenance is verified, not arbitrary natural-chat message authentication.",
+    "The question was human-required from creation. Coordinator forwarding/escalation was not exercised in this run.",
+    "Closed-origin recovery, daemon/backend crash recovery and physical second-machine operation were not exercised.",
+    "No process retirement, Git finalisation or repository changes were authorised by this test."
+  ]
+}
