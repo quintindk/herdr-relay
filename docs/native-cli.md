@@ -137,6 +137,53 @@ still use that command API or their existing scoped tools/UI, not named CLI verb
 
 ## Native task pane
 
+### Human questions and reviews in OpenCode
+
+```bash
+node src/cli.mjs native inbox install --here --context /private/owner.json
+```
+
+Outside the current human chat use `--session HUMAN_SESSION_ID` instead of `--here`.
+The session selects where automatic inbox notifications appear. It does not enrol
+or invoke that session. `--config-dir DIR` overrides the global OpenCode config
+directory. `--evidence-file /private/existing-directory/human-inbox.jsonl` enables
+local load/notification/decision evidence without recording credentials or answer
+text in that file.
+
+The installer adds the native Relay server and TUI plugin to `opencode.json` and
+`cli.json`, preserves other settings/plugins and creates private byte-for-byte
+backups before changing existing files. Repeating it makes no duplicate entry or
+backup. Conflicting Relay owner/session settings, duplicate entries and an existing
+`opencode.jsonc` require explicit reconciliation instead of silent replacement.
+It does not restart OpenCode or change model/permissions. Valid configuration edits
+reload in running clients. Verify the slash commands actually appear before testing.
+
+The server plugin provides the reload-generation check. The owner context path
+is configured only in the local TUI, not in server/model tools. The bootstrap
+owner file may omit `url`, using the same loopback default as the native CLI.
+
+- Human-addressed questions notify only the configured selected human session.
+  Agent-addressed questions still use the initiating-agent delivery path.
+- Notifications are read-only, deduplicated toasts. They never start a model turn,
+  open an unsolicited modal or publish an answer/review. A backend outage is shown
+  without claiming there are no pending questions.
+- Open `/relay-questions`, select the question, type your answer and confirm the
+  exact prompt/answer. The TUI publishes the decision directly to Relay. Do not
+  send the answer to the worker or paste it into a controller's question tool.
+- Open `/relay-reviews`, inspect the exact candidate, choose accept/reject, give
+  a reason and confirm. Submission and native settlement alone cannot pass a
+  human-review policy.
+- Decisions retain session/dialog attribution and a digest. This is keyboard-dialog
+  provenance, not a claim that an arbitrary native user message is human-authenticated.
+- Session changes, reconnects, plugin reload or disposal fence stale decisions.
+  Confirmed operations are saved before publication and reuse their original key
+  after a lost response.
+
+To remove the integration, remove only its plugin entries from both configs,
+preserving subsequent unrelated edits. Do not blindly restore an old whole-file
+backup after other settings have changed. Inbox decisions and pending backend work
+are not deleted by removing a plugin.
+
 `native board` opens the same Ink view as the native Herdr work pane. `--json`
 prints its snapshot. The CRON section includes paused schedules. Enter shows
 requested/applied state, target and the last 50 published occurrence receipts,

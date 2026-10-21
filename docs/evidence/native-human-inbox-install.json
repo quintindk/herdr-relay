@@ -1,0 +1,47 @@
+{
+  "verifiedOn": "2026-10-21",
+  "scope": "Maintained live OpenCode human inbox installation, read-only session-scoped notifications and automated TUI answer/review verification. Actual-human live test is pending.",
+  "command": "node src/cli.mjs native inbox install --here --context PRIVATE_OWNER_JSON --evidence-file PRIVATE_JSONL",
+  "runtime": "OpenCode 2.1.2",
+  "installation": {
+    "state": "installed",
+    "repeatState": "existing",
+    "notificationSessionId": "ses_ea2a99094ffekBIQCnm5whxK0D",
+    "originalConfigurationsBackedUp": true,
+    "unrelatedSettingsPreserved": true,
+    "ownerTokenCopiedIntoPluginConfiguration": false,
+    "serverRestarted": false,
+    "modelOrPermissionsChanged": false,
+    "liveTuiLoaded": true,
+    "liveInboxReady": true,
+    "readOnlyServerToolResponded": true
+  },
+  "tests": {
+    "rootPassed": 1482,
+    "rootSkipped": 1,
+    "rootFailed": 0,
+    "v2Passed": 30,
+    "syntaxChecks": "passed",
+    "automatedRuntimeSmoke": "OpenCode 2.1.2 backend, worker tools, daemon, keyboard human inbox and candidate review",
+    "questionNotificationObservedInSmoke": true,
+    "reviewNotificationObservedInSmoke": true,
+    "smokeModel": "deterministic fixture",
+    "smokeInput": "synthetic PTY keyboard input"
+  },
+  "liveTest": {
+    "taskId": "wright-human-inbox-20261021",
+    "executionId": "wright-human-inbox-run-20261021",
+    "questionId": "question_974bd939a159d78a9516e38b93340f2ab10eb38e98a393bd66d5b9c851ebd8b7",
+    "workerSessionId": "ses_ea25a17a4ffeoGDK66M9ecexgj",
+    "reviewPolicy": "human",
+    "status": "waiting, actual-human answer/review pending",
+    "questionNotificationEmittedInConfiguredHumanTui": true,
+    "controllerMayPublishHumanAnswerOrReview": false
+  },
+  "limitations": [
+    "No actual-human live decision is claimed by this installation evidence.",
+    "Human interaction uses keyboard dialogs with session/dialog provenance, not arbitrary natural-chat user-message authentication.",
+    "Automatic notifications appear only when the configured human session is selected. The durable inbox remains available from other authorised local TUIs.",
+    "This does not certify coordinator escalation, closed-origin recovery, crash replay or two physical machines."
+  ]
+}

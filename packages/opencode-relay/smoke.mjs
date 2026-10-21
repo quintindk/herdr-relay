@@ -357,7 +357,7 @@ try {
       mkdirSync(clientConfig, { recursive: true });
       const evidenceFile = join(root, 'human-inbox.jsonl');
       writeFileSync(join(clientConfig, 'cli.json'), JSON.stringify({ plugins: [{ package: packageDirectory,
-        options: { evidenceFile, ownerContextFile: ownerFile } }] }));
+        options: { evidenceFile, ownerContextFile: ownerFile, notificationSessionId: session.id } }] }));
       const switchConfirmation = process.argv.includes('--switch-confirmation');
       const confirmationGate = join(root, 'confirmation-gate');
       const switchTrigger = join(root, 'switch-trigger');
@@ -438,6 +438,8 @@ try {
       const [code] = await once(humanTui, 'exit');
       assert.equal(code, 0, diagnostics);
       const events = readFileSync(evidenceFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      if (!process.argv.includes('--chat-answer') && !switchConfirmation) assert.ok(events.some(event =>
+        event.type === 'human_inbox_notification' && event.questions > 0), 'Human TUI must receive its pending-question notification');
       assert.ok(events.some(event => event.type === (reloadConfirmation || transportConfirmation || switchConfirmation ? 'human_decision_refused' : 'human_decision')),
         `Human inbox did not resolve: ${JSON.stringify(events)} ${diagnostics}`);
       if (reloadConfirmation || transportConfirmation || switchConfirmation) {
@@ -469,7 +471,8 @@ try {
       writeFileSync(ownerFile, JSON.stringify({ url: backend.origin, token: ownerToken }), { mode: 0o600 });
       const clientConfig = join(root, 'review-client/opencode'); mkdirSync(clientConfig, { recursive: true });
       const evidenceFile = join(root, 'review-inbox.jsonl');
-      writeFileSync(join(clientConfig, 'cli.json'), JSON.stringify({ plugins: [{ package: packageDirectory, options: { evidenceFile, ownerContextFile: ownerFile } }] }));
+      writeFileSync(join(clientConfig, 'cli.json'), JSON.stringify({ plugins: [{ package: packageDirectory,
+        options: { evidenceFile, ownerContextFile: ownerFile, notificationSessionId: session.id } }] }));
       humanTui = spawn('python3', [join(packageDirectory, 'pty-client.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
       let diagnostics = '';
       humanTui.stdout.on('data', () => {}); humanTui.stderr.on('data', chunk => { diagnostics = (diagnostics + chunk).slice(-8000); });
@@ -478,6 +481,8 @@ try {
         review: true, redact: [password, ownerToken] }));
       const [code] = await once(humanTui, 'exit'); assert.equal(code, 0, diagnostics);
       assert.ok(readFileSync(evidenceFile, 'utf8').includes('"type":"human_decision"'), diagnostics);
+      assert.ok(readFileSync(evidenceFile, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+        .some(event => event.type === 'human_inbox_notification' && event.reviews > 0), 'Human TUI must receive its pending-review notification');
     }
     const accepted = process.argv.includes('--review-tui') ? await ownerApi('GET', '/v1/executions/execution') :
       await command(ownerApi, 'accept', 'execution.review', { id: reviewed.id, expectedRevision: reviewed.revision,

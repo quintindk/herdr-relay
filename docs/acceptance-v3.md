@@ -228,3 +228,26 @@ live workflow, not the full human-escalation/provenance gate. Initiating-agent
 routing, closed-origin answering, plugin confirmation, failure injection and
 resource retirement remain open. No process retirement was authorised. Evidence:
 [Wright human workflow](evidence/native-wright-human-workflow.json).
+
+## Direct human inbox installation and test preparation, 2026-10-21
+
+The earlier Wright human workflow used the controller to relay both decisions.
+It did not verify that the product delivered a human question to the user.
+
+The maintained `native inbox install` command now configures the real OpenCode
+server/TUI plugin, with private configuration backups and repeat-call/conflict
+checks. Session-scoped, read-only polling notifies the human about pending
+questions/reviews. It never opens a modal, invokes a model or records a decision.
+The existing `/relay-questions` and `/relay-reviews` flows publish directly from
+the human's local TUI after keyboard confirmation, retaining dialog provenance
+and their durable mutation outbox. Bootstrap owner contexts now receive the same
+local URL default as the CLI.
+
+The live existing TUIs loaded the plugin without a service restart and the
+configured human session reported inbox readiness. The OpenCode 2.1.2 automated
+daemon/worker-tool smoke verified question/review notifications and both keyboard
+decision flows. Input remains synthetic in that smoke. Root regression passed
+1,482 tests with one skipped and zero failed. All 30 v2 tests and syntax checks
+passed. The live Wright direct-human test has been started, but an actual human
+answer and review are not yet claimed. Evidence:
+[human inbox installation](evidence/native-human-inbox-install.json).

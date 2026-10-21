@@ -440,3 +440,28 @@ certify source-bound v2 plugin confirmations, natural-chat provenance, agent
 escalation, closed-origin recovery, crash/replay or Git/resource retirement. Those
 remain implementation/acceptance work, not inferred from this successful run.
 Evidence: [Wright human workflow](evidence/native-wright-human-workflow.json).
+
+## Direct human inbox delivery, 2026-10-21
+
+Closed the live setup/notification gap with `native inbox install` and pane-local
+human inbox notifications. Installation preserves unrelated settings, backs up
+original files privately, refuses conflicting Relay scopes/JSONC shadowing and is
+repeat-safe. The owner context stays in the TUI configuration. No worker obtains
+it and no model tool is granted backend human authority. Live configuration
+hot-reload loaded the existing server/TUI plugin without restarting OpenCode.
+
+Polling shows pending-human question/review counts only in the configured selected
+session. It is non-modal, read-only and deduplicated. In-flight reads are fenced
+after session changes, reconnect or disposal. Errors report unavailability rather
+than empty success. Actual keyboard decisions still use the original exact
+selection/revision/confirmation checks and durable pending-operation reconciliation.
+The bootstrap `owner.json` URL omission exposed during installation is now handled
+consistently with the native CLI.
+
+Verification: 1,482 root tests passed, one skipped, zero failed. All 30 v2 tests
+and syntax checks passed. The OpenCode 2.1.2 daemon/worker-tool automated smoke
+verified actual TUI notification, answer and review paths with synthetic input.
+The live configured human TUI reported `human_inbox_ready`; the actual-human
+Wright workflow is started but not yet certified. The controller must not publish
+its answer or review. Evidence:
+[human inbox installation](evidence/native-human-inbox-install.json).

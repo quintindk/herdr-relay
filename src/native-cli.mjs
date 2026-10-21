@@ -12,6 +12,7 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   agent enrol --here|--session ID --config PRIVATE_NODE_JSON --reserved [--directory DIR] [--transport tools|cli]
     [--service-registration FILE] --context OWNER_JSON
   node install|run --config PRIVATE_NODE_JSON
+  inbox install --here|--session HUMAN_SESSION_ID --context OWNER_JSON [--config-dir DIR] [--evidence-file FILE]
   task|comment|agent|node|execution|schedule|occurrence list [--limit N] [--cursor TOKEN]
   task|comment|agent|node|execution|schedule|occurrence inspect ID
   task create|edit|comment --file PAYLOAD_JSON --key KEY
@@ -38,7 +39,7 @@ export async function main(args) {
     return worker(args.slice(1));
   }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration'].map(k => [k, { type: 'string' }])),
+    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file'].map(k => [k, { type: 'string' }])),
     help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' },
   } });
   const [group, action, id] = positionals;
@@ -46,6 +47,7 @@ export async function main(args) {
   const output = value => console.log(JSON.stringify(value, null, 2));
   requireValue(positionals.length <= 3, 'invalid_request', 'Unexpected positional arguments');
   const allowed = group === 'node' && ['install', 'run'].includes(action) ? ['config']
+    : group === 'inbox' && action === 'install' ? ['context', 'here', 'session', 'config-dir', 'evidence-file']
     : group === 'agent' && action === 'enrol' ? ['context', 'here', 'session', 'config', 'reserved', 'directory', 'transport', 'service-registration']
     : group === 'schedule' && action === 'preview' ? ['cron', 'timezone']
     : group === 'board' ? ['context', 'json']
@@ -61,6 +63,13 @@ export async function main(args) {
     execFileSync(process.execPath, [fileURLToPath(script), '--config', resolve(values.config)], { stdio: 'inherit' }); return;
   }
   if (group === 'schedule' && action === 'preview') { requireValue(!id, 'invalid_request', 'Unexpected schedule ID'); output(previewCron(values.cron, values.timezone)); return; }
+  if (group === 'inbox' && action === 'install') {
+    requireValue(!id && Boolean(values.here) !== Boolean(values.session), 'invalid_request', 'Choose --here or --session ID');
+    const { installNativeInbox } = await import('./native-inbox-install.mjs');
+    output(installNativeInbox({ contextFile: values.context ?? process.env.RELAY_NATIVE_CONTEXT,
+      sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
+      configDirectory: values['config-dir'], evidenceFile: values['evidence-file'] })); return;
+  }
   const path = values.context ?? process.env.RELAY_NATIVE_CONTEXT;
   requireValue(path, 'invalid_request', 'Explicit --context or RELAY_NATIVE_CONTEXT is required');
   const context = JSON.parse(readFileSync(path, 'utf8'));

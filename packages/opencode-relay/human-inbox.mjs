@@ -5,6 +5,11 @@ import { nativeBackendClient } from '../../src/backend-client.mjs';
 import { HumanProposals, humanSource, proposalDigest } from './human-proposals.mjs';
 import { proposedActions } from './operator-tools.mjs';
 import { RelaySpike } from './rpc.mjs';
+import { humanInboxNotifications } from './human-inbox-notifications.mjs';
+
+// Bootstrap owner.json deliberately omits the local origin. Match native CLI
+// semantics rather than requiring users to rewrite their credential file.
+export const humanInboxClient = context => nativeBackendClient({ ...context, url: context.url ?? 'http://127.0.0.1:3210' });
 
 // Runs only from a local TUI keyboard/palette command. It never registers an
 // owner-capable model tool or exposes the owner credential over server RPC.
@@ -13,9 +18,11 @@ export function registerHumanInbox(ctx, { clientId, selectedSession, record = ()
   let disposed = false;
   let busy = false;
   let generation = 0;
+  let notifications;
   let previousSession = selectedSession();
   const stopConnection = ctx.data?.on?.('server.connected', () => {
     generation++;
+    notifications?.invalidate();
     record({ type: 'connection_context_invalidated', sessionId: selectedSession() });
   });
   const runtimeGeneration = async () => (await ctx.client.rpc(RelaySpike).inspect({},
@@ -27,7 +34,7 @@ export function registerHumanInbox(ctx, { clientId, selectedSession, record = ()
   const stopTracking = createRoot(dispose => {
     createEffect(() => {
       const session = selectedSession();
-      if (session !== previousSession) { generation++; previousSession = session; }
+      if (session !== previousSession) { generation++; previousSession = session; notifications?.invalidate(); }
     });
     return dispose;
   });
@@ -36,7 +43,7 @@ export function registerHumanInbox(ctx, { clientId, selectedSession, record = ()
   const check = origin => {
     if (disposed || origin.generation !== generation || origin.sessionId !== selectedSession()) throw new Error('Human inbox context changed');
   };
-  const api = () => nativeBackendClient(JSON.parse(readFileSync(ctx.options.ownerContextFile, 'utf8')));
+  const api = () => humanInboxClient(JSON.parse(readFileSync(ctx.options.ownerContextFile, 'utf8')));
   const pages = async (request, collection, status) => {
     const items = [];
     let cursor;
@@ -51,6 +58,22 @@ export function registerHumanInbox(ctx, { clientId, selectedSession, record = ()
     } while (cursor);
     return items;
   };
+  if (ctx.options.notificationSessionId) notifications = humanInboxNotifications({
+    selectedSession, notificationSessionId: ctx.options.notificationSessionId,
+    notify: toast => ctx.ui.toast.show(toast), record,
+    load: async () => {
+      const request = api();
+      const info = await request('GET', '/v1/info');
+      const [questions, executions, occurrences] = await Promise.all([
+        pages(request, 'questions', 'open'), pages(request, 'executions', 'in_review'), pages(request, 'occurrences', 'in_review'),
+      ]);
+      return [...questions.filter(q => q.addressedTo.type === 'user' && q.addressedTo.id === info.userId)
+        .map(q => ({ kind: 'question', id: q.id, revision: q.revision })),
+      ...executions.filter(e => e.reviewPolicy !== 'agent' || e.reviewerMode === 'human_recovery')
+        .map(e => ({ kind: 'review', id: e.id, revision: e.revision })),
+      ...occurrences.filter(o => !o.executionId).map(o => ({ kind: 'review', id: o.id, revision: o.revision }))];
+    },
+  });
   const run = async kind => {
     if (disposed || busy) return;
     busy = true;
@@ -141,7 +164,8 @@ export function registerHumanInbox(ctx, { clientId, selectedSession, record = ()
       check(origin);
       await request('POST', '/v1/commands', command);
       await updateOutbox(draft => { if (draft.pending?.command.key === command.key) draft.pending = null; });
-      record({ type: 'human_decision', kind, sessionId: origin.sessionId });
+      record({ type: 'human_decision', kind, sessionId: origin.sessionId, entityId: id, commandKey: command.key,
+        source: 'keyboard_dialog' });
       ctx.ui.toast.show({ message: 'Relay decision recorded', variant: 'success' });
     } catch (error) {
       record({ type: 'human_decision_refused', kind, sessionId: origin.sessionId });
@@ -227,5 +251,5 @@ export function registerHumanInbox(ctx, { clientId, selectedSession, record = ()
       finally { busy = false; }
     } },
   ] }));
-  return () => { disposed = true; generation++; stopTracking(); stopConnection?.(); };
+  return () => { disposed = true; generation++; notifications?.stop(); stopTracking(); stopConnection?.(); };
 }
