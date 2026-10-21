@@ -8,6 +8,7 @@ export const decisionText = value => stripVTControlCharacters(String(value ?? ''
   .replace(/[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, '');
 export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
   const item = modal.item;
+  const accent = item.kind === 'review' ? 'magenta' : item.kind === 'question' ? 'yellow' : 'cyan';
   const actions = item.disabled ? [] : item.kind === 'question' ? ['Answer question'] : item.kind === 'review'
     ? ['Accept result', 'Request changes'] : item.kind === 'reminder' ? ['Acknowledge reminder']
       : [item.action === 'dismiss' ? 'Dismiss refused decision' : 'Retry original decision'];
@@ -50,13 +51,14 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
   const start = Math.min(modal.scroll, Math.max(0, content.length - viewport));
   const editStart = modal.stage === 'edit' && modal.scroll === 0 ? Math.max(0, content.length - viewport) : start;
   return h(Box, { position: 'absolute', left: Math.max(0, Math.floor((width - w) / 2)), top: Math.max(0, Math.floor((height - size) / 2)),
-    width: w, height: size, borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2,
+    width: w, height: size, borderStyle: 'round', borderColor: 'gray', backgroundColor: 'black', paddingX: 2,
     flexDirection: 'column', overflow: 'hidden' },
-  h(Text, { bold: true, color: 'magenta', wrap: 'truncate-end' }, decisionText(item.title)),
+  h(Text, { bold: true, color: accent, wrap: 'truncate-end' }, decisionText(item.title)),
   h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' },
     ...content.slice(editStart, editStart + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line || ' '))),
-  ...actions.map((action, i) => h(Text, { key: action, inverse: modal.index === i, bold: modal.index === i }, `[ ${action} ]`)),
-  h(Text, { color: modal.error ? 'red' : 'magenta', wrap: 'truncate-end' }, modal.error || (modal.stage === 'confirm' ? 'Confirm this exact decision' : modal.stage === 'edit' ? `${modal.text.length}/4000` : ' ')),
+  ...actions.map((action, i) => h(Text, { key: action, inverse: modal.index === i, bold: modal.index === i,
+    color: modal.index === i ? accent : undefined, dimColor: modal.index !== i }, `[ ${action} ]`)),
+  h(Text, { color: modal.error ? 'red' : accent, wrap: 'truncate-end' }, modal.error || (modal.stage === 'confirm' ? 'Confirm this exact decision' : modal.stage === 'edit' ? `${modal.text.length}/4000` : `${editStart + 1}–${Math.min(content.length, editStart + viewport)} / ${content.length}`)),
   h(Box, { flexGrow: 1 }),
   h(Text, { dimColor: true, wrap: 'truncate-end' }, modal.busy ? 'Publishing confirmed decision…' : modal.locked ? 'Enter retry original decision · Esc close'
     : modal.stage === 'inspect' ? 'Enter open · t details · PgUp/PgDn · Esc later'

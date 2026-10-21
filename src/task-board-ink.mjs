@@ -558,7 +558,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         .catch(error => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
     }
   });
-  const visibleHeight = Math.max(1, Math.floor((height - (native ? 7 : 6)) / (native && ['inbox', 'agents'].includes(view) ? 3 : 1))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
+  const visibleHeight = Math.max(1, Math.floor((height - (native ? 8 : 6)) / (native && ['inbox', 'agents', 'schedules'].includes(view) ? 4 : 1))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
   const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
@@ -575,30 +575,51 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   };
   if (quitting) return null;
   const summary = taskCounts(board.tasks);
+  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal);
+  const nativeCounts = view === 'agents'
+    ? `${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
+    : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
+      : view === 'schedules' ? `${board.routines.filter(r => r.state === 'active').length} active   ${board.routines.filter(r => r.state === 'paused').length} paused`
+        : `${summary.open} open   ${summary.active} active   ${summary.blocked} blocked   ${summary.review} in review`;
+  const cardTitle = (title, active, color = 'cyan') => h(Box, { height: 1, overflow: 'hidden' },
+    h(Text, { color: active ? color : 'gray' }, active ? '› ' : '  '),
+    h(Text, { bold: true, inverse: active, color: active ? color : undefined, dimColor: overlay, wrap: 'truncate-end' }, title));
+  const emptyLabel = view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.'
+    : view === 'agents' ? 'No agents advertised.' : view === 'schedules' ? 'No schedules installed.' : showDone ? 'No matching tasks.' : 'No open tasks.';
   const background = h(Box, { width, height, flexDirection: 'column' },
-    h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: Boolean(modal || assignment || reviewModal || detail) }, 'RELAY / TASKS'),
+    h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: overlay }, native ? `RELAY / ${view === 'schedules' ? 'SCHEDULE' : view.toUpperCase()}` : 'RELAY / TASKS'),
       h(Text, { dimColor: true }, native ? offline ? 'Inbox unavailable: showing cached state' : !loaded ? 'Loading inbox…' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`)),
     native ? h(Box, { gap: 2 }, ...[['tasks', 'Tasks'], ['agents', 'Agents'], ['inbox', `Inbox (${offline ? '?' : !loaded ? '…' : board.inbox.length})`], ['schedules', 'Schedule']].map(([id, title]) =>
-      h(Text, { key: id, inverse: view === id, bold: view === id }, ` ${title} `))) : null,
-    h(Text, { dimColor: Boolean(modal || detail), wrap: 'truncate-end' }, `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${offline ? `OFFLINE ${offline}` : loaded ? 'LIVE' : 'LOADING'}${native && board.fetchedAt ? ` · last updated ${new Date(board.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Africa/Johannesburg', hour12: false })} SAST` : ''}`),
-    h(Box, { borderStyle: 'single', borderColor: modal || assignment || reviewModal ? 'gray' : 'cyan', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' },
-      !visible.length && native ? h(Text, { dimColor: true }, view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.' : 'Nothing to show.') : null,
+      h(Text, { key: id, inverse: view === id, bold: view === id, color: view === id ? 'cyan' : undefined, dimColor: view !== id || overlay }, ` ${title} `))) : null,
+    native ? h(Box, { justifyContent: 'space-between', height: 1, overflow: 'hidden' },
+      h(Text, { dimColor: true, wrap: 'truncate-end' }, nativeCounts),
+      h(Text, { color: offline ? 'yellow' : 'gray', wrap: 'truncate-end' }, `${offline ? 'OFFLINE' : loaded ? '● LIVE' : 'LOADING'}${board.fetchedAt ? ` · last updated ${new Date(board.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Africa/Johannesburg', hour12: false })} SAST` : ''}`))
+      : h(Text, { dimColor: Boolean(modal || detail), wrap: 'truncate-end' }, `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${offline ? `OFFLINE ${offline}` : loaded ? 'LIVE' : 'LOADING'}`),
+    h(Box, { borderStyle: native ? 'round' : 'single', borderColor: native || modal || assignment || reviewModal ? 'gray' : 'cyan',
+      paddingX: native ? 1 : 0, paddingTop: native ? 1 : 0, flexDirection: 'column', flexGrow: 1, overflow: 'hidden' },
+      !visible.length && native ? h(Box, { flexGrow: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
+        h(Text, { dimColor: true, wrap: 'truncate-end' }, emptyLabel),
+        h(Text, { dimColor: true, wrap: 'truncate-end' }, view === 'tasks' && !showDone ? 'Press h to include completed tasks.' : 'Tab switches views · r refreshes')) : null,
       ...visible.map((row, index) => {
         const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail && !decisionModal;
-        if (row.type === 'agent') return h(Box, { key: row.id, height: 3, flexDirection: 'column', overflow: 'hidden' },
-          h(Text, { inverse: active, bold: active, color: 'cyan', wrap: 'truncate-end' }, `${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`),
-          h(Text, { wrap: 'truncate-end' }, `  Node: ${clean(row.agent.nodeName || 'Unknown')} · Machine: ${clean(row.agent.machineName || 'Not advertised')} · ${clean(row.agent.directory || 'Workspace not advertised')}`),
+        if (row.type === 'agent') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
+          cardTitle(`${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`, active),
+          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Node: ${clean(row.agent.nodeName || 'Unknown')} · Machine: ${clean(row.agent.machineName || 'Not advertised')} · ${clean(row.agent.directory || 'Workspace not advertised')}`),
           h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Last seen: ${lastSeenLabel(row.agent.lastSeenAt)}`));
-        if (row.type === 'inbox') return h(Box, { key: row.id, height: 3, flexDirection: 'column', overflow: 'hidden' },
-          h(Text, { inverse: active, bold: active, color: 'magenta', wrap: 'truncate-end' }, `${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`),
+        if (row.type === 'inbox') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
+          cardTitle(`${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`, active, row.item.kind === 'review' ? 'magenta' : 'yellow'),
           h(Text, { wrap: 'truncate-end' }, `  ${clean(row.item.summary)}`),
           h(Text, { dimColor: true, wrap: 'truncate-end' }, `  ${clean(row.item.from)} · ${clean(row.item.stateLabel)}${row.item.locationLabel ? ` · ${clean(row.item.locationLabel)}` : ''}`));
+        if (native && row.type === 'routine') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
+          cardTitle(`${clean(row.routine.title)}  [${clean(row.routine.state)}]`, active, 'magenta'),
+          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  ${clean(row.routine.cron)} · ${clean(row.routine.timezone)}`),
+          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Next ${row.routine.nextRunAt ? lastSeenLabel(row.routine.nextRunAt) : '—'} · ${clean(row.routine.target || 'Unresolved target')}`));
         const taskStyle = row.type === 'task' ? taskRowStyle(row.task, Boolean(modal || assignment || reviewModal || detail), row.context) : null;
         const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : ['routine', 'inbox'].includes(row.type) ? 'magenta' : taskStyle.color;
         const dimmed = taskStyle?.dimColor ?? Boolean(modal || assignment || reviewModal || detail);
         return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
           h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, h(Text, { wrap: 'truncate-end', inverse: active,
-            bold: row.type === 'section', dimColor: dimmed, color: tone }, rowText(row))),
+            bold: row.type === 'section' || native && row.type === 'group', dimColor: dimmed || native && row.type === 'group' && !active, color: tone }, rowText(row))),
           row.type === 'task' ? h(Box, { width: native ? Math.min(48, Math.floor(width / 2)) : 13, flexShrink: 0, justifyContent: 'flex-end' },
             h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, native && row.task.attentionLabel
               ? `${labels[row.task.status] ?? row.task.status} · ${decisionText(row.task.attentionLabel)}` : `[${labels[row.task.status] ?? row.task.status}]`)) : null);

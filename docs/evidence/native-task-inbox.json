@@ -58,6 +58,14 @@
     }
   },
   "liveWorkModified": false,
+  "visualPolish": {
+    "focusedTestsPassed": 40,
+    "viewSpecificHeadingsAndCounters": true,
+    "roundedQuietBordersAndSpacedCards": true,
+    "narrowTerminalChecked": true,
+    "keyboardAndDecisionFlowsUnchanged": true,
+    "realFixturePtyAnswerReviewAndScheduleReadsPassed": true
+  },
   "deployedServicesRestarted": false,
   "liveMachineLabels": "Not advertised: running backend/node processes have not been restarted to use the new optional metadata",
   "limitations": [

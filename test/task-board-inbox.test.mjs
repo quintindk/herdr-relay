@@ -143,3 +143,27 @@ test('Agents is separate from Tasks and exposes mode, node, machine, freshness a
   assert.doesNotMatch(frame(instance), /node-secret-identity/);
   await input(instance, 't'); assert.match(frame(instance), /node-secret-identity/);
 });
+
+test('native visual layout uses a view-specific heading, contextual counters and a quiet empty state', async t => {
+  const agents = [{ id: 'a', companyId: 'native', name: 'Interactive worker', mode: 'interactive' },
+    { id: 'b', companyId: 'native', name: 'Headless worker', mode: 'headless' }];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, agents, inbox: [] }), interval: 60000, width: 110, height: 28 }));
+  t.after(() => instance.unmount()); await tick();
+  assert.match(frame(instance), /RELAY \/ TASKS/); assert.match(frame(instance), /╭|╰/);
+  await input(instance, '\t');
+  assert.match(frame(instance), /RELAY \/ AGENTS/); assert.match(frame(instance), /1 interactive\s+1 headless/);
+  await input(instance, '\t');
+  assert.match(frame(instance), /RELAY \/ INBOX/); assert.match(frame(instance), /0 questions\s+0 reviews\s+0 reminders/);
+  assert.match(frame(instance), /No decisions need your attention/); assert.match(frame(instance), /Tab switches views/);
+});
+
+test('native cards and header remain inside a narrow terminal without changing navigation', async t => {
+  const agents = [{ id: 'a', companyId: 'native', displayName: 'A very long interactive worker name', mode: 'interactive',
+    nodeName: 'Long workstation label', machineName: 'desktop', directory: '/work/a-long-folder', availabilityLabel: 'Unknown or stale' }];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, agents }), interval: 60000, width: 54, height: 18 }));
+  t.after(() => instance.unmount()); await tick(); await input(instance, '\t');
+  const lines = frame(instance).split('\n');
+  assert.ok(lines.length <= 18); assert.ok(lines.every(line => [...line].length <= 54));
+  assert.match(frame(instance), /RELAY \/ AGENTS/);
+  await input(instance, '\t'); assert.match(frame(instance), /Question · Prepare deployment/);
+});

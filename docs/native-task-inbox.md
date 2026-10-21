@@ -64,6 +64,12 @@ section. Selecting one opens the same decision component as Inbox. Results,
 comments and recorded question/review activity remain accessible after resolution.
 `Tab` inside task detail changes sections rather than changing the board view.
 
+The native layout uses a view-specific heading and counters, subdued rounded
+borders, highlighted tabs and spaced cards for agents, decisions and schedules.
+Secondary metadata is dimmed, while selection and decision types retain colour.
+Empty views explain what to do next. Scheduling instants are displayed in SAST.
+This presentation does not alter keyboard controls or decision semantics.
+
 ## Agents, nodes and machines
 
 **Agents** is a separate read-only directory, not an empty-agent list mixed into
