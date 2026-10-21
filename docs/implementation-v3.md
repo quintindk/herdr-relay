@@ -525,3 +525,23 @@ restarted, so their existing machine labels remain unadvertised. The isolated
 OpenCode 2.1.2 daemon/TUI smoke verified actual hostname/platform advertisement
 alongside question/answer/review. Final follow-up regression passed 1,506 root
 tests, one skipped, zero failed, plus all 30 v2 tests and syntax/whitespace checks.
+
+## Live rollout and native board test preparation, 2026-10-21
+
+After explicit user approval, the native backend and three local node daemons
+were refreshed to the pushed implementation. The two managed nodes retained their
+user-service installation. The manual local node was gracefully stopped through a
+verified process handle and started with the same maintained CLI/configuration,
+without installing another service. Preflight found no unsettled executions,
+notices or outbox entries, and private online backups of the backend plus three
+node journals passed integrity checks. Schedules remained paused/expired and
+their definitions/revisions were unchanged.
+
+The backend now advertises machine metadata support, and all three local nodes
+report their actual local hostname/platform. Original native conversation bindings
+remain intact. OpenCode, models, permissions and credentials were not restarted
+or replaced. The actual-human native board test is now waiting on its first
+question. Only the human board may publish its answer/review; the worker checks
+terminal/dialog provenance. These orderly restarts are rollout evidence, not
+crash-recovery or physical-machine certification. Evidence:
+[rollout and board preparation](evidence/native-machine-rollout-board-live.json).
