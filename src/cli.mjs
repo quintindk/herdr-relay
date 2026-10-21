@@ -14,6 +14,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 const help = `herdr-relay (development)
   service --paperclip-url URL [--state-dir DIR] [--backend-context FILE] [--herdr-config FILE]
   status
+  native --help  [native backend enrolment, tasks, executions, schedules, worker CLI and board]
   company provision --file company.json
   agent list
   agent discover
@@ -101,6 +102,10 @@ Pull settlement is operator-attested. Native settlement requires a matching
 terminal response. Automatic interruption requires a dedicated owned runtime.`;
 
 export async function main(args) {
+  if (args[0] === 'native') {
+    const { main: native } = await import('./native-cli.mjs');
+    return native(args.slice(1));
+  }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: Object.fromEntries(
     ['context', 'file', 'context-out', 'paperclip-url', 'state-dir', 'key', 'company', 'summary-file', 'question-file', 'candidate', 'outcome', 'evidence', 'interaction', 'directory', 'source', 'backend-context', 'herdr-config', 'task', 'timeout', 'project', 'status', 'agent', 'user', 'parent', 'limit', 'cursor', 'from', 'to', 'namespace', 'external-id']
       .map(name => [name, { type: 'string' }]).concat([['help', { type: 'boolean' }], ['watch', { type: 'boolean' }], ['json', { type: 'boolean' }], ['reserved', { type: 'boolean' }]])) });

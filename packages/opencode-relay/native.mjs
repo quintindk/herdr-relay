@@ -4,10 +4,11 @@ function check(condition, code) {
   if (!condition) throw Object.assign(new Error(code), { code });
 }
 
-export const supportedV2Versions = Object.freeze(['2.1.0', '2.1.2']);
-
 export function checkV2Version(version) {
-  check(supportedV2Versions.includes(version), 'unsupported_native_version');
+  // Major-version admission is not API certification. Exact identity, decoded
+  // response contracts and correlated native terminal checks still fail closed.
+  check(typeof version === 'string' && version.trim() === version &&
+    /^2\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version), 'unsupported_native_version');
   return version;
 }
 

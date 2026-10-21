@@ -4,7 +4,8 @@ This isolated package implements the first v2 runtime probe for
 [specification v3](../../docs/spec-v3.md). It is not the production Relay bridge.
 It does not change global OpenCode configuration or integrate into the v1 service.
 
-Pinned CLI, plugin and client: **2.1.0**. Node.js 24+ is required. The TUI smoke also
+Reproducible fixture CLI/plugin/client dependencies: **2.1.0**. Runtime admission
+accepts **2.x**, with live evidence on 2.1.0 and 2.1.2. Node.js 24+ is required. The TUI smoke also
 requires Python 3 with Unix PTY support. Each package has its own lockfile.
 
 ```bash
@@ -79,6 +80,6 @@ offline job publication are exercised by the extended backend smoke. This does n
 certify real-model or physical cross-machine operation.
 
 For the headless-only probe, run `npm --prefix packages/opencode-relay run smoke`.
-`RELAY_V2_BINARY` can select an isolated binary, but its reported version must match
-the pinned baseline. The evidence is in
+`RELAY_V2_BINARY` can select an isolated 2.x binary. Major-version admission does
+not bypass the identity, API and native settlement checks. The evidence is in
 [the v2 spike report](../../docs/opencode-v2-spike.md).

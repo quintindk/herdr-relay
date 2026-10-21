@@ -175,6 +175,25 @@ test('Ink task rows colour active and review states and dim terminal states', as
   assert.deepEqual(taskRowStyle(tasks[0], false, true), { color: undefined, dimColor: true });
 });
 
+test('Ink native cron detail shows paused taskless completion receipts and sanitises summaries', async t => {
+  const routine = { id: 'native-job', companyId: 'native', title: 'native-job', state: 'paused', cron: '* * * * *',
+    timezone: 'Africa/Johannesburg', executionMode: 'interactive_exact', backendStatus: 'applied', nextRunAt: null,
+    nextRunIsEstimate: true, targetAgentId: 'chat', delivery: { state: 'paused', reason: 'Requested revision 2, applied 2' },
+    runs: [{ id: 'occurrence', status: 'completed', triggeredAt: '2026-10-21T07:38:00Z', nativeOccurrence: true,
+      linkedIssueId: null, summary: 'Cron completed\n\u001b[31m\u202e safely' }] };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ companies: [{ id: 'native', name: 'Relay' }],
+    agents: [], projects: [], tasks: [], routines: [routine], warnings: [] }),
+  detailRoutine: async () => routine, detailTask: async () => assert.fail('Taskless occurrence must not open a task'),
+  interval: 60000, width: 120, height: 26 }));
+  t.after(() => instance.unmount()); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /native-job.*paused/);
+  instance.stdin.write('\r'); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  assert.match(frame, /CRON · native-job/); assert.match(frame, /clock preview/);
+  assert.match(frame, /completed.*taskless.*Cron completed/);
+  assert.doesNotMatch(frame, /identity mismatch|not on board|\u202e/);
+});
+
 test('Ink task detail clips long content and scrolls inside a fixed modal viewport', async t => {
   const description = Array.from({ length: 40 }, (_, index) => `Evidence line ${String(index + 1).padStart(2, '0')} with enough text to render.`).join('\n');
   const instance = render(h(TaskBoardInkApp, { read: async () => board,

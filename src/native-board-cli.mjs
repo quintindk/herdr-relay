@@ -15,7 +15,7 @@ try {
   else {
     requireValue(process.stdin.isTTY && process.stdout.isTTY, 'terminal_required', 'Interactive board requires a TTY, or use --json');
     await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask,
-      statusTask: board.statusTask, reviewTask: board.reviewTask });
+      statusTask: board.statusTask, reviewTask: board.reviewTask, detailRoutine: board.detailRoutine });
   }
 } catch (error) {
   console.error(JSON.stringify({ code: error.code ?? 'board_failed', message: error.message })); process.exitCode = 1;

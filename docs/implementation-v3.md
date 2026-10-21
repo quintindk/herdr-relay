@@ -348,8 +348,9 @@ or tests.
 The user explicitly requested enrolling this already-open conversation and testing
 a cron here. Its native service was OpenCode 2.1.2 rather than the 2.1.0 spike
 baseline. Read-only exact identity/history verification passed, followed by the
-isolated 2.1.2 backend/worker-tool/daemon/two-TUI smoke. The native version guard now
-admits only the explicitly exercised 2.1.0 and 2.1.2 releases, not arbitrary patches.
+isolated 2.1.2 backend/worker-tool/daemon/two-TUI smoke. At that checkpoint, version
+admission allowed only the explicitly exercised 2.1.0 and 2.1.2 releases. The
+subsequent user-requested 2.x policy is recorded below.
 
 External bindings may explicitly select `workerTransport: "cli"` when the existing
 chat already has shell access. The default remains direct worker tools. The
@@ -374,3 +375,45 @@ Follow-up verification passed: 1,466 root tests with one skipped and zero failed
 all 21 v2 tests, syntax/whitespace checks, and the isolated 2.1.2 owned
 launch/interruption/provision/stop/resume smoke. The latter retained the original
 session through verified stop and idle-process crash recovery.
+
+## Native CLI and schedule visibility follow-up, 2026-10-21
+
+The enrolment/cron smoke originally used temporary operator scripts for setup and
+pause-after-first-admission. They called native commands and the maintained node
+installer, not direct database writes. Native admission, intent, invocation,
+worker staging, settlement and publication still ran through the node/backend.
+That was execution evidence, not proof of a complete operator CLI. The live job
+was taskless. It did not test task creation, comments or a manual Done transition.
+
+The maintained `node src/cli.mjs native` entry point now covers exact interactive
+enrolment, separate node installation/run, task creation/edit/comment/status,
+execution requests/cancellation, schedule preview/create/list/inspect/control,
+occurrence reads, scoped worker commands and the native board. Legacy commands
+retain their old backend. Stable mutation keys, backend revision checks and
+owner-versus-worker credentials remain mandatory. Advanced mutations without a
+named verb still use the explicit native command API. Cron run-now remains absent.
+
+The native board previously hard-coded `routines: []`. It now reads schedules,
+including paused ones, and displays requested/applied state plus published
+occurrence receipts and summaries. Next-run values are labelled clock previews,
+not admission guarantees. Existing panes must be reopened to load the changed
+adapter. Live read-only PTY verification against the deployed backend displayed
+this chat's paused cron and completed receipt, then exited cleanly. The maintained
+enrolment CLI also verified this existing binding without replacing it or changing
+its service/policy. The test schedule remains paused.
+
+Runtime version admission now accepts 2.x by user instruction. Other majors and
+malformed versions remain refused. Exact identity, decoded API responses,
+pagination, idle/inbox, durable intent and native terminal correlation still fail
+closed. This is not certification of every future 2.x release. Dependency
+lockfiles stay reproducible. See [native CLI](native-cli.md) for exact commands,
+payloads, authority boundaries and remaining gaps.
+
+Verification passed: 1,478 root tests, one skipped, zero failed. All 21 v2 tests,
+syntax/Python syntax/whitespace checks and the real OpenCode 2.1.2
+backend/tool/daemon/two-TUI smoke passed. The new CLI/board tests cover task and
+comment writes, explicit execution requests, schedule revisions/activation, scoped
+submission without fabricated settlement, rejected privilege escalation,
+idempotent enrolment, lost credential replies and real PTY schedule detail/quit.
+The three original temporary setup/watch scripts were retired after verification.
+Evidence: [native CLI and board](evidence/native-cli-board.json).

@@ -194,12 +194,14 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
   }
   if (!detail.loading && !detail.error && detail.kind === 'routine') {
     const routine = detail.data;
-    content = [`${routine.state} / backend ${routine.backendStatus} / ${routine.executionMode}`,
+    content = [`${routine.state} / backend ${routine.backendStatus} / ${routine.intent === 'reminder' ? 'human reminder' : routine.executionMode}`,
       `${routine.cron} · ${routine.timezone}`,
-      `Next ${routine.nextRunAt || 'none'} · target ${routine.targetAgentId || routine.targetBindingId || routine.targetDirectory || 'unresolved'}`,
+      `Next${routine.nextRunIsEstimate ? ' (clock preview)' : ''} ${routine.nextRunAt || 'none'} · target ${routine.targetAgentId || routine.targetBindingId || routine.targetDirectory || 'unresolved'}`,
       ...(routine.delivery ? [`Delivery ${routine.delivery.state}${routine.delivery.reason ? ` · ${routine.delivery.reason}` : ''}`] : []),
       '', `Recent occurrences (${routine.runs.length}${routine.runs.length === 50 ? '+' : ''})`,
-      ...detail.occurrences.map(entry => `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.task?.identifier || entry.run.linkedIssueId || 'unlinked'}  ${entry.task ? entry.task.status : entry.mismatch ? 'identity mismatch' : 'not on board'}`)];
+      ...detail.occurrences.map(entry => entry.run.nativeOccurrence
+        ? `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.run.linkedIssueId || 'taskless'}  ${clean(entry.run.summary).replace(/[\u202a-\u202e\u2066-\u2069]/g, '')}`
+        : `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.task?.identifier || entry.run.linkedIssueId || 'unlinked'}  ${entry.task ? entry.task.status : entry.mismatch ? 'identity mismatch' : 'not on board'}`)];
   }
   const scrollKey = detail.kind === 'task' ? taskTabs[tab] : 'Routine';
   const scroll = scrolls[scrollKey] ?? 0;
@@ -260,7 +262,7 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
     h(Box, { height: viewportHeight, flexDirection: 'column', overflow: 'hidden', marginTop: 1 },
       ...content.slice(scroll, scroll + viewportHeight).map((line, index) => {
         const absolute = scroll + index, occurrenceIndex = absolute - occurrenceStart, entry = occurrenceIndex >= 0 ? occurrences[occurrenceIndex] : null;
-        return h(Text, { key: `${scroll}:${index}`, bold: absolute === occurrenceStart - 1, inverse: occurrenceIndex === detail.occurrence,
+        return h(Text, { key: `${scroll}:${index}`, wrap: 'truncate-end', bold: absolute === occurrenceStart - 1, inverse: occurrenceIndex === detail.occurrence,
           color: entry?.task ? 'cyan' : entry?.mismatch ? 'red' : undefined }, line || ' ');
       })),
     h(Box, { justifyContent: 'space-between' },
@@ -490,7 +492,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     const tasks = new Map(board.tasks.map(task => [`${task.companyId}:${task.id}`, task]));
     const occurrences = detail.data.runs.map(run => {
       const task = run.linkedIssueId ? tasks.get(`${detail.data.companyId}:${run.linkedIssueId}`) : null;
-      const match = task && task.origin?.kind === 'routine_execution' && task.origin.routineId === detail.data.routineId && task.origin.runId === run.id;
+      const match = task && (run.nativeOccurrence ? run.nativeTaskId === task.id
+        : task.origin?.kind === 'routine_execution' && task.origin.routineId === detail.data.routineId && task.origin.runId === run.id);
       return { run, task: match ? task : null, mismatch: Boolean(task && !match) };
     });
     detailView = { ...detail, occurrences, occurrence, setOccurrence };

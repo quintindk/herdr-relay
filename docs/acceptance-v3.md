@@ -172,7 +172,7 @@ as completed. Its pause reached applied revision 2. No replacement conversation,
 native restart, plugin reload, model switch or permission change was needed.
 See [existing-session evidence](evidence/native-current-session-cron.json).
 
-The adapter now explicitly admits 2.1.0 and 2.1.2, with an isolated 2.1.2
+The adapter at that checkpoint explicitly admitted 2.1.0 and 2.1.2, with an isolated 2.1.2
 backend/tool/daemon/two-TUI smoke preceding enrolment. External
 `workerTransport: "cli"` is an explicit operator choice, not a fallback around
 denied shell access.
@@ -183,3 +183,26 @@ Follow-up checkpoint: 1,466 root tests passed, one skipped, zero failed. All 21 
 tests and syntax/whitespace checks passed. The isolated OpenCode 2.1.2 owned-runtime
 and provisioning smoke also passed launch, interruption, verified stop and
 same-session resume after an idle process crash.
+
+### Operator CLI and schedule visibility
+
+The initial live smoke's temporary operator setup/pause scripts were not complete
+CLI parity. The maintained `native` entry point now exposes enrolment, node
+installation/run, task/comment/status, execution request/cancel, schedule control,
+occurrence reads, worker staging and the board. Advanced actions still have the
+explicit command API. Cron run-now and full natural-chat/UI mutation parity remain
+open. Enrolment is tested for repeat calls, lost credential replies and scope
+changes. Worker submission remains staged until native settlement.
+
+Native schedule rows no longer disappear behind a hard-coded empty array. Paused
+jobs and completed taskless receipts are visible, with requested/applied state
+kept separate. The deployed backend's real task-pane PTY read/quit passed. No
+agent was restarted and the current-chat cron stayed paused. Runtime admission is
+now 2.x rather than a patch allow-list, with native/API guards preserved. This
+does not replace release-by-release compatibility evidence.
+
+Checkpoint: 1,478 root tests passed, one skipped, zero failed. All 21 v2 tests,
+syntax/whitespace/Python syntax checks and the OpenCode 2.1.2
+backend/tool/daemon/two-TUI smoke passed. Read-only deployed-backend enrolment and
+schedule readback preserved the existing binding and paused revision 2. Evidence:
+[native CLI and schedule board](evidence/native-cli-board.json).

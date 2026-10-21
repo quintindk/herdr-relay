@@ -4,6 +4,8 @@ import { startBackend } from '../src/backend-service.mjs';
 import { nativeBackendClient } from '../src/backend-client.mjs';
 import { nativeBoard } from '../src/native-board.mjs';
 import { buildBoardRows } from '../src/task-board-view.mjs';
+import { renderTaskBoard } from '../src/task-board-view.mjs';
+import { digest } from '../src/protocol.mjs';
 
 test('native board traverses collections and updates status through current backend revisions', async () => {
   const backend = await startBackend({ database: ':memory:' });
@@ -49,4 +51,42 @@ test('native board displays readable identifiers without changing task identity'
   assert.equal(snapshot.tasks[2].identifier, 'RELAY-7');
   assert.equal((await board.inspectTask({ taskId: opaque })).task.identifier, 'DEF-42');
   assert.equal((await board.detailTask({ taskId: opaque })).task.id, opaque);
+});
+
+test('native board displays paused schedules and completed taskless occurrences without inventing local admission', async () => {
+  const backend = await startBackend({ database: ':memory:' });
+  try {
+    const token = backend.store.bootstrap().token;
+    const owner = backend.store.authenticate(token);
+    const command = (actor, key, action, payload) => backend.store.command(actor, { key, action, payload });
+    command(owner, 'node', 'node.enrol', { id: 'node', name: 'Node' });
+    const node = backend.store.authenticate(backend.store.enrolCredential(owner, 'node', 'credential').token);
+    command(node, 'agent', 'agent.register', { id: 'agent', nodeId: 'node', name: 'Chat', mode: 'interactive' });
+    command(node, 'ad', 'agent.advertise', { id: 'agent', expectedRevision: 1, availability: 'available', conversationId: 'chat' });
+    command(owner, 'schedule', 'schedule.install', { id: 'visible-job', definition: { nodeId: 'node', targetAgentId: 'agent',
+      targetConversationId: 'chat', cron: '* * * * *', enabled: true, instructions: 'Check' } });
+    const board = nativeBoard(nativeBackendClient({ url: backend.origin, token }));
+    let snapshot = await board.read();
+    assert.equal(snapshot.routines[0].state, 'change_pending'); assert.equal(snapshot.routines[0].nextRunAt, null);
+    command(node, 'ack', 'schedule.acknowledge', { id: 'visible-job', expectedRevision: 1 });
+    snapshot = await board.read();
+    assert.equal(snapshot.routines[0].state, 'active'); assert.equal(snapshot.routines[0].nextRunIsEstimate, true);
+    const intendedAt = '2026-10-21T07:38:00.000Z';
+    command(node, 'publish', 'schedule.publish', { id: `occurrence_${digest(['visible-job', intendedAt])}`, scheduleId: 'visible-job',
+      definitionRevision: 1, intendedAt, candidate: 'candidate', summary: 'Live cron completed', evidence: 'Exact native terminal' });
+    command(owner, 'pause', 'schedule.pause', { id: 'visible-job', expectedRevision: 1 });
+    command(node, 'pause-ack', 'schedule.acknowledge', { id: 'visible-job', expectedRevision: 2 });
+    snapshot = await board.read();
+    assert.equal(snapshot.routines[0].state, 'paused'); assert.equal(snapshot.routines[0].executionMode, 'interactive_exact');
+    assert.match(renderTaskBoard(snapshot, { width: 160, height: 40 }).text, /visible-job/);
+    const detail = await board.detailRoutine({ scheduleId: 'visible-job' });
+    assert.equal(detail.runs[0].status, 'completed'); assert.equal(detail.runs[0].linkedIssueId, null);
+    assert.equal(detail.runs[0].summary, 'Live cron completed');
+  } finally { await backend.close(); }
+});
+
+test('native board refuses repeated collection cursors instead of silently hiding schedules', async () => {
+  const board = nativeBoard(async (method, path) => path.startsWith('/v1/schedules?')
+    ? { items: [], nextCursor: 'loop' } : { items: [] });
+  await assert.rejects(board.read(), { code: 'incomplete_collection' });
 });

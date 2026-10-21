@@ -22,6 +22,7 @@
     "scripts/plugin-launch.sh",
     "scripts/toggle-board.py",
     "scripts/native-board-launch.mjs",
+    "scripts/install-native-node.mjs",
     "herdr-plugin.toml",
     "docs/*.md"
   ],

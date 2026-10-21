@@ -32,8 +32,9 @@ identity, a loopback URL and private native password file. Hermes bindings use t
 existing reserved Hermes contract. A daemon restart with no native bindings has
 been verified after stopping its backend, using its persisted instance pin.
 
-Native version admission explicitly supports OpenCode 2.1.0 and 2.1.2. Other
-releases remain refused until validated. External `opencode-v2` bindings default
+Native version admission accepts OpenCode 2.x. Compatibility has been exercised
+on 2.1.0 and 2.1.2. Other majors remain refused and API/identity/terminal checks
+still fail closed. External `opencode-v2` bindings default
 to direct worker tools. An operator may explicitly set `workerTransport: "cli"`
 for an existing conversation whose shell tool is already available. That path
 uses the same session-scoped worker credential and exact execution/run checks,
@@ -142,6 +143,11 @@ test controller's pause reached applied revision 2. The existing native service,
 model, plugins and permissions were unchanged. The chat remains enrolled and its
 test schedule is paused.
 
+The maintained [native CLI](native-cli.md) now exposes enrolment, node installation,
+tasks/comments, execution requests, schedules, scoped worker staging and the native
+board under `node src/cli.mjs native`. Custom JavaScript is not required for these
+operations. The advanced operator command API remains available explicitly.
+
 ## Routes
 
 - `GET /v1/info`: protocol and instance identity.
@@ -190,7 +196,11 @@ or transfer implicitly to another node. During backend disconnection, installed
 scope remains authoritative until the owner observes a change.
 
 `src/native-board-cli.mjs --context /private/owner.json` reuses the Ink task pane
-against native records, with `--json` for noninteractive output. Assignment is
+against native records, with `--json` for noninteractive output. The CRON section
+includes paused schedules and requested/applied revisions. Detail shows published
+occurrence status and summaries, including taskless jobs. Next times are previews,
+not local admission receipts. Reopen an existing pane process to load this adapter.
+Assignment is
 deliberately separate from execution. Status edits and exact candidate review use
 backend revisions. Status-plus-comment commits atomically. Full UI parity remains pending.
 

@@ -32,6 +32,9 @@ The [acceptance ledger](docs/acceptance-v3.md) lists passed, partial and outstan
 release gates, including the manual second-machine installation.
 The [Paperclip task migration guide](docs/paperclip-task-migration.md) describes
 read-only export/planning and explicit native import before laptop v2 cutover.
+The [native CLI](docs/native-cli.md) provides explicit `native` enrolment,
+task/comment/execution/schedule and worker commands, separate from the legacy
+commands below. Native task panes include schedules and published occurrences.
 
 ## Implemented
 
