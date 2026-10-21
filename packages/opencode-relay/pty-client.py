@@ -24,6 +24,7 @@ try:
     next_attempt = time.monotonic() + 5
     notified = False
     decision_sent = False
+    new_chat_sent = False
     inbox_steps = set()
     while child.poll() is None and time.monotonic() < deadline:
         if config.get("passiveUntil") and os.path.exists(config["passiveUntil"]):
@@ -39,7 +40,7 @@ try:
             if b"\x1b[6n" in chunk:
                 os.write(master, b"\x1b[1;1R")
         if time.monotonic() >= next_attempt and os.path.exists(config["evidenceFile"]):
-            command = b"/relay-reminders" if config.get("reminder") else b"/relay-reviews" if config.get("review") else b"/relay-decisions" if config.get("proposals") else b"/relay-questions" if config.get("inbox") else b"/relay-spike-confirm" if config.get("decision") else b"/relay-spike"
+            command = b"/relay-enrol" if config.get("enrol") else b"/relay-attach" if config.get("attach") else b"/relay-reminders" if config.get("reminder") else b"/relay-reviews" if config.get("review") else b"/relay-decisions" if config.get("proposals") else b"/relay-questions" if config.get("inbox") else b"/relay-spike-confirm" if config.get("decision") else b"/relay-spike"
             os.write(master, b"\x15" + command)
             time.sleep(0.5)
             os.write(master, b"\r")
@@ -48,6 +49,18 @@ try:
         if sent and os.path.exists(config["evidenceFile"]):
             with open(config["evidenceFile"], encoding="utf-8") as handle:
                 evidence = handle.read()
+                if config.get("enrol") or config.get("attach"):
+                    for step, keys in [("enrolment_name", b"TUI fixture agent\r"), ("enrolment_confirm", b"\r")]:
+                        if ('"type":"' + step + '"') in evidence and step not in inbox_steps:
+                            time.sleep(0.5)
+                            os.write(master, keys)
+                            inbox_steps.add(step)
+                            next_attempt = deadline
+                    if config.get("autoNewChat") and '"type":"receiver_attached"' in evidence and not new_chat_sent:
+                        time.sleep(0.5)
+                        with open(config["newChatTrigger"], "w", encoding="utf-8") as trigger:
+                            trigger.write("create")
+                        new_chat_sent = True
                 if config.get("inbox"):
                     for step, keys in [("inbox_select", b"\r"), ("inbox_answer", b"South Africa North\r"), ("inbox_confirm", b"\r")]:
                          if ('"type":"' + step + '"') in evidence and step not in inbox_steps:
@@ -76,8 +89,8 @@ try:
                     os.write(master, b"\r")
                     decision_sent = True
                     next_attempt = deadline
-                done = '"type":"human_decision_refused"' if config.get('expectRefused') else '"type":"human_decision"' if config.get("inbox") or config.get("proposals") or config.get("review") else '"type":"decision"' if config.get("decision") else '"type":"notification"'
-                if done in evidence:
+                done = '"type":"receiver_attached"' if config.get("enrol") or config.get("attach") else '"type":"human_decision_refused"' if config.get('expectRefused') else '"type":"human_decision"' if config.get("inbox") or config.get("proposals") or config.get("review") else '"type":"decision"' if config.get("decision") else '"type":"notification"'
+                if done in evidence and (not config.get("autoNewChat") or evidence.count('"type":"receiver_attached"') >= 2):
                     notified = True
                     if not config.get("passiveUntil"):
                         break

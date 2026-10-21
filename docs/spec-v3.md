@@ -230,8 +230,11 @@ requests, runs, interactions, schedules and occurrences. Bindings retain their o
 identity/revision for the exact native conversation. Native provider IDs are
 mappings, not public UUID validation rules. Names and paths are not identities.
 
-Each agent has one owning node in this version. Conversation replacement does not
-silently transfer executions or review rights. A directory reference includes its
+Each agent has one owning node in this version. A durable workspace/role enrolment
+is independent of its receiving conversation. Explicit attachment, or a new-chat
+launch under its standing grant, advances the receiver generation for future
+admissions. Conversation replacement does not silently transfer admitted
+executions or review rights. A directory reference includes its
 node. The same path on two machines is not the same resource.
 
 Nodes publish their local directory and last-seen state. Discovery shows node,
@@ -423,6 +426,10 @@ Defaults are no overlap per schedule/binding and skipping missed recurring firin
 after downtime. Busy/offline deferral is visible and bounded by installed policy.
 Admitted native targets are pinned. Preserve exact-chat versus explicitly
 authorised node/folder targeting. Never infer replacements from names or paths.
+Persistent agent schedules address a stable node/agent pair and resolve its
+designated receiver at occurrence admission. Replacing that chat does not transfer
+schedule ownership or change the schedule definition. Exact-chat targeting is an
+explicit non-persistent option. See [the receiver contract](native-receivers.md).
 
 Jobs may keep local occurrence history, attach to a standing task, or explicitly
 create a task per occurrence. Frequent polling must not require an issue per tick.

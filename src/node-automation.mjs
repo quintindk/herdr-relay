@@ -45,6 +45,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
   reconcileScheduleDefinitions(journal, clock);
   tickLocalSchedules(journal, clock);
   for (const row of journal.db.prepare("SELECT data FROM occurrences WHERE state IN ('pending','admitted','uncertain','waiting_question') ORDER BY id").all()) {
+    try {
     let occurrence = JSON.parse(row.data);
     let work = journal.work(occurrence.id);
     if (occurrence.definition.intent === 'reminder') {
@@ -73,7 +74,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
         saveOccurrence('cancelled', { reason: 'Installed schedule no longer admits pending work' }); continue;
       }
     }
-    const binding = work ? await resolveBinding(work.execution.targetAgentId) : occurrence.definition.targetFolder ?
+    const binding = work ? await resolveBinding(work.execution.targetAgentId, work) : occurrence.definition.targetFolder ?
       await resolveBinding.folder?.(occurrence.definition.targetFolder) : await resolveBinding(occurrence.definition.targetAgentId);
     if (!binding) {
       if (!work) saveOccurrence('pending', { admission: { state: 'deferred', reason: 'target_unavailable_or_ambiguous' } });
@@ -181,6 +182,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
         ...(binding.prepareInvocation?.(snapshot) ?? {}),
         prompt: `Relay local occurrence ${occurrence.id}.\n${execution.instructions}\n${binding.workerInstructions?.(execution) ?? ''}`, createdAt: now() };
       journal.transaction(() => {
+        journal.assertReceiver(binding);
         work = journal.save({ id: occurrence.id, bindingId: binding.id, nativeConversationId: exactConversation, execution, invocation, state: 'intent' });
         saveOccurrence('admitted', { bindingId: binding.id });
       });
@@ -233,5 +235,11 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
       journal.archive({ ...work, observation });
       journal.save({ ...journal.work(work.id), observation, state: 'settled' });
     });
+    } catch (error) {
+      if (!['native_identity_mismatch', 'receiver_replaced'].includes(error.code)) throw error;
+      const occurrence = JSON.parse(journal.db.prepare('SELECT data FROM occurrences WHERE id=?').get(JSON.parse(row.data).id).data);
+      journal.db.prepare('UPDATE occurrences SET data=? WHERE id=?').run(JSON.stringify({ ...occurrence,
+        recovery: { state: 'blocked', reason: error.code ?? 'native_or_backend_unavailable' } }), occurrence.id);
+    }
   }
 }

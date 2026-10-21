@@ -152,7 +152,8 @@ export class BackendStore {
         return JSON.parse(previous.data);
       }
       const value = fn();
-      const eventType = action === 'task.create' && value.id !== payload.id ? 'task.reference_reused' : action;
+      const eventType = action.startsWith('agent.schedule_') ? `schedule.${action.slice('agent.schedule_'.length)}` :
+        action === 'task.create' && value.id !== payload.id ? 'task.reference_reused' : action;
       this.event(eventType, value, actor, key);
       this.db.prepare('INSERT INTO receipts VALUES (?,?,?,?)').run(identity, key, hash, JSON.stringify(value));
       return value;
@@ -164,7 +165,7 @@ export class BackendStore {
     requireValue(payload && typeof payload === 'object' && !Array.isArray(payload), 'invalid_request', 'Payload required');
     return this.mutate(actor, key, action, payload, () => this.apply(actor, action, structuredClone(payload)));
   }
-  apply(actor, action, p) {
+  apply(actor, action, p, authority = {}) {
     const created = (kind, input) => {
       requireValue(validId(input.id) && !this.get(kind, input.id, false), 'identity_conflict', `Unique ${kind} identity required`, 409);
       return this.save(kind, { ...input, revision: 1, createdAt: now(), updatedAt: now() });
@@ -201,6 +202,34 @@ export class BackendStore {
       this.db.prepare('UPDATE credentials SET data=? WHERE id=?').run(JSON.stringify(credential), p.id);
       return { id: p.id, revision: 1, revoked: true };
     }
+    if (action === 'agent.enrol') {
+      this.ownerOnly(actor);
+      fields(p, ['id', 'nodeId', 'name', 'directory'], ['id', 'nodeId', 'name', 'directory']);
+      this.get('node', p.nodeId);
+      string(p.name, 'name', 256);
+      requireValue(typeof p.directory === 'string' && isAbsolute(p.directory) && normalize(p.directory) === p.directory && p.directory.length <= 4096,
+        'invalid_directory', 'Canonical absolute enrolled directory required');
+      requireValue(!this.all('agent').some(a => a.nodeId === p.nodeId && a.directory === p.directory && a.name === p.name && a.standingGrant),
+        'enrolment_exists', 'This workspace and agent name already have an enrolment', 409);
+      return created('agent', { ...p, mode: 'interactive', capabilities: [], ownerId: this.owner, bindingRevision: 0,
+        standingGrant: { autoAttach: true, scheduleManagement: true, userId: actor.id, at: now() } });
+    }
+    if (action === 'agent.attach') {
+      this.ownerOnly(actor);
+      fields(p, ['id', 'expectedBindingRevision', 'conversationId', 'directory', 'bindingId'],
+        ['id', 'expectedBindingRevision', 'conversationId', 'directory', 'bindingId']);
+      const agent = this.get('agent', p.id);
+      requireValue(agent.standingGrant && agent.directory === p.directory, 'enrolment_scope_mismatch', 'Standing workspace enrolment required');
+      requireValue(Number.isSafeInteger(p.expectedBindingRevision) && p.expectedBindingRevision === agent.bindingRevision,
+        'stale_binding', 'Receiving chat changed. Inspect before attaching', 409);
+      string(p.conversationId, 'conversationId', 512);
+      requireValue(validId(p.bindingId), 'invalid_binding', 'Exact binding identity required');
+      requireValue(!this.all('agent').some(a => a.id !== agent.id && a.nodeId === agent.nodeId && a.conversationId === p.conversationId),
+        'conversation_alias', 'Conversation already receives work for another agent');
+      return changed('agent', agent, { bindingId: p.bindingId, bindingRevision: agent.bindingRevision + 1,
+        conversationId: p.conversationId, availability: 'unknown',
+        attachment: { userId: actor.id, previousConversationId: agent.conversationId ?? null, at: now() } });
+    }
     if (action === 'agent.register') {
       fields(p, ['id', 'nodeId', 'name', 'capabilities', 'mode', 'directory'], ['id', 'nodeId', 'name', 'mode']);
       if (p.directory !== undefined) requireValue(typeof p.directory === 'string' && isAbsolute(p.directory) &&
@@ -220,6 +249,8 @@ export class BackendStore {
         'invalid_advertisement', 'Invalid agent availability or identity');
       requireValue(!agent.conversationId || p.conversationId === undefined || p.conversationId === agent.conversationId,
         'conversation_adoption_required', 'Explicit human adoption required to replace an advertised conversation');
+      requireValue(!agent.standingGrant || p.conversationId === agent.conversationId && p.bindingRevision === agent.bindingRevision,
+        'stale_binding', 'Advertisement cannot replace the designated receiver');
       return changed('agent', agent, { availability: p.availability, bindingRevision: p.bindingRevision ?? null,
         conversationId: p.conversationId ?? null, lastSeenAt: now() });
     }
@@ -227,6 +258,7 @@ export class BackendStore {
       this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision', 'conversationId', 'bindingRevision'], ['id', 'expectedRevision', 'conversationId', 'bindingRevision']);
       const agent = this.get('agent', p.id); this.revision(agent, p.expectedRevision);
+      requireValue(!agent.standingGrant, 'attachment_required', 'Standing agents use revisioned attachment, not adoption');
       string(p.conversationId, 'conversationId', 512);
       requireValue(Number.isSafeInteger(p.bindingRevision) && p.bindingRevision > (agent.bindingRevision ?? 0), 'stale_binding', 'Newer binding revision required');
       requireValue(!this.all('execution').some(e => (e.targetAgentId === agent.id || e.originAgentId === agent.id) && !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)) &&
@@ -246,8 +278,22 @@ export class BackendStore {
       requireValue(!agent.directory || agent.directory === p.directory, 'directory_migration_required', 'Enrolled directory cannot be changed in place');
       return changed('agent', agent, { directory: p.directory });
     }
+    if (['agent.schedule_install', 'agent.schedule_pause', 'agent.schedule_resume', 'agent.schedule_cancel'].includes(action)) {
+      fields(p, ['agentId', 'conversationId', 'bindingRevision', 'payload'], ['agentId', 'conversationId', 'bindingRevision', 'payload']);
+      const agent = this.agent(actor, p.agentId);
+      this.nodeOnly(actor, agent.nodeId);
+      requireValue(agent.standingGrant?.scheduleManagement && p.conversationId === agent.conversationId && p.bindingRevision === agent.bindingRevision,
+        'stale_binding', 'Only the designated receiver may manage its agent schedules', 409);
+      const operation = action.slice('agent.schedule_'.length);
+      requireValue(p.payload && typeof p.payload === 'object' && !Array.isArray(p.payload), 'invalid_request', 'Exact schedule payload required');
+      string(p.payload.id, 'schedule id', 256);
+      const definition = operation === 'install' ? p.payload?.definition : this.get('schedule', p.payload?.id).definition;
+      requireValue(definition?.nodeId === agent.nodeId && definition.targetAgentId === agent.id && !definition.targetFolder &&
+        !definition.targetConversationId && definition.intent !== 'reminder', 'forbidden', 'Only this agent\'s persistent schedules are authorised', 403);
+      return this.apply(actor, `schedule.${operation}`, p.payload, { scheduleAgent: agent });
+    }
     if (action === 'schedule.install') {
-      this.ownerOnly(actor);
+      if (!authority.scheduleAgent) this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision', 'definition'], ['id', 'definition']);
       fields(p.definition, ['nodeId', 'targetAgentId', 'targetFolder', 'targetConversationId', 'instructions', 'cron', 'timezone', 'at', 'enabled', 'reviewPolicy', 'expiresAt', 'intent'],
         ['nodeId', 'instructions', 'enabled']);
@@ -291,7 +337,7 @@ export class BackendStore {
       return created('schedule', { id: p.id, definition: p.definition, appliedRevision: 0 });
     }
     if (action === 'schedule.cancel') {
-      this.ownerOnly(actor);
+      if (!authority.scheduleAgent) this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision', 'reason'], ['id', 'expectedRevision', 'reason']);
       const schedule = this.get('schedule', p.id); this.revision(schedule, p.expectedRevision);
       string(p.reason, 'reason', 2000);
@@ -300,7 +346,7 @@ export class BackendStore {
         definition: { ...schedule.definition, enabled: false } });
     }
     if (['schedule.pause', 'schedule.resume'].includes(action)) {
-      this.ownerOnly(actor);
+      if (!authority.scheduleAgent) this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision'], ['id', 'expectedRevision']);
       const schedule = this.get('schedule', p.id); this.revision(schedule, p.expectedRevision);
       requireValue(!schedule.cancelled && (!schedule.transfer || schedule.transfer.state === 'completed'),
@@ -543,7 +589,7 @@ export class BackendStore {
       requireValue(!this.all('execution').some(e => e.taskId === task.id && !['completed', 'cancelled', 'rejected', 'failed'].includes(e.state)),
         'task_busy', 'Task already has an outstanding execution', 409);
       return created('execution', { ...p, targetNodeId: target.nodeId, reviewPolicy: p.reviewPolicy ?? 'none',
-        targetConversationId: target.conversationId ?? null, targetBindingRevision: target.bindingRevision ?? null,
+        targetConversationId: target.standingGrant ? null : target.conversationId ?? null, targetBindingRevision: target.standingGrant ? null : target.bindingRevision ?? null,
         responsibleUserId: this.owner, state: 'requested', originNodeId: p.originAgentId ? this.get('agent', p.originAgentId).nodeId : null,
         cancellationRequested: false });
     }
@@ -590,7 +636,7 @@ export class BackendStore {
       this.event('task.create', child, actor, p.id);
       return created('execution', { id: p.id, taskId: child.id, taskRevision: child.revision, originAgentId: parent.targetAgentId,
         originNodeId: actor.id, parentExecutionId: parent.id, targetAgentId: target.id, targetNodeId: target.nodeId,
-        targetConversationId: target.conversationId ?? null, targetBindingRevision: target.bindingRevision ?? null,
+        targetConversationId: target.standingGrant ? null : target.conversationId ?? null, targetBindingRevision: target.standingGrant ? null : target.bindingRevision ?? null,
         instructions: p.instructions, reviewPolicy: p.reviewPolicy ?? parent.reviewPolicy,
         ...(p.reviewGrantId ? { reviewGrantId: p.reviewGrantId } : {}), allowDelegation: false,
         responsibleUserId: this.owner, state: 'requested', cancellationRequested: false });
@@ -677,6 +723,8 @@ export class BackendStore {
       fields(p, ['id', 'expectedRevision', 'bindingId', 'runId'], ['id', 'expectedRevision', 'bindingId', 'runId']);
       const e = this.get('execution', p.id); this.nodeOnly(actor, e.targetNodeId); this.revision(e, p.expectedRevision);
       const target = this.get('agent', e.targetAgentId);
+      requireValue(!target.standingGrant || p.bindingId === target.bindingId,
+        'stale_binding', 'Admission must use the designated receiver', 409);
       requireValue(!e.targetConversationId || target.conversationId === e.targetConversationId, 'target_conversation_replaced', 'Advertised execution target changed');
       requireValue(e.state === 'requested' && !e.cancellationRequested && !terminal(this.get('task', e.taskId)), 'execution_ineligible', 'Execution no longer eligible', 409);
       if (e.monitor) requireValue(Date.now() >= Date.parse(e.monitor.startsAt) && Date.now() < Date.parse(e.monitor.endsAt),
@@ -686,7 +734,8 @@ export class BackendStore {
         'dependencies_pending', 'Dependencies are not complete', 409);
       requireValue(validId(p.bindingId) && validId(p.runId), 'invalid_request', 'Exact binding and run required');
       taskDisposition(e.taskId, 'in_progress', e.id);
-      return changed('execution', e, { state: 'accepted', bindingId: p.bindingId, runId: p.runId });
+      return changed('execution', e, { state: 'accepted', bindingId: p.bindingId, runId: p.runId,
+        ...(target.standingGrant ? { targetConversationId: target.conversationId, targetBindingRevision: target.bindingRevision } : {}) });
     }
     if (action === 'execution.monitor_end') {
       fields(p, ['id', 'expectedRevision'], ['id', 'expectedRevision']);

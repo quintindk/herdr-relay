@@ -4,8 +4,9 @@ import { digest, now } from './protocol.mjs';
 // Notifications release only on correlated native completion. No resend on loss.
 export async function tickAgentNotices(journal, api, resolveBinding) {
   for (const row of journal.db.prepare("SELECT data FROM notices WHERE state IN ('pending','observing','uncertain') ORDER BY rowid").all()) {
+    try {
     let notice = JSON.parse(row.data);
-    const binding = await resolveBinding(notice.agentId);
+    const binding = await resolveBinding(notice.agentId, notice.bindingId ? notice : undefined);
     if (!binding) continue;
     const exactConversation = binding.identity?.sessionId ?? binding.conversationId ?? null;
     const save = patch => {
@@ -36,12 +37,22 @@ export async function tickAgentNotices(journal, api, resolveBinding) {
           `${question.prompt}\nUse relay_questions to inspect current scope. Answer with relay_agent_answer only from existing authority, ` +
           `or use relay_agent_forward to ask the responsible human. Do not claim a human decision or run unrelated work.\n` +
           (binding.agentInstructions?.() ?? '') };
-      save({ state: 'observing', bindingId: binding.id, nativeConversationId: exactConversation, invocation });
+      journal.transaction(() => {
+        journal.assertReceiver(binding);
+        save({ state: 'observing', bindingId: binding.id, nativeConversationId: exactConversation, invocation });
+      });
       try { await binding.native.send(invocation); }
       catch (error) { save({ state: 'uncertain', error: error.code ?? 'native_delivery_uncertain' }); continue; }
     }
     if (notice.bindingId !== binding.id) continue;
     const observation = binding.observe(await binding.native.snapshot(), notice.invocation);
     save({ observation, state: observation.state === 'finished' ? 'settled' : observation.state === 'conflict' ? 'conflict' : notice.state });
+    } catch (error) {
+      if (!['native_identity_mismatch', 'receiver_replaced'].includes(error.code)) throw error;
+      const id = JSON.parse(row.data).id;
+      const notice = JSON.parse(journal.db.prepare('SELECT data FROM notices WHERE id=?').get(id).data);
+      journal.db.prepare('UPDATE notices SET data=? WHERE id=?').run(JSON.stringify({ ...notice,
+        recovery: { state: 'blocked', reason: error.code ?? 'native_or_backend_unavailable' } }), id);
+    }
   }
 }

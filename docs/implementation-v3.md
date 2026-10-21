@@ -73,6 +73,16 @@ Tests verify local execution without backend calls and deferred single publicati
 
 ## Next gates
 
+Durable receiving-chat follow-up: [the receiver contract](native-receivers.md)
+now separates stable installation/agent identity from exact conversation bindings.
+Human-only `/relay-enrol` and `/relay-attach`, a fresh-chat launcher, automatic
+selected-root-chat attachment and scoped persistent schedule controls are
+implemented. The node hot-loads replacements while retaining pinned historical
+attempts. Real OpenCode 2.1.0 and 2.1.2 daemon/tool cron probes pass, and the 2.1.2
+TUI verifies both keyboard commands and automatic new-chat scheduled delivery.
+The model and keyboard/navigation input are fixtures, not actual-human acceptance.
+See [sanitised receiver evidence](evidence/native-durable-receivers.json).
+
 1. Complete native correctness and tool/UI parity. Exact/folder scheduling now has bounded runtime proof.
 2. Extend v2 UI parity and actual-human evidence. Reload, transport reconnect and session-switch probes pass.
 3. Verify broader offline schedules, reminders and combined Git/daemon recovery.

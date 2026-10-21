@@ -17,22 +17,30 @@ outside the checkout. Enrolment never prints a token.
 
 ## Existing conversation enrolment
 
+Native enrolment now creates a **durable workspace/role agent**, not a session-
+derived node and agent. See [receiving chats](native-receivers.md) for human-only
+`/relay-enrol`, `/relay-attach`, automatic new-chat attachment and persistent crons.
+Use a clean development config. Old session-derived enrolments are not migrated.
+
 ```bash
 node src/cli.mjs native agent enrol \
   --here --reserved --transport cli \
-  --config /private/interactive-node/node.json \
+  --name Wright --config /private/machine-node/node.json \
   --context /private/owner.json
-node src/cli.mjs native node install --config /private/interactive-node/node.json
+node src/cli.mjs native node install --config /private/machine-node/node.json
 ```
 
 `--here` requires the current harness's `OPENCODE_SESSION_ID`. Otherwise supply
 `--session ID --directory /absolute/project`. `--service-registration FILE` selects
 an existing authenticated local OpenCode service. Discovery never starts one.
 
-Enrolment verifies session/project/directory/creation identity, creates native
-node/agent records and writes mode-0600 credentials/configuration. Repeating it
-verifies the existing scope without replacing files or issuing another credential.
-Changed identity, transport, endpoint or authentication requires reconciliation.
+Enrolment verifies session/project/directory/creation identity, creates a stable
+installation and workspace/role agent, then attaches the exact initial chat.
+Configuration and credentials are mode 0600. Repeating it verifies the existing
+scope without issuing another credential or creating another agent.
+Replacement chats use `agent attach`, not another enrolment. Transport changes
+require explicit reconciliation. Historical endpoints and credentials remain
+with their original bindings.
 It never adopts another chat, changes permissions/model/plugins or restarts OpenCode.
 
 `--transport cli` explicitly selects the chat's existing shell and scoped worker

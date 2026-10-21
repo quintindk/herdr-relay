@@ -122,6 +122,13 @@ export class NodeJournal {
     return row ? JSON.parse(row.data) : null;
   }
   works() { return this.db.prepare('SELECT data FROM work ORDER BY id').all().map(row => JSON.parse(row.data)); }
+  assertReceiver(binding) {
+    if (!binding.receiverGeneration) return;
+    const row = this.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${binding.agentId}`);
+    const receiver = row && JSON.parse(row.value);
+    requireValue(receiver?.state === 'active' && receiver.bindingId === binding.id && receiver.generation === binding.receiverGeneration,
+      'receiver_replaced', 'Receiving conversation changed before admission', 409);
+  }
   save(work) {
     this.db.prepare('INSERT INTO work VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,data=excluded.data')
       .run(work.id, work.state, JSON.stringify(work));

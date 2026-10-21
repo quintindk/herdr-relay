@@ -11,13 +11,14 @@ export async function main(args = process.argv.slice(2)) {
     context: { type: 'string' }, execution: { type: 'string' }, run: { type: 'string' }, key: { type: 'string' }, file: { type: 'string' },
   } });
   const action = positionals[0];
-  const agentAction = ['questions', 'answer', 'forward', 'tasks', 'task', 'comments', 'relations', 'agents'].includes(action);
+  const agentAction = ['questions', 'answer', 'forward', 'tasks', 'task', 'comments', 'relations', 'agents', 'status', 'schedules',
+    'schedule-install', 'schedule-pause', 'schedule-resume', 'schedule-cancel'].includes(action);
   requireValue((agentAction || ['read', 'ask', 'submit', 'delegate', 'wait-children', 'delay', 'review-child', 'children'].includes(action) && values.execution && values.run) && values.context,
     'invalid_request', 'Usage: node-worker-cli read|ask|submit --context FILE --execution ID --run ID [--key KEY --file JSON]');
   const connection = JSON.parse(readFileSync(values.context, 'utf8'));
   const payload = values.file ? JSON.parse(readFileSync(values.file, 'utf8')) : undefined;
   const result = await call(connection, 'POST', agentAction ? `/agent/${action}` : `/work/${action}`, agentAction ? {
-    ...(payload ?? {}), ...(values.key ? { key: values.key } : {}),
+    ...(action.startsWith('schedule-') ? { payload } : payload ?? {}), ...(values.key ? { key: values.key } : {}),
   } : { executionId: values.execution, runId: values.run, ...(values.key ? { key: values.key } : {}), ...(payload ? { payload } : {}) });
   console.log(JSON.stringify(result));
 }

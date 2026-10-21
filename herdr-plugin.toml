@@ -52,3 +52,9 @@ id = "native-work"
 title = "Relay native tasks"
 placement = "split"
 command = ["node", "scripts/native-board-launch.mjs"]
+
+[[panes]]
+id = "native-agent"
+title = "Relay agent: new receiving chat"
+placement = "split"
+command = ["node", "scripts/native-agent-launch.mjs"]

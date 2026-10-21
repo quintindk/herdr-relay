@@ -1,6 +1,6 @@
 import { Plugin } from '@opencode/plugin';
 import { RelaySpike } from './rpc.mjs';
-import { readFileSync } from 'node:fs';
+import { workerConnection } from './worker-context.mjs';
 import { call } from '../../src/client.mjs';
 import { registerHumanProposals } from './human-proposals.mjs';
 import { registerOperatorTools } from './operator-tools.mjs';
@@ -24,9 +24,9 @@ export default Plugin.define({
           return { content: JSON.stringify({ version: ctx.app.version, sessionId: context.sessionID, mode: 'read_only_spike' }) };
         },
       });
-      if (ctx.options.workerContextFile) {
+      if (ctx.options.workerContextFile || ctx.options.workerDirectory) {
         const worker = async (context, action, input) => {
-          const connection = JSON.parse(readFileSync(ctx.options.workerContextFile, 'utf8'));
+          const connection = workerConnection(ctx.options, context.sessionID);
           if (connection.sessionId !== context.sessionID) throw new Error('Worker tool belongs to another exact conversation');
           const current = await call(connection, 'POST', '/work/current', { sessionId: context.sessionID });
           const payload = action === 'ask' ? { prompt: input.prompt, humanRequired: input.humanRequired ?? false } :
@@ -66,10 +66,31 @@ export default Plugin.define({
           key: { type: 'string', minLength: 1 }, payload: { type: 'object', properties, required, additionalProperties: false },
         }, required: ['key', 'payload'], additionalProperties: false }, execute: (input, context) => worker(context, action, input) });
         const agent = async (context, action, input) => {
-          const connection = JSON.parse(readFileSync(ctx.options.workerContextFile, 'utf8'));
+          const connection = workerConnection(ctx.options, context.sessionID);
           if (connection.sessionId !== context.sessionID) throw new Error('Agent tool belongs to another exact conversation');
           return { content: JSON.stringify(await call(connection, 'POST', `/agent/${action}`, input)) };
         };
+        for (const [name, action, description] of [
+          ['relay_attachment_status', 'status', 'Read whether this chat receives new work, plus outstanding agent obligations.'],
+          ['relay_schedules', 'schedules', 'Read persistent schedules installed for this durable agent. Chat replacement does not change ownership.'],
+        ]) editor.add({ name, description, options: { codemode: false },
+          input: { type: 'object', properties: {}, additionalProperties: false }, execute: (input, context) => agent(context, action, input) });
+        for (const operation of ['install', 'pause', 'resume', 'cancel']) editor.add({
+          name: operation === 'install' ? 'relay_schedule_create' : `relay_schedule_${operation}`,
+          description: `Schedule ${operation} within this agent's standing grant. Requires explicit human instruction. Use an immutable retry key.`,
+          options: { codemode: false }, input: { type: 'object', properties: {
+            key: { type: 'string', minLength: 1 }, payload: { type: 'object', properties: {
+              id: { type: 'string', minLength: 1 }, expectedRevision: { type: 'integer', minimum: 1 },
+              ...(operation === 'install' ? { definition: { type: 'object', properties: {
+                instructions: { type: 'string', minLength: 1 }, cron: { type: 'string' }, at: { type: 'string' },
+                timezone: { type: 'string' }, enabled: { type: 'boolean' }, reviewPolicy: { enum: ['none', 'human'] }, expiresAt: { type: 'string' },
+              }, required: ['instructions', 'enabled'], additionalProperties: false } } : {}),
+              ...(operation === 'cancel' ? { reason: { type: 'string', minLength: 1 } } : {}),
+            }, required: operation === 'install' ? ['id', 'definition'] : ['id', 'expectedRevision', ...(operation === 'cancel' ? ['reason'] : [])],
+            additionalProperties: false },
+          }, required: ['key', 'payload'], additionalProperties: false },
+          execute: (input, context) => agent(context, `schedule-${operation}`, input),
+        });
         for (const [name, action, description] of [
           ['relay_task_list', 'tasks', 'List task records. Follow nextCursor to complete the traversal.'],
           ['relay_agents', 'agents', 'Discover agents across nodes. Directory records do not reserve execution.'],

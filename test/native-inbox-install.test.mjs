@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installNativeInbox } from '../src/native-inbox-install.mjs';
 
@@ -22,7 +22,9 @@ test('inbox installer preserves unrelated configuration, makes private backups a
   assert.equal(result.state, 'installed'); assert.equal(result.serverRestarted, false); assert.equal(result.permissionsChanged, false);
   const nextServer = JSON.parse(readFileSync(serverFile, 'utf8')), nextCli = JSON.parse(readFileSync(cliFile, 'utf8'));
   assert.equal(nextServer.model, server.model); assert.deepEqual(nextServer.permissions, server.permissions);
-  assert.equal(nextServer.plugins[0], server.plugins[0]); assert.equal(nextServer.plugins[1].options, undefined);
+  assert.equal(nextServer.plugins[0], server.plugins[0]);
+  assert.equal(nextServer.plugins[1].options.workerDirectory, dirname(nextCli.plugins[1].options.nativeNodeConfigFile));
+  assert.equal(nextServer.plugins[1].options.ownerContextFile, undefined);
   assert.deepEqual(nextCli.theme, cli.theme); assert.deepEqual(nextCli.plugins[0], cli.plugins[0]);
   assert.equal(nextCli.plugins[1].options.notificationSessionId, f.input.sessionId);
   assert.equal(nextCli.plugins[1].options.ownerContextFile, f.input.contextFile);

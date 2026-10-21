@@ -335,3 +335,41 @@ dialog attribution for both decisions. Local history shows one initial settled
 question and one successful continuation. Execution/task are completed/done.
 The controller published neither decision. Evidence:
 [streamlined board live](evidence/native-board-streamlined-live.json).
+
+## Durable agent and fresh-chat scheduling follow-up
+
+The restarted-Wright test exposed a session-derived identity failure: Relay
+delivered to the old enrolled conversation rather than the newly opened TUI.
+That is not acceptance of replacement-chat delivery.
+
+The new [receiver contract](native-receivers.md) persists one installation and
+workspace/role agent across chats. Human-only `/relay-enrol` and `/relay-attach`
+provide standing enrolment and revisioned attachment. A confirmed original-key
+outbox reconciles uncertainty, and historical bindings retain admitted work.
+Session-derived development records are not migrated.
+
+Isolated OpenCode 2.1.0 and 2.1.2 runtime probes each verify two real minute-cron
+firings in different chats under the same agent and unchanged schedule definition.
+The replacement chat pauses/resumes the existing schedule using scoped credentials.
+Stale credentials are refused and a daemon restart preserves the receiver. The
+2.1.2 probe additionally confirms both slash commands through actual TUI keyboard
+dialogs, then drives Home/new-root-session/selection and observes automatic
+attachment followed by scheduled delivery into that new conversation.
+
+These are real native API/tool/daemon/TUI processes with deterministic model and
+synthetic keyboard/navigation input. They do not close actual-human enrolment,
+physical-machine, offline replacement or the full recovery matrix. All 42 v2
+package tests pass. Evidence: [durable receivers](evidence/native-durable-receivers.json).
+
+Final regression: **1,522 root tests passed, one skipped, zero failed**, plus all
+42 v2 tests, syntax/whitespace and Python syntax checks. The skipped check requires
+the absent pinned Paperclip validator source.
+
+The local backend was backed up online and restarted with the same instance and
+unchanged installed schedule definitions/revisions. The existing OpenCode server
+was not restarted. Server/TUI plugin reload evidence includes both the current
+Relay and restarted Wright conversations, and scoped tools load in both native
+locations. The two old session-derived interactive test daemons were stopped and
+disabled, their advertisements marked offline and their state retained. The
+unrelated local headless schedules were not changed. No user chat was silently
+enrolled. Actual-human `/relay-enrol` in the visible Wright chat is the next gate.

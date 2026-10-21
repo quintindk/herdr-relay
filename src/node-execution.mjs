@@ -10,6 +10,7 @@ export async function tickNode(journal, api, resolveBinding) {
     connected = false;
   }
   for (let work of journal.works()) {
+    try {
     let execution = work.execution;
     if (execution.localOccurrence) continue;
     if (execution.monitor && Date.now() >= Date.parse(execution.monitor.endsAt) && !execution.cancellationRequested &&
@@ -53,6 +54,19 @@ export async function tickNode(journal, api, resolveBinding) {
       continue;
     }
     const recoveringAdmission = work.state === 'admitting' && work.attempt && journal.receipt(`admit:${work.attempt}`);
+    if (recoveringAdmission?.state === 'conflict' && recoveringAdmission.error === 'stale_binding' && !work.invocation && connected) {
+      const fresh = await api('GET', `/v1/executions/${encodeURIComponent(execution.id)}`);
+      // A definitive backend rejection, followed by an unchanged unadmitted
+      // request, proves no native turn exists. Resolve a new receiver next tick.
+      // Lost replies and accepted attempts never take this path.
+      if (fresh.state === 'requested' && fresh.targetNodeId === journal.nodeId && !fresh.bindingId) journal.transaction(() => {
+        const key = `admit:${work.attempt}`;
+        const superseded = { ...recoveringAdmission, state: 'superseded' };
+        journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify(superseded), key);
+        journal.save({ ...work, execution: fresh, state: 'pending', bindingId: null, nativeConversationId: null, attempt: null, recovery: null });
+      });
+      continue;
+    }
     if (recoveringAdmission?.state === 'recorded') {
       execution = execution.revision > recoveringAdmission.receipt.revision ? execution : recoveringAdmission.receipt;
       const answer = execution.answerQuestionId ? (await api('GET', `/v1/questions/${encodeURIComponent(execution.answerQuestionId)}`)).answer : null;
@@ -60,7 +74,7 @@ export async function tickNode(journal, api, resolveBinding) {
       work = journal.save({ ...work, execution, answer, children, state: 'admitted', invocation: null, observation: null, interruption: null, staged: null });
     }
     if (['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(execution.state) || work.state === 'settled') continue;
-    const binding = await resolveBinding(execution.targetAgentId);
+    const binding = await resolveBinding(execution.targetAgentId, work.bindingId ? work : undefined);
     if (!binding) continue;
     const exactConversation = binding.identity?.sessionId ?? binding.conversationId ?? null;
     if (work.nativeConversationId && work.nativeConversationId !== exactConversation) {
@@ -79,7 +93,8 @@ export async function tickNode(journal, api, resolveBinding) {
       }
       continue;
     }
-    const attempt = digest([execution.id, execution.continuationId ?? 'initial']);
+    const attempt = digest([execution.id, execution.continuationId ?? 'initial',
+      ...(binding.receiverGeneration && execution.state === 'requested' ? [binding.id] : [])]);
     const admissionKey = `admit:${attempt}`;
     if (['requested', 'continuation_ready'].includes(execution.state)) {
       if (!connected) continue;
@@ -105,7 +120,10 @@ export async function tickNode(journal, api, resolveBinding) {
         ['intent', 'observing', 'uncertain', 'conflict', 'admitted', 'native_finished'].includes(other.state))) continue;
       const runId = `run_${attempt}`;
       journal.archive(work);
-      work = journal.save({ ...work, state: 'admitting', bindingId: binding.id, nativeConversationId: exactConversation, attempt });
+      work = journal.transaction(() => {
+        if (!work.bindingId) journal.assertReceiver(binding);
+        return journal.save({ ...work, state: 'admitting', bindingId: binding.id, nativeConversationId: exactConversation, attempt });
+      });
       journal.queue({ key: admissionKey, action: execution.state === 'requested' ? 'execution.admit' : 'execution.continue',
         payload: { id: execution.id, expectedRevision: execution.revision, runId,
           ...(execution.state === 'requested' ? { bindingId: binding.id } : {}) } });
@@ -193,6 +211,12 @@ export async function tickNode(journal, api, resolveBinding) {
         } });
         journal.save({ ...work, state: 'settled_waiting' });
       }
+    }
+    } catch (error) {
+      if (!['native_identity_mismatch', 'receiver_replaced'].includes(error.code)) throw error;
+      // A missing historical chat blocks that attempt, not every other agent on
+      // the node. Keep its invocation and uncertainty evidence intact.
+      journal.save({ ...journal.work(work.id), recovery: { state: 'blocked', reason: error.code ?? 'native_or_backend_unavailable', at: now() } });
     }
   }
 }

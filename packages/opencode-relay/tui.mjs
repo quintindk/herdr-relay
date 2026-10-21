@@ -4,6 +4,7 @@ import { Plugin } from '@opencode/plugin/tui';
 import { RelaySpike } from './rpc.mjs';
 import { decisionPresenter } from './decision.mjs';
 import { registerHumanInbox } from './human-inbox.mjs';
+import { registerEnrolmentCommands } from './enrolment-commands.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.spike.tui',
@@ -22,6 +23,7 @@ export default Plugin.define({
       return route.type === 'session' ? route.sessionID : null;
     };
     const stopHumanInbox = registerHumanInbox(ctx, { clientId, selectedSession: sessionId, record });
+    const stopEnrolment = registerEnrolmentCommands(ctx, { selectedSession: sessionId, record });
     const decisions = decisionPresenter({ clientId, selectedSession: sessionId,
       readSource: async sessionID => {
         const page = await ctx.client.message.list({ sessionID, order: 'desc', type: 'user', limit: 1 });
@@ -81,6 +83,7 @@ export default Plugin.define({
       closed = true;
       decisions.dispose();
       stopHumanInbox();
+      stopEnrolment();
       stop();
       record({ type: 'disposed' });
     };

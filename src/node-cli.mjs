@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { readFileSync, mkdirSync, writeFileSync, existsSync, unlinkSync, lstatSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, existsSync, unlinkSync, lstatSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -18,6 +18,7 @@ import { provisionNodeWorktree, finaliseNodeWorktree, retireNodeWorktree } from 
 import { nodeTasks } from './node-tasks.mjs';
 import { enrolledDirectory, resolveFolderBinding } from './node-folder.mjs';
 import { configureV2WorkerSession, v2WorkerInstructions, usesV2WorkerTools } from './node-worker-instructions.mjs';
+import { NativeReceivers } from './native-receivers.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 try {
@@ -62,19 +63,23 @@ try {
     const bindings = new Map();
     const ownedDefinitions = new Map();
     const workers = [];
-    const nativeEndpoints = new Set();
+    const nativeEndpoints = new Map();
     const socketPath = join(directory, 'node.sock');
-    for (const entry of config.bindings) {
+    const receivers = new NativeReceivers(journal);
+    const historicalBindings = new Map();
+    const contextFiles = new Map();
+    let workerIndexDigest;
+    const loadBinding = async entry => {
       requireValue(['opencode-v2', 'opencode-v2-owned', 'hermes'].includes(entry.harness) && entry.agentId && entry.id,
         'invalid_binding', 'Explicit supported native binding required');
       const directWorkerTools = usesV2WorkerTools(entry);
       const retirement = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`retired-binding:${entry.id}`);
       if (retirement) {
         requireValue(JSON.parse(retirement.value).state === 'retired', 'retirement_pending', 'Inspect incomplete owned retirement before restarting this binding');
-        continue;
+        return;
       }
-      requireValue(!bindings.has(entry.agentId), 'duplicate_binding', 'Agent has multiple local bindings');
-      const contextFile = join(directory, `worker-${digest(entry.agentId)}.json`);
+      requireValue(entry.receiverGeneration || !bindings.has(entry.agentId), 'duplicate_binding', 'Agent has multiple local bindings');
+      const contextFile = join(directory, `worker-${digest(entry.receiverGeneration ? [entry.agentId, entry.id] : entry.agentId)}.json`);
       if (entry.worktree) {
         requireValue(entry.harness === 'opencode-v2-owned' && entry.directory === entry.worktree.path,
           'invalid_worktree', 'Owned worktree path must equal the explicit owned runtime directory');
@@ -112,32 +117,63 @@ try {
         fetch: (url, options) => fetch(url, { ...options, signal: options?.signal ?? AbortSignal.timeout(15000) }) });
         checkV2Version((await client.server.info()).version);
         const native = new NativeOpenCodeV2(client, entry.identity);
-        await native.verify();
+        // Historical conversations can be archived. They must not prevent the
+        // new receiver starting or erase their pinned recovery obligations.
+        if (!entry.receiverGeneration) await native.verify();
         binding = { id: entry.id, identity: entry.identity, native, observe: observeV2 };
       }
       if (entry.harness.startsWith('opencode-v2')) await configureV2WorkerSession(binding, entry.sessionPermissions);
       else requireValue(entry.sessionPermissions === undefined, 'invalid_permissions', 'Session permissions require a V2 binding');
       const nativeIdentity = digest(entry.harness === 'hermes' ? ['hermes', entry.hermes.url, entry.hermes.profile ?? '', entry.conversationId] :
         ['opencode-v2', binding.runtime?.descriptor.origin ?? entry.url, binding.identity?.sessionId ?? entry.identity.sessionId]);
-      requireValue(!nativeEndpoints.has(nativeIdentity), 'conversation_alias', 'One exact conversation may have only one local binding');
-      nativeEndpoints.add(nativeIdentity);
+      requireValue(!nativeEndpoints.has(nativeIdentity) || entry.receiverGeneration && nativeEndpoints.get(nativeIdentity) === entry.agentId,
+        'conversation_alias', 'One exact conversation may receive work for only one agent');
+      nativeEndpoints.set(nativeIdentity, entry.agentId);
       const worker = existsSync(contextFile) ? JSON.parse(readFileSync(contextFile, 'utf8')) :
-        { socketPath, agentId: entry.agentId, sessionId: binding.identity?.sessionId ?? entry.identity?.sessionId ?? entry.conversationId, token: randomBytes(32).toString('hex') };
+        { socketPath, agentId: entry.agentId, sessionId: binding.identity?.sessionId ?? entry.identity?.sessionId ?? entry.conversationId,
+          ...(entry.receiverGeneration ? { bindingId: entry.id, bindingRevision: entry.receiverGeneration } : {}), token: randomBytes(32).toString('hex') };
       requireValue(worker.socketPath === socketPath && worker.agentId === entry.agentId, 'context_conflict', 'Worker context changed');
       requireValue(worker.sessionId === (binding.identity?.sessionId ?? entry.identity?.sessionId ?? entry.conversationId),
         'context_conflict', 'Worker context belongs to a different conversation');
       if (!existsSync(contextFile)) writeFileSync(contextFile, JSON.stringify(worker), { flag: 'wx', mode: 0o600 });
       workers.push(worker);
+      contextFiles.set(entry.id, contextFile);
       const cli = `${quote(process.execPath)} ${quote(join(dirname(fileURLToPath(import.meta.url)), 'node-worker-cli.mjs'))} --context ${quote(contextFile)}`;
-      bindings.set(entry.agentId, { ...binding, ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () =>
+      const configured = { ...binding, agentId: entry.agentId, ...(entry.receiverGeneration ? { receiverGeneration: entry.receiverGeneration } : {}),
+        ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () =>
         `Use ${cli} questions to inspect addressed questions. Answer with ${cli} answer --key KEY --file JSON containing {id,expectedRevision,body}, or forward --key KEY --file JSON containing {id,expectedRevision,reason}.\n`,
       workerInstructions: execution => directWorkerTools ? v2WorkerInstructions(execution) :
         `Read and check cancellation: ${cli} read --execution ${quote(execution.id)} --run ${quote(execution.runId)}\n` +
         (execution.allowDelegation ? `Explicit bounded delegation is granted. Use ${cli} delegate --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file CHILD_JSON with {id,taskId,title,instructions,targetAgentId,reviewPolicy}. Then stage ${cli} wait-children --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key WAIT_KEY --file WAIT_JSON with {childExecutionIds:[...]}, and finish the turn.\n` : '') +
         (execution.childExecutionIds?.length ? `Inspect supplied child receipts and refresh with ${cli} children --execution ${quote(execution.id)} --run ${quote(execution.runId)}. Only children with explicit agent review grants may be decided using ${cli} review-child --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file JSON with {id,expectedRevision,candidate,decision,reason}. Others require the human. Final root review remains human.\n` : '') +
         `Use the assigned scope. Do not read credentials. To ask asynchronously, create JSON {"prompt":"...","humanRequired":false} and call ${cli} ask --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key QUESTION_KEY --file /absolute/question.json.\n` +
-        `Otherwise write JSON {"candidate":"EXACT_CANDIDATE","summary":"RESULT"} and call ${cli} submit --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key RESULT_KEY --file /absolute/result.json. After ask or submit finish this turn immediately.\n` });
-    }
+        `Otherwise write JSON {"candidate":"EXACT_CANDIDATE","summary":"RESULT"} and call ${cli} submit --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key RESULT_KEY --file /absolute/result.json. After ask or submit finish this turn immediately.\n` };
+      historicalBindings.set(entry.id, configured);
+      if (!entry.receiverGeneration) bindings.set(entry.agentId, configured);
+    };
+    const refreshReceivers = async () => {
+      for (const entry of receivers.list('native-binding')) if (!historicalBindings.has(entry.id)) await loadBinding(entry);
+      for (const enrolment of receivers.list('enrolment')) {
+        const entry = receivers.resolve(enrolment.id);
+        const binding = entry && historicalBindings.get(entry.id);
+        if (binding) bindings.set(enrolment.id, binding);
+        else bindings.delete(enrolment.id);
+      }
+      if (config.identityVersion === 2) {
+        const sessions = {};
+        for (const binding of historicalBindings.values()) sessions[binding.identity.sessionId] = contextFiles.get(binding.id);
+        for (const binding of bindings.values()) if (binding.receiverGeneration) sessions[binding.identity.sessionId] = contextFiles.get(binding.id);
+        const value = { nodeId: config.nodeId, sessions };
+        const hash = digest(value);
+        if (hash !== workerIndexDigest) {
+          const path = join(directory, 'worker-index.json');
+          writeFileSync(`${path}.new`, JSON.stringify(value), { mode: 0o600 });
+          renameSync(`${path}.new`, path); workerIndexDigest = hash;
+        }
+      }
+    };
+    for (const entry of config.bindings) await loadBinding(entry);
+    await refreshReceivers();
     if (connectedAtStartup) {
       for (const entry of config.bindings) {
         if (!bindings.has(entry.agentId)) continue;
@@ -163,8 +199,9 @@ try {
     let lastHeartbeat = 0;
     const tick = () => {
       if (closed) return;
-      const resolveBinding = async agentId => {
-        const binding = bindings.get(agentId);
+      const resolveBinding = async (agentId, pinned) => {
+        const binding = pinned?.bindingId ? historicalBindings.get(pinned.bindingId) : bindings.get(agentId);
+        if (binding && binding.agentId !== agentId) return null;
         const owned = ownedDefinitions.get(agentId);
         if (!owned || !binding) return binding;
         if (journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`retired-binding:${binding.id}`)) return null;
@@ -196,7 +233,7 @@ try {
         }
       };
       resolveBinding.folder = directory => resolveFolderBinding(bindings, directory, resolveBinding);
-      pending = tickNode(journal, api, resolveBinding).finally(async () => {
+      pending = refreshReceivers().then(() => tickNode(journal, api, resolveBinding)).finally(async () => {
         await tickAutomation(journal, resolveBinding, Date.now(), api);
         await tickAgentNotices(journal, api, resolveBinding);
         for (const [agentId, owned] of ownedDefinitions) {
@@ -245,7 +282,7 @@ try {
             await api('POST', '/v1/commands', { key: `advertise:${agentId}:${lastHeartbeat}`, action: 'agent.advertise',
               payload: { id: agentId, expectedRevision: agent.revision, availability,
                 conversationId: binding.identity?.sessionId ?? config.bindings.find(entry => entry.agentId === agentId).conversationId,
-                bindingRevision: binding.runtime?.descriptor.generation ?? 1 } });
+                bindingRevision: binding.receiverGeneration ?? binding.runtime?.descriptor.generation ?? 1 } });
           }
           if (config.herdr?.socketPath) await publishHerdrInventory(api, { ...config.herdr, nodeId: config.nodeId },
             await herdrInventory(config.herdr.socketPath));

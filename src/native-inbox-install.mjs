@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { requireValue } from './protocol.mjs';
+import { nativeNodeConfig } from './native-enrol.mjs';
 
 // Configuration only. No prompt, decision, service restart or session-policy edit.
 export function installNativeInbox({ contextFile, sessionId, configDirectory, evidenceFile }) {
@@ -36,8 +37,9 @@ export function installNativeInbox({ contextFile, sessionId, configDirectory, ev
       ...(options ? { options: { ...(existing?.options ?? {}), ...options } } : {}) };
     return { ...config, plugins: existing ? plugins.map(p => p === existing ? entry : p) : [...plugins, entry] };
   };
-  const nextServer = configure(server);
-  const nextCli = configure(cli, { ownerContextFile: contextFile, notificationSessionId: sessionId,
+  const nodeConfigFile = nativeNodeConfig();
+  const nextServer = configure(server, { workerDirectory: dirname(nodeConfigFile) });
+  const nextCli = configure(cli, { ownerContextFile: contextFile, notificationSessionId: sessionId, nativeNodeConfigFile: nodeConfigFile,
     ...(evidenceFile ? { evidenceFile: resolve(evidenceFile) } : {}) });
   // Validate both files before modifying either. Backups retain original bytes.
   mkdirSync(directory, { recursive: true, mode: 0o700 });

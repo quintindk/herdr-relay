@@ -4,15 +4,23 @@ import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
+import { call } from './client.mjs';
 import { nativeBackendClient } from './backend-client.mjs';
 import { requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
-import { enrolInteractive } from './native-enrol.mjs';
+import { enrolInteractive, attachInteractive, listEnrolments, launchInteractive, nativeConnection } from './native-enrol.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
-  agent enrol --here|--session ID --config PRIVATE_NODE_JSON --reserved [--directory DIR] [--transport tools|cli]
+  agent enrol --here|--session ID --reserved [--config PRIVATE_NODE_JSON] [--directory DIR] [--name NAME] [--transport tools|cli]
     [--service-registration FILE] --context OWNER_JSON
+  agent enrolments [--directory DIR] [--config PRIVATE_NODE_JSON] --context OWNER_JSON
+  agent attach --here|--session ID --agent ID --generation N --key KEY [--config PRIVATE_NODE_JSON] [--directory DIR] --context OWNER_JSON
+  agent launch [--agent ID] [--directory DIR] [--config PRIVATE_NODE_JSON] [--key KEY] [--json] --context OWNER_JSON
   node install|run --config PRIVATE_NODE_JSON
+  node ensure --config PRIVATE_NODE_JSON --session ID  [reuse the running node, otherwise install/start it]
   inbox install --here|--session HUMAN_SESSION_ID --context OWNER_JSON [--config-dir DIR] [--evidence-file FILE]
   task|comment|agent|node|execution|schedule|occurrence list [--limit N] [--cursor TOKEN]
   task|comment|agent|node|execution|schedule|occurrence inspect ID
@@ -41,7 +49,7 @@ export async function main(args) {
     return worker(args.slice(1));
   }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file'].map(k => [k, { type: 'string' }])),
+    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation'].map(k => [k, { type: 'string' }])),
     help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' },
   } });
   const [group, action, id] = positionals;
@@ -49,8 +57,12 @@ export async function main(args) {
   const output = value => console.log(JSON.stringify(value, null, 2));
   requireValue(positionals.length <= 3, 'invalid_request', 'Unexpected positional arguments');
   const allowed = group === 'node' && ['install', 'run'].includes(action) ? ['config']
+    : group === 'node' && action === 'ensure' ? ['config', 'session']
     : group === 'inbox' && action === 'install' ? ['context', 'here', 'session', 'config-dir', 'evidence-file']
-    : group === 'agent' && action === 'enrol' ? ['context', 'here', 'session', 'config', 'reserved', 'directory', 'transport', 'service-registration']
+    : group === 'agent' && action === 'enrol' ? ['context', 'here', 'session', 'config', 'reserved', 'directory', 'transport', 'service-registration', 'name', 'key']
+    : group === 'agent' && action === 'attach' ? ['context', 'here', 'session', 'config', 'directory', 'service-registration', 'agent', 'generation', 'key']
+    : group === 'agent' && action === 'enrolments' ? ['context', 'config', 'directory']
+    : group === 'agent' && action === 'launch' ? ['context', 'config', 'directory', 'agent', 'key', 'json', 'service-registration']
     : group === 'schedule' && action === 'preview' ? ['cron', 'timezone']
     : group === 'board' ? ['context', 'json']
     : action === 'list' ? ['context', 'limit', 'cursor'] : action === 'inspect' ? ['context']
@@ -63,6 +75,30 @@ export async function main(args) {
     requireValue(values.config && !id, 'invalid_request', 'Node operation requires --config');
     const script = new URL(action === 'install' ? '../scripts/install-native-node.mjs' : './node-cli.mjs', import.meta.url);
     execFileSync(process.execPath, [fileURLToPath(script), '--config', resolve(values.config)], { stdio: 'inherit' }); return;
+  }
+  if (group === 'node' && action === 'ensure') {
+    requireValue(values.config && values.session && !id, 'invalid_request', 'Node readiness requires --config and --session');
+    const config = JSON.parse(readFileSync(resolve(values.config), 'utf8'));
+    requireValue(config.identityVersion === 2, 'configuration_conflict', 'Stable-node config required');
+    const ready = async milliseconds => {
+      const deadline = Date.now() + milliseconds;
+      do {
+        try {
+          const connection = workerConnection({ workerDirectory: config.stateDirectory }, values.session);
+          const status = await call(connection, 'POST', '/agent/status', {}, { signal: AbortSignal.timeout(1000) });
+          if (status.receivingHere) return status;
+        } catch {}
+        await delay(200);
+      } while (Date.now() < deadline);
+    };
+    let status = await ready(3000);
+    if (!status) {
+      execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/install-native-node.mjs', import.meta.url)), '--config', resolve(values.config)],
+        { stdio: ['ignore', 'pipe', 'inherit'] });
+      status = await ready(10000);
+    }
+    requireValue(status, 'node_not_ready', 'Attachment is saved, but the Relay node has not applied it. Reconcile before dispatching');
+    output({ state: 'running', nodeId: config.nodeId, agentId: status.agentId, sessionId: values.session }); return;
   }
   if (group === 'schedule' && action === 'preview') { requireValue(!id, 'invalid_request', 'Unexpected schedule ID'); output(previewCron(values.cron, values.timezone)); return; }
   if (group === 'inbox' && action === 'install') {
@@ -89,7 +125,32 @@ export async function main(args) {
     requireValue(!id && Boolean(values.here) !== Boolean(values.session), 'invalid_request', 'Choose --here or --session ID');
     output(await enrolInteractive({ configFile: values.config, sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
       directory: values.directory ?? process.cwd(), reserved: values.reserved === true, transport: values.transport,
-      serviceRegistration: values['service-registration'], backend, api })); return;
+      serviceRegistration: values['service-registration'], name: values.name, key: values.key, backend, api })); return;
+  }
+  if (group === 'agent' && action === 'enrolments') {
+    requireValue(!id, 'invalid_request', 'Enrolments takes no ID');
+    output(await listEnrolments({ configFile: values.config, directory: values.directory, api })); return;
+  }
+  if (group === 'agent' && action === 'attach') {
+    requireValue(!id && Boolean(values.here) !== Boolean(values.session) && /^\d+$/.test(values.generation ?? ''),
+      'invalid_request', 'Choose --here or --session and supply the inspected --generation');
+    output(await attachInteractive({ configFile: values.config, sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
+      directory: values.directory ?? process.cwd(), agentId: values.agent, expectedGeneration: Number(values.generation),
+      key: values.key, serviceRegistration: values['service-registration'], backend, api })); return;
+  }
+  if (group === 'agent' && action === 'launch') {
+    requireValue(!id, 'invalid_request', 'Launch takes no positional ID');
+    const result = await launchInteractive({ configFile: values.config, directory: values.directory ?? process.cwd(),
+      agentId: values.agent, key: values.key ?? randomUUID(), serviceRegistration: values['service-registration'], backend, api });
+    if (values.json) output(result);
+    else {
+      execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/install-native-node.mjs', import.meta.url)), '--config', result.configFile], { stdio: 'inherit' });
+      const endpoint = await nativeConnection({ serviceRegistration: values['service-registration'] });
+      requireValue(endpoint.url === result.nativeUrl, 'native_identity_mismatch', 'Native endpoint changed before opening the receiving chat');
+      execFileSync('opencode', [values.directory ?? process.cwd(), '--server', endpoint.url, '--session', result.sessionId],
+        { stdio: 'inherit', env: { ...process.env, OPENCODE_PASSWORD: endpoint.password } });
+    }
+    return;
   }
   if (group === 'board') {
     const { nativeBoard } = await import('./native-board.mjs');

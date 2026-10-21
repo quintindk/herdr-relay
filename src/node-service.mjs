@@ -24,6 +24,47 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       catch { throw new RelayError('invalid_json', 'JSON request required'); }
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
       const path = new URL(req.url, 'http://node').pathname;
+      const currentReceiver = () => {
+        requireValue(worker.bindingId && worker.bindingRevision, 'standing_enrolment_required', 'Stable agent enrolment required', 403);
+        journal.assertReceiver({ id: worker.bindingId, agentId: worker.agentId, receiverGeneration: worker.bindingRevision });
+      };
+      const ownsWork = work => work?.execution.targetAgentId === worker.agentId &&
+        (!worker.sessionId || !work.nativeConversationId || work.nativeConversationId === worker.sessionId) &&
+        (!worker.bindingId || work.bindingId === worker.bindingId);
+      if (path === '/agent/status') {
+        requireValue(Object.keys(body).length === 0, 'invalid_request', 'Status takes no overrides');
+        const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${worker.agentId}`);
+        const receiver = row ? JSON.parse(row.value) : null;
+        const works = journal.works().filter(w => w.execution.targetAgentId === worker.agentId &&
+          !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ agentId: worker.agentId, sessionId: worker.sessionId, receiver,
+          receivingHere: receiver?.state === 'active' && receiver.bindingId === worker.bindingId,
+          obligations: works.map(w => ({ id: w.id, state: w.execution.state, conversationId: w.nativeConversationId,
+            recovery: w.recovery ?? null })) })); return;
+      }
+      if (path === '/agent/schedules') {
+        requireValue(Object.keys(body).length === 0, 'invalid_request', 'Schedule lookup takes no overrides');
+        const items = journal.db.prepare('SELECT data FROM schedules ORDER BY id').all().map(row => JSON.parse(row.data))
+          .filter(s => s.definition.targetAgentId === worker.agentId && !s.definition.targetConversationId);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ items, complete: true, scope: 'locally_installed_agent_schedules' })); return;
+      }
+      if (['/agent/schedule-install', '/agent/schedule-pause', '/agent/schedule-resume', '/agent/schedule-cancel'].includes(path)) {
+        currentReceiver();
+        requireValue(api && Object.keys(body).every(k => ['key', 'payload'].includes(k)) && typeof body.key === 'string' && body.key.trim() && body.payload,
+          'invalid_request', 'Stable operation key and exact schedule payload required');
+        const operation = path.slice('/agent/schedule-'.length);
+        const payload = structuredClone(body.payload);
+        if (operation === 'install') {
+          requireValue(payload.definition && !payload.definition.nodeId && !payload.definition.targetAgentId &&
+            !payload.definition.targetFolder && !payload.definition.targetConversationId, 'forbidden', 'Persistent schedules target only this agent', 403);
+          payload.definition = { ...payload.definition, nodeId: journal.nodeId, targetAgentId: worker.agentId };
+        }
+        const command = { key: `agent-schedule:${worker.agentId}:${body.key}`, action: `agent.schedule_${operation}`,
+          payload: { agentId: worker.agentId, conversationId: worker.sessionId, bindingRevision: worker.bindingRevision, payload } };
+        journal.queue(command); await journal.flush(api);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(journal.receipt(command.key))); return;
+      }
       if (path === '/agent/notifications') {
         requireValue(Object.keys(body).length === 0, 'invalid_request', 'No notification scope override supported');
         const items = journal.db.prepare('SELECT data FROM local_notifications ORDER BY id').all().map(row => JSON.parse(row.data));
@@ -57,7 +98,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       if (path === '/work/current') {
         requireValue(typeof worker.sessionId === 'string' && body.sessionId === worker.sessionId && Object.keys(body).length === 1,
           'forbidden', 'Exact enrolled native session required', 403);
-        const candidates = journal.works().filter(work => work.execution.targetAgentId === worker.agentId &&
+        const candidates = journal.works().filter(work => ownsWork(work) &&
           ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && work.execution.state === 'accepted');
         requireValue(candidates.length === 1, 'work_ambiguous', 'One active worker execution required', 409);
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -65,7 +106,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       }
       if (path === '/work/children') {
         const parent = journal.work(body.executionId);
-        requireValue(api && parent?.execution.targetAgentId === worker.agentId && parent.execution.runId === body.runId,
+        requireValue(api && ownsWork(parent) && parent.execution.runId === body.runId,
           'forbidden', 'Exact parent execution required', 403);
         const items = [];
         let cursor;
@@ -90,6 +131,11 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           } while (cursor);
           result = { items, complete: true };
         } else {
+          if (worker.bindingId) {
+            const addressedNotice = journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
+              .map(row => JSON.parse(row.data)).some(n => n.bindingId === worker.bindingId && n.questionId === body.id);
+            if (!addressedNotice) currentReceiver();
+          }
           requireValue(Object.keys(body).every(key => ['id', 'expectedRevision', 'key', 'body', 'reason'].includes(key)) &&
             typeof body.id === 'string' && body.id && typeof body.key === 'string', 'invalid_request', 'Exact question, revision and key required');
           const action = path === '/agent/answer' ? 'question.answer' : 'question.forward';
@@ -102,7 +148,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
       const work = journal.work(body.executionId);
-      requireValue(work && work.execution.targetAgentId === worker.agentId && work.execution.runId === body.runId,
+      requireValue(ownsWork(work) && work.execution.runId === body.runId,
         'forbidden', 'Exact current worker execution required', 403);
       let result;
       if (path === '/work/read') result = { execution: work.execution, localState: work.state,

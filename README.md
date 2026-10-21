@@ -35,6 +35,10 @@ read-only export/planning and explicit native import before laptop v2 cutover.
 The [native CLI](docs/native-cli.md) provides explicit `native` enrolment,
 task/comment/execution/schedule and worker commands, separate from the legacy
 commands below. Native task panes include schedules and published occurrences.
+Native [durable agents and receiving chats](docs/native-receivers.md) separate
+standing enrolment from `/relay-attach`. Persistent crons target the stable agent,
+while admitted work retains its original native conversation. The explicit Herdr
+launcher and new-chat TUI path support replacement without recreating schedules.
 
 ## Implemented
 

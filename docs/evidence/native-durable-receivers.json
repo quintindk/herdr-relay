@@ -1,0 +1,74 @@
+{
+  "verifiedOn": "2026-10-21",
+  "scope": "Durable node/agent enrolment, revisioned receiving-chat attachment and persistent scheduling across fresh native conversations.",
+  "migration": "None. Session-derived development enrolments are not converted.",
+  "runtimeChecks": [
+    {
+      "runtime": "2.1.0",
+      "command": "npm --prefix packages/opencode-relay run smoke:receivers",
+      "realMinuteCronFirings": 2,
+      "unchangedScheduleDefinitionAcrossChatReplacement": true,
+      "sameNodeAndAgentAcrossConversations": true,
+      "replacementChatScheduleManagement": true,
+      "staleCredentialRefused": true,
+      "daemonRestartPreservedReceiver": true
+    },
+    {
+      "runtime": "2.1.2",
+      "command": "RELAY_V2_BINARY=/absolute/path/to/opencode npm --prefix packages/opencode-relay run smoke:receivers -- --tui",
+      "stableAgentId": "agent_0cef1051-5a2c-49bb-a3ba-fee0dfbf306f",
+      "stableNodeId": "node_5dc1cd17-c0e8-41fd-871f-57f7087308df",
+      "cronConversations": ["ses_ea177c17affeEHrl8yaSlWMcmj", "ses_d288323a33944cdb0d85e69dd0"],
+      "realMinuteCronFirings": 2,
+      "unchangedScheduleDefinitionAcrossChatReplacement": true,
+      "nodeHotAttachment": true,
+      "replacementChatPauseResumePause": true,
+      "staleCredentialRefused": true,
+      "daemonRestartPreservedReceiver": true,
+      "humanOnlyEnrolCommandKeyboardConfirmed": true,
+      "humanOnlyAttachCommandKeyboardConfirmed": true,
+      "automaticSelectedRootChatAttachment": true,
+      "automaticNewChatReceivedSubsequentScheduledWork": true,
+      "oldCronDefinitionNotRecreatedByAutomaticAttachment": true
+    }
+  ],
+  "automatedCoverage": [
+    "Lost credential reply retains one installation identity.",
+    "Competing attachment claims preserve one receiving generation.",
+    "A lost attachment reply fences new delivery until original-key reconciliation.",
+    "Archived-chat reconciliation does not rediscover or mutate original confirmed intent.",
+    "Definitive attachment refusal restores only a read-back-confirmed previous designation.",
+    "Old operation retries cannot reclaim a superseded receiver.",
+    "Fresh schedule firings resolve the replacement agent receiver after journal reopen and while execution is offline.",
+    "Uncertain old delivery is never replayed into the replacement chat.",
+    "Attachment fences a stale native admission snapshot transactionally.",
+    "A handover racing backend admission retries only after a definitive no-admission refusal.",
+    "Exact-session credentials cannot read or submit another chat's execution under the same agent.",
+    "Human confirmation is invalidated by switch, switch-and-return, reconnect, reload or disposal.",
+    "New-chat navigation preserves the original receiver claim across Home and creation/selection event reordering."
+  ],
+  "v2PackageTestsPassed": 42,
+  "rootRegression": { "passed": 1522, "skipped": 1, "failed": 0, "skipReason": "Pinned Paperclip validator source is not installed." },
+  "localRollout": {
+    "backendOnlineBackupVerified": true,
+    "backendServiceRestarted": true,
+    "backendInstancePreserved": true,
+    "existingScheduleDefinitionsAndAppliedRevisionsPreserved": true,
+    "openCodeServerRestarted": false,
+    "nativeModelsOrPermissionsChanged": false,
+    "liveWrightAndRelayPluginReloadObserved": true,
+    "scopedToolsLoadedInBothLiveLocations": true,
+    "oldSessionDerivedInteractiveDaemonsStoppedAndDisabled": true,
+    "oldInteractiveAgentAdvertisementsMarkedOffline": true,
+    "oldStateAndSchedulesRetained": true,
+    "stableEnrolmentsBeforeHumanAcceptance": 0,
+    "userChatsSilentlyEnrolled": false
+  },
+  "limitations": [
+    "Real native services, tools, daemon and TUIs, with a deterministic model and synthetic keyboard/navigation input.",
+    "No actual-human acceptance of the new enrolment or attachment commands is claimed.",
+    "No physical second-machine, complete crash-during-write matrix or offline replacement-attachment certification.",
+    "An unrelated plain OpenCode launch requires explicit attachment. Automatic fresh launches use the authorised Herdr/CLI launcher.",
+    "Development fixtures are isolated. These smokes do not enrol or replace the user's Wright conversation."
+  ]
+}

@@ -35,7 +35,7 @@ export async function registerOperatorTools(ctx) {
   const registration = await ctx.tool.transform(editor => {
     if (ctx.options.readContextFile) {
       for (const [name, collection] of [['relay_task_list', 'tasks'], ['relay_agents', 'agents'], ['relay_schedules', 'schedules'],
-        ['relay_questions', 'questions'], ['relay_reviews', 'executions']]) editor.add({ name,
+         ['relay_questions', 'questions'], ['relay_reviews', 'executions']].filter(() => !ctx.options.workerDirectory)) editor.add({ name,
         description: `Read native ${collection}. Results carry pagination/freshness. This never starts agents.`, options: { codemode: false },
         input: { type: 'object', properties: { cursor: text, limit: { type: 'integer', minimum: 1, maximum: 500 }, status: text, taskId: text }, additionalProperties: false },
         async execute(input) {
@@ -50,11 +50,11 @@ export async function registerOperatorTools(ctx) {
             ('GET', `/v1/tasks/${encodeURIComponent(id)}`)) };
         } });
     }
-    for (const [name, definition] of Object.entries(proposedActions)) editor.add({ name,
+    for (const [name, definition] of Object.entries(proposedActions).filter(([name]) => !ctx.options.workerDirectory || !name.startsWith('relay_schedule_'))) editor.add({ name,
       description: `Propose ${definition.action} from the current human instruction. Publication requires exact keyboard confirmation through /relay-decisions.`,
       options: { codemode: false }, input: { type: 'object', properties: definition.properties, required: definition.required, additionalProperties: false },
       async execute(input, context) {
-        if (ctx.options.workerContextFile) throw new Error('Worker plugin cannot propose owner operations');
+        if (ctx.options.workerContextFile || ctx.options.workerDirectory) throw new Error('Worker plugin cannot propose owner operations');
         if (!input || Object.keys(input).some(key => !Object.hasOwn(definition.properties, key)) ||
           definition.required.some(key => !Object.hasOwn(input, key))) throw new Error('Invalid operator proposal fields');
         const messages = await ctx.session.context({ sessionID: context.sessionID });

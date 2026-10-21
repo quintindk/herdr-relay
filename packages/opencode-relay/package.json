@@ -13,7 +13,8 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "smoke": "node smoke.mjs",
-    "smoke:interactive-cron": "node smoke-interactive-cron.mjs"
+    "smoke:interactive-cron": "node smoke-interactive-cron.mjs",
+    "smoke:receivers": "node smoke-receivers.mjs"
   },
   "dependencies": {
     "@opencode/client": "2.1.0",

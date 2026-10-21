@@ -66,7 +66,8 @@ export function nativeBoard(api, { decisionJournal } = {}) {
     const next = preview && (!d.expiresAt || Date.parse(preview) < Date.parse(d.expiresAt)) ? preview : null;
     return { id: schedule.id, scheduleId: schedule.id, routineId: schedule.id, companyId: 'native', title: schedule.id,
       state, backendStatus: pending ? 'change pending' : 'applied', revision: schedule.revision, appliedRevision: schedule.appliedRevision,
-      intent: d.intent ?? 'job', executionMode: d.targetFolder ? 'interactive_folder' : agents.find(a => a.id === d.targetAgentId)?.mode === 'interactive' ? 'interactive_exact' : 'headless',
+      intent: d.intent ?? 'job', executionMode: d.targetFolder ? 'interactive_folder' : d.targetConversationId ? 'interactive_exact' :
+        agents.find(a => a.id === d.targetAgentId)?.standingGrant ? 'interactive_agent' : agents.find(a => a.id === d.targetAgentId)?.mode === 'interactive' ? 'interactive_exact' : 'headless',
       cron: d.cron ?? `at ${d.at}`, timezone: d.timezone ?? 'Africa/Johannesburg', nextRunAt: next ?? null, nextRunIsEstimate: true,
       target: d.targetFolder ?? d.targetAgentId ?? 'human', targetAgentId: d.targetAgentId, targetConversationId: d.targetConversationId,
       targetDirectory: d.targetFolder, ownerNodeId: d.nodeId,
@@ -83,11 +84,14 @@ export function nativeBoard(api, { decisionJournal } = {}) {
           'Schedule next times are clock previews, not admission receipts. Occurrence history contains published receipts, not all local pending/running work.'] };
     },
     async detailAgent({ agentId }) {
-      const { agents, nodes, tasks, executions, attention } = await load();
+      const { agents, nodes, tasks, executions, schedules, attention } = await load();
       const agent = agents.find(a => a.id === agentId);
       requireValue(agent, 'agent_missing', 'Agent no longer appears in the directory');
       const taskIds = new Set(executions.filter(e => e.targetAgentId === agentId && !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => e.taskId));
-      return { agent: presentAgent(agent, nodes), tasks: tasks.filter(t => taskIds.has(t.id)).map(t => ({ title: t.title, attentionLabel: attention(t).attentionLabel })) };
+      return { agent: presentAgent(agent, nodes), tasks: tasks.filter(t => taskIds.has(t.id)).map(t => ({ title: t.title, attentionLabel: attention(t).attentionLabel })),
+        persistentSchedules: schedules.filter(s => s.definition.targetAgentId === agent.id && !s.definition.targetConversationId).length,
+        historicalAttempts: executions.filter(e => e.targetAgentId === agent.id && e.bindingId && e.bindingId !== agent.bindingId &&
+          !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => ({ id: e.id, state: e.state, conversationId: e.targetConversationId })) };
     },
     pendingDecisions: publicationItems,
     async detailInbox({ id }) {
