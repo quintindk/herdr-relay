@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { startBackend } from '../src/backend-service.mjs';
 import { nativeBackendClient } from '../src/backend-client.mjs';
@@ -105,6 +105,22 @@ test('native CLI rejects ignored options, unknown verbs and unsafe pagination wi
     ['task', 'list', '--limit', '501', '--context', '/missing'], ['agent', 'enrol', '--here', '--session', 'both', '--context', '/missing']]) {
     await assert.rejects(cli(...args));
   }
+});
+
+test('native board and tui alias use the native default context without changing other command authority', async t => {
+  const f = await fixture(t), state = join(f.root, 'state');
+  const directory = join(state, 'herdr-relay-backend');
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const defaultContext = join(directory, 'owner.json');
+  writeFileSync(defaultContext, JSON.stringify({ url: f.backend.origin, token: f.token }), { mode: 0o600 });
+  const env = { ...process.env, XDG_STATE_HOME: state }; delete env.RELAY_NATIVE_CONTEXT;
+  const run = (...args) => exec(process.execPath, ['src/cli.mjs', ...args], { env, timeout: 15000 });
+  assert.deepEqual(JSON.parse((await run('native', 'board', '--json')).stdout).inbox, []);
+  assert.deepEqual(JSON.parse((await run('tui', '--json')).stdout).inbox, []);
+  await assert.rejects(run('native', 'task', 'list'), /Explicit --context/);
+  writeFileSync(defaultContext, JSON.stringify({ url: f.backend.origin, token: 'bad-token' }));
+  await assert.rejects(run('tui', '--json'), /unauthorised/);
+  assert.deepEqual(JSON.parse((await run('tui', '--json', '--context', f.context)).stdout).inbox, []);
 });
 
 test('real native CLI TUI displays paused cron and its completed taskless receipt', async t => {

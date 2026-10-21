@@ -185,8 +185,13 @@ export class BackendStore {
       return node;
     }
     if (action === 'node.heartbeat') {
-      fields(p, ['id'], ['id']); this.nodeOnly(actor, p.id);
-      return changed('node', this.get('node', p.id), { lastSeenAt: now() });
+      fields(p, ['id', 'machine'], ['id']); this.nodeOnly(actor, p.id);
+      if (p.machine !== undefined) {
+        fields(p.machine, ['hostname', 'platform'], ['hostname']);
+        string(p.machine.hostname, 'machine.hostname', 253);
+        if (p.machine.platform !== undefined) string(p.machine.platform, 'machine.platform', 64);
+      }
+      return changed('node', this.get('node', p.id), { lastSeenAt: now(), ...(p.machine ? { machine: p.machine } : {}) });
     }
     if (action === 'credential.revoke') {
       this.ownerOnly(actor); fields(p, ['id'], ['id']);

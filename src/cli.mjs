@@ -15,6 +15,7 @@ const help = `herdr-relay (development)
   service --paperclip-url URL [--state-dir DIR] [--backend-context FILE] [--herdr-config FILE]
   status
   native --help  [native backend enrolment, tasks, executions, schedules, worker CLI and board]
+  tui [--context OWNER_JSON] [--json]  [native Tasks, Agents, Inbox, Schedules]
   company provision --file company.json
   agent list
   agent discover
@@ -102,6 +103,10 @@ Pull settlement is operator-attested. Native settlement requires a matching
 terminal response. Automatic interruption requires a dedicated owned runtime.`;
 
 export async function main(args) {
+  if (args[0] === 'tui') {
+    const { main: native } = await import('./native-cli.mjs');
+    return native(['board', ...args.slice(1)]);
+  }
   if (args[0] === 'native') {
     const { main: native } = await import('./native-cli.mjs');
     return native(args.slice(1));

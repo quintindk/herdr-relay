@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { requireValue } from './protocol.mjs';
+import { digest, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
+import { nativeAgentLabel, nativeAttention } from './native-board-attention.mjs';
 
-export function nativeBoard(api) {
+export function nativeBoard(api, { decisionJournal } = {}) {
+  const terminalId = `terminal:${randomUUID()}`;
   const all = async collection => {
     const items = [];
     const cursors = new Set(), ids = new Set();
@@ -25,6 +27,35 @@ export function nativeBoard(api) {
     identifier: task.identifier || task.source?.metadata?.identifier ||
       (task.id.length > 24 ? `${task.id.slice(0,12)}…${task.id.slice(-8)}` : task.id),
     assigneeUserId: task.responsibleUserId, assigneeAgentId: null });
+  const publicationItems = () => (decisionJournal?.pending() ?? []).map(p => ({
+    id: `publication:${p.key}`, kind: 'publication', entityId: p.command.payload.id, key: p.key,
+    title: p.state === 'conflict' ? 'Decision refused: inspect before trying again' : 'Confirmed decision awaiting acknowledgement',
+    summary: `${p.command.action}: ${p.command.payload.body ?? p.command.payload.reason ?? 'acknowledgement'}`,
+    context: p.state === 'conflict' ? `Refused (${p.error}). Dismiss this refused operation, then reopen the current item for a fresh decision.`
+      : 'Outcome is unconfirmed. Retry reuses your original confirmation and operation key.',
+    from: 'This terminal', stateLabel: p.state === 'conflict' ? 'Needs inspection' : 'Publication unconfirmed',
+    action: p.state === 'conflict' ? 'dismiss' : 'retry', error: p.error, command: p.command, instanceId: p.instance,
+  }));
+  const load = async () => {
+    const collections = ['tasks', 'agents', 'nodes', 'schedules', 'questions', 'executions', 'occurrences', 'notifications', 'monitor_results'];
+    const [info, ...values] = await Promise.all([api('GET', '/v1/info'), ...collections.map(all)]);
+    requireValue(info.userId && info.instanceId, 'invalid_backend_response', 'Native board requires backend and human identity');
+    const data = Object.fromEntries(collections.map((name, i) => [name, values[i]]));
+    const { inbox, attention } = nativeAttention({ ...data, monitorResults: data.monitor_results, userId: info.userId });
+    return { ...data, info, attention, inbox: [...publicationItems(), ...inbox].map(item => ({ ...item, instanceId: item.instanceId ?? info.instanceId })) };
+  };
+  const presentAgent = (agent, nodes) => {
+    const node = nodes.find(node => node.id === agent.nodeId);
+    const nodeAge = Date.now() - Date.parse(node?.lastSeenAt), agentAge = Date.now() - Date.parse(agent.lastSeenAt);
+    const fresh = nodeAge >= 0 && nodeAge < 15000 && agentAge >= 0 && agentAge < 15000;
+    const reported = agent.availability ?? 'unknown';
+    return { ...agent, companyId: 'native', displayName: nativeAgentLabel(agent),
+      name: `${nativeAgentLabel(agent)} @ ${node?.name ?? 'Unknown node'} / ${node?.machine?.hostname ?? 'machine not advertised'}`,
+      nodeName: node?.name ?? 'Unknown node', nodeLastSeenAt: node?.lastSeenAt ?? null,
+      machineName: node?.machine?.hostname ?? 'Not advertised', machinePlatform: node?.machine?.platform ?? null,
+      reportedAvailability: reported, availabilityLabel: fresh && reported === 'busy' ? 'Busy (reported)' : fresh && reported === 'available'
+        ? 'Available (reported)' : 'Unknown or stale', availability: fresh ? 'present' : 'unknown', nativeState: 'unknown', bridgeState: null };
+  };
   const routine = (schedule, agents = []) => {
     const d = schedule.definition;
     const pending = schedule.appliedRevision !== schedule.revision;
@@ -44,16 +75,53 @@ export function nativeBoard(api) {
   };
   return {
     async read() {
-      const [tasks, agents, nodes, schedules] = await Promise.all([all('tasks'), all('agents'), all('nodes'), all('schedules')]);
-      return { companies: [{ id: 'native', name: 'Relay' }], projects: [], routines: schedules.map(s => routine(s, agents)), tasks: tasks.map(scoped),
+      const { tasks, agents, nodes, schedules, inbox, attention, info } = await load();
+      return { companies: [{ id: 'native', name: 'Relay' }], projects: [], routines: schedules.map(s => routine(s, agents)),
+        inbox, tasks: tasks.map(t => ({ ...scoped(t), ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
-        agents: agents.map(agent => {
-          const node = nodes.find(node => node.id === agent.nodeId);
-          const age = Date.now() - Date.parse(node?.lastSeenAt);
-          return { ...agent, companyId: 'native', name: `${agent.name} @ ${node?.name ?? agent.nodeId}`,
-            availability: age >= 0 && age < 15000 ? 'present' : 'unknown', nativeState: 'unknown', bridgeState: null };
-        }), fetchedAt: new Date().toISOString(), warnings: ['Native task view. Assignment is separate from execution.',
+        agents: agents.map(agent => presentAgent(agent, nodes)), fetchedAt: new Date().toISOString(), warnings: ['Native task view. Assignment is separate from execution.',
           'Schedule next times are clock previews, not admission receipts. Occurrence history contains published receipts, not all local pending/running work.'] };
+    },
+    async detailAgent({ agentId }) {
+      const { agents, nodes, tasks, executions, attention } = await load();
+      const agent = agents.find(a => a.id === agentId);
+      requireValue(agent, 'agent_missing', 'Agent no longer appears in the directory');
+      const taskIds = new Set(executions.filter(e => e.targetAgentId === agentId && !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => e.taskId));
+      return { agent: presentAgent(agent, nodes), tasks: tasks.filter(t => taskIds.has(t.id)).map(t => ({ title: t.title, attentionLabel: attention(t).attentionLabel })) };
+    },
+    pendingDecisions: publicationItems,
+    async detailInbox({ id }) {
+      const local = publicationItems().find(item => item.id === id);
+      if (local) return local;
+      const data = await load();
+      const item = data.inbox.find(item => item.id === id);
+      requireValue(item, 'decision_unavailable', 'This item changed or was resolved. Refresh Inbox');
+      return item;
+    },
+    async decideInbox({ item, body, decision, reason, key }) {
+      requireValue(decisionJournal, 'decision_storage_required', 'Durable human decision storage is required');
+      requireValue(item && typeof key === 'string' && key, 'invalid_request', 'Exact preview and stable operation key required');
+      if (item.kind === 'publication') {
+        if (item.action === 'dismiss') { decisionJournal.dismiss(item.key); return { state: 'recorded', message: 'Refused operation dismissed. Reopen the current item before deciding again.' }; }
+        await decisionJournal.retry(api, item.key);
+        return { state: 'recorded', message: 'Original confirmed decision published.' };
+      }
+      requireValue(!item.disabled && ['question.answer', 'execution.review', 'execution.monitor_review', 'occurrence.review', 'notification.acknowledge'].includes(item.action),
+        'decision_unavailable', 'This item does not permit a human decision');
+      const payload = { id: item.entityId, expectedRevision: item.revision };
+      if (item.kind === 'question') {
+        requireValue(typeof body === 'string' && body.trim() && body.trim().length <= 4000, 'invalid_answer', 'Answer must contain 1..4000 characters');
+        payload.body = body.trim();
+      } else if (item.kind === 'review') {
+        requireValue(['accept', 'reject'].includes(decision) && typeof reason === 'string' && reason.trim() && reason.trim().length <= 4000,
+          'invalid_review', 'Exact decision and review reason required');
+        Object.assign(payload, { candidate: item.candidate, decision, reason: reason.trim() });
+      }
+      if (item.action !== 'execution.monitor_review' && item.kind !== 'reminder') payload.source = {
+        conversationId: terminalId, messageId: `dialog:${key}`, digest: digest(payload),
+      };
+      await decisionJournal.submit(api, { key, action: item.action, payload }, item.instanceId);
+      return { state: 'recorded', message: item.kind === 'review' ? decision === 'accept' ? item.acceptEffect : item.rejectEffect : item.effect };
     },
     async detailRoutine({ scheduleId }) {
       const schedule = await api('GET', `/v1/schedules/${encodeURIComponent(scheduleId)}`);
@@ -67,13 +135,20 @@ export function nativeBoard(api) {
     },
     async inspectTask({ taskId }) {
       const task = await api('GET', `/v1/tasks/${encodeURIComponent(taskId)}`);
-      return { task: scoped(task), revision: task.revision, defaultHumanUserId: task.responsibleUserId };
+      const { executions, questions } = await load();
+      return { task: scoped(task), revision: task.revision, defaultHumanUserId: task.responsibleUserId,
+        interactions: [...executions.filter(e => e.taskId === taskId && !['completed', 'failed', 'cancelled', 'rejected'].includes(e.state)),
+          ...questions.filter(q => q.taskId === taskId && q.status === 'open' && q.blocking)].map(item => ({ id: item.id, status: 'pending' })) };
     },
     async detailTask({ taskId }) {
-      const task = await api('GET', `/v1/tasks/${encodeURIComponent(taskId)}`);
-      const [comments, executions] = await Promise.all([all('comments'), all('executions')]);
+      const [{ tasks, executions, questions, attention, inbox, info }, comments] = await Promise.all([load(), all('comments')]);
+      const task = tasks.find(t => t.id === taskId);
+      requireValue(task, 'task_missing', 'Task not found');
       const execution = executions.filter(e => e.taskId === taskId && e.result).sort((a, b) => (b.result.sequence ?? 0) - (a.result.sequence ?? 0))[0];
-      return { task: scoped(task), revision: task.revision, comments: comments.filter(c => c.taskId === taskId).map(c => ({ ...c,
+      return { task: { ...scoped(task), ...attention(task), responsibleName: task.responsibleUserId === info.userId ? 'You' : task.responsibleUserId }, actions: inbox.filter(i => i.taskId === taskId),
+        activity: [...questions.filter(q => q.taskId === taskId).map(q => `${q.status === 'answered' ? 'Answered' : 'Question'}: ${q.prompt}${q.answer ? ` — ${q.answer.body}` : ''}`),
+          ...executions.filter(e => e.taskId === taskId && e.review).map(e => `Review ${e.review.decision}: ${e.review.reason}`)],
+        revision: task.revision, comments: comments.filter(c => c.taskId === taskId).map(c => ({ ...c,
         authorUserId: c.author.type === 'user' ? c.author.id : null, authorAgentId: null })),
       result: execution?.result, review: execution?.state === 'in_review' ? { candidate: execution.result.candidate,
         interactionId: execution.id, executionRevision: execution.revision } : null };

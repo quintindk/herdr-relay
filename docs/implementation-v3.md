@@ -476,3 +476,52 @@ answer/review publication. This is keyboard-dialog provenance rather than arbitr
 natural-chat source authentication. Escalation, closed-origin and failure recovery
 remain separate gates. Evidence:
 [actual-human inbox workflow](evidence/native-human-inbox-live.json).
+
+## Native task-board Inbox, 2026-10-21
+
+The native work pane now has Tasks, Agents, Inbox and Schedule views. Native projection
+joins task/execution/question state without making the responsible human the
+executing agent. It exposes human questions, ordinary/monitor/taskless candidate
+reviews and reminder acknowledgements. Agent-addressed questions remain separate
+until forwarded. Task Actions and Inbox open the same decision component. Result,
+comment and question/review activity remain visible after resolution.
+
+Keyboard decisions use explicit edit/preview/confirmation, exact backend revisions
+and a private persistent decision journal beside the owner context. The command
+and backend identity are saved before network publication. Retries reuse the same
+confirmed bytes/key after process restart. Unknown outcomes and malformed receipts
+remain pending. Definite refusals can be inspected/dismissed without deleting their
+history. Current backend authority/revision checks remain authoritative. The UI
+does not silently upgrade a stale preview or describe an answer as proof that a
+worker has resumed. Inbox selection follows identity through refreshes and an open
+decision retains its original preview.
+
+Fixture API/journal/Ink tests and a real CLI PTY cover answering, exact acceptance,
+request-changes semantics, human/agent routing, cancellation, taskless/monitor
+reviews, reminder acknowledgement, offline state, restart and lost-acknowledgement
+reconciliation. A read-only deployed-backend PTY verified the new Schedules view
+and completed cron receipt without replacing the user's pane. This is not yet an
+actual-human live decision test of the new board. Legacy Paperclip interfaces and
+OpenCode slash commands remain available. See [board guide](native-task-inbox.md)
+and [evidence](evidence/native-task-inbox.json).
+
+Final regression checkpoint: 1,501 root tests passed, one skipped, zero failed.
+All 30 v2 tests, syntax/whitespace and Python syntax checks passed. Subsequent
+focused checks also covered lossless cell-aware decision wrapping, including CJK
+and joined emoji, and exact receipt validation before reporting a decision recorded.
+
+CLI/Agents/machine follow-up: `npm run board`, development `node src/cli.mjs tui`
+and installed `herdr-relay tui` open the native board. Board-only context defaulting
+does not change other native commands or the legacy Paperclip board. The tab order
+is Tasks, Agents, Inbox, Schedule. Agents is a separate read-only directory with
+mode, node, workspace, advisory availability, freshness and outstanding work.
+Tasks no longer list empty agent groups.
+
+Node and machine labels are separate throughout agent/task/inbox projections.
+The optional hostname/platform heartbeat field is owning-node-only and gated by
+the backend's advertised capability. Existing heartbeats remain valid. Hostnames
+are labels rather than identity or authority. Running deployed services were not
+restarted, so their existing machine labels remain unadvertised. The isolated
+OpenCode 2.1.2 daemon/TUI smoke verified actual hostname/platform advertisement
+alongside question/answer/review. Final follow-up regression passed 1,506 root
+tests, one skipped, zero failed, plus all 30 v2 tests and syntax/whitespace checks.

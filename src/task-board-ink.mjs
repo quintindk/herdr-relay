@@ -1,14 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { buildBoardRows } from './task-board-view.mjs';
+import { buildBoardRows, wrapBoardText } from './task-board-view.mjs';
+import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
 const labels = { backlog: 'Backlog', todo: 'Todo', in_progress: 'Active', blocked: 'Blocked',
   in_review: 'In review', done: 'Done', cancelled: 'Cancelled', delete: 'Delete permanently' };
 const terminal = status => ['done', 'cancelled'].includes(status);
-const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').trim();
+const clean = value => decisionText(value).trim();
+const lastSeenLabel = value => Number.isFinite(Date.parse(value)) ? `${new Date(value).toLocaleString('en-GB', {
+  timeZone: 'Africa/Johannesburg', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+})} SAST` : 'Not yet reported';
 const taskCounts = tasks => ({ open: tasks.filter(task => !terminal(task.status)).length,
   active: tasks.filter(task => task.status === 'in_progress').length,
   blocked: tasks.filter(task => task.status === 'blocked').length,
@@ -151,13 +155,49 @@ function ReviewModal({ modal, setModal, submit, width, height }) {
   h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : modal.decision === 'reject' ? 'Type feedback · Enter review · Esc cancel' : 'Enter review · Esc cancel'));
 }
 
-function DetailModal({ detail, close, openOccurrence, review, width, height }) {
-  const taskTabs = ['Overview', 'Result', 'Comments'];
+function AgentDetailModal({ detail, close, width, height }) {
+  const [scroll, setScroll] = useState(0), [technical, setTechnical] = useState(false);
+  const w = Math.max(32, Math.min(100, width - 2)), size = Math.max(10, Math.min(height - 2, 26)), viewport = Math.max(2, size - 6);
+  const agent = detail.data?.agent;
+  const lines = (agent ? [
+    `Mode: ${agent.mode || 'Unknown'}`, `Availability: ${agent.availabilityLabel || 'Unknown or stale'}`,
+    `Node: ${agent.nodeName || 'Unknown node'}`, `Workspace: ${agent.directory || 'Not advertised'}`,
+    `Machine: ${agent.machineName || 'Not advertised'}${agent.machinePlatform ? ` (${agent.machinePlatform})` : ''}`,
+    `Agent last seen: ${lastSeenLabel(agent.lastSeenAt)}`, `Node last seen: ${lastSeenLabel(agent.nodeLastSeenAt)}`,
+    `Capabilities: ${agent.capabilities?.length ? agent.capabilities.join(', ') : 'None advertised'}`,
+    '', 'Directory availability is advisory. It does not grant dispatch authority.', '',
+    `Outstanding tasks (${detail.data.tasks.length})`,
+    ...(detail.data.tasks.length ? detail.data.tasks.flatMap(t => [t.title, `  ${t.attentionLabel || 'State unavailable'}`]) : ['No outstanding tasks reported.']),
+    ...(technical ? ['', `Agent identity: ${agent.id}`, `Node identity: ${agent.nodeId}`, `Conversation identity: ${agent.conversationId || 'None advertised'}`,
+      `Binding revision: ${agent.bindingRevision ?? 'Unknown'}`, `Last reported availability: ${agent.reportedAvailability || 'unknown'}`] : []),
+  ] : [detail.error ? `Agent detail unavailable: ${detail.error}` : 'Loading agent…']).flatMap(line => wrapBoardText(line, w - 6));
+  const start = Math.min(scroll, Math.max(0, lines.length - viewport));
+  useInput((input, key) => {
+    if (key.escape || key.return || input === 'q') { close(); return; }
+    if (input === 't') { setTechnical(value => !value); setScroll(0); return; }
+    if (key.downArrow || input === 'j') setScroll(value => Math.min(Math.max(0, lines.length - viewport), value + 1));
+    if (key.upArrow || input === 'k') setScroll(value => Math.max(0, value - 1));
+    if (key.pageDown) setScroll(value => Math.min(Math.max(0, lines.length - viewport), value + viewport));
+    if (key.pageUp) setScroll(value => Math.max(0, value - viewport));
+  });
+  return h(Box, { position: 'absolute', width: w, height: size, left: Math.max(0, Math.floor((width - w) / 2)), top: Math.max(0, Math.floor((height - size) / 2)),
+    borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
+  h(Text, { bold: true, color: 'cyan', wrap: 'truncate-end' }, clean(agent?.displayName || agent?.name || 'Agent')),
+  h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' }, ...lines.slice(start, start + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line || ' '))),
+  h(Box, { flexGrow: 1 }), h(Text, { dimColor: true }, `${start + 1}-${Math.min(lines.length, start + viewport)}/${lines.length}`),
+  h(Text, { dimColor: true, wrap: 'truncate-end' }, 'j/k · PgUp/PgDn · t details · Esc close'));
+}
+
+function DetailModal({ detail, close, openOccurrence, openAction, review, width, height }) {
+  const actions = detail.data?.actions ?? [];
+  const taskTabs = [...(actions.length ? ['Actions'] : []), 'Overview', 'Result', 'Comments', ...(detail.data?.activity ? ['Activity'] : [])];
   const [tab, setTab] = useState(0);
+  const [actionIndex, setActionIndex] = useState(0);
+  const [technical, setTechnical] = useState(false);
   const [scrolls, setScrolls] = useState({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
   const detailId = detail.row?.taskId ?? detail.row?.routine?.id ?? detail.data?.task?.id ?? detail.data?.scheduleId;
   useEffect(() => {
-    setTab(0); setScrolls({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
+    setTab(0); setActionIndex(0); setTechnical(false); setScrolls({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
   }, [detail.kind, detailId]);
   const modalWidth = Math.max(52, Math.min(100, width - 4)), modalHeight = Math.max(12, Math.min(height - 2, 24));
   const contentWidth = Math.max(20, modalWidth - 6);
@@ -181,14 +221,21 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
     const task = detail.data.task;
     const result = detail.data.result;
     taskSections = {
+      Actions: [task.attentionLabel || 'Needs your attention', '', ...actions.flatMap((item, i) => [
+        `${i === actionIndex ? '›' : ' '} ${item.kind === 'question' ? 'Answer question' : item.kind === 'review' ? 'Review result' : 'Acknowledge reminder'}`,
+        ...wrapLines(item.summary), ''])],
       Overview: [...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
-        'Summary', '', ...wrapLines(task.description || 'No description.')],
-      Result: result ? ['Submitted result', '', ...wrapLines(result.summary), '', `Candidate  ${result.candidate}`,
+        ...(task.attentionLabel ? [task.attentionLabel, `Responsible: ${task.responsibleName || task.responsibleUserId || 'Not set'}`, `Worker: ${task.executionAgentName || 'None'}`, ''] : []),
+        ...(task.executionNodeName ? [`Node: ${task.executionNodeName}`, `Machine: ${task.executionMachineName || 'Not advertised'}`, ''] : []),
+        'Summary', '', ...wrapLines(task.description || 'No description.'), ...(technical ? ['', `Task identity: ${task.id}`] : [])],
+      Result: result ? ['Submitted result', '', ...wrapLines(result.summary), '',
+        ...(detail.data.actions !== undefined && !technical ? ['Exact candidate identity: press t for technical details'] : [`Candidate  ${result.candidate}`]),
         ...(result.deliverables ? ['', 'Deliverables', ...wrapLines(JSON.stringify(result.deliverables))] : []),
         ...(result.checks ? ['', 'Checks', ...wrapLines(JSON.stringify(result.checks))] : [])] : ['No Relay result.'],
       Comments: detail.data.comments?.length ? detail.data.comments.flatMap((comment, index) => [
         `${comment.authorUserId || comment.authorAgentId || 'system'}${comment.createdAt ? ` · ${comment.createdAt}` : ''}`,
         ...wrapLines(comment.body), ...(index < detail.data.comments.length - 1 ? [''] : [])]) : ['No comments.'],
+      Activity: detail.data.activity?.length ? detail.data.activity.flatMap(wrapLines) : ['No recorded interactions.'],
     };
     content = taskSections[taskTabs[tab]];
   }
@@ -210,6 +257,12 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
   const occurrenceStart = detail.kind === 'routine' && detail.data ? 5 + (detail.data.delivery ? 1 : 0) : -1;
   const maxScroll = Math.max(0, content.length - viewportHeight);
   useInput((input, key) => {
+    if (detail.kind === 'task' && input === 't') { setTechnical(value => !value); return; }
+    if (detail.kind === 'task' && taskTabs[tab] === 'Actions') {
+      if (key.return) { void openAction(actions[actionIndex]); return; }
+      if (key.downArrow || input === 'j') { setActionIndex(value => Math.min(actions.length - 1, value + 1)); return; }
+      if (key.upArrow || input === 'k') { setActionIndex(value => Math.max(0, value - 1)); return; }
+    }
     if (detail.kind === 'task' && ['A', 'F', 'R'].includes(input)) { review(input); return; }
     if (key.escape || input === 'q' || input === '\r' || input === '\n') close();
     if (detail.kind === 'task' && (key.tab || input === '\t')) {
@@ -243,7 +296,7 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
   if (detail.kind === 'task') {
     const task = detail.data.task;
     return h(Box, box,
-      h(Text, { bold: true, color: 'magenta' }, `${task.identifier || task.id} · ${task.title}`),
+      h(Text, { bold: true, color: 'magenta' }, detail.data.actions !== undefined ? decisionText(task.title) : `${task.identifier || task.id} · ${task.title}`),
       h(Text, { dimColor: true }, `${task.status} · ${task.assigneeUserId || task.assigneeAgentId || 'unassigned'}`),
       h(Box, { gap: 2 }, ...taskTabs.map((name, index) => h(Text, { key: name, inverse: tab === index,
         bold: tab === index, color: tab === index ? 'cyan' : undefined }, ` ${name} `))),
@@ -253,7 +306,7 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
           color: line.startsWith('Routine occurrence ') ? 'cyan' : undefined,
           dimColor: ['No comments.', 'No Relay result.'].includes(line) }, line || ' '))),
       h(Box, { justifyContent: 'space-between' },
-        h(Text, { dimColor: true }, `${detail.data.review ? 'A approve · F/R reject · ' : ''}Tab section · j/k · PgUp/PgDn · Home/End · Esc close`),
+        h(Text, { dimColor: true }, `${actions.length && taskTabs[tab] === 'Actions' ? 'Enter act · ' : detail.data.review ? 'A approve · F/R reject · ' : ''}Tab section · j/k · PgUp/PgDn · Home/End · Esc close`),
         h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
   }
   const routine = detail.data, occurrences = detail.occurrences;
@@ -270,10 +323,16 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
       h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
 }
 
-export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, reviewTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
+  assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
-  const [board, setBoard] = useState({ companies: [], agents: [], projects: [], tasks: [], routines: [], fetchedAt: null, warnings: [] });
+  const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
+    ...(pendingDecisions ? { inbox: pendingDecisions() } : {}), fetchedAt: null, warnings: [] }));
+  const native = Array.isArray(board.inbox);
+  const [view, setView] = useState('tasks');
+  const [selectedNativeId, setSelectedNativeId] = useState(null);
+  const [decisionModal, setDecisionModal] = useState(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
   const [assignment, setAssignment] = useState(null); const [reviewModal, setReviewModal] = useState(null);
@@ -296,32 +355,69 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
         active = new AbortController(); const value = await read(active.signal);
         if (!disposed) { setBoard({ ...value, routines: value.routines ?? [], warnings: value.warnings ?? [] }); setOffline(''); setLoaded(true); }
       }
-      catch (error) { if (!disposed) setOffline(clean(error.message || error.code || 'offline')); }
+      catch (error) { if (!disposed) {
+        setOffline(clean(error.message || error.code || 'offline'));
+        if (pendingDecisions) setBoard(value => ({ ...value, inbox: [...pendingDecisions(), ...(value.inbox ?? []).filter(i => i.kind !== 'publication')] }));
+      } }
       if (!disposed) timer = setTimeout(refresh, interval);
     };
     void refresh();
     return () => { disposed = true; clearTimeout(timer); active?.abort(); };
-  }, [read, interval, refreshGeneration]);
+  }, [read, interval, refreshGeneration, pendingDecisions]);
   const taskRows = useMemo(() => {
     const all = buildBoardRows(board, { showDone, showIdle, filter });
     const expanded = new Set(all.filter(row => row.expandable && !collapsed.has(row.id)).map(row => row.id));
-    return buildBoardRows(board, { showDone, showIdle, filter, expanded });
+    const rows = buildBoardRows(board, { showDone, showIdle, filter, expanded });
+    return native ? rows.filter(row => row.type !== 'group' || row.counts.total > 0) : rows;
   }, [board, showDone, showIdle, filter, collapsed]);
   const routineRows = useMemo(() => board.routines.filter(routine => showDone || routine.state !== 'cancelled')
     .map(routine => ({ id: `cron:${routine.id}`, type: 'routine', routine })), [board.routines, showDone]);
-  const rows = useMemo(() => [
+  const inboxRows = useMemo(() => (board.inbox ?? []).filter(item => !filter || decisionText(`${item.title} ${item.summary} ${item.from} ${item.stateLabel}`).toLowerCase().includes(filter.toLowerCase()))
+    .map(item => ({ id: item.id, type: 'inbox', item })), [board.inbox, filter]);
+  const agentRows = useMemo(() => board.agents.filter(agent => !filter || clean(`${agent.displayName || agent.name} ${agent.mode} ${agent.nodeName} ${agent.directory} ${agent.availabilityLabel}`).toLowerCase().includes(filter.toLowerCase()))
+    .map(agent => ({ id: `agent:${agent.id}`, type: 'agent', agent })), [board.agents, filter]);
+  const rows = useMemo(() => native ? view === 'inbox' ? inboxRows : view === 'agents' ? agentRows : view === 'schedules' ? routineRows : taskRows : [
     ...(routineRows.length ? [{ id: 'section:cron', type: 'section', label: `CRON · ${routineRows.length}` }, ...routineRows] : []),
     { id: 'section:tasks', type: 'section', label: `TASKS · ${taskRows.filter(row => row.type === 'task').length}` },
     ...taskRows,
-  ], [routineRows, taskRows]);
-  const selectedIndex = rows[selected]?.type === 'section'
+  ], [native, view, inboxRows, agentRows, routineRows, taskRows]);
+  const nativeIndex = selectedNativeId ? rows.findIndex(row => row.id === selectedNativeId) : -1;
+  const selectedIndex = native ? nativeIndex >= 0 ? nativeIndex : Math.min(selected, Math.max(0, rows.length - 1)) : rows[selected]?.type === 'section'
     ? Math.max(0, rows.findIndex((row, index) => index >= selected && row.type !== 'section')) : selected;
+  useEffect(() => {
+    if (native && nativeIndex < 0 && rows[selectedIndex]) setSelectedNativeId(rows[selectedIndex].id);
+  }, [native, nativeIndex, rows, selectedIndex]);
   useEffect(() => { setSelected(value => {
     value = Math.max(0, Math.min(rows.length - 1, value));
     if (rows[value]?.type !== 'section') return value;
     const next = rows.findIndex((row, index) => index >= value && row.type !== 'section');
     return next >= 0 ? next : Math.max(0, rows.findLastIndex(row => row.type !== 'section'));
   }); }, [rows]);
+  const openInbox = async item => {
+    if (!item || !detailInbox || !decideInbox) { setNotice('Decision interface unavailable'); return; }
+    const requestId = randomUUID();
+    setDecisionModal({ item: { ...item, summary: 'Loading current decision…', disabled: true }, requestId, stage: 'inspect', index: 0,
+      text: '', scroll: 0, technical: false, key: `human-board:${randomUUID()}`, error: '', busy: true });
+    try {
+      const fresh = await detailInbox({ id: item.id });
+      setDecisionModal(value => value?.requestId === requestId ? { ...value, item: fresh, busy: false } : value);
+    } catch (error) {
+      setDecisionModal(value => value?.requestId === requestId ? { ...value, busy: false, error: decisionText(error.message) } : value);
+    }
+  };
+  const submitDecision = async current => {
+    setDecisionModal({ ...current, busy: true, locked: true, error: '' });
+    try {
+      const result = await decideInbox({ item: current.item, key: current.key, body: current.text,
+        decision: current.index === 0 ? 'accept' : 'reject', reason: current.text });
+      if (result.state !== 'recorded') throw Error('Decision is not confirmed');
+      setDecisionModal(null); setDetail(null); setNotice(result.message || 'Decision recorded');
+      setRefreshGeneration(value => value + 1);
+    } catch (error) {
+      setDecisionModal({ ...current, busy: false, locked: true, error: decisionText(error.message || 'Publication is not confirmed. Inspect Inbox.') });
+      if (pendingDecisions) setBoard(value => ({ ...value, inbox: [...pendingDecisions(), ...(value.inbox ?? []).filter(i => i.kind !== 'publication')] }));
+    }
+  };
   const submit = async current => {
     const status = current.options[current.index]; setModal({ ...current, busy: true, error: '' });
     try {
@@ -361,6 +457,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     } catch (error) { setAssignment({ ...current, busy: false, error: clean(error.message || error.code || 'assignment failed') }); }
   };
   const prepareReview = key => {
+    const nativeReview = detail?.data?.actions?.find(item => item.kind === 'review');
+    if (nativeReview) { void openInbox(nativeReview); return; }
     const candidate = detail?.data?.review, task = detail?.data?.task;
     if (!candidate || !task || !reviewTask) { setNotice('No pending candidate'); return; }
     if (key === 'R' && !reviewFeedback.trim()) { setNotice('Rejection feedback is required; press F'); return; }
@@ -382,23 +480,29 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     } catch (error) { setReviewModal({ ...current, busy: false, error: clean(error.message || error.code || 'review failed') }); }
   };
   useInput((input, key) => {
-    if (modal || assignment || reviewModal || detail) return;
+    if (modal || assignment || reviewModal || detail || decisionModal) return;
     if (searching) {
       if (key.escape) { setSearching(false); setFilter(''); }
       else if (key.return) setSearching(false);
       else if (key.backspace || key.delete) setFilter(value => [...value].slice(0, -1).join(''));
       else if (input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input)) setFilter(value => value + input);
-      setSelected(0); return;
+      setSelected(0); setSelectedNativeId(null); return;
     }
     if (input === 'q' || key.escape) { setQuitting(true); (onQuit ?? exit)(); return; }
     if (input === 'h') { setShowDone(value => !value); return; }
-    if (input === 'i') { setShowIdle(value => !value); return; }
+    if (input === 'i') { if (native) setNotice('All enrolled agents, including stale reports, are listed in Agents'); else setShowIdle(value => !value); return; }
     if (input === '/') { setSearching(true); return; }
     if (input === 'r') { setRefreshGeneration(value => value + 1); return; }
+    if (native && key.tab) {
+      const views = ['tasks', 'agents', 'inbox', 'schedules'];
+      setView(value => views[(views.indexOf(value) + (key.shift ? 3 : 1)) % 4]);
+      setSelected(0); setSelectedNativeId(null); return;
+    }
     const move = delta => setSelected(() => {
       let next = selectedIndex;
       do { next = Math.max(0, Math.min(rows.length - 1, next + delta)); }
       while (rows[next]?.type === 'section' && next > 0 && next < rows.length - 1);
+      if (native) setSelectedNativeId(rows[next]?.id ?? null);
       return next;
     });
     if (key.upArrow || input === 'k') move(-1);
@@ -431,6 +535,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
       }).catch(error => setNotice(`Status unavailable: ${clean(error.message)}`));
     }
     if (input === 'a') {
+      if (native && !assignTask) { setNotice('Sending work requires an explicit execution request, not a responsibility change'); return; }
       const row = rows[selectedIndex];
       if (row?.type !== 'task') { setNotice('Select a task'); return; }
       const agents = board.agents.filter(agent => agent.companyId === row.companyId && agent.availability === 'present')
@@ -441,19 +546,23 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     }
     if (key.return || input === 'd' || key.tab) {
       const row = rows[selectedIndex]; if (!row || row.type === 'group') return;
+      if (row.type === 'inbox') { void openInbox(row.item); return; }
       if (row.type === 'section') return;
-      setOccurrence(0); setDetail({ kind: row.type === 'routine' ? 'routine' : 'task', row, loading: true });
+      const requestId = randomUUID();
+      setOccurrence(0); setDetail({ kind: row.type === 'routine' ? 'routine' : row.type === 'agent' ? 'agent' : 'task', row, requestId, loading: true });
       const request = row.type === 'routine'
         ? detailRoutine({ companyId: row.routine.companyId, scheduleId: row.routine.id })
-        : detailTask({ companyId: row.companyId, taskId: row.taskId });
-      void request.then(data => setDetail(value => value ? { ...value, loading: false, data } : value))
-        .catch(error => setDetail(value => value ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
+        : row.type === 'agent' ? detailAgent ? detailAgent({ agentId: row.agent.id }) : Promise.reject(Error('Agent detail is unavailable'))
+          : detailTask({ companyId: row.companyId, taskId: row.taskId });
+      void request.then(data => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, data } : value))
+        .catch(error => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
     }
   });
-  const visibleHeight = Math.max(3, height - 6), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
+  const visibleHeight = Math.max(1, Math.floor((height - (native ? 7 : 6)) / (native && ['inbox', 'agents'].includes(view) ? 3 : 1))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
   const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
+    if (row.type === 'inbox') return `${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${decisionText(row.item.title)}  · ${decisionText(row.item.summary)}`;
     if (row.type === 'routine') return `  ◆ ${row.routine.title}  [${row.routine.state}]  ${row.routine.cron}  next ${row.routine.nextRunAt || '-'}`;
     const fold = row.expandable ? row.expanded ? '▾' : '▸' : '·';
     if (row.type === 'group') return `${fold} ${row.name}${row.agent ? ` / ${row.agent.availability || 'unknown'}` : ''}  · ${row.counts.open} open`;
@@ -462,31 +571,44 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     const context = row.context ? ` [via ${row.owner}]` : '';
     const anomaly = row.anomaly ? ` [${row.anomaly}]` : '';
     const subtree = row.descendants ? ` [+${row.descendants}/${row.counts.open} open]` : '';
-    return `${guides}${branch}${fold} ${row.task.identifier || row.task.id}${context}  ${row.task.title}${anomaly}${subtree}`;
+    return `${guides}${branch}${fold} ${native ? '' : `${row.task.identifier || row.task.id}${context}  `}${clean(row.task.title)}${anomaly}${subtree}`;
   };
   if (quitting) return null;
   const summary = taskCounts(board.tasks);
   const background = h(Box, { width, height, flexDirection: 'column' },
     h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: Boolean(modal || assignment || reviewModal || detail) }, 'RELAY / TASKS'),
-      h(Text, { dimColor: true }, `${board.companies.length} companies · ${board.agents.length} agents`)),
-    h(Text, { dimColor: Boolean(modal || detail) }, `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${offline ? `OFFLINE ${offline}` : loaded ? 'LIVE' : 'LOADING'}`),
+      h(Text, { dimColor: true }, native ? offline ? 'Inbox unavailable: showing cached state' : !loaded ? 'Loading inbox…' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`)),
+    native ? h(Box, { gap: 2 }, ...[['tasks', 'Tasks'], ['agents', 'Agents'], ['inbox', `Inbox (${offline ? '?' : !loaded ? '…' : board.inbox.length})`], ['schedules', 'Schedule']].map(([id, title]) =>
+      h(Text, { key: id, inverse: view === id, bold: view === id }, ` ${title} `))) : null,
+    h(Text, { dimColor: Boolean(modal || detail), wrap: 'truncate-end' }, `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${offline ? `OFFLINE ${offline}` : loaded ? 'LIVE' : 'LOADING'}${native && board.fetchedAt ? ` · last updated ${new Date(board.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Africa/Johannesburg', hour12: false })} SAST` : ''}`),
     h(Box, { borderStyle: 'single', borderColor: modal || assignment || reviewModal ? 'gray' : 'cyan', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' },
+      !visible.length && native ? h(Text, { dimColor: true }, view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.' : 'Nothing to show.') : null,
       ...visible.map((row, index) => {
-        const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail;
+        const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail && !decisionModal;
+        if (row.type === 'agent') return h(Box, { key: row.id, height: 3, flexDirection: 'column', overflow: 'hidden' },
+          h(Text, { inverse: active, bold: active, color: 'cyan', wrap: 'truncate-end' }, `${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`),
+          h(Text, { wrap: 'truncate-end' }, `  Node: ${clean(row.agent.nodeName || 'Unknown')} · Machine: ${clean(row.agent.machineName || 'Not advertised')} · ${clean(row.agent.directory || 'Workspace not advertised')}`),
+          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Last seen: ${lastSeenLabel(row.agent.lastSeenAt)}`));
+        if (row.type === 'inbox') return h(Box, { key: row.id, height: 3, flexDirection: 'column', overflow: 'hidden' },
+          h(Text, { inverse: active, bold: active, color: 'magenta', wrap: 'truncate-end' }, `${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`),
+          h(Text, { wrap: 'truncate-end' }, `  ${clean(row.item.summary)}`),
+          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  ${clean(row.item.from)} · ${clean(row.item.stateLabel)}${row.item.locationLabel ? ` · ${clean(row.item.locationLabel)}` : ''}`));
         const taskStyle = row.type === 'task' ? taskRowStyle(row.task, Boolean(modal || assignment || reviewModal || detail), row.context) : null;
-        const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : row.type === 'routine' ? 'magenta' : taskStyle.color;
+        const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : ['routine', 'inbox'].includes(row.type) ? 'magenta' : taskStyle.color;
         const dimmed = taskStyle?.dimColor ?? Boolean(modal || assignment || reviewModal || detail);
         return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
           h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, h(Text, { wrap: 'truncate-end', inverse: active,
             bold: row.type === 'section', dimColor: dimmed, color: tone }, rowText(row))),
-          row.type === 'task' ? h(Box, { width: 13, flexShrink: 0, justifyContent: 'flex-end' },
-            h(Text, { inverse: active, dimColor: dimmed, color: tone }, `[${labels[row.task.status] ?? row.task.status}]`)) : null);
+          row.type === 'task' ? h(Box, { width: native ? Math.min(48, Math.floor(width / 2)) : 13, flexShrink: 0, justifyContent: 'flex-end' },
+            h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, native && row.task.attentionLabel
+              ? `${labels[row.task.status] ?? row.task.status} · ${decisionText(row.task.attentionLabel)}` : `[${labels[row.task.status] ?? row.task.status}]`)) : null);
       })),
     searching ? h(Text, { dimColor: Boolean(modal || detail) }, `/${filter}▏  Enter apply · Esc clear`) : notice
       ? h(Text, { dimColor: Boolean(modal || detail) }, notice.text)
       : h(Box, { flexDirection: 'column' },
-        h(Text, { dimColor: Boolean(modal || detail) }, 'j/k move · Enter/Tab detail · Space/←/→ fold · / search'),
-        h(Text, { dimColor: Boolean(modal || assignment || reviewModal || detail) }, 'h done · i idle · r refresh · a assign · s status · q quit')));
+        h(Text, { dimColor: Boolean(modal || detail) }, native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search'),
+        h(Text, { dimColor: Boolean(modal || assignment || reviewModal || detail) }, native && !assignTask
+          ? 'h done · r refresh · s status · q quit' : 'h done · i idle · r refresh · a assign · s status · q quit')));
   let detailView = detail;
   if (detail?.kind === 'routine' && detail.data) {
     const tasks = new Map(board.tasks.map(task => [`${task.companyId}:${task.id}`, task]));
@@ -512,7 +634,10 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
       if (typeof value === 'function') setReviewModal(current => { const next = value(current); if (next?.reason !== undefined) setReviewFeedback(next.reason); return next; });
       else { if (value?.reason !== undefined) setReviewFeedback(value.reason); setReviewModal(value); }
     }, submit: submitReview, width, height }) : null,
-    detailView && !reviewModal ? h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, review: prepareReview, width, height }) : null);
+    detailView && !reviewModal && !decisionModal ? detailView.kind === 'agent'
+      ? h(AgentDetailModal, { detail: detailView, close: () => setDetail(null), width, height })
+      : h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, openAction: openInbox, review: prepareReview, width, height }) : null,
+    decisionModal ? h(BoardDecisionModal, { modal: decisionModal, setModal: setDecisionModal, submit: submitDecision, width, height }) : null);
 }
 
 export async function watchTaskBoardInk(read, options = {}) {

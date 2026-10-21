@@ -13,7 +13,7 @@ import { requireValue, digest } from './protocol.mjs';
 import { tickAutomation } from './node-automation.mjs';
 import { hermesNodeBinding } from './node-hermes.mjs';
 import { tickAgentNotices } from './node-notices.mjs';
-import { herdrInventory, publishHerdrInventory } from './node-discovery.mjs';
+import { herdrInventory, nodeHeartbeatPayload, publishHerdrInventory } from './node-discovery.mjs';
 import { provisionNodeWorktree, finaliseNodeWorktree, retireNodeWorktree } from './node-resources.mjs';
 import { nodeTasks } from './node-tasks.mjs';
 import { enrolledDirectory, resolveFolderBinding } from './node-folder.mjs';
@@ -237,7 +237,7 @@ try {
         }
         if (Date.now() - lastHeartbeat >= 5000) {
           lastHeartbeat = Date.now();
-          await api('POST', '/v1/commands', { key: `heartbeat:${lastHeartbeat}`, action: 'node.heartbeat', payload: { id: config.nodeId } });
+          await api('POST', '/v1/commands', { key: `heartbeat:${lastHeartbeat}`, action: 'node.heartbeat', payload: nodeHeartbeatPayload(config.nodeId, info) });
           for (const [agentId, binding] of bindings) {
             const agent = await api('GET', `/v1/agents/${encodeURIComponent(agentId)}`);
             let availability = 'unknown';

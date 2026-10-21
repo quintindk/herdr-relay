@@ -151,6 +151,12 @@ operations. The advanced operator command API remains available explicitly.
 ## Routes
 
 - `GET /v1/info`: protocol and instance identity.
+- Info also advertises `features.nodeMachineAdvertisement` for compatible nodes.
+  When present, a node may include bounded `machine: {hostname, platform}` labels
+  in its authenticated `node.heartbeat`. Older heartbeat payloads remain valid and
+  preserve previous machine metadata. Only the owning node can advertise it.
+  Hostnames are display labels, not unique identities or transfer authority.
+  Updated daemons omit this field for backends that do not advertise the feature.
 - `GET /v1/snapshot`: atomic shared-record snapshot and exact event checkpoint.
 - `POST /v1/commands`: `{key, action, payload}`.
 - `POST /v1/node-credentials`: human-only `{nodeId, key}` with retry receipt.

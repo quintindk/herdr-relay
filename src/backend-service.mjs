@@ -21,7 +21,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       // local credential connector; cross-site pages cannot borrow that context.
       requireValue(!req.headers.origin, 'origin_not_allowed', 'Browser Origin requests are not supported by the native API', 403);
       let result;
-      if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner };
+      if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
+        features: { nodeMachineAdvertisement: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/snapshot') result = store.snapshot();
       else if (req.method === 'GET' && url.pathname === '/v1/activity') result = store.activity({
         from: url.searchParams.get('from'), to: url.searchParams.get('to'), taskId: url.searchParams.get('taskId') ?? undefined,

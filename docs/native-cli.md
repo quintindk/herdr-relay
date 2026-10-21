@@ -137,6 +137,19 @@ still use that command API or their existing scoped tools/UI, not named CLI verb
 
 ## Native task pane
 
+Run `npm run board` from the checkout, or `herdr-relay tui` in an installed build.
+`node src/cli.mjs tui` is the equivalent development command. These open the native
+board with the local owner context by default. `--context` and
+`RELAY_NATIVE_CONTEXT` override it. No other native mutation gets an implicit
+owner context, and the legacy Paperclip `board` command is unchanged.
+
+The [native task board and Inbox](native-task-inbox.md) has Tasks, Agents, Inbox and
+Schedule views. Human questions, candidate reviews and reminders can be handled
+directly in the board with explicit previews/confirmations. Native task detail
+links to those same actions. Confirmed board decisions use a private durable local
+journal for uncertain publication and restart reconciliation. The OpenCode slash
+commands below remain available, but are not required for the board workflow.
+
 ### Human questions and reviews in OpenCode
 
 ```bash

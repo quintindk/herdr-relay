@@ -28,7 +28,7 @@ test('native board traverses collections and updates status through current back
 });
 
 test('native empty board has no fabricated human owner group', async () => {
-  const board = nativeBoard(async () => ({ items: [] }));
+  const board = nativeBoard(async (method, path) => path === '/v1/info' ? { instanceId: 'backend', userId: 'owner' } : { items: [] });
   assert.deepEqual(buildBoardRows(await board.read()), []);
 });
 
@@ -40,6 +40,7 @@ test('native board displays readable identifiers without changing task identity'
     { id: 'short-id', title: 'Short task', identifier: 'RELAY-7' },
   ];
   const board = nativeBoard(async (method, path) => {
+    if (path === '/v1/info') return { instanceId: 'backend', userId: 'owner' };
     if (path.startsWith('/v1/tasks?')) return { items: tasks };
     if (path.startsWith('/v1/tasks/')) return tasks.find(task => task.id === decodeURIComponent(path.slice('/v1/tasks/'.length)));
     return { items: [] };

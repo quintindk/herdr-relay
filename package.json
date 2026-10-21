@@ -30,6 +30,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "board": "node src/cli.mjs native board",
     "start": "node src/cli.mjs service",
     "check": "node scripts/check.mjs",
     "test": "node --test test/*.test.mjs",

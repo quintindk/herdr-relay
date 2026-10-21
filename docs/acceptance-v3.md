@@ -270,3 +270,33 @@ keyboard decisions from the same client. This passes the bounded actual-human
 direct inbox answer/review path. It does not close natural-chat message provenance,
 initiating-agent escalation, closed-origin recovery, crash/replay or physical-node
 gates. Evidence: [actual-human inbox workflow](evidence/native-human-inbox-live.json).
+
+## Task-board human workflow follow-up
+
+Native Tasks/Agents/Inbox/Schedule views now expose task-linked human questions, exact
+reviews and reminders without requiring OpenCode slash commands. Task detail and
+Inbox share a decision flow, while responsibility and executing agent remain
+separate. A durable local journal preserves confirmed decisions and original-key
+reconciliation across uncertain replies/restart. Stale revisions and cancelled
+review scope are refused, not silently refreshed into a new approval.
+
+API, persistent-journal and keyboard tests cover ordinary/taskless/monitor review,
+question forwarding, actual request-changes semantics, offline status, stale
+selection and malformed/lost receipts. A disposable real PTY answers a fixture
+question and accepts its exact candidate through the maintained CLI. This is
+synthetic-input evidence, not actual-human board acceptance. The deployed backend
+was inspected read-only in a separate PTY and retained its paused cron/receipt.
+No live work or existing pane was replaced. Evidence:
+[native task-board Inbox](evidence/native-task-inbox.json).
+
+Verification checkpoint: 1,501 root tests passed, one skipped, zero failed. All
+30 v2 tests, syntax/whitespace and Python syntax checks passed. The separate
+native-board actual-human decision test remains pending.
+
+The CLI/Agents/node-machine follow-up passes 1,506 root tests, one skipped, zero
+failed, plus all 30 v2 tests and syntax/whitespace checks. The isolated OpenCode
+2.1.2 daemon/TUI smoke also verifies the node's optional hostname/platform
+advertisement. The CLI opens Tasks, Agents, Inbox, Schedule without a context
+argument for the local native board only. Older deployed services were not
+restarted and continue showing machine metadata as not advertised. This does not
+claim rollout or actual-human board acceptance.

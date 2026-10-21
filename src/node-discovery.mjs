@@ -2,6 +2,12 @@ import { connect } from 'node:net';
 import { isAbsolute, basename } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { digest, requireValue } from './protocol.mjs';
+import { hostname } from 'node:os';
+
+// A hostname is a node-reported display label, never a machine identity or grant.
+export function nodeHeartbeatPayload(nodeId, info, machine = { hostname: hostname(), platform: process.platform }) {
+  return { id: nodeId, ...(info.features?.nodeMachineAdvertisement === true ? { machine } : {}) };
+}
 
 export function herdrInventory(socketPath) {
   requireValue(isAbsolute(socketPath), 'invalid_herdr_config', 'Absolute Herdr socket required');

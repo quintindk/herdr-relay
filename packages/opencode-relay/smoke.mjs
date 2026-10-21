@@ -4,7 +4,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -500,6 +500,11 @@ try {
     }
     const task = await ownerApi('GET', '/v1/tasks/task');
     assert.equal((await command(ownerApi, 'complete', 'task.update', { id: task.id, expectedRevision: task.revision, changes: { status: 'done' } })).status, 'done');
+    if (daemonProbe) {
+      const advertisedNode = await ownerApi('GET', '/v1/nodes/node');
+      assert.equal(advertisedNode.machine?.hostname, hostname(), 'Daemon must publish its own reported machine label');
+      assert.equal(advertisedNode.machine?.platform, process.platform);
+    }
     backendWorkflow = true;
     if (workerDriven) assert.equal(workerToolCalls, (meshProbe ? 3 : 2) + (process.argv.includes('--chat-answer') ? 1 : 0), 'Expected question, answer and submission calls');
     if (process.argv.includes('--scheduled-ask')) {

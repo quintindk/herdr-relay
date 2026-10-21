@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import struct
 import subprocess
@@ -20,7 +21,7 @@ data = bytearray()
 
 def until(marker):
     deadline = time.monotonic() + 10
-    while marker not in data:
+    while not (marker(data) if callable(marker) else marker in data):
         assert child.poll() is None, data.decode("utf-8", errors="replace")[-3000:]
         assert time.monotonic() < deadline, data.decode("utf-8", errors="replace")[-3000:]
         if select.select([master], [], [], 0.1)[0]:
@@ -28,8 +29,14 @@ def until(marker):
 
 
 try:
+    until(b"Schedule")
+    time.sleep(0.2)
+    for label in [b"Agents", b"Inbox", b"Schedule"]:
+        data.clear()
+        os.write(master, b"\t")
+        until(lambda current: re.search(rb"\x1b\[7m(?:\x1b\[[0-9;]*m)* " + label, current))
     until(sys.argv[4].encode())
-    assert b"CRON" in data
+    assert b"Schedule" in data
     time.sleep(0.2)
     os.write(master, b"\r")
     until(sys.argv[5].encode())

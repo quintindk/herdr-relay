@@ -1,0 +1,71 @@
+{
+  "verifiedOn": "2026-10-21",
+  "scope": "First native task-board human Inbox slice. Fixture API, persistent journal, Ink and real disposable PTY verification. Actual-human live decision test of this board is pending.",
+  "entryPoint": "npm run board, node src/cli.mjs tui, or installed herdr-relay tui",
+  "explicitContextEntryPoint": "node src/cli.mjs native board --context PRIVATE_OWNER_JSON",
+  "views": ["Tasks", "Agents", "Inbox", "Schedule"],
+  "capabilities": [
+    "Human questions, exact candidate reviews and reminders in one task-linked Inbox.",
+    "Task Actions and Inbox share the same fresh-preview, edit and explicit-confirmation component.",
+    "Executing agent is displayed separately from human responsibility.",
+    "Agents has a separate read-only view with mode, owning node, workspace, reported availability and last seen.",
+    "Node and reported machine labels remain distinct in agent, task and human decision context.",
+    "Optional machine heartbeat metadata is owned by the reporting node and capability-gated for older backends.",
+    "Task rows describe admission, waits, continuation eligibility and review without claiming unobserved native execution.",
+    "Taskless scheduled reviews and standing-monitor reviews show their own effects.",
+    "Stable item-identity selection across refreshes and pinned decision previews.",
+    "Private durable decision journal with original-key retry across restart and backend identity fencing.",
+    "Uncertain or malformed receipts stay unconfirmed. Definitively refused operations require inspection and explicit dismissal.",
+    "Offline fetch time and cached state are explicit, not empty success."
+  ],
+  "tests": {
+    "rootPassed": 1506,
+    "rootSkipped": 1,
+    "rootFailed": 0,
+    "focusedPassed": 51,
+    "v2Passed": 30,
+    "agentsCliMachineFocusedPassed": 26,
+    "realRuntimeSmoke": {
+      "runtime": "OpenCode 2.1.2",
+      "backendWorkflow": true,
+      "nodeDaemon": true,
+      "nodeAdvertisedOwnHostnameAndPlatform": true,
+      "humanInboxTui": true,
+      "model": "deterministic fixture",
+      "input": "synthetic keyboard"
+    },
+    "syntaxChecks": "passed",
+    "pythonSyntaxChecks": "passed",
+    "whitespaceChecks": "passed",
+    "realFixturePty": {
+      "humanAnswer": true,
+      "exactCandidateAcceptance": true,
+      "cleanQuit": true,
+      "input": "synthetic keyboard",
+      "backend": "disposable fixture"
+    },
+    "deployedBackendReadOnlyPty": {
+      "scheduleVisible": true,
+      "completedOccurrenceVisible": true,
+      "cleanQuit": true,
+      "existingUserPaneReplaced": false
+    },
+    "deployedBackendReadback": {
+      "tasks": 172,
+      "inbox": 0,
+      "schedules": 3,
+      "completedWrightTaskShowsWorkerSeparatelyFromResponsibleHuman": true
+    }
+  },
+  "liveWorkModified": false,
+  "deployedServicesRestarted": false,
+  "liveMachineLabels": "Not advertised: running backend/node processes have not been restarted to use the new optional metadata",
+  "limitations": [
+    "No actual-human live Inbox decision is claimed for this new native board.",
+    "Advanced grant, transfer, adoption and local daemon recovery controls are not included in this slice.",
+    "Shared backend state does not contain every local native uncertainty or admission state.",
+    "Request changes does not automatically dispatch another ordinary worker turn.",
+    "Terminal-dialog provenance does not claim an OpenCode conversation or natural-chat source message.",
+    "Existing native work-pane processes must be reopened to load the changed board."
+  ]
+}

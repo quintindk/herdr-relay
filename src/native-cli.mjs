@@ -1,8 +1,9 @@
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { nativeBackendClient } from './backend-client.mjs';
 import { requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
@@ -24,9 +25,10 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   schedule pause|resume ID --revision N --key KEY
   schedule cancel ID --revision N --reason TEXT --key KEY
   work read|submit|ask|... --context WORKER_JSON --execution ID --run ID [--key KEY] [--file PAYLOAD_JSON]
-  board [--json]
+  board [--context OWNER_JSON] [--json]  [Tasks, Agents, Inbox, Schedules]
   command --file COMMAND_JSON  [advanced native {key,action,payload}]
-All backend commands require --context OWNER_JSON or RELAY_NATIVE_CONTEXT.
+Backend commands require --context OWNER_JSON or RELAY_NATIVE_CONTEXT.
+Board alone defaults to $XDG_STATE_HOME/herdr-relay-backend/owner.json (or ~/.local/state).
 Worker commands use scoped worker credentials, never an owner context.
 Payload files contain native backend fields, not legacy companyId/routine envelopes.
 Enrolment never starts/restarts OpenCode or grants permissions. Start the node separately.
@@ -70,7 +72,8 @@ export async function main(args) {
       sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
       configDirectory: values['config-dir'], evidenceFile: values['evidence-file'] })); return;
   }
-  const path = values.context ?? process.env.RELAY_NATIVE_CONTEXT;
+  const path = values.context ?? process.env.RELAY_NATIVE_CONTEXT ?? (group === 'board'
+    ? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-backend/owner.json') : undefined);
   requireValue(path, 'invalid_request', 'Explicit --context or RELAY_NATIVE_CONTEXT is required');
   const context = JSON.parse(readFileSync(path, 'utf8'));
   const backend = { url: context.url ?? 'http://127.0.0.1:3210', ...(context.cloudflareAccess ? { cloudflareAccess: context.cloudflareAccess } : {}),
@@ -90,14 +93,19 @@ export async function main(args) {
   }
   if (group === 'board') {
     const { nativeBoard } = await import('./native-board.mjs');
-    const board = nativeBoard(api);
-    if (values.json) output(await board.read());
-    else {
-      requireValue(process.stdin.isTTY && process.stdout.isTTY, 'terminal_required', 'Interactive board requires a TTY, or use --json');
-      const { watchTaskBoardInk } = await import('./task-board-ink.mjs');
-      await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask, detailRoutine: board.detailRoutine,
-        statusTask: board.statusTask, reviewTask: board.reviewTask });
-    }
+    const { NativeDecisionJournal } = await import('./native-decision-journal.mjs');
+    const journal = new NativeDecisionJournal(join(dirname(resolve(path)), 'native-board-decisions.sqlite'));
+    const board = nativeBoard(api, { decisionJournal: journal });
+    try {
+      if (values.json) output(await board.read());
+      else {
+        requireValue(process.stdin.isTTY && process.stdout.isTTY, 'terminal_required', 'Interactive board requires a TTY, or use --json');
+        const { watchTaskBoardInk } = await import('./task-board-ink.mjs');
+        await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask, detailRoutine: board.detailRoutine,
+          detailAgent: board.detailAgent, statusTask: board.statusTask, reviewTask: board.reviewTask, detailInbox: board.detailInbox,
+          decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions });
+      }
+    } finally { journal.close(); }
     return;
   }
   const collections = { task: 'tasks', comment: 'comments', agent: 'agents', node: 'nodes', execution: 'executions', schedule: 'schedules', occurrence: 'occurrences' };

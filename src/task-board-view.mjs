@@ -34,6 +34,21 @@ function widthOf(text) {
   return [...segmenter.segment(text)].reduce((sum, { segment }) => sum + cellWidth(segment), 0);
 }
 
+/** Lossless cell-aware lines for scrollable decision editors and previews. */
+export function wrapBoardText(value, columns) {
+  const lines = [];
+  for (const paragraph of String(value ?? '').split(/\r?\n/)) {
+    let line = '', used = 0;
+    for (const { segment } of segmenter.segment(clean(paragraph))) {
+      const cells = cellWidth(segment);
+      if (line && used + cells > columns) { lines.push(line); line = ''; used = 0; }
+      line += segment; used += cells;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
 function fit(value, width, unicode = false) {
   const text = clean(value);
   if (width <= 0) return '';
@@ -129,17 +144,18 @@ export function buildBoardRows(value, options = {}) {
   const owners = new Map();
   for (const [id, task] of tasks) {
     let group;
-    if (task.assigneeAgentId) {
-      const agent = agents.get(keyOf(task.companyId, task.assigneeAgentId));
-      group = ensureGroup(task.companyId, 'agent', task.assigneeAgentId,
-        agent?.name || `Agent: ${task.assigneeAgentId} (missing)`, agent);
+    const executionAgentId = task.executionAgentId || task.assigneeAgentId;
+    if (executionAgentId) {
+      const agent = agents.get(keyOf(task.companyId, executionAgentId));
+      group = ensureGroup(task.companyId, 'agent', executionAgentId,
+        agent?.name || `Agent: ${executionAgentId} (missing)`, agent);
     } else if (task.assigneeUserId) {
       group = ensureGroup(task.companyId, 'human', task.assigneeUserId,
         task.assigneeUserId === 'local-board' ? 'Human: Board (local-board)' : `Human: ${task.assigneeUserId}`);
     } else group = ensureGroup(task.companyId, 'unassigned', '', 'Unassigned');
     owners.set(id, group);
     const searchable = [task.identifier, task.title, task.descriptionPreview, task.status,
-      projects.get(keyOf(task.companyId, task.projectId))?.name, group.name, group.companyName].map(clean).join(' ').toLocaleLowerCase();
+      task.attentionLabel, task.responsibleUserId, projects.get(keyOf(task.companyId, task.projectId))?.name, group.name, group.companyName].map(clean).join(' ').toLocaleLowerCase();
     if ((showDone || !done(task)) && (!filter || searchable.includes(filter))) group.assigned.push(id);
   }
   const rows = [];
