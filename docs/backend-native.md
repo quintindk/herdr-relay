@@ -32,6 +32,15 @@ identity, a loopback URL and private native password file. Hermes bindings use t
 existing reserved Hermes contract. A daemon restart with no native bindings has
 been verified after stopping its backend, using its persisted instance pin.
 
+Native version admission explicitly supports OpenCode 2.1.0 and 2.1.2. Other
+releases remain refused until validated. External `opencode-v2` bindings default
+to direct worker tools. An operator may explicitly set `workerTransport: "cli"`
+for an existing conversation whose shell tool is already available. That path
+uses the same session-scoped worker credential and exact execution/run checks,
+without installing a plugin, reloading the native service or changing permissions.
+It is not an automatic fallback for workers whose shell access is denied.
+Owned v2 bindings retain their direct-tool default and reject this override.
+
 `opencode-v2-owned` bindings additionally accept `executable`, `directory`,
 `reserved: true` and an explicit v2 `config`. Provisioning journals a dedicated
 runtime and exact session before writes, reuses both on repeated calls, and exposes
@@ -124,6 +133,14 @@ Private state is retained under `/tmp/opencode/relay-interactive-cron-*` for
 diagnosis. The script stops only its own processes. Set `RELAY_SMOKE_EVIDENCE` to
 write a credential-free evidence file. This smoke does not certify physical reboot,
 remote nodes, backend disconnection or interactive schedule-management controls.
+
+The [existing-session evidence](evidence/native-current-session-cron.json)
+separately records a real cron firing in the user's already-open OpenCode 2.1.2
+conversation. A separate explicitly enrolled node targeted that exact chat through
+the CLI transport. Native settlement and backend publication completed, and the
+test controller's pause reached applied revision 2. The existing native service,
+model, plugins and permissions were unchanged. The chat remains enrolled and its
+test schedule is paused.
 
 ## Routes
 

@@ -25,7 +25,7 @@ mkdirSync(workspace); mkdirSync(state);
 const configFile = join(root, 'node.json');
 const finishTuis = join(root, 'finish-tuis');
 const runtimes = [], tuis = [];
-let backend, journal, daemon, nodeLog = '', releaseHuman;
+let backend, journal, daemon, nodeLog = '', releaseHuman, runtimeVersion;
 let held = false;
 const humanGate = new Promise(resolve => { releaseHuman = resolve; });
 const progress = message => console.error(message);
@@ -80,6 +80,9 @@ try {
         models: { [modelId]: { name: modelId, limit: { context: 8192, output: 1024 } } } } },
     } });
     runtimes.push(runtime);
+    const version = (await runtime.client.server.info()).version;
+    if (runtimeVersion) assert.equal(version, runtimeVersion);
+    runtimeVersion = version;
     const session = await runtime.client.session.create({ location: { directory: workspace },
       title: `Interactive cron ${agentId}`, model: { providerID: 'local-smoke', id: modelId } });
     entries.push({ id: `binding-${agentId}`, agentId, mode: 'interactive', harness: 'opencode-v2', reserved: true,
@@ -203,7 +206,7 @@ try {
   }
   for (const tui of tuis) assert.equal(tui.process.exitCode, null, tui.diagnostics());
   await stopNode();
-  const result = { verifiedOn: new Date().toISOString(), runtime: 'OpenCode 2.1.0', backend: 'native relay/0.2 isolated instance',
+  const result = { verifiedOn: new Date().toISOString(), runtime: `OpenCode ${runtimeVersion}`, backend: 'native relay/0.2 isolated instance',
     model: modelId, realModel: true, agentMode: 'interactive', nodeBinding: 'opencode-v2', relayOwnedRuntime: false,
     syntheticTuiInput: true, attachedTuis: tuis.length, busyExactDeferred: true, absentFolderDeferred: true,
     ambiguousFolderDeferred: true, folderFutureChatReplacement: true, admittedTargetPreserved: true,

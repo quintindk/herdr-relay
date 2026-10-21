@@ -17,7 +17,7 @@ import { herdrInventory, publishHerdrInventory } from './node-discovery.mjs';
 import { provisionNodeWorktree, finaliseNodeWorktree, retireNodeWorktree } from './node-resources.mjs';
 import { nodeTasks } from './node-tasks.mjs';
 import { enrolledDirectory, resolveFolderBinding } from './node-folder.mjs';
-import { configureV2WorkerSession, v2WorkerInstructions } from './node-worker-instructions.mjs';
+import { configureV2WorkerSession, v2WorkerInstructions, usesV2WorkerTools } from './node-worker-instructions.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 try {
@@ -67,6 +67,7 @@ try {
     for (const entry of config.bindings) {
       requireValue(['opencode-v2', 'opencode-v2-owned', 'hermes'].includes(entry.harness) && entry.agentId && entry.id,
         'invalid_binding', 'Explicit supported native binding required');
+      const directWorkerTools = usesV2WorkerTools(entry);
       const retirement = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`retired-binding:${entry.id}`);
       if (retirement) {
         requireValue(JSON.parse(retirement.value).state === 'retired', 'retirement_pending', 'Inspect incomplete owned retirement before restarting this binding');
@@ -98,7 +99,7 @@ try {
         ownedDefinitions.set(entry.agentId, { entry, contextFile, failures: 0 });
       } else {
         const { OpenCode } = await import('../packages/opencode-relay/node_modules/@opencode/client/dist/promise/index.js');
-        const { NativeOpenCodeV2, observeV2 } = await import('../packages/opencode-relay/native.mjs');
+        const { NativeOpenCodeV2, observeV2, checkV2Version } = await import('../packages/opencode-relay/native.mjs');
         requireValue(entry.identity && entry.url && entry.authFile && entry.reserved === true,
           'invalid_binding', 'Exact OpenCode identity, private auth and explicit conversation reservation required');
         const origin = new URL(entry.url);
@@ -109,7 +110,7 @@ try {
         const client = OpenCode.make({ baseUrl: origin.origin, headers: {
           authorization: `Basic ${Buffer.from(`opencode:${auth.password}`).toString('base64')}` },
         fetch: (url, options) => fetch(url, { ...options, signal: options?.signal ?? AbortSignal.timeout(15000) }) });
-        requireValue((await client.server.info()).version === '2.1.0', 'unsupported_native_version', 'Pinned v2.1.0 runtime required');
+        checkV2Version((await client.server.info()).version);
         const native = new NativeOpenCodeV2(client, entry.identity);
         await native.verify();
         binding = { id: entry.id, identity: entry.identity, native, observe: observeV2 };
@@ -130,7 +131,7 @@ try {
       const cli = `${quote(process.execPath)} ${quote(join(dirname(fileURLToPath(import.meta.url)), 'node-worker-cli.mjs'))} --context ${quote(contextFile)}`;
       bindings.set(entry.agentId, { ...binding, ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () =>
         `Use ${cli} questions to inspect addressed questions. Answer with ${cli} answer --key KEY --file JSON containing {id,expectedRevision,body}, or forward --key KEY --file JSON containing {id,expectedRevision,reason}.\n`,
-      workerInstructions: execution => entry.harness.startsWith('opencode-v2') ? v2WorkerInstructions(execution) :
+      workerInstructions: execution => directWorkerTools ? v2WorkerInstructions(execution) :
         `Read and check cancellation: ${cli} read --execution ${quote(execution.id)} --run ${quote(execution.runId)}\n` +
         (execution.allowDelegation ? `Explicit bounded delegation is granted. Use ${cli} delegate --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file CHILD_JSON with {id,taskId,title,instructions,targetAgentId,reviewPolicy}. Then stage ${cli} wait-children --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key WAIT_KEY --file WAIT_JSON with {childExecutionIds:[...]}, and finish the turn.\n` : '') +
         (execution.childExecutionIds?.length ? `Inspect supplied child receipts and refresh with ${cli} children --execution ${quote(execution.id)} --run ${quote(execution.runId)}. Only children with explicit agent review grants may be decided using ${cli} review-child --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file JSON with {id,expectedRevision,candidate,decision,reason}. Others require the human. Final root review remains human.\n` : '') +

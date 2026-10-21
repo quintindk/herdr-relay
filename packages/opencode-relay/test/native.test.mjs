@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NativeOpenCodeV2, observeV2 } from '../native.mjs';
+import { NativeOpenCodeV2, observeV2, checkV2Version } from '../native.mjs';
 
 const invocation = { messageId: 'owned', prompt: 'work', priorMessageIds: ['prior'] };
 const user = { id: 'owned', type: 'user', text: 'work' };
 const terminal = { id: 'terminal', type: 'idle', outcome: 'succeeded' };
 const snapshot = messages => ({ messages, idle: true, inbox: [] });
+
+test('native version guard admits only the explicitly exercised releases', () => {
+  for (const version of ['2.1.0', '2.1.2']) assert.equal(checkV2Version(version), version);
+  for (const version of ['2.1.1', '2.1.3', '2.2.0', undefined]) {
+    assert.throws(() => checkV2Version(version), { code: 'unsupported_native_version' });
+  }
+});
 
 test('v2 observation requires owned prompt and correlated idle evidence, not global idle alone', () => {
   assert.equal(observeV2(snapshot([terminal]), invocation).state, 'uncertain');

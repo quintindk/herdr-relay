@@ -4,6 +4,13 @@ function check(condition, code) {
   if (!condition) throw Object.assign(new Error(code), { code });
 }
 
+export const supportedV2Versions = Object.freeze(['2.1.0', '2.1.2']);
+
+export function checkV2Version(version) {
+  check(supportedV2Versions.includes(version), 'unsupported_native_version');
+  return version;
+}
+
 // A versioned spike adapter, not wired into the v1 Relay execution service yet.
 export class NativeOpenCodeV2 {
   constructor(client, identity) {

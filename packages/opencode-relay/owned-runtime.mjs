@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode } from '@opencode/client';
 import { processGroupMembers } from '../../src/runtimes.mjs';
 import { requireValue, canonical } from '../../src/protocol.mjs';
+import { checkV2Version } from './native.mjs';
 
 const startIdentity = pid => {
   try {
@@ -67,7 +68,7 @@ export async function launchOwnedV2({ directory, executable, workspace, config, 
         writeFileSync(join(directory, 'auth.json'), JSON.stringify({ password }), { flag: previous ? 'w' : 'wx', mode: 0o600 });
         const client = OpenCode.make({ baseUrl: origin, headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` } });
         const info = await client.server.info({ signal: AbortSignal.timeout(5000) });
-        requireValue(info.version === '2.1.0', 'unsupported_native_version', 'Pinned OpenCode 2.1.0 required');
+        checkV2Version(info.version);
         requireValue(info.pid === child.pid || processGroupMembers(child.pid).some(member => member.pid === info.pid),
           'runtime_identity_mismatch', 'API server is not inside the owned native process group');
         writeFileSync(descriptorPath, JSON.stringify(ready), { mode: 0o600 });

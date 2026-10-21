@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { configureV2WorkerSession, v2WorkerInstructions } from '../src/node-worker-instructions.mjs';
+import { configureV2WorkerSession, v2WorkerInstructions, usesV2WorkerTools } from '../src/node-worker-instructions.mjs';
+
+test('external interactive CLI transport is explicit and never changes the owned worker default', () => {
+  assert.equal(usesV2WorkerTools({ harness: 'opencode-v2' }), true);
+  assert.equal(usesV2WorkerTools({ harness: 'opencode-v2', workerTransport: 'tools' }), true);
+  assert.equal(usesV2WorkerTools({ harness: 'opencode-v2', workerTransport: 'cli' }), false);
+  assert.equal(usesV2WorkerTools({ harness: 'opencode-v2-owned' }), true);
+  assert.equal(usesV2WorkerTools({ harness: 'hermes' }), false);
+  for (const entry of [{ harness: 'opencode-v2', workerTransport: 'typo' },
+    { harness: 'opencode-v2-owned', workerTransport: 'cli' }, { harness: 'hermes', workerTransport: 'tools' }]) {
+    assert.throws(() => usesV2WorkerTools(entry), { code: 'invalid_worker_transport' });
+  }
+});
 
 test('v2 worker instructions use actual scoped tools without shell transport', () => {
   const instructions = v2WorkerInstructions({});

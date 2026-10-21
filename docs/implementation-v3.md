@@ -342,3 +342,35 @@ tests, the existing two-TUI deterministic smoke, syntax checks and whitespace
 checks passed. The earlier root invocation hit two legacy discovery timing
 assertions. Both passed in the serial rerun without changing their implementation
 or tests.
+
+## Existing interactive session, 2026-10-21
+
+The user explicitly requested enrolling this already-open conversation and testing
+a cron here. Its native service was OpenCode 2.1.2 rather than the 2.1.0 spike
+baseline. Read-only exact identity/history verification passed, followed by the
+isolated 2.1.2 backend/worker-tool/daemon/two-TUI smoke. The native version guard now
+admits only the explicitly exercised 2.1.0 and 2.1.2 releases, not arbitrary patches.
+
+External bindings may explicitly select `workerTransport: "cli"` when the existing
+chat already has shell access. The default remains direct worker tools. The
+override changes instructions only, retains scoped credentials and exact run
+checks, and is refused for owned bindings. This avoids a plugin reload or permission
+change solely to test an existing interactive chat.
+
+A separate node enrolled the exact current session. Its minute cron fired at
+09:38 SAST and completed native settlement/backend publication at 09:38:30 SAST.
+The agent used the real scoped worker CLI to read and stage the acknowledgement,
+then finished the turn. The test controller paused future scheduling immediately
+after admission. Pause revision 2 was acknowledged. The chat stays enrolled, while
+the test schedule stays paused. No existing native service, model, plugin or
+permission was changed and no replacement session was created.
+
+Evidence: [current-session cron](evidence/native-current-session-cron.json).
+This closes the bounded existing-session execution test, not arbitrary active-chat
+adoption, simultaneous typing safety, natural-chat schedule-management parity or
+the wider v3 acceptance gates.
+
+Follow-up verification passed: 1,466 root tests with one skipped and zero failed,
+all 21 v2 tests, syntax/whitespace checks, and the isolated 2.1.2 owned
+launch/interruption/provision/stop/resume smoke. The latter retained the original
+session through verified stop and idle-process crash recovery.

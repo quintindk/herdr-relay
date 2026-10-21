@@ -162,3 +162,24 @@ Regression checkpoint: `node --test --test-concurrency=1 test/*.test.mjs` passed
 smoke and syntax/whitespace checks passed. An earlier root invocation failed two
 legacy discovery timing assertions. The explicit serial rerun passed both without
 code or test changes in that path.
+
+### Existing-session follow-up
+
+The user-authorised test in the actual already-open OpenCode 2.1.2 conversation
+also passed against the deployed native backend. One real minute cron occurrence
+read/submitted through the session-scoped worker CLI, settled natively and published
+as completed. Its pause reached applied revision 2. No replacement conversation,
+native restart, plugin reload, model switch or permission change was needed.
+See [existing-session evidence](evidence/native-current-session-cron.json).
+
+The adapter now explicitly admits 2.1.0 and 2.1.2, with an isolated 2.1.2
+backend/tool/daemon/two-TUI smoke preceding enrolment. External
+`workerTransport: "cli"` is an explicit operator choice, not a fallback around
+denied shell access.
+The full arbitrary-adoption, concurrent-input and natural-chat mutation gates
+remain open.
+
+Follow-up checkpoint: 1,466 root tests passed, one skipped, zero failed. All 21 v2
+tests and syntax/whitespace checks passed. The isolated OpenCode 2.1.2 owned-runtime
+and provisioning smoke also passed launch, interruption, verified stop and
+same-session resume after an idle process crash.

@@ -1,5 +1,15 @@
 import { requireValue } from './protocol.mjs';
 
+export function usesV2WorkerTools(entry) {
+  // Existing external chats may explicitly use their already-available shell.
+  // This selects instructions only. It never grants shell permission.
+  requireValue(entry.workerTransport === undefined || ['tools', 'cli'].includes(entry.workerTransport),
+    'invalid_worker_transport', 'Worker transport must be tools or cli');
+  requireValue(entry.workerTransport === undefined || entry.harness === 'opencode-v2',
+    'invalid_worker_transport', 'Transport override requires an external OpenCode v2 binding');
+  return entry.harness.startsWith('opencode-v2') && entry.workerTransport !== 'cli';
+}
+
 // Session policy is explicit operator configuration, never an automatic grant.
 export async function configureV2WorkerSession(binding, permissions) {
   if (permissions === undefined) return;
@@ -10,7 +20,7 @@ export async function configureV2WorkerSession(binding, permissions) {
   await binding.native.client.session.update({ sessionID: binding.identity.sessionId, permissions });
 }
 
-// V2 bindings have direct scoped tools. Do not also advertise shell commands,
+// V2 bindings default to direct scoped tools. Do not also advertise shell commands,
 // which can be unavailable under the worker's deliberately restricted policy.
 export function v2WorkerInstructions(execution) {
   return `Use the actual Relay function tools, not shell commands or printed tool-call markup.

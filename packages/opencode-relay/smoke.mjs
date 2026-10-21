@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode } from '@opencode/client';
 import { RelaySpike } from './rpc.mjs';
-import { NativeOpenCodeV2, observeV2 } from './native.mjs';
+import { NativeOpenCodeV2, observeV2, checkV2Version } from './native.mjs';
 import { startBackend } from '../../src/backend-service.mjs';
 import { nativeBackendClient } from '../../src/backend-client.mjs';
 import { NodeJournal } from '../../src/node-journal.mjs';
@@ -26,7 +26,7 @@ import { provisionOwnedV2 } from './provision.mjs';
 const packageDirectory = dirname(fileURLToPath(import.meta.url));
 const binary = process.env.RELAY_V2_BINARY ?? join(packageDirectory, 'node_modules/.bin/opencode2');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim();
-assert.equal(version, 'opencode v2.1.0', 'Revalidate the spike before changing its pinned runtime');
+const runtimeVersion = checkV2Version(version.replace(/^opencode v/, ''));
 const root = mkdtempSync(join(tmpdir(), 'relay-v2-'));
 const workspace = join(root, 'workspace');
 const config = join(root, 'config/opencode');
@@ -122,7 +122,7 @@ try {
     headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
     fetch: (url, options) => fetch(url, { ...options, signal: options?.signal ?? AbortSignal.timeout(15000) }) });
   const info = await client.server.info();
-  assert.equal(info.version, '2.1.0');
+  assert.equal(info.version, runtimeVersion);
   const location = { directory: workspace };
   const session = await client.session.create({ location, title: 'Relay v2 disposable spike', model: { providerID: 'relay-fixture', id: 'fixture' } });
   const rpc = client.rpc(RelaySpike);
