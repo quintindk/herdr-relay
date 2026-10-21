@@ -19,6 +19,7 @@ export function nativeBoard(api) {
     async read() {
       const [tasks, agents, nodes] = await Promise.all([all('tasks'), all('agents'), all('nodes')]);
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], routines: [], tasks: tasks.map(scoped),
+        showEmptyLocalBoard: false,
         agents: agents.map(agent => {
           const node = nodes.find(node => node.id === agent.nodeId);
           const age = Date.now() - Date.parse(node?.lastSeenAt);

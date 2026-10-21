@@ -122,7 +122,9 @@ export function buildBoardRows(value, options = {}) {
   };
   const companies = new Set([...companyNames.keys(), ...value.agents.map(agent => agent.companyId),
     ...value.tasks.map(task => task.companyId)]);
-  for (const company of companies) ensureGroup(company, 'human', 'local-board', 'Human: Board (local-board)');
+  if (value.showEmptyLocalBoard !== false) {
+    for (const company of companies) ensureGroup(company, 'human', 'local-board', 'Human: Board (local-board)');
+  }
   for (const agent of value.agents) ensureGroup(agent.companyId, 'agent', agent.id, agent.name || agent.id, agent);
   const owners = new Map();
   for (const [id, task] of tasks) {
