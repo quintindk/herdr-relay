@@ -17,6 +17,7 @@ import { herdrInventory, publishHerdrInventory } from './node-discovery.mjs';
 import { provisionNodeWorktree, finaliseNodeWorktree, retireNodeWorktree } from './node-resources.mjs';
 import { nodeTasks } from './node-tasks.mjs';
 import { enrolledDirectory, resolveFolderBinding } from './node-folder.mjs';
+import { configureV2WorkerSession, v2WorkerInstructions } from './node-worker-instructions.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 try {
@@ -113,6 +114,8 @@ try {
         await native.verify();
         binding = { id: entry.id, identity: entry.identity, native, observe: observeV2 };
       }
+      if (entry.harness.startsWith('opencode-v2')) await configureV2WorkerSession(binding, entry.sessionPermissions);
+      else requireValue(entry.sessionPermissions === undefined, 'invalid_permissions', 'Session permissions require a V2 binding');
       const nativeIdentity = digest(entry.harness === 'hermes' ? ['hermes', entry.hermes.url, entry.hermes.profile ?? '', entry.conversationId] :
         ['opencode-v2', binding.runtime?.descriptor.origin ?? entry.url, binding.identity?.sessionId ?? entry.identity.sessionId]);
       requireValue(!nativeEndpoints.has(nativeIdentity), 'conversation_alias', 'One exact conversation may have only one local binding');
@@ -127,7 +130,7 @@ try {
       const cli = `${quote(process.execPath)} ${quote(join(dirname(fileURLToPath(import.meta.url)), 'node-worker-cli.mjs'))} --context ${quote(contextFile)}`;
       bindings.set(entry.agentId, { ...binding, ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () =>
         `Use ${cli} questions to inspect addressed questions. Answer with ${cli} answer --key KEY --file JSON containing {id,expectedRevision,body}, or forward --key KEY --file JSON containing {id,expectedRevision,reason}.\n`,
-      workerInstructions: execution =>
+      workerInstructions: execution => entry.harness.startsWith('opencode-v2') ? v2WorkerInstructions(execution) :
         `Read and check cancellation: ${cli} read --execution ${quote(execution.id)} --run ${quote(execution.runId)}\n` +
         (execution.allowDelegation ? `Explicit bounded delegation is granted. Use ${cli} delegate --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file CHILD_JSON with {id,taskId,title,instructions,targetAgentId,reviewPolicy}. Then stage ${cli} wait-children --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key WAIT_KEY --file WAIT_JSON with {childExecutionIds:[...]}, and finish the turn.\n` : '') +
         (execution.childExecutionIds?.length ? `Inspect supplied child receipts and refresh with ${cli} children --execution ${quote(execution.id)} --run ${quote(execution.runId)}. Only children with explicit agent review grants may be decided using ${cli} review-child --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file JSON with {id,expectedRevision,candidate,decision,reason}. Others require the human. Final root review remains human.\n` : '') +

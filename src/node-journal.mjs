@@ -105,10 +105,11 @@ export class NodeJournal {
             this.save(work);
           }
         }
-        if (event.type === 'schedule.publish' && event.data?.nodeId === this.nodeId) {
+        if (['schedule.publish', 'schedule.fail'].includes(event.type) && event.data?.nodeId === this.nodeId) {
           const local = this.work(event.entityId);
           if (local?.execution.localOccurrence) this.save({ ...local, state: 'settled', execution: { ...local.execution,
-            state: event.data.state, result: { candidate: event.data.candidate, summary: event.data.summary } } });
+            state: event.data.state, ...(event.type === 'schedule.fail' ? { failure: { reason: event.data.reason, evidence: event.data.evidence } } :
+              { result: { candidate: event.data.candidate, summary: event.data.summary } }) } });
         }
       }
       this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('cursor', page.cursor);

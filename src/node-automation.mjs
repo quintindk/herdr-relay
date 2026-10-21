@@ -197,7 +197,18 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
     if (observation.state === 'conflict') { journal.save({ ...work, observation, state: 'conflict' }); continue; }
     if (observation.state !== 'finished') continue;
     journal.save({ ...work, observation, state: 'native_finished' });
-    if (observation.outcome !== 'succeeded') { saveOccurrence('failed', { observation }); continue; }
+    const fail = reason => journal.transaction(() => {
+      journal.queue({ key: `occurrence-failed:${occurrence.id}:${work.execution.runId}`, action: 'schedule.fail', payload: {
+        id: occurrence.id, scheduleId: occurrence.scheduleId, definitionRevision: occurrence.definition.revision,
+        intendedAt: occurrence.intendedAt, reason,
+        evidence: `Native terminal ${observation.messageId}, run ${work.execution.runId}, outcome ${observation.outcome}`,
+      } });
+      saveOccurrence('failed', { observation, reason });
+      journal.archive({ ...work, observation });
+      journal.save({ ...work, observation, state: 'settled', error: reason,
+        execution: { ...work.execution, state: 'failed' } });
+    });
+    if (observation.outcome !== 'succeeded') { fail(`native_${observation.outcome}`); continue; }
     if (work.staged?.kind === 'question') {
       journal.transaction(() => {
         journal.queue({ key: `schedule-question:${occurrence.id}:${work.execution.runId}:${work.staged.key}`, action: 'schedule.ask', payload: {
@@ -211,7 +222,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
       });
       continue;
     }
-    if (work.staged?.kind !== 'result') continue;
+    if (work.staged?.kind !== 'result') { fail('missing_worker_submission'); continue; }
     journal.transaction(() => {
       journal.queue({ key: `occurrence-publish:${occurrence.id}`, action: 'schedule.publish', payload: {
         id: occurrence.id, scheduleId: occurrence.scheduleId, definitionRevision: occurrence.definition.revision,

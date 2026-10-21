@@ -59,6 +59,43 @@ access contract. Cloudflare Access enforcement belongs to the protected tunnel
 application, with Relay actor credentials still checked by the local origin.
 `Authorization: Bearer ...` separately authenticates the human or enrolled node.
 
+### Restricted V2 cron worker
+
+V2 workers receive instructions for the direct `relay_work_read`,
+`relay_work_ask` and `relay_work_submit` tools, not an additional shell transport.
+Built-in tools may remain denied. An optional binding-level `sessionPermissions`
+array applies explicit session-scoped rules after the agent's rules, as documented
+in the [V2 plugin guide](https://opencode.ai/v2/docs/build/plugins#permissions).
+For a read/submit-only smoke worker:
+
+```json
+{
+  "sessionPermissions": [
+    { "action": "*", "resource": "*", "effect": "deny" },
+    { "action": "relay_work_read", "resource": "*", "effect": "allow" },
+    { "action": "relay_work_submit", "resource": "*", "effect": "allow" }
+  ]
+}
+```
+
+These rules are operator configuration, not grants invented by the daemon. They
+persist on the exact worker session and are reapplied on node startup. They do not
+change the owned runtime's pinned provider configuration or create another session.
+Validate a real tool round trip before scheduling a new model-backed job. Merely
+listing a model or registering an agent does not establish tool execution.
+
+Scheduled turns that terminate unsuccessfully, or finish without staging a result
+or question, publish `schedule.fail` with the original occurrence identity and
+native terminal evidence. They appear as failed occurrences, without a fabricated
+candidate/result. Publication is journalled for offline retry. Proven-terminal
+failure releases local capacity but never replays the original prompt.
+
+The [live local cron evidence](evidence/native-local-cron-model.json) records two
+real Qwen/LM Studio occurrences through the direct read/submit tools, without
+overlap, followed by an applied pause. The first missing-submission attempt is
+retained as a failed occurrence. This does not certify remote/offline/reboot
+behaviour or native TUI schedule controls.
+
 ## Routes
 
 - `GET /v1/info`: protocol and instance identity.

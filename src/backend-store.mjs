@@ -356,9 +356,11 @@ export class BackendStore {
       const schedule = this.get('schedule', p.id); this.nodeOnly(actor, schedule.definition.nodeId); this.revision(schedule, p.expectedRevision);
       return this.save('schedule', { ...schedule, appliedRevision: schedule.revision, appliedAt: now() });
     }
-    if (action === 'schedule.publish') {
-      fields(p, ['id', 'scheduleId', 'definitionRevision', 'intendedAt', 'candidate', 'summary', 'evidence'],
-        ['id', 'scheduleId', 'definitionRevision', 'intendedAt', 'candidate', 'summary', 'evidence']);
+    if (['schedule.publish', 'schedule.fail'].includes(action)) {
+      const failed = action === 'schedule.fail';
+      const required = ['id', 'scheduleId', 'definitionRevision', 'intendedAt', 'evidence',
+        ...(failed ? ['reason'] : ['candidate', 'summary'])];
+      fields(p, required, required);
       const schedule = this.get('schedule', p.scheduleId);
       requireValue(p.definitionRevision <= schedule.revision && p.definitionRevision > 0 && Number.isFinite(Date.parse(p.intendedAt)),
         'invalid_occurrence', 'Recorded schedule revision and instant required');
@@ -366,18 +368,21 @@ export class BackendStore {
       this.nodeOnly(actor, installation?.definition.nodeId);
       requireValue(installation?.definition.nodeId === actor.id, 'invalid_occurrence', 'Installed definition evidence required');
       requireValue(p.id === `occurrence_${digest([p.scheduleId, p.intendedAt])}`, 'invalid_occurrence', 'Occurrence identity does not match schedule/instant');
-      string(p.summary, 'summary'); string(p.candidate, 'candidate', 512); string(p.evidence, 'evidence', 4000);
+      if (failed) string(p.reason, 'reason', 2000);
+      else { string(p.summary, 'summary'); string(p.candidate, 'candidate', 512); }
+      string(p.evidence, 'evidence', 4000);
       const occurrence = created('occurrence', { ...p, nodeId: actor.id, definition: installation.definition,
-        state: installation.definition.reviewPolicy === 'human' ? 'in_review' : 'completed' });
+        state: failed ? 'failed' : installation.definition.reviewPolicy === 'human' ? 'in_review' : 'completed' });
       const execution = this.get('execution', p.id, false);
       if (execution) {
         requireValue(execution.localOccurrence && execution.targetNodeId === actor.id && execution.state === 'accepted' && !execution.cancellationRequested,
           'occurrence_ineligible', 'Materialised scheduled work is no longer active');
         const settled = changed('execution', execution, { state: occurrence.state,
-          result: { candidate: p.candidate, summary: p.summary, evidence: p.evidence, digest: digest({ candidate: p.candidate, summary: p.summary }),
-            sequence: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0)+1 AS seq FROM changes').get().seq) } });
-        this.event('execution.scheduled_result', settled, actor, occurrence.id);
-        taskDisposition(execution.taskId, occurrence.state === 'in_review' ? 'in_review' : 'done', occurrence.id);
+          ...(failed ? { failure: { reason: p.reason, evidence: p.evidence } } : {
+            result: { candidate: p.candidate, summary: p.summary, evidence: p.evidence, digest: digest({ candidate: p.candidate, summary: p.summary }),
+              sequence: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0)+1 AS seq FROM changes').get().seq) } }) });
+        this.event(failed ? 'execution.scheduled_failure' : 'execution.scheduled_result', settled, actor, occurrence.id);
+        taskDisposition(execution.taskId, failed ? 'blocked' : occurrence.state === 'in_review' ? 'in_review' : 'done', occurrence.id);
         occurrence.executionId = execution.id;
         this.save('occurrence', occurrence);
       }
