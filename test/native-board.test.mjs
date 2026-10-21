@@ -20,3 +20,24 @@ test('native board traverses collections and updates status through current back
     assert.equal((await board.detailTask({ taskId: 'task' })).comments[0].body, 'Checked');
   } finally { await backend.close(); }
 });
+
+test('native board displays readable identifiers without changing task identity', async () => {
+  const opaque = `task_pc_${'a'.repeat(64)}`;
+  const tasks = [
+    { id: opaque, title: 'Imported task', source: { metadata: { identifier: 'DEF-42' } } },
+    { id: `${opaque}b`, title: 'Native task' },
+    { id: 'short-id', title: 'Short task', identifier: 'RELAY-7' },
+  ];
+  const board = nativeBoard(async (method, path) => {
+    if (path.startsWith('/v1/tasks?')) return { items: tasks };
+    if (path.startsWith('/v1/tasks/')) return tasks.find(task => task.id === decodeURIComponent(path.slice('/v1/tasks/'.length)));
+    return { items: [] };
+  });
+  const snapshot = await board.read();
+  assert.equal(snapshot.tasks[0].identifier, 'DEF-42');
+  assert.equal(snapshot.tasks[0].id, opaque);
+  assert.equal(snapshot.tasks[1].identifier, `${tasks[1].id.slice(0,12)}…${tasks[1].id.slice(-8)}`);
+  assert.equal(snapshot.tasks[2].identifier, 'RELAY-7');
+  assert.equal((await board.inspectTask({ taskId: opaque })).task.identifier, 'DEF-42');
+  assert.equal((await board.detailTask({ taskId: opaque })).task.id, opaque);
+});
