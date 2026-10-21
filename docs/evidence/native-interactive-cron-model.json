@@ -1,0 +1,87 @@
+{
+  "verifiedOn": "2026-10-21T07:28:39.700Z",
+  "runtime": "OpenCode 2.1.0",
+  "backend": "native relay/0.2 isolated instance",
+  "model": "qwen/qwen3.8-27b",
+  "realModel": true,
+  "agentMode": "interactive",
+  "nodeBinding": "opencode-v2",
+  "relayOwnedRuntime": false,
+  "syntheticTuiInput": true,
+  "attachedTuis": 2,
+  "busyExactDeferred": true,
+  "absentFolderDeferred": true,
+  "ambiguousFolderDeferred": true,
+  "folderFutureChatReplacement": true,
+  "admittedTargetPreserved": true,
+  "settledWorkNotReplayedOnRestart": true,
+  "pauseApplied": true,
+  "receipts": [
+    {
+      "id": "occurrence_7179545f65c25b013fc532dd465a8642c11028d8c0a8b3bab1ba3070bff3b358",
+      "scheduleId": "interactive-exact",
+      "intendedAt": "2026-10-21T07:25:52.632Z",
+      "conversationId": "ses_ea2a60d4bffeNgavG8caQlgRI2",
+      "bindingId": "binding-chat-a",
+      "nativeOutcome": "succeeded",
+      "localState": "settled",
+      "backendState": "completed",
+      "tools": [
+        {
+          "name": "relay_work_read",
+          "state": "completed"
+        },
+        {
+          "name": "relay_work_submit",
+          "state": "completed"
+        }
+      ]
+    },
+    {
+      "id": "occurrence_aff445a96f1139c917095d9449edea361198e8064b6778826923e724dd865085",
+      "scheduleId": "interactive-folder",
+      "intendedAt": "2026-10-21T07:27:00.000Z",
+      "conversationId": "ses_ea2a60d4bffeNgavG8caQlgRI2",
+      "bindingId": "binding-chat-a",
+      "nativeOutcome": "succeeded",
+      "localState": "settled",
+      "backendState": "completed",
+      "tools": [
+        {
+          "name": "relay_work_read",
+          "state": "completed"
+        },
+        {
+          "name": "relay_work_submit",
+          "state": "completed"
+        }
+      ]
+    },
+    {
+      "id": "occurrence_29c9a6e5a3fe3396fd6403361d1ccea743ea44a21c2913ee40240700b2332149",
+      "scheduleId": "interactive-folder",
+      "intendedAt": "2026-10-21T07:28:00.000Z",
+      "conversationId": "ses_ea2a5f5e6ffeYripERiyXZMnJc",
+      "bindingId": "binding-chat-b",
+      "nativeOutcome": "succeeded",
+      "localState": "settled",
+      "backendState": "completed",
+      "tools": [
+        {
+          "name": "relay_work_read",
+          "state": "completed"
+        },
+        {
+          "name": "relay_work_submit",
+          "state": "completed"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Synthetic input, not actual human approval.",
+    "No atomic protection against concurrent human input.",
+    "No physical reboot, remote node or backend disconnection certification.",
+    "Exact-chat replacement refusal remains fixture-tested."
+  ]
+}

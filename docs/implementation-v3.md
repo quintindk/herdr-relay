@@ -309,3 +309,36 @@ include blocker field values/source digests and can be saved privately with
 `--output`. Active task/recovery obligations remain blocking. The laptop's private
 166-task export is not present on this host, so these fixes have fixture coverage,
 not readback of that actual inventory. Home-host transfer/import remains explicit.
+
+## Interactive scheduling with a real model, 2026-10-21
+
+`npm --prefix packages/opencode-relay run smoke:interactive-cron` passed against
+an isolated native `relay/0.2` backend and real node daemon, using OpenCode 2.1.0
+and LM Studio's `qwen/qwen3.8-27b`. Two actual TUIs stayed attached throughout.
+Agents were registered as `interactive` with explicitly reserved external
+`opencode-v2` bindings, not node-provisioned `opencode-v2-owned` runtimes.
+
+- An exact-chat one-shot occurrence remained pending during a held synthetic human
+  turn, then completed in the original conversation when it became idle.
+- Folder cron occurrences at 09:27 and 09:28 SAST completed in chat A and chat B
+  respectively. The second firing deferred with no local binding and then with two
+  ambiguous bindings before a single explicitly enrolled replacement admitted it.
+- The first admitted target remained unchanged. A subsequent daemon restart did
+  not replay settled work, and the folder schedule's pause reached applied revision 2.
+- All three occurrences contain completed `relay_work_read`/`relay_work_submit`
+  calls, successful native terminal evidence, settled local work and completed
+  backend publication. Both TUIs used synthetic input, not human approval.
+
+Evidence: [interactive cron model smoke](evidence/native-interactive-cron-model.json).
+This does not certify arbitrary active-chat adoption, atomic protection against
+concurrent human input, interactive schedule-management controls, exact-chat
+replacement refusal at runtime, physical reboot, remote nodes or backend outages.
+Only disposable test processes/state were used. Existing services/routines were
+not changed.
+
+Verification at this checkpoint: the explicit serial root run passed 1,465 tests
+with one skipped pinned-Paperclip-validator check and zero failures. All 20 v2
+tests, the existing two-TUI deterministic smoke, syntax checks and whitespace
+checks passed. The earlier root invocation hit two legacy discovery timing
+assertions. Both passed in the serial rerun without changing their implementation
+or tests.

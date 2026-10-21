@@ -137,3 +137,28 @@ reads and writes, identity mapping and review projection.
 
 These are work remaining in the accepted scope. They have not been silently
 reclassified as optional merely because the first native workflow now runs.
+
+## Real-model interactive scheduling, 2026-10-21
+
+```bash
+npm --prefix packages/opencode-relay run smoke:interactive-cron
+```
+
+The [interactive cron evidence](evidence/native-interactive-cron-model.json)
+adds real-model evidence with two attached OpenCode 2.1.0 TUIs, a native backend
+and a node daemon using reserved external interactive bindings. Exact-chat
+busy deferral/completion, two folder cron firings across chat replacement,
+absent/ambiguous binding deferral, immutable admitted identity, applied pause and
+settled-work restart deduplication passed. Every occurrence completed native
+read/submit tools and backend publication.
+
+The exact-chat occurrence uses one-shot timing. The folder test uses actual
+minute cron ticks, not an advanced test clock. Model/tool execution is real,
+while keyboard/API input remains synthetic. This does not close the actual-human,
+arbitrary live-chat adoption, physical-machine or full recovery gates.
+
+Regression checkpoint: `node --test --test-concurrency=1 test/*.test.mjs` passed
+1,465 tests, one skipped and zero failed. All 20 v2 tests, the existing two-TUI
+smoke and syntax/whitespace checks passed. An earlier root invocation failed two
+legacy discovery timing assertions. The explicit serial rerun passed both without
+code or test changes in that path.

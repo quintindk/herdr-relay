@@ -12,7 +12,8 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "smoke": "node smoke.mjs"
+    "smoke": "node smoke.mjs",
+    "smoke:interactive-cron": "node smoke-interactive-cron.mjs"
   },
   "dependencies": {
     "@opencode/client": "2.1.0",

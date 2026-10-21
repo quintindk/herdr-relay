@@ -19,13 +19,15 @@ child = subprocess.Popen(config["args"], cwd=config["cwd"], env=config["env"],
 os.close(slave)
 output = bytearray()
 try:
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + config.get("timeoutSeconds", 45)
     sent = False
     next_attempt = time.monotonic() + 5
     notified = False
     decision_sent = False
     inbox_steps = set()
     while child.poll() is None and time.monotonic() < deadline:
+        if config.get("passiveUntil") and os.path.exists(config["passiveUntil"]):
+            break
         if select.select([master], [], [], 0.1)[0]:
             try:
                 chunk = os.read(master, 65536)
@@ -77,7 +79,9 @@ try:
                 done = '"type":"human_decision_refused"' if config.get('expectRefused') else '"type":"human_decision"' if config.get("inbox") or config.get("proposals") or config.get("review") else '"type":"decision"' if config.get("decision") else '"type":"notification"'
                 if done in evidence:
                     notified = True
-                    break
+                    if not config.get("passiveUntil"):
+                        break
+                    next_attempt = deadline
     # Only surface terminal output on failure, with credentials redacted.
     if not notified:
         text = output.decode("utf-8", errors="replace")

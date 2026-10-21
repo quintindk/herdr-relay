@@ -96,6 +96,35 @@ overlap, followed by an applied pause. The first missing-submission attempt is
 retained as a failed occurrence. This does not certify remote/offline/reboot
 behaviour or native TUI schedule controls.
 
+### Interactive cron smoke
+
+```bash
+npm --prefix packages/opencode-relay run smoke:interactive-cron
+```
+
+This separate smoke uses real OpenCode 2.1.0 TUIs, a native backend, a node daemon
+and explicitly reserved `opencode-v2` bindings registered as `interactive`. The
+test controller starts the disposable native services. The node does not own or
+provision them. It never adopts or sends prompts into an existing user chat.
+
+The default provider is LM Studio at `http://127.0.0.1:1234/v1`, using
+`qwen/qwen3.8-27b`. Override with `RELAY_SMOKE_MODEL_URL` and `RELAY_SMOKE_MODEL`.
+The model must support actual function calls. Session policy permits only
+`relay_work_read` and `relay_work_submit`. A proxy holds the first synthetic human
+turn until the test verifies that scheduled delivery remains pending while busy.
+
+The smoke checks exact-chat delivery, two real folder cron occurrences, no-target
+and ambiguous-target deferral, future-chat replacement, preserved admitted identity,
+applied pause and no settled-work replay after daemon restart. Native transcripts
+must contain completed read/submit calls and successful terminal receipts. Both
+TUIs remain attached throughout. Keyboard/API input is synthetic, not actual human
+authorisation, and there is no atomic idle-and-send guarantee.
+
+Private state is retained under `/tmp/opencode/relay-interactive-cron-*` for
+diagnosis. The script stops only its own processes. Set `RELAY_SMOKE_EVIDENCE` to
+write a credential-free evidence file. This smoke does not certify physical reboot,
+remote nodes, backend disconnection or interactive schedule-management controls.
+
 ## Routes
 
 - `GET /v1/info`: protocol and instance identity.
