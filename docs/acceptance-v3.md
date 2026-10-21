@@ -327,3 +327,11 @@ automated keyboard/PTY coverage, not a second actual-human acceptance run.
 
 Streamlined-flow checkpoint: 1,511 root tests passed, one skipped, zero failed.
 All 30 v2 tests and syntax/whitespace checks passed.
+
+The subsequent actual-human streamlined-flow retest also passed. Quintin answered
+and accepted the exact result entirely through the revised native board, then
+confirmed the interaction looked good. Backend receipts retain distinct terminal
+dialog attribution for both decisions. Local history shows one initial settled
+question and one successful continuation. Execution/task are completed/done.
+The controller published neither decision. Evidence:
+[streamlined board live](evidence/native-board-streamlined-live.json).

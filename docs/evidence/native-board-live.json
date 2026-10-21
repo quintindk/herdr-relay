@@ -1,6 +1,6 @@
 {
   "verifiedOn": "2026-10-21",
-  "scope": "Actual-human answer and exact candidate acceptance entirely through the native task board. Original interaction passed; the subsequently streamlined editor has automated coverage, not a second human acceptance run.",
+  "scope": "Actual-human answer and exact candidate acceptance entirely through the original native task board. The subsequent streamlined-flow human retest is recorded in native-board-streamlined-live.json.",
   "runtimeCodeCommit": "f135c36",
   "taskId": "wright-native-board-20261021",
   "executionId": "wright-native-board-run-20261021",
@@ -69,12 +69,13 @@
     "rootTestsFailed": 0,
     "v2TestsPassed": 30,
     "syntaxAndWhitespaceChecks": "passed",
-    "actualHumanRetest": false
+    "actualHumanRetest": true,
+    "actualHumanRetestEvidence": "native-board-streamlined-live.json"
   },
   "limitations": [
     "One bounded actual-human board workflow, not full specification v3 certification.",
     "Terminal-dialog provenance, not natural-chat user-message authentication.",
     "No crash, closed-origin, physical second-machine or retirement failure was injected.",
-    "The streamlined editor was verified with fixtures and synthetic PTY input rather than a second live human decision."
+    "The separate streamlined-flow human retest is recorded in native-board-streamlined-live.json."
   ]
 }

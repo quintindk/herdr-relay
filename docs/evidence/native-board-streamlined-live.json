@@ -1,0 +1,52 @@
+{
+  "verifiedOn": "2026-10-21",
+  "scope": "Actual-human retest of the streamlined native board answer and review flow, without controller-relayed decisions or OpenCode slash commands.",
+  "runtimeCodeCommit": "fbc1567",
+  "taskId": "wright-streamlined-board-20261021",
+  "executionId": "wright-streamlined-board-run-20261021",
+  "workerSessionId": "ses_ea25a17a4ffeoGDK66M9ecexgj",
+  "question": {
+    "id": "question_a280dd6d94619d960f1309385b3d3e22c7e1a40808d64aac216d4ed8417266b6",
+    "answer": "You are amazing!",
+    "author": { "type": "user", "id": "owner" },
+    "at": "2026-10-21T10:57:00.264Z",
+    "source": {
+      "conversationId": "terminal:69c41d48-afd1-4b7c-9543-1d43c9d9c613",
+      "messageId": "dialog:human-board:95453391-2f37-441c-a556-4f0f1b255242",
+      "digest": "178142800ce78c1b908f890b6e0056313c7535592e94944793d23e41ac05a007"
+    }
+  },
+  "nativeTurns": [
+    {
+      "runId": "run_76497568883adc9f176beb6ccb9eb500b6a68b618d5e0f627bb5cc150f41c4d4",
+      "state": "settled_waiting",
+      "terminalMessageId": "msg_15e1aa17b001NdbjgmdAbwTedP",
+      "outcome": "succeeded"
+    },
+    {
+      "runId": "run_fd498adb5d5a871d99f16a7ea39abfe0ec8a0053b95fcbcda86dfa9606803a7c",
+      "state": "native_finished",
+      "terminalMessageId": "msg_15e1bbf15001SWP400SZJqYVoZ",
+      "outcome": "succeeded"
+    }
+  ],
+  "review": {
+    "decision": "accept",
+    "candidate": "wright-streamlined-board-candidate-20261021",
+    "resultDigest": "b995b052b076a1ba92a56563bfc4d4c0afc12e6237313466c29064bdd2788e5e",
+    "reason": "Excellent!",
+    "at": "2026-10-21T10:57:44.993Z",
+    "source": {
+      "conversationId": "terminal:69c41d48-afd1-4b7c-9543-1d43c9d9c613",
+      "messageId": "dialog:human-board:28ec7bf5-3209-4295-80e6-5aa460aa9634",
+      "digest": "25d9bb8df1481b31714d3923a7956b847a5e575857fa8cfb5f57fba15bb98252"
+    }
+  },
+  "finalState": { "execution": "completed", "executionRevision": 7, "task": "done", "taskRevision": 4 },
+  "controllerPublishedHumanDecisions": false,
+  "humanConfirmedStreamlinedFlow": true,
+  "limitations": [
+    "A bounded actual-human UI workflow, not crash-recovery, escalation, closed-origin or physical-machine certification.",
+    "Terminal-dialog provenance does not claim native natural-chat message authentication."
+  ]
+}

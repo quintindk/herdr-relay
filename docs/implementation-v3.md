@@ -571,3 +571,10 @@ Final verification: 1,511 root tests passed, one skipped, zero failed. All 30 v2
 tests and syntax/whitespace checks passed. The focused 43-test keyboard/PTY group
 includes direct editing, combined review fields, explicit confirmation, persistent
 acknowledgement, original-key uncertain retry and cancelled-draft refusal.
+
+An actual-human retest of the streamlined interface then passed against the
+deployed backend and the existing Wright conversation. The direct board answer,
+one continuation and exact candidate acceptance are independently recorded with
+terminal/dialog provenance. Quintin confirmed the revised interaction. No
+controller-relayed decision or manual Done transition was used. Evidence:
+[streamlined board live](evidence/native-board-streamlined-live.json).
