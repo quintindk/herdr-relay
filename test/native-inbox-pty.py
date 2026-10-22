@@ -12,7 +12,10 @@ import time
 
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 120, 0, 0))
-child = subprocess.Popen([sys.argv[1], sys.argv[2], "native", "board", "--context", sys.argv[3]], stdin=slave, stdout=slave, stderr=slave)
+child = subprocess.Popen([sys.argv[1], sys.argv[2], "native", "board", "--context", sys.argv[3]],
+                         stdin=slave, stdout=slave, stderr=slave,
+                         # Only the PTY child is interactive, not the surrounding CI job.
+                         env={**os.environ, "CI": "false", "CONTINUOUS_INTEGRATION": "false", "FORCE_COLOR": "1"})
 os.close(slave)
 data = bytearray()
 

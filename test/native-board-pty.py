@@ -14,7 +14,10 @@ import time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 150, 0, 0))
 child = subprocess.Popen([sys.argv[1], sys.argv[2], "native", "board", "--context", sys.argv[3]],
-                         stdin=slave, stdout=slave, stderr=slave)
+                         stdin=slave, stdout=slave, stderr=slave,
+                         # This child has a real disposable PTY. Ink otherwise suppresses
+                         # interactive rendering when the test runner inherits CI=true.
+                         env={**os.environ, "CI": "false", "CONTINUOUS_INTEGRATION": "false", "FORCE_COLOR": "1"})
 os.close(slave)
 data = bytearray()
 

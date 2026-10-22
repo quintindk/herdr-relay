@@ -13,7 +13,8 @@ import os, pty, select, subprocess, sys, time
 master, slave = pty.openpty()
 command = [sys.argv[1], sys.argv[2], "--context", sys.argv[3], "board", "--watch"]
 process = subprocess.Popen(command,
-                           stdin=slave, stdout=slave, stderr=slave)
+                           stdin=slave, stdout=slave, stderr=slave,
+                           env={**os.environ, "CI": "false", "CONTINUOUS_INTEGRATION": "false", "FORCE_COLOR": "1"})
 os.close(slave)
 try:
     data = b""
