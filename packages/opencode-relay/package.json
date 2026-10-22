@@ -1,6 +1,6 @@
 {
   "name": "@herdr/relay-opencode-v2-spike",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "private": true,
   "type": "module",
   "description": "Isolated OpenCode v2 compatibility spike for Herdr Relay",
@@ -14,7 +14,8 @@
     "test": "node --test test/*.test.mjs",
     "smoke": "node smoke.mjs",
     "smoke:interactive-cron": "node smoke-interactive-cron.mjs",
-    "smoke:receivers": "node smoke-receivers.mjs"
+    "smoke:receivers": "node smoke-receivers.mjs",
+    "smoke:messages": "node smoke-messages.mjs"
   },
   "dependencies": {
     "@opencode/client": "2.1.0",

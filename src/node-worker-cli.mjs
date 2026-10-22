@@ -13,7 +13,7 @@ export async function main(args = process.argv.slice(2)) {
   const action = positionals[0];
   const agentAction = ['questions', 'answer', 'forward', 'tasks', 'task', 'comments', 'relations', 'agents', 'status', 'schedules',
     'schedule-install', 'schedule-pause', 'schedule-resume', 'schedule-cancel', 'interactive-context', 'interactive-grants', 'interactive-status',
-    'interactive-prepare', 'interactive-dispatch', 'interactive-cancel'].includes(action);
+    'interactive-prepare', 'interactive-dispatch', 'interactive-cancel', 'message-send', 'messages', 'message'].includes(action);
   requireValue((agentAction || ['read', 'ask', 'submit', 'delegate', 'wait-children', 'delay', 'review-child', 'children'].includes(action) && values.execution && values.run) && values.context,
     'invalid_request', 'Usage: node-worker-cli read|ask|submit --context FILE --execution ID --run ID [--key KEY --file JSON]');
   const connection = JSON.parse(readFileSync(values.context, 'utf8'));

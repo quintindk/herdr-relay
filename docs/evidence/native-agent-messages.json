@@ -1,0 +1,58 @@
+{
+  "verifiedOn": "2026-10-22",
+  "candidate": "0.2.0-rc.4",
+  "scope": "Task-independent native agent messages/status updates, not task creation, work dispatch or automatic execution-completion handback",
+  "tools": ["relay_message_send", "relay_messages", "relay_message_inspect"],
+  "requiresActiveExecution": false,
+  "requiresBackendRootCredentialInChat": false,
+  "authority": "context_only",
+  "regression": {
+    "messageTestsPassed": 13,
+    "focusedMessageAndNativeCliTestsPassed": 20,
+    "rootCheckpoint": { "passed": 1559, "skipped": 1, "failed": 0 },
+    "rootCheckpointPredatesFinalRecoveryFollowUp": true,
+    "finalCi": "pending",
+    "v2TestsPassed": 57,
+    "syntaxAndWhitespacePassed": true,
+    "workflowLintPassed": true
+  },
+  "runtime": {
+    "command": "npm --prefix packages/opencode-relay run smoke:messages",
+    "versionsPassed": ["2.1.0", "2.1.2"],
+    "ciEnvironmentFlagsPassed": true,
+    "realOpenCodeService": true,
+    "realNodeDaemon": true,
+    "modelInvokedSendAndInboxTools": true,
+    "taskOrExecutionCreated": false,
+    "nativeDeliveryReceipt": true,
+    "restartDidNotDuplicate": true,
+    "automaticReplies": 0,
+    "model": "deterministic fixture",
+    "physicalMachines": 1,
+    "actualHuman": false
+  },
+  "installedArtifactPreflight": {
+    "command": "node scripts/verify-package.mjs",
+    "passed": true,
+    "cleanProductionInstall": true,
+    "taskIndependentCrossNodeFixtureDelivery": true,
+    "auditVerified": true,
+    "productionVulnerabilities": 0,
+    "releaseVerified": false,
+    "limitation": "Dirty-source preflight before final commit, not the final release report"
+  },
+  "safetyAndRecovery": [
+    "Exact sender binding and participant-scoped inbox/sent reads",
+    "Bounded content and 100 outstanding messages per recipient",
+    "Busy/offline recipient deferral",
+    "Immutable operation keys and backend retry reconciliation",
+    "Persisted native intent before send and no blind resend after lost reply",
+    "Missing original local intent blocks snapshot reconstruction",
+    "Receiving-chat replacement blocks unsafe admission or retargeting",
+    "Delivered native outcome is not approval or proof of action",
+    "Automatic message acknowledgement/reply loops are blocked"
+  ],
+  "liveServicesUpgraded": false,
+  "liveMessagesSent": false,
+  "historicalExecutionsReplayed": false
+}

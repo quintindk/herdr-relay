@@ -80,6 +80,19 @@ export default Plugin.define({
         editor.add({ name: 'relay_interactive_status', description: 'Inspect one preparation requested by this durable agent. Ready receipts are historical placement evidence, not permanent availability.',
           options: { codemode: false }, input: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 96 } }, required: ['id'], additionalProperties: false },
           execute: (input, context) => agent(context, 'interactive-status', input) });
+        editor.add({ name: 'relay_message_send',
+          description: 'Send an informational message/status update to another enrolled agent, independently of tasks. Does not create a task, dispatch work or convey human authority. Use an immutable retry key. Do not automatically reply to an incoming message.',
+          options: { codemode: false }, input: { type: 'object', properties: {
+            key: { type: 'string', minLength: 1, maxLength: 100 }, recipientAgentId: { type: 'string', minLength: 1, maxLength: 256 },
+            kind: { enum: ['message', 'status'] }, subject: { type: 'string', minLength: 1, maxLength: 256 }, body: { type: 'string', minLength: 1, maxLength: 8000 },
+          }, required: ['key', 'recipientAgentId', 'body'], additionalProperties: false }, execute: (input, context) => agent(context, 'message-send', input) });
+        editor.add({ name: 'relay_messages', description: 'Read this agent’s task-independent inbox or sent messages with delivery receipts. Follow nextCursor. Delivery does not imply approval or action.',
+          options: { codemode: false }, input: { type: 'object', properties: {
+            direction: { enum: ['inbox', 'sent'] }, cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 500 },
+          }, additionalProperties: false }, execute: (input, context) => agent(context, 'messages', input) });
+        editor.add({ name: 'relay_message_inspect', description: 'Inspect one message involving this exact agent and its delivery status. No task/execution is required.',
+          options: { codemode: false }, input: { type: 'object', properties: { id: { type: 'string', minLength: 1 } }, required: ['id'], additionalProperties: false },
+          execute: (input, context) => agent(context, 'message', input) });
         for (const operation of ['prepare', 'dispatch', 'cancel']) {
           const string = { type: 'string', minLength: 1, maxLength: 256 };
           const properties = operation === 'prepare' ? { id: { ...string, maxLength: 96 }, grantId: string, nodeId: string, directory: { ...string, maxLength: 4096 },

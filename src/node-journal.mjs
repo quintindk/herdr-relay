@@ -55,6 +55,8 @@ export class NodeJournal {
       entityId: schedule.id, revision: schedule.revision, data: schedule });
     for (const request of snapshot.collections.provision_request ?? []) events.push({ id: `snapshot:provision:${request.id}:${request.revision}`,
       type: 'interactive.request', entityId: request.id, revision: request.revision, data: request });
+    for (const message of snapshot.collections.message ?? []) events.push({ id: `snapshot:message:${message.id}:${message.revision}`,
+      type: 'message.snapshot', entityId: message.id, revision: message.revision, data: message });
     // Native delivery intent/history is never replaced from a shared snapshot.
     // Only newer backend projections and new addressed work are merged.
     this.consume({ items: events, cursor: snapshot.cursor });
@@ -105,6 +107,13 @@ export class NodeJournal {
           const notice = { id: event.id, questionId: event.data.id, agentId: event.data.addressedTo.id,
             revision: event.data.revision, prompt: event.data.prompt, state: 'pending' };
           this.db.prepare('INSERT OR IGNORE INTO notices VALUES (?,?,?)').run(notice.id, notice.state, JSON.stringify(notice));
+        }
+        if (event.type.startsWith('message.') && event.data.recipient?.nodeId === this.nodeId &&
+          ['queued', 'delivering', 'uncertain'].includes(event.data.state)) {
+          const message = event.data, id = `message:${message.id}`;
+          // Replays/snapshots merge by message identity, never by change-event ID.
+          const notice = { id, messageId: message.id, agentId: message.recipient.agentId, state: 'pending', kind: 'message' };
+          this.db.prepare('INSERT OR IGNORE INTO notices VALUES (?,?,?)').run(id, notice.state, JSON.stringify(notice));
         }
         if (event.data?.targetNodeId === this.nodeId && event.type.startsWith('execution.')) {
           const old = this.work(event.entityId);

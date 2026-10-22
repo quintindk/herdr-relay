@@ -6,6 +6,7 @@ import { previewCron } from './cron-schedule.mjs';
 import { isAbsolute, normalize } from 'node:path';
 import { applyInteractive } from './interactive-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
+import { applyMessage } from './agent-messages.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -63,7 +64,7 @@ export class BackendStore {
   snapshot() {
     return this.transaction(() => ({ instanceId: this.instance, protocol: backendProtocol,
       collections: Object.fromEntries(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
-        .concat(['provision_grant', 'provision_request']).map(kind => [kind, this.all(kind)])),
+        .concat(['provision_grant', 'provision_request', 'message']).map(kind => [kind, this.all(kind)])),
       cursor: Buffer.from(JSON.stringify({ instance: this.instance,
         after: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq) })).toString('base64url'), fetchedAt: now() }));
   }
@@ -176,6 +177,7 @@ export class BackendStore {
     };
     const changed = (kind, entity, patch) => this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
     if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed });
+    if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     const taskDisposition = (taskId, status, causation) => {
       const task = this.get('task', taskId);
       if (terminal(task)) return task;

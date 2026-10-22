@@ -46,6 +46,8 @@ Backend commands require --context or RELAY_NATIVE_CONTEXT. Node operators canno
 Board prefers the joined node's scoped operator.json, otherwise the local backend owner.json.
 Worker commands use scoped worker credentials, never an owner context.
 Payload files contain native backend fields, not legacy companyId/routine envelopes.
+Task-independent messaging: work message-send|messages|message uses --context PRIVATE_WORKER_JSON,
+with --key for sends and --file for message/query fields. No task/execution/run is required.
 Enrolment never starts/restarts OpenCode or grants permissions. Start the node separately.
 Run-now for an existing native cron is not implemented. Use an explicit execution request.
 Pause must be acknowledged by the owner node. Already admitted work is not interrupted.`;

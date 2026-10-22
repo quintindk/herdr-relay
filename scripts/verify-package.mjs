@@ -27,6 +27,7 @@ const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-desti
 assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firecrawl|\.git)(\/|$)/.test(f.path)), 'Package contains private or development files');
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'scripts/migrate-paperclip-tasks.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
+  'src/agent-messages.mjs', 'src/node-messages.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -70,6 +71,10 @@ try {
     import {startBackend} from './src/backend-service.mjs';
     import {BackendStore} from './src/backend-store.mjs';
     import {enrolInteractive,attachInteractive} from './src/native-enrol.mjs';
+    import {NodeJournal} from './src/node-journal.mjs';
+    import {startNodeService} from './src/node-service.mjs';
+    import {tickAgentNotices} from './src/node-notices.mjs';
+    import {call} from './src/client.mjs';
     const root=${JSON.stringify(root)}, evo=join(root,'Evo'), surface=join(root,'Surface'), state=join(evo,'backend');
     mkdirSync(state,{recursive:true}); mkdirSync(surface);
     const backend=await startBackend({database:join(state,'backend.sqlite')});
@@ -98,6 +103,26 @@ try {
       session.id='ses_surface_replacement';session.time.created=2;
       assert.equal((await attachInteractive({...input,sessionId:session.id,agentId:enrolled.agentId,expectedGeneration:1,key:'replace'},dependencies)).generation,2);
       await assert.rejects(api('POST','/v1/node-credentials',{nodeId:config.nodeId,key:'escalate'}),{code:'forbidden'});
+      const evoConfig=JSON.parse(readFileSync(join(evo,'node/node.json'))), rootApi=nativeBackendClient({url:backend.origin,token:rootToken});
+      await rootApi('POST','/v1/commands',{key:'message-agent',action:'agent.enrol',payload:{id:'evo-message-agent',nodeId:evoConfig.nodeId,name:'Evo message receiver',directory:evo}});
+      await rootApi('POST','/v1/commands',{key:'message-attach',action:'agent.attach',payload:{id:'evo-message-agent',expectedBindingRevision:0,conversationId:'ses_evo_message',bindingId:'evo-message-binding',directory:evo}});
+      const sourceJournal=new NodeJournal(join(surface,'node/node.sqlite'),{nodeId:config.nodeId,instanceId:backend.store.instance});
+      const targetJournal=new NodeJournal(join(evo,'node/node.sqlite'),{nodeId:evoConfig.nodeId,instanceId:backend.store.instance});
+      targetJournal.db.prepare('INSERT INTO settings VALUES (?,?)').run('receiver:evo-message-agent',JSON.stringify({state:'active',bindingId:'evo-message-binding',generation:1}));
+      const sender=backend.store.get('agent',enrolled.agentId), messageSocket=join(surface,'message-fixture.sock');
+      const service=await startNodeService({journal:sourceJournal,socketPath:messageSocket,api:nativeBackendClient(config.backend),
+        workers:[{agentId:sender.id,sessionId:sender.conversationId,bindingId:sender.bindingId,bindingRevision:sender.bindingRevision,token:'fixture-message-token'}]});
+      try {
+        const sent=await call({socketPath:messageSocket,token:'fixture-message-token'},'POST','/agent/message-send',
+          {key:'surface-status',recipientAgentId:'evo-message-agent',kind:'status',body:'Surface fixture status. No work authorised.'});
+        assert.equal(sent.state,'recorded');assert.equal(backend.store.all('task').length,0);assert.equal(backend.store.all('execution').length,0);
+        targetJournal.reconcileSnapshot(backend.store.snapshot());let sends=0;
+        const binding={id:'evo-message-binding',agentId:'evo-message-agent',receiverGeneration:1,identity:{sessionId:'ses_evo_message'},
+          native:{snapshot:async()=>({idle:true,inbox:[],messages:[]}),send:async()=>{sends++}},observe:()=>({state:'finished',outcome:'succeeded'})};
+        await tickAgentNotices(targetJournal,nativeBackendClient(evoConfig.backend),async()=>binding);
+        await tickAgentNotices(targetJournal,nativeBackendClient(evoConfig.backend),async()=>binding);
+        assert.equal(sends,1);assert.equal(backend.store.get('message',sent.receipt.id).state,'delivered');
+      } finally {await service.close();sourceJournal.close();targetJournal.close();}
       const source=join(surface,'paperclip-source.json'), file=join(surface,'paperclip-export.json');
       await nativeAdmin(['tasks','source','--url',${JSON.stringify(`http://127.0.0.1:${paperclip.address().port}`)},'--local-trusted','--output',source]);
       await nativeAdmin(['tasks','companies','--source',source]);
@@ -115,7 +140,7 @@ try {
       finally {store.close();}
       console.log('ONBOARDING_SMOKE='+JSON.stringify({cleanEvoAndSurfaceHomes:true,scopedBootstrapAndJoin:true,operatorEnrolAndAttach:true,
         pluginInstallWithoutSession:true,sourceExportReadOnly:true,taskImportIdempotent:true,backendBackupPassed:true,systemdUnitDryRunPassed:true,
-        physicalSurfaceTested:false,rootCredentialCopied:false}));
+        taskIndependentAgentMessages:true,physicalSurfaceTested:false,rootCredentialCopied:false}));
     } finally {await backend.close();}
   `], { cwd: installed, timeout: 60000, maxBuffer: 4 * 1024 * 1024,
     env: { ...process.env, HOME: join(root, 'clean-home'), XDG_STATE_HOME: join(root, 'clean-state'), XDG_CONFIG_HOME: join(root, 'clean-config'), RELAY_NATIVE_CONTEXT: '' } });

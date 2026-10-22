@@ -49,6 +49,13 @@ Use [installation and onboarding](installation-and-onboarding.md),
 
 ## Current priority: native operation
 
+RC4 candidate adds [task-independent agent messages/status updates](agent-messages.md)
+with scoped sender attribution and inbox/sent receipts. Real OpenCode 2.1.0/2.1.2
+service/node/tool smokes pass using deterministic models, without creating tasks or
+executions. This does not close the separate standalone execution-completion handback
+gap found in the [live investigation](evidence/native-origin-handback-investigation.json).
+No historical approval, live work or completed result is replayed by the feature.
+
 Native Relay implements both Tasks and Collaboration. Its provider surface covers
 task creation/editing, comments, parent/dependency relationships, references and
 activity. Core execution, questions, review and offline automation have bounded

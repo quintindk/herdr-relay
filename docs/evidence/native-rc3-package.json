@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0-rc.3",
+  "releaseUrl": "https://github.com/quintindk/herdr-relay/releases/tag/v0.2.0-rc.3",
+  "releaseWorkflowUrl": "https://github.com/quintindk/herdr-relay/actions/runs/39746602958",
+  "branchCiUrl": "https://github.com/quintindk/herdr-relay/actions/runs/39745827090",
+  "sourceCommit": "e91d1353c8e549b15123b23e975bd7730514da26",
+  "publishedArtifact": "herdr-relay-0.2.0-rc.3.tgz",
+  "sha256": "82f4ffbe2669951e266630ef3884661829977c47abc598d171ac766ea9470c0e",
+  "verifiedOn": "2026-10-22",
+  "githubTagPipelinePassed": true,
+  "downloadedAssetsChecksumPassed": true,
+  "cleanProductionInstall": true,
+  "installedOnboardingPassed": true,
+  "auditVerified": true,
+  "vulnerabilities": { "info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 0, "total": 0 },
+  "published": true,
+  "prerelease": true,
+  "knownLimitationsAddedToPublishedNotes": [
+    "Standalone execution completion does not notify the originating agent automatically",
+    "Independent agent messaging is not included in RC3"
+  ],
+  "liveServicesChanged": false,
+  "taskDataChanged": false,
+  "physicalSurfaceTested": false
+}

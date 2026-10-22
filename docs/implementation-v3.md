@@ -11,6 +11,7 @@ The specification is not complete. Existing 0.1.x operation remains independent.
 | Native backend | SQLite atomic mutations/events/receipts, revisions, node credentials, loopback API | Broader scope/contract tests, lifecycle and review integration |
 | Tasks | Native CRUD/comments/relations, references, bounded activity, exact-session reads and Ink adapter | UI live certification and full provider parity |
 | Questions | Staging, escalation, continuation, agent inbox routes and real-TUI keyboard answer | Real-human evidence, orphan recovery and natural-chat source integration |
+| Agent messages (RC4 candidate) | Task-independent send/inbox/sent tools, sender attribution, durable exact-chat delivery and restart/uncertainty tests; real native tool smoke on 2.1.0/2.1.2 | Live rollout, physical two-node acceptance and separate automatic execution-completion handback |
 | Node | Journal/outbox, v2/Hermes adapters, daemon offline restart and observation-only Herdr discovery | Live Herdr/Hermes acceptance and broader recovery |
 | Scheduling | Exact/folder jobs, scheduled clarification, offline/monitor runtime smokes; reminder UI and fenced transfer | Reminder/disconnection runtime matrix and full lifecycle |
 | Providers | Pinned node Tasks read boundary, native/Paperclip/GitHub adapters, qualified GitHub relations and no-resend journal | External execution/delegation/review integration, full parity and live provider proof |

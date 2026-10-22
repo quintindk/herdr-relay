@@ -82,6 +82,33 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           obligations: works.map(w => ({ id: w.id, state: w.execution.state, conversationId: w.nativeConversationId,
             recovery: w.recovery ?? null })) })); return;
       }
+      if (path === '/agent/message-send') {
+        currentReceiver();
+        requireValue(api && Object.keys(body).every(k => ['key', 'recipientAgentId', 'kind', 'subject', 'body'].includes(k)) &&
+          typeof body.key === 'string' && body.key.trim() && body.key.length <= 100 && typeof body.recipientAgentId === 'string' &&
+          typeof body.body === 'string', 'invalid_request', 'Immutable key, exact recipient and message body required');
+        requireValue(!journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
+          .some(row => { const n = JSON.parse(row.data); return n.kind === 'message' && n.bindingId === worker.bindingId; }),
+          'message_reply_not_authorised', 'An incoming informational message does not authorise automatic replies or message chains', 403);
+        const { key, ...payload } = body;
+        const command = { key: `message-send:${worker.agentId}:${key}`, action: 'message.send', payload: {
+          ...payload, id: `message_${digest([worker.agentId, key])}`, senderAgentId: worker.agentId,
+          sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision,
+        } };
+        journal.queue(command); await journal.flush(api);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(journal.receipt(command.key))); return;
+      }
+      if (path === '/agent/messages' || path === '/agent/message') {
+        currentReceiver();
+        requireValue(api, 'backend_unavailable', 'Message backend unavailable', 503);
+        const inspect = path === '/agent/message';
+        requireValue(Object.keys(body).every(k => (inspect ? ['id'] : ['direction', 'cursor', 'limit']).includes(k)) &&
+          (!inspect || typeof body.id === 'string' && body.id), 'invalid_request', 'Only exact message ID or bounded inbox/sent pagination is supported');
+        const result = inspect ? await api('GET', `/v1/messages/${encodeURIComponent(body.id)}`) :
+          await api('GET', `/v1/messages?${new URLSearchParams({ agentId: worker.agentId, ...body })}`);
+        if (inspect) requireValue([result.sender.agentId, result.recipient.agentId].includes(worker.agentId), 'forbidden', 'Message belongs to different agents', 403);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
       if (path === '/agent/schedules') {
         requireValue(Object.keys(body).length === 0, 'invalid_request', 'Schedule lookup takes no overrides');
         const items = journal.db.prepare('SELECT data FROM schedules ORDER BY id').all().map(row => JSON.parse(row.data))

@@ -1,4 +1,5 @@
 import { digest, now } from './protocol.mjs';
+import { deliverAgentMessage } from './node-messages.mjs';
 
 // Addressed questions are normal bounded agent turns, never human authority.
 // Notifications release only on correlated native completion. No resend on loss.
@@ -6,6 +7,7 @@ export async function tickAgentNotices(journal, api, resolveBinding) {
   for (const row of journal.db.prepare("SELECT data FROM notices WHERE state IN ('pending','observing','uncertain') ORDER BY rowid").all()) {
     try {
     let notice = JSON.parse(row.data);
+    if (notice.kind === 'message') { await deliverAgentMessage(journal, api, resolveBinding, notice); continue; }
     const binding = await resolveBinding(notice.agentId, notice.bindingId ? notice : undefined);
     if (!binding) continue;
     const exactConversation = binding.identity?.sessionId ?? binding.conversationId ?? null;
