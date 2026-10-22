@@ -2,10 +2,29 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { startBackend } from '../src/backend-service.mjs';
 import { nativeBackendClient } from '../src/backend-client.mjs';
-import { nativeBoard } from '../src/native-board.mjs';
+import { nativeBoard, boardLocalIdentity } from '../src/native-board.mjs';
 import { buildBoardRows } from '../src/task-board-view.mjs';
 import { renderTaskBoard } from '../src/task-board-view.mjs';
 import { digest } from '../src/protocol.mjs';
+
+test('local agents match the scoped node/backend identity, never matching machine labels or workspace paths', async () => {
+  const nodes = [{ id: 'surface', name: 'Surface', machine: { hostname: 'same-machine' } },
+    { id: 'evo', name: 'Evo', machine: { hostname: 'same-machine' } }];
+  const agents = nodes.map(n => ({ id: `agent-${n.id}`, nodeId: n.id, name: 'mason', directory: '/same/path', mode: 'interactive', capabilities: [] }));
+  const api = async (method, path) => path === '/v1/info' ? { instanceId: 'backend', userId: 'owner' }
+    : path.startsWith('/v1/agents?') ? { items: agents } : path.startsWith('/v1/nodes?') ? { items: nodes } : { items: [] };
+  const context = { nodeId: 'surface', instanceId: 'backend', scope: { kind: 'node_operator', nodeId: 'surface' } };
+  const board = nativeBoard(api, boardLocalIdentity(context)), snapshot = await board.read();
+  assert.deepEqual(snapshot.localNode, { id: 'surface', name: 'Surface' });
+  assert.deepEqual(snapshot.agents.map(a => a.locality), ['local', 'remote']);
+  assert.equal((await board.detailAgent({ agentId: 'agent-surface' })).agent.locality, 'local');
+  for (const options of [{}, { localNodeId: 'surface', localInstanceId: 'other-backend' }, { localNodeId: 'missing', localInstanceId: 'backend' }]) {
+    const value = await nativeBoard(api, options).read();
+    assert.equal(value.localNode, null); assert.ok(value.agents.every(a => a.locality === 'unknown'));
+  }
+  assert.deepEqual(boardLocalIdentity({ nodeId: 'evo', instanceId: 'backend' }), {});
+  assert.deepEqual(boardLocalIdentity({ ...context, nodeId: 'evo' }), {});
+});
 
 test('native board traverses collections and updates status through current backend revisions', async () => {
   const backend = await startBackend({ database: ':memory:' });

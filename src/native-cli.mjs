@@ -177,10 +177,10 @@ export async function main(args) {
     return;
   }
   if (group === 'board') {
-    const { nativeBoard } = await import('./native-board.mjs');
+    const { nativeBoard, boardLocalIdentity } = await import('./native-board.mjs');
     const { NativeDecisionJournal } = await import('./native-decision-journal.mjs');
     const journal = new NativeDecisionJournal(join(dirname(resolve(path)), 'native-board-decisions.sqlite'));
-    const board = nativeBoard(api, { decisionJournal: journal });
+    const board = nativeBoard(api, { decisionJournal: journal, ...boardLocalIdentity(context) });
     try {
       if (values.json) output(await board.read());
       else {

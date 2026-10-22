@@ -104,6 +104,15 @@ node, workspace, reported availability and last-seen time. Stale reports remain
 visible as unknown, not as proof that a worker stopped. Enter opens fresh detail
 and outstanding task summaries. `t` reveals stable agent/node/conversation IDs.
 
+The RC7 development view identifies the local node with a green **LOCAL** badge in
+the header and matching badges beside its agents. The text stays readable without colour.
+Agent detail labels local/remote ownership, and searching `local` or `remote`
+matches that classification. Identity comes from the selected node-operator
+context and must match the backend instance and an advertised node record.
+Hostname, display name and workspace matches do not establish locality. With a
+backend-root or unpinned context, it shows **Local node: not identified** rather
+than guessing. This is a display distinction, not dispatch authority or readiness.
+
 Agent, task detail and human decision context distinguish the **owning Relay node**
 from its **reported machine**. Several nodes may run on one machine. Hostnames
 are display labels, not unique identities, grants or grounds for reassignment.

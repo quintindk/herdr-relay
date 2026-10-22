@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { nativeBackendClient } from './backend-client.mjs';
-import { nativeBoard } from './native-board.mjs';
+import { nativeBoard, boardLocalIdentity } from './native-board.mjs';
 import { watchTaskBoardInk } from './task-board-ink.mjs';
 import { requireValue } from './protocol.mjs';
 import { NativeDecisionJournal } from './native-decision-journal.mjs';
@@ -14,7 +14,7 @@ try {
   const contextPath = values.context ?? process.env.RELAY_NATIVE_CONTEXT ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-backend/owner.json');
   const context = JSON.parse(readFileSync(contextPath, 'utf8'));
   const journal = new NativeDecisionJournal(join(dirname(resolve(contextPath)), 'native-board-decisions.sqlite'));
-  const board = nativeBoard(nativeBackendClient({ ...context, url: context.url ?? 'http://127.0.0.1:3210' }), { decisionJournal: journal });
+  const board = nativeBoard(nativeBackendClient({ ...context, url: context.url ?? 'http://127.0.0.1:3210' }), { decisionJournal: journal, ...boardLocalIdentity(context) });
   try {
     if (values.json) console.log(JSON.stringify(await board.read(), null, 2));
     else {

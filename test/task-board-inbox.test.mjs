@@ -21,6 +21,32 @@ const frame = instance => stripVTControlCharacters(instance.lastFrame());
 async function input(instance, text) { instance.stdin.write(text); await tick(); }
 async function inbox(instance) { await input(instance, '\t'); await input(instance, '\t'); }
 
+test('Agents identifies the local node and its agents in cards, search and fresh detail', async t => {
+  const local = { ...base.agents[0], id: 'local', displayName: 'Local worker', locality: 'local', nodeName: 'Surface', mode: 'headless' };
+  const remote = { ...local, id: 'remote', displayName: 'Remote worker', locality: 'remote', nodeName: 'Evo' };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, localNode: { id: 'surface', name: 'Surface' }, agents: [local, remote] }),
+    detailAgent: async ({ agentId }) => ({ agent: agentId === 'local' ? local : remote, tasks: [] }), interval: 60000, width: 110, height: 26 }));
+  t.after(() => instance.unmount()); await tick(); await input(instance, '\t');
+  assert.match(frame(instance), /LOCAL\s+Surface · 1 agent/);
+  assert.match(frame(instance), /LOCAL\s+Local worker/); assert.match(frame(instance), /Evo \(remote\)/);
+  assert.doesNotMatch(frame(instance), /LOCAL\s+Remote worker/);
+  await input(instance, '/'); await input(instance, 'local'); await input(instance, '\r');
+  assert.match(frame(instance), /LOCAL\s+Local worker/); assert.doesNotMatch(frame(instance), /Remote worker/);
+  await input(instance, '\r'); assert.match(frame(instance), /Surface \(local node\)/);
+});
+
+test('local badges remain visible and do not overflow a narrow Agents view', async t => {
+  const agent = { ...base.agents[0], displayName: 'A local worker with a very long descriptive name', locality: 'local', nodeName: 'Surface', mode: 'interactive' };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, localNode: { id: 'surface', name: 'Surface' }, agents: [agent] }),
+    interval: 60000, width: 54, height: 18 }));
+  t.after(() => instance.unmount()); await tick(); await input(instance, '\t');
+  const output = frame(instance);
+  assert.equal((output.match(/LOCAL/g) ?? []).length, 2);
+  assert.match(output, /LOCAL\s+Surface/);
+  assert.ok(output.split('\n').every(line => line.length <= 54));
+  assert.ok(output.split('\n').length <= 18);
+});
+
 test('native task columns use actual status width and reserve at least two thirds for titles', () => {
   assert.deepEqual(taskBoardColumns(100, ['[Todo]']), { title: 89, status: 6, gap: 1 });
   for (const width of [40, 54, 80, 100, 160, 240]) {

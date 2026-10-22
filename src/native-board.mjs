@@ -3,7 +3,12 @@ import { digest, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { nativeAgentLabel, nativeAttention } from './native-board-attention.mjs';
 
-export function nativeBoard(api, { decisionJournal } = {}) {
+export function boardLocalIdentity(context) {
+  return context?.scope?.kind === 'node_operator' && context.nodeId === context.scope.nodeId && context.instanceId
+    ? { localNodeId: context.nodeId, localInstanceId: context.instanceId } : {};
+}
+
+export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId } = {}) {
   const terminalId = `terminal:${randomUUID()}`;
   const all = async collection => {
     const items = [];
@@ -44,12 +49,15 @@ export function nativeBoard(api, { decisionJournal } = {}) {
     const { inbox, attention } = nativeAttention({ ...data, monitorResults: data.monitor_results, userId: info.userId });
     return { ...data, info, attention, inbox: [...publicationItems(), ...inbox].map(item => ({ ...item, instanceId: item.instanceId ?? info.instanceId })) };
   };
-  const presentAgent = (agent, nodes) => {
+  const localNode = (nodes, info) => localNodeId && localInstanceId === info.instanceId ? nodes.find(n => n.id === localNodeId) : null;
+  const presentAgent = (agent, nodes, info) => {
     const node = nodes.find(node => node.id === agent.nodeId);
     const nodeAge = Date.now() - Date.parse(node?.lastSeenAt), agentAge = Date.now() - Date.parse(agent.lastSeenAt);
     const fresh = nodeAge >= 0 && nodeAge < 15000 && agentAge >= 0 && agentAge < 15000;
     const reported = agent.availability ?? 'unknown';
+    const local = localNode(nodes, info);
     return { ...agent, companyId: 'native', displayName: nativeAgentLabel(agent),
+      locality: local ? agent.nodeId === local.id ? 'local' : 'remote' : 'unknown',
       name: `${nativeAgentLabel(agent)} @ ${node?.name ?? 'Unknown node'} / ${node?.machine?.hostname ?? 'machine not advertised'}`,
       nodeName: node?.name ?? 'Unknown node', nodeLastSeenAt: node?.lastSeenAt ?? null,
       machineName: node?.machine?.hostname ?? 'Not advertised', machinePlatform: node?.machine?.platform ?? null,
@@ -80,15 +88,16 @@ export function nativeBoard(api, { decisionJournal } = {}) {
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], routines: schedules.map(s => routine(s, agents)),
         inbox, tasks: tasks.map(t => ({ ...scoped(t), ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
-        agents: agents.map(agent => presentAgent(agent, nodes)), fetchedAt: new Date().toISOString(), warnings: ['Native task view. Assignment is separate from execution.',
+        localNode: localNode(nodes, info) ? { id: localNodeId, name: localNode(nodes, info).name ?? localNodeId } : null,
+        agents: agents.map(agent => presentAgent(agent, nodes, info)), fetchedAt: new Date().toISOString(), warnings: ['Native task view. Assignment is separate from execution.',
           'Schedule next times are clock previews, not admission receipts. Occurrence history contains published receipts, not all local pending/running work.'] };
     },
     async detailAgent({ agentId }) {
-      const { agents, nodes, tasks, executions, schedules, attention } = await load();
+      const { agents, nodes, tasks, executions, schedules, attention, info } = await load();
       const agent = agents.find(a => a.id === agentId);
       requireValue(agent, 'agent_missing', 'Agent no longer appears in the directory');
       const taskIds = new Set(executions.filter(e => e.targetAgentId === agentId && !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => e.taskId));
-      return { agent: presentAgent(agent, nodes), tasks: tasks.filter(t => taskIds.has(t.id)).map(t => ({ title: t.title, attentionLabel: attention(t).attentionLabel })),
+      return { agent: presentAgent(agent, nodes, info), tasks: tasks.filter(t => taskIds.has(t.id)).map(t => ({ title: t.title, attentionLabel: attention(t).attentionLabel })),
         persistentSchedules: schedules.filter(s => s.definition.targetAgentId === agent.id && !s.definition.targetConversationId).length,
         historicalAttempts: executions.filter(e => e.targetAgentId === agent.id && e.bindingId && e.bindingId !== agent.bindingId &&
           !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => ({ id: e.id, state: e.state, conversationId: e.targetConversationId })) };

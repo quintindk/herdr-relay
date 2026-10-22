@@ -161,7 +161,7 @@ function AgentDetailModal({ detail, close, width, height }) {
   const agent = detail.data?.agent;
   const lines = (agent ? [
     `Mode: ${agent.mode || 'Unknown'}`, `Availability: ${agent.availabilityLabel || 'Unknown or stale'}`,
-    `Node: ${agent.nodeName || 'Unknown node'}`, `Workspace: ${agent.directory || 'Not advertised'}`,
+    `Node: ${agent.nodeName || 'Unknown node'}${agent.locality === 'local' ? ' (local node)' : agent.locality === 'remote' ? ' (remote node)' : ''}`, `Workspace: ${agent.directory || 'Not advertised'}`,
     `Machine: ${agent.machineName || 'Not advertised'}${agent.machinePlatform ? ` (${agent.machinePlatform})` : ''}`,
     `Agent last seen: ${lastSeenLabel(agent.lastSeenAt)}`, `Node last seen: ${lastSeenLabel(agent.nodeLastSeenAt)}`,
     `Capabilities: ${agent.capabilities?.length ? agent.capabilities.join(', ') : 'None advertised'}`,
@@ -366,7 +366,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     .map(routine => ({ id: `cron:${routine.id}`, type: 'routine', routine })), [board.routines, showDone]);
   const inboxRows = useMemo(() => (board.inbox ?? []).filter(item => !filter || decisionText(`${item.title} ${item.summary} ${item.from} ${item.stateLabel}`).toLowerCase().includes(filter.toLowerCase()))
     .map(item => ({ id: item.id, type: 'inbox', item })), [board.inbox, filter]);
-  const agentRows = useMemo(() => board.agents.filter(agent => !filter || clean(`${agent.displayName || agent.name} ${agent.mode} ${agent.nodeName} ${agent.directory} ${agent.availabilityLabel}`).toLowerCase().includes(filter.toLowerCase()))
+  const agentRows = useMemo(() => board.agents.filter(agent => !filter || clean(`${agent.displayName || agent.name} ${agent.mode} ${agent.nodeName} ${agent.directory} ${agent.availabilityLabel} ${agent.locality ?? 'unknown'}`).toLowerCase().includes(filter.toLowerCase()))
     .map(agent => ({ id: `agent:${agent.id}`, type: 'agent', agent })), [board.agents, filter]);
   const rows = useMemo(() => native ? view === 'inbox' ? inboxRows : view === 'agents' ? agentRows : view === 'schedules' ? routineRows : taskRows : [
     ...(routineRows.length ? [{ id: 'section:cron', type: 'section', label: `CRON · ${routineRows.length}` }, ...routineRows] : []),
@@ -573,13 +573,16 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   if (quitting) return null;
   const summary = taskCounts(board.tasks);
   const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal);
+  const localAgentCount = board.agents.filter(agent => agent.locality === 'local').length;
   const nativeCounts = view === 'agents'
-    ? `${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
+    ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
     : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
       : view === 'schedules' ? `${board.routines.filter(r => r.state === 'active').length} active   ${board.routines.filter(r => r.state === 'paused').length} paused`
         : `${summary.open} open   ${summary.active} active   ${summary.blocked} blocked   ${summary.review} in review`;
-  const cardTitle = (title, active, color = 'cyan') => h(Box, { height: 1, overflow: 'hidden' },
+  const cardTitle = (title, active, color = 'cyan', local = false) => h(Box, { height: 1, overflow: 'hidden' },
     h(Text, { color: active ? color : 'gray' }, active ? '› ' : '  '),
+    local ? h(Text, { bold: true, inverse: true, color: 'green', dimColor: overlay }, ' LOCAL ') : null,
+    local ? h(Text, null, ' ') : null,
     h(Text, { bold: true, inverse: active, color: active ? color : undefined, dimColor: overlay, wrap: 'truncate-end' }, title));
   const emptyLabel = view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.'
     : view === 'agents' ? 'No agents advertised.' : view === 'schedules' ? 'No schedules installed.' : showDone ? 'No matching tasks.' : 'No open tasks.';
@@ -592,7 +595,10 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     native ? h(Box, { gap: 2 }, ...[['tasks', 'Tasks'], ['agents', 'Agents'], ['inbox', `Inbox (${offline ? '?' : !loaded ? '…' : board.inbox.length})`], ['schedules', 'Schedule']].map(([id, title]) =>
       h(Text, { key: id, inverse: view === id, bold: view === id, color: view === id ? 'cyan' : undefined, dimColor: view !== id || overlay }, ` ${title} `))) : null,
     native ? h(Box, { justifyContent: 'space-between', height: 1, overflow: 'hidden' },
-      h(Text, { dimColor: true, wrap: 'truncate-end' }, nativeCounts),
+      view === 'agents' && board.localNode ? h(Box, { flexShrink: 1, overflow: 'hidden' },
+        h(Text, { bold: true, inverse: true, color: 'green', dimColor: overlay }, ' LOCAL '),
+        h(Text, { color: 'green', bold: true, dimColor: overlay, wrap: 'truncate-end' }, ` ${clean(board.localNode.name)} · ${localAgentCount} ${localAgentCount === 1 ? 'agent' : 'agents'}`))
+        : h(Text, { dimColor: true, wrap: 'truncate-end' }, nativeCounts),
       h(Text, { color: offline ? 'yellow' : 'gray', wrap: 'truncate-end' }, `${offline ? 'OFFLINE' : loaded ? '● LIVE' : 'LOADING'}${board.fetchedAt ? ` · last updated ${new Date(board.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Africa/Johannesburg', hour12: false })} SAST` : ''}`))
       : h(Text, { dimColor: Boolean(modal || detail), wrap: 'truncate-end' }, `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${offline ? `OFFLINE ${offline}` : loaded ? 'LIVE' : 'LOADING'}`),
     h(Box, { borderStyle: native ? 'round' : 'single', borderColor: native || modal || assignment || reviewModal ? 'gray' : 'cyan',
@@ -603,8 +609,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       ...visible.map((row, index) => {
         const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail && !decisionModal;
         if (row.type === 'agent') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
-          cardTitle(`${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`, active),
-          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Node: ${clean(row.agent.nodeName || 'Unknown')} · Machine: ${clean(row.agent.machineName || 'Not advertised')} · ${clean(row.agent.directory || 'Workspace not advertised')}`),
+          cardTitle(`${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`, active, 'cyan', row.agent.locality === 'local'),
+          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Node: ${clean(row.agent.nodeName || 'Unknown')}${row.agent.locality === 'local' ? ' (local)' : row.agent.locality === 'remote' ? ' (remote)' : ''} · Machine: ${clean(row.agent.machineName || 'Not advertised')} · ${clean(row.agent.directory || 'Workspace not advertised')}`),
           h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Last seen: ${lastSeenLabel(row.agent.lastSeenAt)}`));
         if (row.type === 'inbox') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
           cardTitle(`${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`, active, row.item.kind === 'review' ? 'magenta' : 'yellow'),
