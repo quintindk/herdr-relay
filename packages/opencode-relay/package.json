@@ -1,6 +1,6 @@
 {
   "name": "@herdr/relay-opencode-v2-spike",
-  "version": "0.2.0-rc.4",
+  "version": "0.2.0-rc.5",
   "private": true,
   "type": "module",
   "description": "Isolated OpenCode v2 compatibility spike for Herdr Relay",

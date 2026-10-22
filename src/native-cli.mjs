@@ -15,6 +15,7 @@ import { enrolInteractive, attachInteractive, listEnrolments, launchInteractive,
 import { nativeAdmin, adminHelp } from './native-admin-cli.mjs';
 import { boardContext } from './native-onboarding.mjs';
 import { readPrivateJson } from './private-files.mjs';
+import { maintenanceCli } from './upgrade-cli.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
   agent enrol --here|--session ID --reserved [--config PRIVATE_NODE_JSON] [--directory DIR] [--name NAME] [--transport tools|cli]
@@ -53,6 +54,7 @@ Run-now for an existing native cron is not implemented. Use an explicit executio
 Pause must be acknowledged by the owner node. Already admitted work is not interrupted.`;
 
 export async function main(args) {
+  if (args[1] === 'upgrade' || args[0] === 'upgrade') { if (await maintenanceCli(args)) return; }
   if (args[0] === 'work') {
     const { main: worker } = await import('./node-worker-cli.mjs');
     return worker(args.slice(1));

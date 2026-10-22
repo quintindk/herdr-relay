@@ -28,15 +28,20 @@ assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firec
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'scripts/migrate-paperclip-tasks.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs',
+  'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
 else copyFileSync(join(staging, packed.filename), artifact, constants.COPYFILE_EXCL);
+assert.ok(!packed.files.some(file => ['src/remote.mjs', 'src/remote-adapter.mjs'].includes(file.path)), 'Retired SSH execution is still packaged');
 mkdirSync(consumer);
 execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-scripts', '--no-fund', '--no-audit',
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
 const installed = join(consumer, 'node_modules/herdr-relay');
+assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
+assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--version'], { encoding: 'utf8' }).trim(), packed.version);
+assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
 assert.match(help, /interactive grant\|request\|dispatch/);
 execFileSync(process.execPath, ['--input-type=module', '-e', `

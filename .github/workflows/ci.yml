@@ -46,6 +46,8 @@ jobs:
       - run: npm run test:v2
       - name: Native task-independent message smoke
         run: npm --prefix packages/opencode-relay run smoke:messages
+      - name: Installed RC4 upgrade, rollback and chat-continuity smoke
+        run: node scripts/verify-upgrade.mjs
 
   package:
     name: Verify installed release package

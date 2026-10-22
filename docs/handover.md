@@ -152,7 +152,7 @@ after changes, rather than relying on this count as a permanent fact.
 | Herdr pane and native placement | Actual temporary pane opened/inspected/closed, `scripts/placement-smoke.mjs` |
 | Real systemd crash/restart | `scripts/service-supervision-smoke.mjs` |
 | Unit generation | `scripts/installation-smoke.mjs` |
-| Actual SSH node status and adapter attachment | `scripts/remote-smoke.mjs` |
+| Historical SSH status/attachment evidence | Retired in RC5. Native nodes use the shared backend, not SSH. |
 
 Sanitised outputs are in `docs/evidence/`. These probes consume model usage when
 marked native. They use isolated homes and copied credentials, which must be

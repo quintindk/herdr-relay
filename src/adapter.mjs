@@ -4,7 +4,9 @@ import { canonical, requireValue } from './protocol.mjs';
 
 export const type = 'herdr_relay';
 export const label = 'Herdr Relay';
-export const agentConfigurationDoc = `# Herdr Relay (development)
+export const agentConfigurationDoc = `# Herdr Relay local Paperclip compatibility adapter
+The SSH remote transport is retired. relayNodeFile configurations fail closed;
+use native Relay node enrolment for backend-connected multi-node operation.
 Requires a local Relay service. Configure relayContextFile with an operator
 credential file, bindingId, current bindingRevision, and timeoutSec (default 300).
 Bindings select explicit CLI pull with operator settlement, or reserved native
@@ -16,10 +18,8 @@ Questions, review and acceptance use separate commands and backend interactions.
 
 export async function execute(ctx) {
   requireValue(!ctx.config.observationOnly, 'agent_observation_only', 'This Herdr agent is registered for visibility only. Verified task delivery is not configured.', 409);
-  if (ctx.config.relayNodeFile) {
-    const { executeRemote } = await import('./remote-adapter.mjs');
-    return executeRemote(ctx);
-  }
+  requireValue(!ctx.config.relayNodeFile, 'legacy_remote_retired',
+    'The legacy SSH/Paperclip remote adapter is retired. Enrol a native Relay node connected to the shared backend.', 410);
   requireValue(ctx.authToken, 'missing_auth', 'Paperclip run authentication is required');
   requireValue(!ctx.executionTarget || ctx.executionTarget.kind === 'local', 'unsupported_target', 'Relay requires a local adapter host');
   requireValue(typeof ctx.config.relayContextFile === 'string', 'invalid_config', 'relayContextFile is required');
@@ -153,16 +153,8 @@ export function createServerAdapter() {
           checks: [{ level: 'warn', code: 'agent_observation_only', message: 'Existing Herdr conversation registered. Dispatch and lifecycle control remain disabled.' }],
           testedAt: new Date().toISOString() };
         if (ctx.config.relayNodeFile) {
-          const { readFileSync } = await import('node:fs');
-          const { remoteCommand } = await import('./remote.mjs');
-          const { execFile } = await import('node:child_process');
-          const { promisify } = await import('node:util');
-          const node = JSON.parse(readFileSync(ctx.config.relayNodeFile, 'utf8'));
-          const { stdout } = await promisify(execFile)('ssh', remoteCommand(node, ['agent', 'list']), { timeout: 15000 });
-          const bindings = JSON.parse(stdout);
-          requireValue(bindings.some(binding => binding.id === ctx.config.bindingId && binding.config.companyId === ctx.companyId &&
-            binding.revision === (ctx.config.bindingRevision ?? 1)), 'binding_not_found', 'Matching remote binding required');
-          return { adapterType: type, status: 'pass', checks: [{ level: 'info', code: 'remote_relay', message: 'Remote Relay binding verified over SSH.' }], testedAt: new Date().toISOString() };
+          return { adapterType: type, status: 'fail', checks: [{ level: 'error', code: 'legacy_remote_retired',
+            message: 'Legacy SSH transport is retired. Use native Relay node enrolment.' }], testedAt: new Date().toISOString() };
         }
         requireValue(typeof ctx.config.relayContextFile === 'string', 'invalid_config', 'relayContextFile is required');
         const connection = credentials(ctx.config.relayContextFile);

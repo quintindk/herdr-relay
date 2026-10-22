@@ -1,17 +1,16 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.0-rc.4",
+  "version": "0.2.0-rc.5",
   "private": true,
   "license": "MIT",
-  "description": "Connect Paperclip work to agents in herdr",
+  "description": "Durable native tasks, agent collaboration and node services for Herdr and OpenCode",
   "type": "module",
   "exports": {
     ".": "./src/adapter.mjs",
     "./server": "./src/adapter.mjs"
   },
   "bin": {
-    "herdr-relay": "./src/cli.mjs",
-    "herdr-relay-remote": "./src/remote.mjs"
+    "herdr-relay": "./src/cli.mjs"
   },
   "files": [
     "src",
@@ -32,6 +31,11 @@
   ],
   "engines": {
     "node": ">=24.0.0"
+  },
+  "relayCompatibility": {
+    "protocol": "relay/0.2",
+    "backendSchema": 1,
+    "nodeSchema": 1
   },
   "scripts": {
     "board": "node src/cli.mjs native board",

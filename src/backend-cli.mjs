@@ -35,7 +35,7 @@ try {
     requireValue(Number.isInteger(port) && port >= 0 && port <= 65535, 'invalid_config', 'Invalid port');
     const unlock = serviceLock(directory);
     let backend;
-    try { backend = await startBackend({ database, userId, port, ingressKeys: config.ingressKeys }); }
+    try { backend = await startBackend({ database, userId, port, ingressKeys: config.ingressKeys, maintenanceFile: join(directory, 'maintenance.json') }); }
     catch (error) { unlock(); throw error; }
     let stopping = false;
     const stop = () => {

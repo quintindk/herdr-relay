@@ -1,16 +1,17 @@
 # Herdr Relay
 
-**0.2.0-rc.3: native-workflow candidate with scoped node onboarding and GitHub releases.**
+**0.2.0-rc.5: native-workflow candidate with safe backend/node maintenance.**
 Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
-and [RC3 scope/readiness](docs/release-0.2.0-rc.3.md).
+and [RC5 scope/readiness](docs/release-0.2.0-rc.5.md).
 
 Download the package, checksums and verification report from
 [GitHub Releases](https://github.com/quintindk/herdr-relay/releases).
 The package requires Node.js 24+ inside Linux/WSL2. It is not a standalone executable.
 
-Next candidate: **0.2.0-rc.4**, adding [task-independent agent messages/status updates](docs/agent-messages.md).
-This is not included in the published RC3 artifact and requires the updated backend,
-node and OpenCode plugin. Preparing it does not upgrade running services.
+RC5 adds [safe backend/node upgrades](docs/service-upgrades.md)
+and retires the legacy SSH wrapper/remote adapter. There is one public CLI,
+`herdr-relay`. Normal upgrades preserve enrolments and data rather than repeating onboarding.
+RC4's [agent messages/status updates](docs/agent-messages.md) remain supported.
 The native backend does not require Paperclip. Legacy Paperclip operation remains
 available and is documented separately below. This is not complete specification
 v3 certification or a production/public-ingress release.

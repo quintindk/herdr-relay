@@ -5,13 +5,15 @@ import { RelayError, requireValue } from './protocol.mjs';
 import { interactiveAuthority } from './interactive-contract.mjs';
 import { bootstrapNode } from './node-bootstrap.mjs';
 import { messageParticipant, queryMessages } from './agent-messages.mjs';
+import { existsSync } from 'node:fs';
+import { releaseVersion, compatibility } from './release-info.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
   return x.length > 0 && x.length === y.length && timingSafeEqual(x, y);
 };
 
-export async function startBackend({ database, userId = 'owner', port = 0, ingressKeys = [] }) {
+export async function startBackend({ database, userId = 'owner', port = 0, ingressKeys = [], maintenanceFile }) {
   const store = new BackendStore(database, { userId });
   const server = createServer(async (req, res) => {
     try {
@@ -19,12 +21,15 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         'unauthorised', 'Valid ingress key required', 401);
       const actor = store.authenticate(req.headers.authorization?.replace(/^Bearer /, '') ?? '');
       const url = new URL(req.url, 'http://relay');
+      const maintenance = Boolean(maintenanceFile && existsSync(maintenanceFile));
+      requireValue(req.method === 'GET' || !maintenance, 'maintenance', 'Backend upgrade maintenance is active. Retry the same immutable operation after it completes', 503);
       requireValue(req.url?.startsWith('/') && !req.url.startsWith('//'), 'invalid_request', 'Relative API path required');
       // Browser-originated writes are not part of this API. Harnesses use the
       // local credential connector; cross-site pages cannot borrow that context.
       requireValue(!req.headers.origin, 'origin_not_allowed', 'Browser Origin requests are not supported by the native API', 403);
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
+        version: releaseVersion, compatibility, maintenance,
         features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };

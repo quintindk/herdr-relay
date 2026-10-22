@@ -9,6 +9,8 @@ and publishes a GitHub release only after verification succeeds.
 - `.github/workflows/ci.yml` runs on branch pushes and pull requests. It requires
   Node.js 24 on Ubuntu, syntax checks, serial root regression tests, v2 tests,
   clean installed-package/onboarding verification and a zero-finding fresh audit.
+  RC5 also runs installed RC4-to-candidate backend/node upgrade, rollback, chat
+  continuity and message-delivery verification using isolated actual processes.
 - Successful runs retain a `release-assets` Actions artifact for 30 days. Releases
   provide persistent downloads without requiring an Actions-artifact download.
 - `.github/workflows/release.yml` runs on `v[0-9]*` tag pushes, calls the same CI
@@ -44,7 +46,7 @@ From the clean committed source, use a **new versioned output directory outside
 the checkout**:
 
 ```bash
-node scripts/verify-package.mjs --release --output /absolute/artifacts/0.2.0-rc.3
+node scripts/verify-package.mjs --release --output /absolute/artifacts/0.2.0-rc.5
 ```
 
 This verifies a production-only npm installation, executable CLI, plugin imports,
@@ -55,9 +57,9 @@ It refuses different bytes at an existing artifact path or mismatched checksums.
 
 Assets:
 
-- `herdr-relay-0.2.0-rc.3.tgz`
+- `herdr-relay-0.2.0-rc.5.tgz`
 - `SHA256SUMS`
-- `herdr-relay-0.2.0-rc.3.tgz.verification.json`
+- `herdr-relay-0.2.0-rc.5.tgz.verification.json`
 
 `--skip-audit` is allowed for clearly marked offline **preflight** only. It is
 refused with `--release`; an unavailable audit is not a passed audit. Clean-home
@@ -76,12 +78,12 @@ Commit/push reviewed source, let branch CI pass, then create an annotated versio
 tag pointing to the exact reviewed commit and push it:
 
 ```bash
-git tag -a v0.2.0-rc.3 EXACT_SOURCE_COMMIT -m "Herdr Relay 0.2.0-rc.3"
-git push origin refs/tags/v0.2.0-rc.3
+git tag -a v0.2.0-rc.5 EXACT_SOURCE_COMMIT -m "Herdr Relay 0.2.0-rc.5"
+git push origin refs/tags/v0.2.0-rc.5
 ```
 
 The release workflow reruns tests and builds its own artifact at that tag. It uses
-`docs/release-0.2.0-rc.3.md` for notes, verifies source provenance and checksums,
+`docs/release-0.2.0-rc.5.md` for notes, verifies source provenance and checksums,
 then creates the release with all three assets. It marks candidate versions as
 prerelease and never promotes them to latest. Do not tag a moving branch or upload
 artifacts from another checkout/commit.

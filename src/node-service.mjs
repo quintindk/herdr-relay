@@ -5,7 +5,7 @@ import { nativeTasksProvider } from './tasks-provider.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
-export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel }) {
+export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel, maintenance = () => false }) {
   tasks ??= api ? { ...nativeTasksProvider(api), type: 'native' } : null;
   requireValue(!existsSync(socketPath), 'socket_exists', 'Node socket already exists. Verify the old service before removing it');
   const server = createServer(async (req, res) => {
@@ -24,6 +24,10 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       catch { throw new RelayError('invalid_json', 'JSON request required'); }
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
       const path = new URL(req.url, 'http://node').pathname;
+      const readOnly = ['/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
+        '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/comments', '/agent/relations',
+        '/agent/questions', '/agent/messages', '/agent/message'];
+      requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
       const currentReceiver = () => {
         requireValue(worker.bindingId && worker.bindingRevision, 'standing_enrolment_required', 'Stable agent enrolment required', 403);
         journal.assertReceiver({ id: worker.bindingId, agentId: worker.agentId, receiverGeneration: worker.bindingRevision });

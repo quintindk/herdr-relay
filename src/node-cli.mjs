@@ -20,6 +20,9 @@ import { enrolledDirectory, resolveFolderBinding } from './node-folder.mjs';
 import { configureV2WorkerSession, v2WorkerInstructions, usesV2WorkerTools } from './node-worker-instructions.mjs';
 import { NativeReceivers } from './native-receivers.mjs';
 import { tickInteractive } from './node-interactive.mjs';
+import { releaseVersion } from './release-info.mjs';
+import { writePrivateJson } from './private-files.mjs';
+import { nodeAgentInstructions } from './node-agent-instructions.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 try {
@@ -31,6 +34,7 @@ try {
   requireValue(!config.tasks || config.tasks.type === 'native', 'unsupported_provider_lifecycle',
     'Daemon execution currently requires native Tasks. External task lifecycle integration is incomplete');
   const directory = resolve(config.stateDirectory);
+  const maintenance = () => existsSync(join(directory, 'maintenance.json'));
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const unlock = serviceLock(directory);
   let journal, service, timer;
@@ -139,10 +143,9 @@ try {
       if (!existsSync(contextFile)) writeFileSync(contextFile, JSON.stringify(worker), { flag: 'wx', mode: 0o600 });
       workers.push(worker);
       contextFiles.set(entry.id, contextFile);
-      const cli = `${quote(process.execPath)} ${quote(join(dirname(fileURLToPath(import.meta.url)), 'node-worker-cli.mjs'))} --context ${quote(contextFile)}`;
+      const cli = `herdr-relay native work --context ${quote(contextFile)}`;
       const configured = { ...binding, agentId: entry.agentId, ...(entry.receiverGeneration ? { receiverGeneration: entry.receiverGeneration } : {}),
-        ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () =>
-        `Use ${cli} questions to inspect addressed questions. Answer with ${cli} answer --key KEY --file JSON containing {id,expectedRevision,body}, or forward --key KEY --file JSON containing {id,expectedRevision,reason}.\n`,
+        ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () => nodeAgentInstructions({ directTools: directWorkerTools, cli }),
       workerInstructions: execution => directWorkerTools ? v2WorkerInstructions(execution) :
         `Read and check cancellation: ${cli} read --execution ${quote(execution.id)} --run ${quote(execution.runId)}\n` +
         (execution.allowDelegation ? `Explicit bounded delegation is granted. Use ${cli} delegate --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file CHILD_JSON with {id,taskId,title,instructions,targetAgentId,reviewPolicy}. Then stage ${cli} wait-children --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key WAIT_KEY --file WAIT_JSON with {childExecutionIds:[...]}, and finish the turn.\n` : '') +
@@ -182,6 +185,7 @@ try {
         try { agent = await api('GET', `/v1/agents/${encodeURIComponent(entry.agentId)}`); }
         catch (error) {
           if (error.status !== 404) throw error;
+          requireValue(!maintenance(), 'maintenance', 'Do not register a new configured agent during upgrade health checks', 503);
           agent = await api('POST', '/v1/commands', { key: `agent-register:${digest([config.nodeId, entry.agentId])}`,
             action: 'agent.register', payload: { id: entry.agentId, nodeId: config.nodeId, name: entry.name ?? entry.agentId,
               capabilities: entry.capabilities ?? [], mode: entry.mode ?? 'headless',
@@ -196,7 +200,7 @@ try {
       requireValue(lstatSync(socketPath).isSocket(), 'socket_conflict', 'Node socket path is not a socket');
       unlinkSync(socketPath);
     }
-    service = await startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel: async worker => {
+    service = await startNodeService({ journal, socketPath, workers, api, tasks, maintenance, getNativeModel: async worker => {
       const binding = historicalBindings.get(worker.bindingId);
       requireValue(binding?.native.verify, 'native_model_unavailable', 'Requester native model cannot be resolved');
       const session = await binding.native.verify(), model = session.model;
@@ -204,6 +208,7 @@ try {
       return { providerID: model.providerID, id: model.id, ...(model.variant && model.variant !== 'default' ? { variant: model.variant } : {}) };
     } });
     let lastHeartbeat = 0;
+    let reportedPause;
     const tick = () => {
       if (closed) return;
       const resolveBinding = async (agentId, pinned) => {
@@ -240,7 +245,17 @@ try {
         }
       };
       resolveBinding.folder = directory => resolveFolderBinding(bindings, directory, resolveBinding);
-      pending = refreshReceivers().then(() => tickNode(journal, api, resolveBinding)).finally(async () => {
+      const paused = maintenance();
+      if (reportedPause !== paused) {
+        writePrivateJson(join(directory, 'runtime.json'), { version: releaseVersion, pid: process.pid, nodeId: config.nodeId,
+          instanceId: info.instanceId, admissionsPaused: paused, observedAt: new Date().toISOString() });
+        reportedPause = paused;
+      }
+      pending = refreshReceivers().then(async () => {
+        if (maintenance()) { await journal.flush(api); await journal.poll(api); }
+        else await tickNode(journal, api, resolveBinding);
+      }).finally(async () => {
+        if (maintenance()) return;
         await tickInteractive(journal, api, config, resolveBinding);
         await tickAutomation(journal, resolveBinding, Date.now(), api);
         await tickAgentNotices(journal, api, resolveBinding);

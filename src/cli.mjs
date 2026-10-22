@@ -10,8 +10,15 @@ import { renderOverview, watchOverview } from './views.mjs';
 import { renderTaskBoard } from './task-board-view.mjs';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { maintenanceCli, upgradeHelp } from './upgrade-cli.mjs';
+import { releaseVersion } from './release-info.mjs';
 
-const help = `herdr-relay (development)
+const help = `herdr-relay ${releaseVersion}
+${upgradeHelp}
+  backend|node|plugin|doctor|tasks --help  [native installed-release administration]
+  native --help  [full native task and agent command reference]
+
+Local Paperclip compatibility commands (legacy SSH transport is retired):
   service --paperclip-url URL [--state-dir DIR] [--backend-context FILE] [--herdr-config FILE]
   status
   native --help  [native backend enrolment, tasks, executions, schedules, worker CLI and board]
@@ -103,6 +110,12 @@ Pull settlement is operator-attested. Native settlement requires a matching
 terminal response. Automatic interruption requires a dedicated owned runtime.`;
 
 export async function main(args) {
+  if (args.length === 1 && args[0] === '--version') { console.log(releaseVersion); return; }
+  if (await maintenanceCli(args)) return;
+  if (['backend', 'node', 'plugin', 'doctor', 'tasks'].includes(args[0]) && !(args[0] === 'backend' && args[1] === 'recover')) {
+    const { main: native } = await import('./native-cli.mjs');
+    return native(args);
+  }
   if (args[0] === 'tui') {
     const { main: native } = await import('./native-cli.mjs');
     return native(['board', ...args.slice(1)]);
@@ -141,9 +154,7 @@ export async function main(args) {
     }
   }
   if (group === 'adapter-stdio') {
-    const { serveAdapterStdio } = await import('./remote-adapter.mjs');
-    await serveAdapterStdio();
-    return;
+    requireValue(false, 'legacy_remote_retired', 'The SSH adapter-stdio transport is retired. Use native Relay node enrolment.', 410);
   }
   if (values.help || !group) { console.log(help); return; }
   if (group === 'candidate' && action === 'inspect') {

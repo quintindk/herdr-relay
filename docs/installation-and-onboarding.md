@@ -1,11 +1,14 @@
 # Evo backend, Evo node and Surface node onboarding
 
-Target: `0.2.0-rc.3`. Evo runs the backend and a node. Surface runs a node inside
+Target: `0.2.0-rc.5`. Evo runs the backend and a node. Surface runs a node inside
 **WSL2 with systemd**. The source Paperclip instance is on **Surface**.
 
 This guide uses installed-release commands only. It does not require cloning a
 branch, running nested development `npm ci`, copying node_modules or manually
 assembling credential JSON. No step silently clears a database or imports tasks.
+
+**Already enrolled?** Do not repeat the fresh-backend/reset steps for an upgrade.
+Use [service upgrades](service-upgrades.md) to preserve identities, data and enrolments.
 
 ## 0. Release and cutover gates
 
@@ -27,9 +30,9 @@ Evo/Surface home directories are not physical Surface acceptance.
 Distribution: a [GitHub **prerelease**](https://github.com/quintindk/herdr-relay/releases)
 with these immutable assets:
 
-- `herdr-relay-0.2.0-rc.3.tgz`
+- `herdr-relay-0.2.0-rc.5.tgz`
 - `SHA256SUMS`
-- `herdr-relay-0.2.0-rc.3.tgz.verification.json`
+- `herdr-relay-0.2.0-rc.5.tgz.verification.json`
 - Release notes and this guide.
 
 An explicitly pushed version tag publishes only after GitHub Actions tests,
@@ -47,20 +50,22 @@ npm --version
 ```
 
 Require Node.js **24+**, Linux binaries inside WSL and Git. Do not use Windows
-`node.exe` for the WSL installation. Pin a release-specific directory rather than
-installing over an active deployment:
+`node.exe` for the WSL installation. Bootstrap the normal CLI in a user-owned npm
+installation, then activate the verified version store before installing services:
 
 ```bash
-RELEASE="$HOME/.local/share/herdr-relay/releases/0.2.0-rc.3"
-npm install --prefix "$RELEASE" /absolute/download/herdr-relay-0.2.0-rc.3.tgz
-RELAY="$RELEASE/node_modules/.bin/herdr-relay"
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.0-rc.5.tgz
+herdr-relay --version
+herdr-relay release install --version 0.2.0-rc.5
+RELAY=herdr-relay
 "$RELAY" native --help
 ```
 
-Use `"$RELAY"` throughout this guide so an old global command cannot take precedence.
-Retain the old installation directory for rollback. Services and plugin entries
-use the selected package's absolute path. Do not remove an installed release while
-its service/plugin references it. Shell PATH activation is separate from data reset.
+`release install` audits/stages the versioned package and activates the recognised
+CLI symlink without restarting a service. Subsequent commands are ordinary
+`herdr-relay` commands. Services/plugins pin that release's absolute path internally.
+Retain referenced old releases for rollback. Do not remove a release while a service,
+plugin, CLI or retained upgrade operation references it. CLI activation is not data reset.
 
 ## 2. Surface: export before upgrading or replacing the source runtime
 

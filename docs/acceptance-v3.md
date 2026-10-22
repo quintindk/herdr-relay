@@ -15,14 +15,32 @@ Updated: 2026-10-22. **Incomplete. Not a 0.2.0 release declaration.**
 | 9. Offline pause | Requested/applied revision, local installation and source-fenced transfer | Fixture coverage, live pause pending |
 | 10. Changed scope | Cancellation, stale revision/run, foreign input, identity and review-grant checks | Partial, full matrix pending |
 | 11. Lifecycle | Dedicated launch/interruption/resume, daemon acceptance retirement and real Git guards | Passed bounded smokes, combined Git/daemon failure matrix pending |
-| 12. Clean deployment | Separate empty state, installed RC2 onboarding, online backup and all four live ingress checks | Local/artifact/ingress passed, physical Surface acceptance pending |
+| 12. Clean deployment | Installed releases, approved Evo reset/archive, node re-enrolment, live peer delivery and all four ingress checks | Evo local acceptance passed, physical Surface pending |
 | 13. Providers | Common reads, pinned node read boundary, GitHub comments/qualified relationships and uncertainty tests | Partial, external execution/write lifecycle and real writes pending |
 | 14. V2 plugin parity | Core worker/agent tools, proposal-only human tools and typed RPC | Partial tool parity |
 | 15. Shared service | Two real clients before/after reload; stale confirmations refused after reload, transport reconnect and session switch round trip | Bounded real-TUI smokes passed, actual-human evidence remains |
 | 16. V2 native | Exact messages/sessions, uncertainty tests, owned interrupt/stop/resume | Partial, crash/replay matrix pending |
-| 17. Cutover | Isolated binary/config throughout | Primary installation deliberately not cut over |
+| 17. Cutover | Evo backend/node now installed from RC4, prior state archived, compatible upgrade rehearsal | Local initial cutover passed; physical Surface/data import and broader recovery gates remain |
 
-## RC2 onboarding readiness, 22 October 2026
+## RC5 service maintenance
+
+The [upgrade guide](service-upgrades.md) adds one public CLI, backend/node/both plans,
+verified release staging, explicit apply, maintenance guards, durable operation status,
+resume and compatible code/configuration rollback. Unknown schemas, unsettled native
+work, changed configuration and pending native forms/permissions fail closed. No
+database is silently restored and human OpenCode chats are not restarted.
+
+The installed RC4-to-candidate rehearsal uses actual isolated backend/node processes
+and existing OpenCode chats. It proves retained IDs/credentials/data, messages across
+the update, retained post-upgrade edits on rollback, node-only isolation and automatic
+bad-health rollback. It also proves a pending native form blocks the switch without
+being cancelled. CI runs this rehearsal. Physical Surface acceptance remains separate.
+
+The legacy SSH wrapper/remote adapter is retired, not the Paperclip data migration path.
+See [maintenance evidence](evidence/native-service-upgrades.json). Automatic standalone
+execution-completion handback remains a known, separate communication gap.
+
+## Historical RC2 onboarding readiness, before the approved RC4 reset
 
 - Installed-release administration, scoped daemon/operator bootstrap, guarded join,
   JSONC-preserving plugin setup and Surface-to-Evo export/import pass isolated tests.

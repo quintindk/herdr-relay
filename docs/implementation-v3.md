@@ -3,7 +3,8 @@
 Updated: 2026-10-22. Target: [specification v3](spec-v3.md).
 
 This ledger distinguishes implemented modules from deployed and verified workflows.
-The specification is not complete. Existing 0.1.x operation remains independent.
+The specification is not complete. Local Paperclip compatibility remains separate;
+the legacy SSH remote execution transport is retired in RC5.
 
 | Area | Current evidence | Remaining work |
 | --- | --- | --- |
@@ -16,6 +17,7 @@ The specification is not complete. Existing 0.1.x operation remains independent.
 | Scheduling | Exact/folder jobs, scheduled clarification, offline/monitor runtime smokes; reminder UI and fenced transfer | Reminder/disconnection runtime matrix and full lifecycle |
 | Providers | Pinned node Tasks read boundary, native/Paperclip/GitHub adapters, qualified GitHub relations and no-resend journal | External execution/delegation/review integration, full parity and live provider proof |
 | Deployment | Installed RC2 administration/onboarding, production-install smoke and all four live Access checks | Physical Surface proof, data disposition and approved cutover |
+| Maintenance (RC5) | Versioned backend/node/both upgrades, private backups, busy/decision guards, actual release/identity checks, resume and code-only rollback; installed real-process upgrade rehearsal | Evo live maintenance acceptance and physical Surface upgrade evidence; future schema migration design |
 
 ## RC2 installation and onboarding
 
