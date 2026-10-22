@@ -13,9 +13,9 @@ try {
     'source-frozen': { type: 'boolean' }, 'legacy-relay-settled': { type: 'boolean' },
   } });
   const action = positionals[0];
-  requireValue(['export', 'plan', 'import'].includes(action), 'invalid_request', 'Use export, plan or import');
-  if (action === 'export') {
-    requireValue(values.source && values.company && values.output, 'invalid_request', 'Export requires --source PRIVATE_CONTEXT --company ID --output NEW_FILE');
+  requireValue(['companies', 'export', 'plan', 'import'].includes(action), 'invalid_request', 'Use companies, export, plan or import');
+  if (action === 'export' || action === 'companies') {
+    requireValue(values.source && (action === 'companies' || values.company && values.output), 'invalid_request', 'Export requires --source PRIVATE_CONTEXT --company ID --output NEW_FILE');
     const config = JSON.parse(readFileSync(values.source, 'utf8'));
     const origin = new URL(config.url);
     requireValue(!origin.username && !origin.password && origin.pathname === '/' && !origin.search && !origin.hash &&
@@ -30,6 +30,13 @@ try {
         'source_read_failed', `Paperclip returned HTTP ${response.status}`);
       return response.json();
     };
+    if (action === 'companies') {
+      const companies = await api('GET', '/api/companies');
+      requireValue(Array.isArray(companies) && companies.length <= 1000 && companies.every(c => typeof c.id === 'string' && typeof c.name === 'string'),
+        'invalid_source', 'Expected a bounded company discovery response');
+      console.log(JSON.stringify({ companies: companies.map(c => ({ id: c.id, name: c.name })), completeness: 'backend_response_only' }));
+      process.exit(0);
+    }
     const bundle = await exportPaperclipTasks(api, { sourceUrl: origin.origin, companyId: values.company });
     writeFileSync(resolve(values.output), `${JSON.stringify(bundle, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
     const { ordered, ...plan } = planPaperclipImport(bundle);

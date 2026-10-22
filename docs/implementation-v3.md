@@ -1,6 +1,6 @@
 # Specification v3 implementation ledger
 
-Updated: 2026-10-20. Target: [specification v3](spec-v3.md).
+Updated: 2026-10-22. Target: [specification v3](spec-v3.md).
 
 This ledger distinguishes implemented modules from deployed and verified workflows.
 The specification is not complete. Existing 0.1.x operation remains independent.
@@ -14,7 +14,28 @@ The specification is not complete. Existing 0.1.x operation remains independent.
 | Node | Journal/outbox, v2/Hermes adapters, daemon offline restart and observation-only Herdr discovery | Live Herdr/Hermes acceptance and broader recovery |
 | Scheduling | Exact/folder jobs, scheduled clarification, offline/monitor runtime smokes; reminder UI and fenced transfer | Reminder/disconnection runtime matrix and full lifecycle |
 | Providers | Pinned node Tasks read boundary, native/Paperclip/GitHub adapters, qualified GitHub relations and no-resend journal | External execution/delegation/review integration, full parity and live provider proof |
-| Deployment | Local user service and public route reach authenticated backend | Cloudflare Access policy enforcement and remote-node proof |
+| Deployment | Installed RC2 administration/onboarding, production-install smoke and all four live Access checks | Physical Surface proof, data disposition and approved cutover |
+
+## RC2 installation and onboarding
+
+Installed CLI commands now cover backend administration, separate daemon/operator
+node bootstrap/join/revocation, plugin installation/upgrades/uninstall, read-only
+doctor and Paperclip source discovery/export/plan/import. Backend-root credentials
+remain on Evo. Surface's operator is scoped to its node for enrolment/attachment
+and retains the same human's task/inbox authority, not backend administration.
+
+The package verifier exercises separate Evo/Surface homes against actual scoped
+HTTP endpoints, enrolment/attachment, pre-session plugin setup, read-only source
+export, repeated import, backup and systemd unit dry-run. Release mode requires a
+clean source commit and fresh zero-finding audit. Versioned artifacts/checksums
+cannot be replaced with different bytes. Publication and tags remain explicit.
+
+Scoped keyboard/TUI probes pass on OpenCode 2.1.0 and 2.1.2. These are single-host
+fixtures, not physical Surface certification. The running Evo backend remains
+unchanged. Its actual data, accepted execution and enabled definitions require
+reconciliation before any reset. See [current acceptance](acceptance-v3.md),
+[onboarding](installation-and-onboarding.md) and
+[RC2 evidence](evidence/native-rc2-onboarding.json).
 
 ## Deployment evidence
 
@@ -30,13 +51,13 @@ The specification is not complete. Existing 0.1.x operation remains independent.
   `replay.synthwarm.com` does not resolve. `relay.synthswarm.com` resolves and returns
   native protocol `relay/0.2` with the owner credential.
 - `scripts/verify-backend-ingress.mjs` verifies four credential combinations without
-  logging secrets. Relay refuses unauthenticated and Access-only calls with 401.
-  Access-plus-actor succeeds, but actor-only also succeeds. The Access application
-  is not yet proven to enforce the shared service-token gate for this hostname.
+  logging secrets. Latest probe on 22 October 2026 passes: unauthenticated and
+  actor-only receive 403, Access-only receives Relay 401 and both credentials
+  receive 200 with `relay/0.2`. This supersedes the original Access-policy failure.
 - Control requests to existing `fc.synthswarm.com` return 403 without Access headers
   and reach that origin with the shared headers, confirming the credential pair.
 - No local Cloudflare origin certificate or management token was found. Updating
-  the remotely managed Access policy remains an external configuration step.
+  management-plane changes are not required by the successful current probe.
 - The second machine has no SSH access. The user will install it manually using
   [the second-node guide](second-node-installation.md). Continue local development
   independently and retain the physical acceptance gate until that node is available.
@@ -95,7 +116,7 @@ See [sanitised receiver evidence](evidence/native-durable-receivers.json).
 3. Verify broader offline schedules, reminders and combined Git/daemon recovery.
 4. Certify live Hermes/Herdr integration and orphan/revoked-review recovery.
 5. Complete real-model, actual-human and rollback/cutover evidence. External provider work is deferred by user direction.
-6. Confirm Cloudflare Access enforcement and complete the manually installed second-node proof.
+6. Recheck ingress after changes and complete the manually installed second-node proof.
 
 Further modules added after the first workflow smoke include scoped child delegation
 and child-wait eligibility, an explicit Hermes node adapter, optional exact-session

@@ -5,6 +5,7 @@ import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { isAbsolute, normalize } from 'node:path';
 import { applyInteractive } from './interactive-contract.mjs';
+import { authoriseOperator } from './node-bootstrap.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -84,7 +85,7 @@ export class BackendStore {
   }
   issueCredential(actor) {
     const token = randomBytes(32).toString('hex');
-    const credential = { id: randomUUID(), type: actor.type, actorId: actor.id, revoked: false, createdAt: now() };
+    const credential = { id: randomUUID(), type: actor.type, actorId: actor.id, revoked: false, createdAt: now(), ...(actor.scope ? { scope: actor.scope } : {}) };
     this.db.prepare('INSERT INTO credentials VALUES (?,?,?)').run(credential.id, digest(token), JSON.stringify(credential));
     return { token, credential };
   }
@@ -95,7 +96,7 @@ export class BackendStore {
     });
   }
   enrolCredential(actor, nodeId, key) {
-    this.ownerOnly(actor); const node = this.get('node', nodeId);
+    this.rootOwnerOnly(actor); const node = this.get('node', nodeId);
     return this.transaction(() => {
       requireValue(validId(key), 'invalid_key', 'Credential issuance key required');
       const receiptKey = `credential:${key}`;
@@ -114,7 +115,7 @@ export class BackendStore {
     });
   }
   rotateCredential(actor, nodeId, key) {
-    this.ownerOnly(actor);
+    this.rootOwnerOnly(actor);
     return this.transaction(() => {
       const result = this.enrolCredential(actor, nodeId, key);
       for (const row of this.db.prepare('SELECT id,data FROM credentials WHERE id<>?').all(result.credential.id)) {
@@ -135,6 +136,7 @@ export class BackendStore {
     return { ...actor, credentialId: actor.id, id: actor.actorId ?? actor.id };
   }
   ownerOnly(actor) { if (actor.type !== 'user' || actor.id !== this.owner) forbidden('Human owner credential required'); }
+  rootOwnerOnly(actor) { this.ownerOnly(actor); if (actor.scope) forbidden('Backend-root owner credential required'); }
   nodeOnly(actor, nodeId) { if (actor.type !== 'node' || actor.id !== nodeId) forbidden('Owning node credential required'); }
   agent(actor, agentId) {
     const agent = this.get('agent', agentId);
@@ -164,6 +166,7 @@ export class BackendStore {
   command(actor, { key, action, payload }) {
     string(action, 'action', 100);
     requireValue(payload && typeof payload === 'object' && !Array.isArray(payload), 'invalid_request', 'Payload required');
+    authoriseOperator(this, actor, action, payload);
     return this.mutate(actor, key, action, payload, () => this.apply(actor, action, structuredClone(payload)));
   }
   apply(actor, action, p, authority = {}) {

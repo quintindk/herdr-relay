@@ -124,9 +124,12 @@ try {
   let keyboardCommands = false;
   if (process.argv.includes('--tui') || tuiOnly) {
     const ownerFile = join(root, 'owner.json');
+    const scopedOperator = process.argv.includes('--scoped-operator');
+    const tuiToken = scopedOperator ? backend.store.issueCredential({ type: 'user', id: backend.store.owner,
+      scope: { kind: 'node_operator', nodeId: first.nodeId, mode: 'localUser', roots: [], maxAgents: 100 } }).token : ownerToken;
     // Recover the existing isolated owner's token from the test input closure,
     // never from a user installation or a backend credential database.
-    const ownerContext = { url: backend.origin, token: ownerToken };
+    const ownerContext = { url: backend.origin, token: tuiToken };
     writeFileSync(ownerFile, JSON.stringify(ownerContext), { mode: 0o600 });
     const info = await runtime.client.server.info();
     const registration = join(root, 'service.json');
@@ -153,7 +156,7 @@ try {
         cwd: workspace, env: { PATH: process.env.PATH, HOME: directory, TERM: 'xterm-256color',
           XDG_CONFIG_HOME: join(directory, 'config'), XDG_DATA_HOME: join(directory, 'data'), XDG_STATE_HOME: join(directory, 'state'),
           OPENCODE_PASSWORD: password }, evidenceFile, [kind]: true, autoNewChat: kind === 'attach', newChatTrigger,
-        timeoutSeconds: 45, redact: [password, ownerToken] }));
+        timeoutSeconds: 45, redact: [password, ownerToken, tuiToken] }));
       await once(tui, 'exit');
       assert.ok(existsSync(evidenceFile), diagnostics);
       const events = readFileSync(evidenceFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -196,7 +199,7 @@ try {
     conversations: [first.sessionId, second.sessionId], cronFirings: tuiOnly ? 0 : 2, realMinuteTicks: !tuiOnly, nodeHotAttachment: true,
     replacementChatScheduleManagement: true, staleCredentialRefused: true, restartPreservedReceiver: true,
     keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands,
-    landingScreenCommands: keyboardCommands && landing, state: root }, null, 2));
+    landingScreenCommands: keyboardCommands && landing, scopedHumanOperator: keyboardCommands && process.argv.includes('--scoped-operator'), state: root }, null, 2));
 } finally {
   await stopDaemon(); journal?.close(); await runtime?.stop(); await backend?.close();
   model.closeAllConnections(); await new Promise(resolve => model.close(resolve));

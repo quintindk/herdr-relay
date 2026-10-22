@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync, renameSync, linkSync, unlinkSync, openSync, fsyncSync, closeSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -7,16 +7,9 @@ import { NativeOpenCodeV2, checkV2Version } from '../packages/opencode-relay/nat
 import { NodeJournal } from './node-journal.mjs';
 import { NativeReceivers } from './native-receivers.mjs';
 import { canonicalDirectory } from './interactive-contract.mjs';
+import { writePrivateJson as writePrivate } from './private-files.mjs';
 
 export const nativeNodeConfig = () => join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-native/node.json');
-const writePrivate = (path, value, exclusive = false) => {
-  const temporary = `${path}.${randomUUID()}`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
-  try { if (exclusive) linkSync(temporary, path); else renameSync(temporary, path); }
-  finally { if (existsSync(temporary)) unlinkSync(temporary); }
-  const directory = openSync(dirname(path), 'r');
-  try { fsyncSync(directory); } finally { closeSync(directory); }
-};
 
 export function configureInteractiveNode({ configFile = nativeNodeConfig(), policy }) {
   requireValue(policy && typeof policy === 'object' && !Array.isArray(policy) && Object.keys(policy).every(k =>

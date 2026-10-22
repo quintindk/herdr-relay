@@ -12,6 +12,9 @@ import { nativeBackendClient } from './backend-client.mjs';
 import { requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { enrolInteractive, attachInteractive, listEnrolments, launchInteractive, nativeConnection, configureInteractiveNode } from './native-enrol.mjs';
+import { nativeAdmin, adminHelp } from './native-admin-cli.mjs';
+import { boardContext } from './native-onboarding.mjs';
+import { readPrivateJson } from './private-files.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
   agent enrol --here|--session ID --reserved [--config PRIVATE_NODE_JSON] [--directory DIR] [--name NAME] [--transport tools|cli]
@@ -39,8 +42,8 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   work read|submit|ask|... --context WORKER_JSON --execution ID --run ID [--key KEY] [--file PAYLOAD_JSON]
   board [--context OWNER_JSON] [--json]  [Tasks, Agents, Inbox, Schedules]
   command --file COMMAND_JSON  [advanced native {key,action,payload}]
-Backend commands require --context OWNER_JSON or RELAY_NATIVE_CONTEXT.
-Board alone defaults to $XDG_STATE_HOME/herdr-relay-backend/owner.json (or ~/.local/state).
+Backend commands require --context or RELAY_NATIVE_CONTEXT. Node operators cannot perform backend administration.
+Board prefers the joined node's scoped operator.json, otherwise the local backend owner.json.
 Worker commands use scoped worker credentials, never an owner context.
 Payload files contain native backend fields, not legacy companyId/routine envelopes.
 Enrolment never starts/restarts OpenCode or grants permissions. Start the node separately.
@@ -52,12 +55,13 @@ export async function main(args) {
     const { main: worker } = await import('./node-worker-cli.mjs');
     return worker(args.slice(1));
   }
+  if (await nativeAdmin(args)) return;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation'].map(k => [k, { type: 'string' }])),
     help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' },
   } });
   const [group, action, id] = positionals;
-  if (values.help || !group) { console.log(nativeHelp); return; }
+  if (values.help || !group) { console.log(`${nativeHelp}\n\n${adminHelp}`); return; }
   const output = value => console.log(JSON.stringify(value, null, 2));
   requireValue(positionals.length <= 3, 'invalid_request', 'Unexpected positional arguments');
   const allowed = group === 'node' && ['install', 'run'].includes(action) ? ['config']
@@ -119,9 +123,9 @@ export async function main(args) {
       configDirectory: values['config-dir'], evidenceFile: values['evidence-file'] })); return;
   }
   const path = values.context ?? process.env.RELAY_NATIVE_CONTEXT ?? (group === 'board'
-    ? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-backend/owner.json') : undefined);
+    ? boardContext() : undefined);
   requireValue(path, 'invalid_request', 'Explicit --context or RELAY_NATIVE_CONTEXT is required');
-  const context = JSON.parse(readFileSync(path, 'utf8'));
+  const context = readPrivateJson(path);
   const backend = { url: context.url ?? 'http://127.0.0.1:3210', ...(context.cloudflareAccess ? { cloudflareAccess: context.cloudflareAccess } : {}),
     ...(context.trustedHttpProxyOrigin ? { trustedHttpProxyOrigin: context.trustedHttpProxyOrigin } : {}) };
   const api = nativeBackendClient({ ...backend, token: context.token });

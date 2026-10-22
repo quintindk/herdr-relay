@@ -4,6 +4,12 @@ Status: implemented task-data migration with fixture coverage. No live productio
 import or full installation cutover has been performed. Primary OpenCode need not
 be upgraded to export, inspect or import task data.
 
+For the Evo/Surface cutover, Paperclip runs on **Surface** and import runs on
+**Evo**. Follow [the primary onboarding guide](installation-and-onboarding.md).
+The supported release commands are `herdr-relay native tasks source`, `companies`,
+`export`, `plan` and `import`. The script examples below remain development
+equivalents; no checkout or manual credential JSON is required on Surface.
+
 ## Preserved data and explicit limits
 
 - Tasks retain full title/description, priority and parent/dependency graph. Personal

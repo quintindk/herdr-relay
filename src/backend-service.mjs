@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { BackendStore, backendProtocol } from './backend-store.mjs';
 import { RelayError, requireValue } from './protocol.mjs';
 import { interactiveAuthority } from './interactive-contract.mjs';
+import { bootstrapNode } from './node-bootstrap.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
@@ -23,7 +24,9 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       requireValue(!req.headers.origin, 'origin_not_allowed', 'Browser Origin requests are not supported by the native API', 403);
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
-        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true } };
+        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true } };
+      else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
+        credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && url.pathname === '/v1/snapshot') result = store.snapshot();
       else if (req.method === 'GET' && url.pathname === '/v1/activity') result = store.activity({
@@ -45,7 +48,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
           cursor: url.searchParams.get('cursor') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });
-      } else if (req.method === 'POST' && ['/v1/commands', '/v1/node-credentials', '/v1/node-credentials/rotate'].includes(url.pathname)) {
+      } else if (req.method === 'POST' && ['/v1/commands', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap'].includes(url.pathname)) {
         let size = 0;
         const chunks = [];
         for await (const chunk of req) {
@@ -56,7 +59,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString()); }
         catch { throw new RelayError('invalid_json', 'JSON body required', 400); }
-        if (url.pathname.startsWith('/v1/node-credentials')) {
+        if (url.pathname === '/v1/node-bootstrap') result = bootstrapNode(store, actor, body);
+        else if (url.pathname.startsWith('/v1/node-credentials')) {
           requireValue(body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).every(key => ['nodeId', 'key'].includes(key)),
             'invalid_request', 'Only nodeId and issuance key are supported');
           result = url.pathname.endsWith('/rotate') ? store.rotateCredential(actor, body.nodeId, body.key) : store.enrolCredential(actor, body.nodeId, body.key);

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { installNativeInbox } from '../src/native-inbox-install.mjs';
+import { installNativeInbox, uninstallNativePlugin } from '../src/native-inbox-install.mjs';
+import { readOpenCodeConfig } from '../src/opencode-config-file.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'relay-inbox-install-'));
@@ -50,6 +51,50 @@ test('inbox installer refuses JSONC shadowing and missing identity', t => {
   const f = fixture(t);
   assert.throws(() => installNativeInbox({ ...f.input, sessionId: undefined }), { code: 'invalid_request' });
   writeFileSync(join(f.root, 'opencode.jsonc'), '{}');
+  writeFileSync(join(f.root, 'opencode.json'), '{}');
+  assert.throws(() => installNativeInbox(f.input), { code: 'configuration_conflict' });
+});
+
+test('plugin installation supports JSONC without losing unrelated comments/settings and can start before any human session exists', t => {
+  const f = fixture(t), path = join(f.root, 'opencode.jsonc');
+  const source = '{\n  // Keep my model and this comment.\n  "model": "chosen/model",\n  "plugins": [\n    // This is not Relay.\n    {"package":"other-plugin", "options": {"untouched":true}},\n  ],\n}\n';
+  writeFileSync(path, source);
+  const input = { ...f.input, sessionId: undefined, enrolmentOnly: true, nodeConfigFile: join(f.root, 'node/node.json') };
+  const result = installNativeInbox(input);
+  const after = readFileSync(path, 'utf8');
+  assert.match(after, /Keep my model/); assert.match(after, /This is not Relay/);
+  assert.equal(readOpenCodeConfig(path).value.model, 'chosen/model');
+  assert.equal(readOpenCodeConfig(path).value.plugins.length, 2);
+  assert.equal(existsSync(join(f.root, 'opencode.json')), false);
+  assert.equal(readFileSync(result.changed.find(c => c.path === path).backup, 'utf8'), source);
+  assert.equal(installNativeInbox(input).state, 'existing');
+  const cli = readOpenCodeConfig(join(f.root, 'cli.json')).value;
+  assert.equal(cli.plugins[0].options.notificationSessionId, undefined);
+  assert.equal(cli.plugins[0].options.nativeNodeConfigFile, input.nodeConfigFile);
+  assert.equal(uninstallNativePlugin({ configDirectory: f.root }).state, 'uninstalled');
+  assert.match(readFileSync(path, 'utf8'), /This is not Relay/);
+  assert.equal(readOpenCodeConfig(path).value.plugins.length, 1);
+  assert.equal(uninstallNativePlugin({ configDirectory: f.root }).state, 'absent');
+});
+
+test('plugin upgrades replace a recognised old release path rather than installing a duplicate', t => {
+  const f = fixture(t), old = join(f.root, 'old-release'); mkdirSync(old);
+  writeFileSync(join(old, 'package.json'), JSON.stringify({ name: '@herdr/relay-opencode-v2-spike' }));
+  writeFileSync(join(f.root, 'opencode.json'), JSON.stringify({ plugins: [{ package: old, options: { retained: true } }] }));
+  installNativeInbox(f.input);
+  const plugins = readOpenCodeConfig(join(f.root, 'opencode.json')).value.plugins;
+  assert.equal(plugins.length, 1); assert.notEqual(plugins[0].package, old); assert.equal(plugins[0].options.retained, true);
+});
+
+test('plugin installation does not suppress first-run V1 terminal migration or bypass a disabled Relay directive', t => {
+  const f = fixture(t);
+  writeFileSync(join(f.root, 'tui.json'), '{"theme":"existing"}');
+  assert.throws(() => installNativeInbox(f.input), { code: 'configuration_conflict' });
+  assert.equal(existsSync(join(f.root, 'cli.json')), false);
+  rmSync(join(f.root, 'tui.json'));
+  const old = join(f.root, 'disabled-release'); mkdirSync(old);
+  writeFileSync(join(old, 'package.json'), JSON.stringify({ name: '@herdr/relay-opencode-v2-spike' }));
+  writeFileSync(join(f.root, 'opencode.json'), JSON.stringify({ plugins: [`-${old}`] }));
   assert.throws(() => installNativeInbox(f.input), { code: 'configuration_conflict' });
 });
 

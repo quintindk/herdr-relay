@@ -1,21 +1,37 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, execFile } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
+import { promisify } from 'node:util';
+import { createServer } from 'node:http';
 
 // A local RC artifact only. This never publishes npm packages, Git tags or a
 // GitHub release, and never uses the user's native services or credentials.
 const root = mkdtempSync('/tmp/opencode/relay-package-check-');
-const { values } = parseArgs({ options: { output: { type: 'string' }, 'skip-audit': { type: 'boolean' } } });
+const { values } = parseArgs({ options: { output: { type: 'string' }, 'skip-audit': { type: 'boolean' }, release: { type: 'boolean' } } });
+let sourceCommit = null, sourceTreeClean = false;
+try {
+  sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  sourceTreeClean = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim() === '';
+} catch {}
+if (values.release) {
+  assert.ok(sourceCommit && sourceTreeClean, 'Release verification requires a clean committed source tree. Commit reviewed changes first.');
+  assert.equal(Boolean(values['skip-audit']), false, 'Release verification cannot skip the production audit');
+}
 const artifactDirectory = resolve(values.output ?? join(root, 'artifacts'));
 mkdirSync(artifactDirectory, { recursive: true });
-const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', artifactDirectory], { encoding: 'utf8' }));
+const staging = join(root, 'staging'); mkdirSync(staging);
+const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', staging], { encoding: 'utf8' }));
 assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firecrawl|\.git)(\/|$)/.test(f.path)), 'Package contains private or development files');
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
-  'scripts/install-native-node.mjs', 'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+  'scripts/install-native-node.mjs', 'scripts/migrate-paperclip-tasks.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
+  'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
+const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
+else copyFileSync(join(staging, packed.filename), artifact, constants.COPYFILE_EXCL);
 mkdirSync(consumer);
 execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-scripts', '--no-fund', '--no-audit',
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
@@ -33,10 +49,87 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
     assert.equal((await response.json()).features.interactiveProvisioning,true); }
   finally { await backend.close(); }
 `], { cwd: installed, stdio: 'pipe' });
+const sourceMethods = [], taskId = '00000000-0000-4000-8000-000000000001';
+const sourceTask = { id: taskId, companyId: 'company', title: 'Surface migration fixture', description: 'Preserved task content', priority: 'high', status: 'in_progress' };
+const paperclip = createServer((req, res) => {
+  sourceMethods.push(req.method);
+  const path = req.url;
+  const body = path === '/api/companies' ? [{ id: 'company', name: 'Surface fixture' }] : path.includes('/audit/') ? { accessTier: 'full', items: [] } :
+    path.includes('/comments?') || path.endsWith('/interactions') ? [] : path.startsWith('/api/companies/') ? [sourceTask] : sourceTask;
+  res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body));
+});
+await new Promise(resolve => paperclip.listen(0, '127.0.0.1', resolve));
+let onboarding;
+try {
+  const result = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs';
+    import {join} from 'node:path';
+    import {nativeAdmin} from './src/native-admin-cli.mjs';
+    import {nativeBackendClient} from './src/backend-client.mjs';
+    import {startBackend} from './src/backend-service.mjs';
+    import {BackendStore} from './src/backend-store.mjs';
+    import {enrolInteractive,attachInteractive} from './src/native-enrol.mjs';
+    const root=${JSON.stringify(root)}, evo=join(root,'Evo'), surface=join(root,'Surface'), state=join(evo,'backend');
+    mkdirSync(state,{recursive:true}); mkdirSync(surface);
+    const backend=await startBackend({database:join(state,'backend.sqlite')});
+    const rootToken=backend.store.bootstrap().token, owner=join(evo,'owner.json');
+    writeFileSync(owner,JSON.stringify({userId:'owner',url:backend.origin,token:rootToken}),{mode:0o600});
+    const configFile=join(surface,'node/node.json'), operatorFile=join(surface,'node/operator.json');
+    const contextDirectory=join(surface,'opencode');
+    try {
+      for(const name of ['Evo','Surface']) {
+        const bundle=join(evo,name+'.bundle');
+        await nativeAdmin(['node','bootstrap','--context',owner,'--key','bootstrap-'+name,'--name',name,'--url',backend.origin,'--local-user','--output',bundle]);
+        await nativeAdmin(['node','join','--bundle',bundle,'--config',name==='Surface'?configFile:join(evo,'node/node.json')]);
+      }
+      await nativeAdmin(['node','join','--bundle',join(evo,'Surface.bundle'),'--config',configFile]);
+      await nativeAdmin(['plugin','install','--config',configFile,'--config-dir',contextDirectory]);
+      await nativeAdmin(['plugin','install','--config',configFile,'--config-dir',contextDirectory]);
+      const op=JSON.parse(readFileSync(operatorFile)), config=JSON.parse(readFileSync(configFile));
+      assert.notEqual(op.token,rootToken); assert.notEqual(config.backend.token,op.token);
+      assert.equal(op.scope.nodeId,config.nodeId); assert.equal(existsSync(join(surface,'owner.json')),false);
+      const api=nativeBackendClient(op);
+      const session={id:'ses_surface_fixture',projectID:'global',location:{directory:surface},time:{created:1}};
+      const dependencies={discover:async()=>({url:'http://127.0.0.1:4096',auth:{type:'basic',username:'opencode',password:'isolated-fixture'}}),
+        makeClient:()=>({server:{info:async()=>({version:'2.1.2'})},session:{get:async()=>session}})};
+      const input={configFile,directory:surface,sessionId:session.id,name:'Surface chat',reserved:true,api,backend:{url:backend.origin}};
+      const enrolled=await enrolInteractive(input,dependencies);
+      session.id='ses_surface_replacement';session.time.created=2;
+      assert.equal((await attachInteractive({...input,sessionId:session.id,agentId:enrolled.agentId,expectedGeneration:1,key:'replace'},dependencies)).generation,2);
+      await assert.rejects(api('POST','/v1/node-credentials',{nodeId:config.nodeId,key:'escalate'}),{code:'forbidden'});
+      const source=join(surface,'paperclip-source.json'), file=join(surface,'paperclip-export.json');
+      await nativeAdmin(['tasks','source','--url',${JSON.stringify(`http://127.0.0.1:${paperclip.address().port}`)},'--local-trusted','--output',source]);
+      await nativeAdmin(['tasks','companies','--source',source]);
+      await nativeAdmin(['tasks','export','--source',source,'--company','company','--output',file]);
+      await nativeAdmin(['tasks','plan','--file',file]);
+      await backend.close();
+      const digest=JSON.parse(readFileSync(file)).digest;
+      const args=['tasks','import','--file',file,'--context',owner,'--state-dir',state,'--confirm-digest',digest,'--source-frozen','--legacy-relay-settled'];
+      await nativeAdmin(args); await nativeAdmin(args);
+      await nativeAdmin(['backend','backup','--state-dir',state,'--output',join(evo,'backup.sqlite')]);
+      await nativeAdmin(['backend','install','--state-dir',join(root,'dry-run-only'),'--dry-run']);
+      assert.equal(existsSync(join(root,'dry-run-only')),false);
+      const store=new BackendStore(join(state,'backend.sqlite'));
+      try { assert.equal(store.all('task').length,1); assert.equal(store.all('task')[0].status,'todo');assert.equal(store.all('execution').length,0);assert.equal(store.all('schedule').length,0); }
+      finally {store.close();}
+      console.log('ONBOARDING_SMOKE='+JSON.stringify({cleanEvoAndSurfaceHomes:true,scopedBootstrapAndJoin:true,operatorEnrolAndAttach:true,
+        pluginInstallWithoutSession:true,sourceExportReadOnly:true,taskImportIdempotent:true,backendBackupPassed:true,systemdUnitDryRunPassed:true,
+        physicalSurfaceTested:false,rootCredentialCopied:false}));
+    } finally {await backend.close();}
+  `], { cwd: installed, timeout: 60000, maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, HOME: join(root, 'clean-home'), XDG_STATE_HOME: join(root, 'clean-state'), XDG_CONFIG_HOME: join(root, 'clean-config'), RELAY_NATIVE_CONTEXT: '' } });
+  onboarding = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('ONBOARDING_SMOKE=')).slice('ONBOARDING_SMOKE='.length));
+  assert.ok(sourceMethods.length > 0 && sourceMethods.every(method => method === 'GET'));
+} finally { await new Promise(resolve => paperclip.close(resolve)); }
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
-const result = { version: packed.version, artifact, sha256: createHash('sha256').update(readFileSync(artifact)).digest('hex'),
+const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
   cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, nativeBackendStarted: true,
+  onboarding,
   auditVerified: Boolean(audit), vulnerabilities: audit?.metadata.vulnerabilities ?? null, published: false, gitTagCreated: false };
 writeFileSync(join(artifactDirectory, `${packed.filename}.verification.json`), JSON.stringify(result, null, 2));
+const sums = `${result.sha256}  ${packed.filename}\n`, sumsPath = join(artifactDirectory, 'SHA256SUMS');
+if (existsSync(sumsPath)) assert.equal(readFileSync(sumsPath,'utf8'),sums,'Existing release checksums differ. Use a separate versioned artifact directory.');
+else writeFileSync(sumsPath,sums,{flag:'wx'});
 console.log(JSON.stringify(result, null, 2));

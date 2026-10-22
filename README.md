@@ -1,7 +1,8 @@
 # Herdr Relay
 
-**0.2.0-rc.1: native-workflow release candidate for trusted local testing.**
-See [RC scope, installation and limitations](docs/release-0.2.0-rc.1.md).
+**0.2.0-rc.2: native-workflow candidate with scoped node onboarding.**
+Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
+and [RC2 scope/readiness](docs/release-0.2.0-rc.2.md).
 The native backend does not require Paperclip. Legacy Paperclip operation remains
 available and is documented separately below. This is not complete specification
 v3 certification or a production/public-ingress release.

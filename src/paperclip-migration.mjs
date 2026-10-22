@@ -131,7 +131,7 @@ export function planPaperclipImport(bundle) {
 // Offline, owner-authenticated import into an exclusively locked backend. All
 // tasks, graph links, source records, comments, mappings and receipt commit together.
 export function importPaperclipTasks(store, actor, bundle) {
-  store.ownerOnly(actor);
+  store.rootOwnerOnly(actor);
   const plan = planPaperclipImport(bundle);
   requireValue(plan.ready, 'migration_blocked', 'Resolve source obligations listed by the dry-run plan');
   return store.transaction(() => {

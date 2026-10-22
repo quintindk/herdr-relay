@@ -1,6 +1,6 @@
 # Specification v3 acceptance ledger
 
-Date: 2026-10-20. **Incomplete. Not a 0.2.0 release declaration.**
+Updated: 2026-10-22. **Incomplete. Not a 0.2.0 release declaration.**
 
 | Spec gate | Evidence | Status |
 | --- | --- | --- |
@@ -15,12 +15,37 @@ Date: 2026-10-20. **Incomplete. Not a 0.2.0 release declaration.**
 | 9. Offline pause | Requested/applied revision, local installation and source-fenced transfer | Fixture coverage, live pause pending |
 | 10. Changed scope | Cancellation, stale revision/run, foreign input, identity and review-grant checks | Partial, full matrix pending |
 | 11. Lifecycle | Dedicated launch/interruption/resume, daemon acceptance retirement and real Git guards | Passed bounded smokes, combined Git/daemon failure matrix pending |
-| 12. Clean deployment | Separate empty state, local service, preserved instance and online backup | Local passed, public Access gate unresolved |
+| 12. Clean deployment | Separate empty state, installed RC2 onboarding, online backup and all four live ingress checks | Local/artifact/ingress passed, physical Surface acceptance pending |
 | 13. Providers | Common reads, pinned node read boundary, GitHub comments/qualified relationships and uncertainty tests | Partial, external execution/write lifecycle and real writes pending |
 | 14. V2 plugin parity | Core worker/agent tools, proposal-only human tools and typed RPC | Partial tool parity |
 | 15. Shared service | Two real clients before/after reload; stale confirmations refused after reload, transport reconnect and session switch round trip | Bounded real-TUI smokes passed, actual-human evidence remains |
 | 16. V2 native | Exact messages/sessions, uncertainty tests, owned interrupt/stop/resume | Partial, crash/replay matrix pending |
 | 17. Cutover | Isolated binary/config throughout | Primary installation deliberately not cut over |
+
+## RC2 onboarding readiness, 22 October 2026
+
+- Installed-release administration, scoped daemon/operator bootstrap, guarded join,
+  JSONC-preserving plugin setup and Surface-to-Evo export/import pass isolated tests.
+- Final RC2 regression: 1,546 root tests passed, one skipped for absent pinned
+  Paperclip validator source, zero failures. All 57 v2 tests and syntax/whitespace checks pass.
+- Scoped real-TUI Home/enrol/attach/replacement probes pass on OpenCode 2.1.0 and
+  2.1.2. Input/model are fixtures, not physical Surface or actual-human evidence.
+- Fresh production dependency audit has zero findings. Live ingress passes all four
+  combinations: unauthenticated 403, actor-only 403, Access-only Relay 401 and
+  Access-plus-actor 200. The earlier Access failure is superseded.
+- Evo's existing backend is unchanged and requires an upgrade for scoped bootstrap.
+  Its inventory contains 181 tasks, 309 comments and 13 native-only tasks. One
+  execution is recorded accepted. Two schedule definitions remain enabled, including
+  a completed one-shot. Inspect future admissions and reconcile obligations first.
+- A verified online backup exists. A Surface export cannot preserve Evo-only work.
+  Zero basic imported-edit candidates is not a complete relationship/activity audit.
+- **Ready for Surface preflight and read-only export. Not ready to reset Evo or
+  perform live import.** Actual Surface installation/authentication, recoverable
+  Paperclip backup, final export/plan, data disposition and archive/reset approval
+  remain required. No live services, task data or Surface installation were changed.
+
+Use [installation and onboarding](installation-and-onboarding.md),
+[release procedure](releasing.md) and [sanitised evidence](evidence/native-rc2-onboarding.json).
 
 ## Current priority: native operation
 
@@ -54,7 +79,7 @@ npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --dae
 npm --prefix packages/opencode-relay run smoke -- --backend --worker-tools --chat-answer
 ```
 
-Latest full root checkpoint: 1,442 passed, one skipped because pinned Paperclip
+Historical root checkpoint: 1,442 passed, one skipped because pinned Paperclip
 validator source is absent, zero failures. This includes folder scheduling,
 persistent lost-send recovery and admission/cancellation guards.
 The v2 package has 20 passing tests. See [implementation ledger](implementation-v3.md)
@@ -62,9 +87,8 @@ and retained [`evidence/`](evidence/) for bounded claims.
 
 ## External dependencies
 
-- Public hostname reaching the backend is `relay.synthswarm.com`. Access-plus-actor
-  authentication works, but actor-only also reaches it. Correct the Cloudflare
-  Access application/policy and rerun `scripts/verify-backend-ingress.mjs`.
+- Public hostname `relay.synthswarm.com` passes all four ingress checks as of
+  22 October 2026. Rerun after ingress/backend changes before remote onboarding.
 - The user will install the second machine manually. See
   [second-node installation](second-node-installation.md). No SSH is required.
 - Real-model, actual-human and physical-machine checks are distinct from fixtures.
