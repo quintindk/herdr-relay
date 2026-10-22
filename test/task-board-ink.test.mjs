@@ -208,7 +208,7 @@ test('Ink task detail clips long content and scrolls inside a fixed modal viewpo
   for (let i = 0; i < 30; i++) { instance.stdin.write('j'); await tick(); }
   frame = stripVTControlCharacters(instance.lastFrame());
   assert.doesNotMatch(frame, /Evidence line 01/); assert.match(frame, /Evidence line 2\d|Evidence line 3\d/);
-  assert.match(frame, /Tab section · j\/k · PgUp\/PgDn · Home\/End/);
+  assert.match(frame, /↑↓ scroll · PgUp\/PgDn · Home\/End/);
   instance.stdin.write('\t'); await tick(); instance.stdin.write('\t'); await tick();
   frame = stripVTControlCharacters(instance.lastFrame()); assert.match(frame, /Latest note/); assert.match(frame, /1-2\/2/);
   instance.stdin.write('\t'); await tick(); frame = stripVTControlCharacters(instance.lastFrame());
@@ -227,6 +227,24 @@ test('Ink detail viewport stays inside a narrow terminal and keeps controls visi
   assert.ok(lines.every(line => line.length <= 54));
   assert.match(lines.join('\n'), /PgUp\/PgDn/);
   assert.match(lines.join('\n'), /1-\d+\/\d+/);
+});
+
+test('Ink task details wrap unbroken text and reach its tail with End, then return to the title with Home', async t => {
+  const title = 'A complete task title that is deliberately longer than its narrow modal header';
+  const description = `START-${'x'.repeat(1400)}-END-OF-CONTENT`;
+  const instance = render(h(TaskBoardInkApp, { read: async () => board,
+    detailTask: async () => ({ task: { ...board.tasks[0], title, description }, result: null, comments: [], revision: 'revision' }),
+    interval: 60000, width: 60, height: 20 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('\r'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /START-/);
+  instance.stdin.write('\x1b[F'); await tick();
+  let output = stripVTControlCharacters(instance.lastFrame());
+  assert.match(output, /END-OF-CONTENT/);
+  assert.ok(output.split('\n').length <= 20);
+  assert.ok(output.split('\n').every(line => line.length <= 60));
+  instance.stdin.write('\x1b[H'); await tick();
+  output = stripVTControlCharacters(instance.lastFrame());
+  assert.match(output, /A complete task title/); assert.match(output, /1-\d+\/\d+/);
 });
 
 test('Ink assignment picker submits one freshly inspected assignment', async t => {

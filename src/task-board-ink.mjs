@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { buildBoardRows, wrapBoardText } from './task-board-view.mjs';
+import { buildBoardRows, wrapBoardText, taskBoardColumns } from './task-board-view.mjs';
 import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
 
 const h = React.createElement;
@@ -205,20 +205,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
   const modalWidth = Math.max(52, Math.min(100, width - 4)), modalHeight = Math.max(12, Math.min(height - 2, 24));
   const contentWidth = Math.max(20, modalWidth - 6);
   const viewportHeight = Math.max(3, modalHeight - (detail.kind === 'task' ? 8 : 7));
-  const wrapLines = value => {
-    const paragraphs = String(value ?? '').split(/\r?\n/); const lines = [];
-    for (const paragraph of paragraphs) {
-      if (!paragraph) { lines.push(''); continue; }
-      let current = '';
-      for (const word of clean(paragraph).split(/\s+/).filter(Boolean)) {
-        const next = current ? `${current} ${word}` : word;
-        if (next.length <= contentWidth) current = next;
-        else { if (current) lines.push(current); current = word; }
-      }
-      if (current) lines.push(current);
-    }
-    return lines;
-  };
+  const wrapLines = value => wrapBoardText(value, contentWidth);
   let content = [], taskSections;
   if (!detail.loading && !detail.error && detail.kind === 'task') {
     const task = detail.data.task;
@@ -227,7 +214,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
       Actions: [task.attentionLabel || 'Needs your attention', '', ...actions.flatMap((item, i) => [
         `${i === actionIndex ? '›' : ' '} ${item.kind === 'question' ? 'Answer question' : item.kind === 'review' ? 'Review result' : 'Acknowledge reminder'}`,
         ...wrapLines(item.summary), ''])],
-      Overview: [...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
+      Overview: ['Title', ...wrapLines(task.title), '', ...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
         ...(task.attentionLabel ? [task.attentionLabel, `Responsible: ${task.responsibleName || task.responsibleUserId || 'Not set'}`, `Worker: ${task.executionAgentName || 'None'}`, ''] : []),
         ...(task.executionNodeName ? [`Node: ${task.executionNodeName}`, `Machine: ${task.executionMachineName || 'Not advertised'}`, ''] : []),
         'Summary', '', ...wrapLines(task.description || 'No description.'), ...(technical ? ['', `Task identity: ${task.id}`] : [])],
@@ -253,8 +240,9 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
         ? `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.run.linkedIssueId || 'taskless'}  ${clean(entry.run.summary).replace(/[\u202a-\u202e\u2066-\u2069]/g, '')}`
         : `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.task?.identifier || entry.run.linkedIssueId || 'unlinked'}  ${entry.task ? entry.task.status : entry.mismatch ? 'identity mismatch' : 'not on board'}`)];
   }
+  content = content.flatMap(wrapLines);
   const scrollKey = detail.kind === 'task' ? taskTabs[tab] : 'Routine';
-  const scroll = scrolls[scrollKey] ?? 0;
+  const scroll = Math.min(scrolls[scrollKey] ?? 0, Math.max(0, content.length - viewportHeight));
   const setScroll = update => setScrolls(value => ({ ...value,
     [scrollKey]: typeof update === 'function' ? update(value[scrollKey] ?? 0) : update }));
   const occurrenceStart = detail.kind === 'routine' && detail.data ? 5 + (detail.data.delivery ? 1 : 0) : -1;
@@ -299,8 +287,8 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
   if (detail.kind === 'task') {
     const task = detail.data.task;
     return h(Box, box,
-      h(Text, { bold: true, color: 'magenta' }, detail.data.actions !== undefined ? decisionText(task.title) : `${task.identifier || task.id} · ${task.title}`),
-      h(Text, { dimColor: true }, `${task.status} · ${task.assigneeUserId || task.assigneeAgentId || 'unassigned'}`),
+      h(Text, { bold: true, color: 'magenta', wrap: 'truncate-end' }, detail.data.actions !== undefined ? decisionText(task.title) : `${task.identifier || task.id} · ${task.title}`),
+      h(Text, { dimColor: true, wrap: 'truncate-end' }, `${task.status} · ${task.assigneeUserId || task.assigneeAgentId || 'unassigned'}`),
       h(Box, { gap: 2 }, ...taskTabs.map((name, index) => h(Text, { key: name, inverse: tab === index,
         bold: tab === index, color: tab === index ? 'cyan' : undefined }, ` ${name} `))),
       h(Box, { height: viewportHeight, flexDirection: 'column', overflow: 'hidden', marginTop: 1 },
@@ -309,7 +297,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
           color: line.startsWith('Routine occurrence ') ? 'cyan' : undefined,
           dimColor: ['No comments.', 'No Relay result.'].includes(line) }, line || ' '))),
       h(Box, { justifyContent: 'space-between' },
-        h(Text, { dimColor: true }, `${actions.length && taskTabs[tab] === 'Actions' ? 'Enter act · ' : detail.data.review ? 'A approve · F/R reject · ' : ''}Tab section · j/k · PgUp/PgDn · Home/End · Esc close`),
+         h(Text, { dimColor: true, wrap: 'truncate-end' }, `${actions.length && taskTabs[tab] === 'Actions' ? 'Enter act · ' : detail.data.review ? 'A approve · F/R reject · ' : ''}↑↓ scroll · PgUp/PgDn · Home/End · Tab section · Esc close`),
         h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
   }
   const routine = detail.data, occurrences = detail.occurrences;
@@ -595,6 +583,9 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     h(Text, { bold: true, inverse: active, color: active ? color : undefined, dimColor: overlay, wrap: 'truncate-end' }, title));
   const emptyLabel = view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.'
     : view === 'agents' ? 'No agents advertised.' : view === 'schedules' ? 'No schedules installed.' : showDone ? 'No matching tasks.' : 'No open tasks.';
+  const statusLabel = task => native && task.attentionLabel
+    ? `${labels[task.status] ?? task.status} · ${decisionText(task.attentionLabel)}` : `[${labels[task.status] ?? task.status}]`;
+  const taskColumns = taskBoardColumns(width, visible.filter(row => row.type === 'task').map(row => statusLabel(row.task)));
   const background = h(Box, { width, height, flexDirection: 'column' },
     h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: overlay }, native ? `RELAY / ${view === 'schedules' ? 'SCHEDULE' : view.toUpperCase()}` : 'RELAY / TASKS'),
       h(Text, { dimColor: true }, native ? offline ? 'Inbox unavailable: showing cached state' : !loaded ? 'Loading inbox…' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`)),
@@ -629,9 +620,9 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
           h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, h(Text, { wrap: 'truncate-end', inverse: active,
             bold: row.type === 'section' || native && row.type === 'group', dimColor: dimmed || native && row.type === 'group' && !active, color: tone }, rowText(row))),
-          row.type === 'task' ? h(Box, { width: native ? Math.min(48, Math.floor(width / 2)) : 13, flexShrink: 0, justifyContent: 'flex-end' },
-            h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, native && row.task.attentionLabel
-              ? `${labels[row.task.status] ?? row.task.status} · ${decisionText(row.task.attentionLabel)}` : `[${labels[row.task.status] ?? row.task.status}]`)) : null);
+          row.type === 'task' ? h(Box, { width: native ? taskColumns.status : 13, marginLeft: native ? taskColumns.gap : 0,
+            flexShrink: 0, justifyContent: 'flex-end' },
+            h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, statusLabel(row.task))) : null);
       })),
     searching ? h(Text, { dimColor: Boolean(modal || detail) }, `/${filter}▏  Enter apply · Esc clear`) : notice
       ? h(Text, { dimColor: Boolean(modal || detail) }, notice.text)

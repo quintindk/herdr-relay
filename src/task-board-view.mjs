@@ -34,6 +34,15 @@ function widthOf(text) {
   return [...segmenter.segment(text)].reduce((sum, { segment }) => sum + cellWidth(segment), 0);
 }
 
+/** Size the status column to its content, without taking space from long titles. */
+export function taskBoardColumns(columns, statusLabels = []) {
+  const available = Math.max(0, Math.floor(columns) - 4); // Borders and horizontal padding.
+  const longest = Math.max(0, ...statusLabels.map(label => widthOf(clean(label))));
+  const status = Math.min(longest, 48, Math.floor(available / 3));
+  const gap = status && available > status ? 1 : 0;
+  return { title: available - status - gap, status, gap };
+}
+
 /** Lossless cell-aware lines for scrollable decision editors and previews. */
 export function wrapBoardText(value, columns) {
   const lines = [];

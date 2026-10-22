@@ -4,7 +4,7 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 import { stripVTControlCharacters } from 'node:util';
 import { TaskBoardInkApp } from '../src/task-board-ink.mjs';
-import { wrapBoardText } from '../src/task-board-view.mjs';
+import { wrapBoardText, taskBoardColumns } from '../src/task-board-view.mjs';
 
 const h = React.createElement, tick = () => new Promise(resolve => setTimeout(resolve, 45));
 const question = { id: 'question:q', entityId: 'q', kind: 'question', title: 'Prepare deployment', summary: 'Which region should I use?',
@@ -20,6 +20,64 @@ const base = { companies: [{ id: 'native', name: 'Relay' }], projects: [], agent
 const frame = instance => stripVTControlCharacters(instance.lastFrame());
 async function input(instance, text) { instance.stdin.write(text); await tick(); }
 async function inbox(instance) { await input(instance, '\t'); await input(instance, '\t'); }
+
+test('native task columns use actual status width and reserve at least two thirds for titles', () => {
+  assert.deepEqual(taskBoardColumns(100, ['[Todo]']), { title: 89, status: 6, gap: 1 });
+  for (const width of [40, 54, 80, 100, 160, 240]) {
+    const layout = taskBoardColumns(width, ['Long attention state '.repeat(8)]);
+    assert.equal(layout.title + layout.status + layout.gap, width - 4);
+    assert.ok(layout.status <= Math.floor((width - 4) / 3));
+    assert.ok(layout.status <= 48);
+  }
+  assert.equal(taskBoardColumns(80, ['界界']).status, 4);
+});
+
+test('native board gives short statuses no unused fixed column and displays a longer task title', async t => {
+  const title = 'A task title that previously disappeared into the oversized status column';
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, tasks: [{ ...task, title, status: 'todo', attentionLabel: '' }] }),
+    detailInbox: async () => question, decideInbox: async () => assert.fail('Read-only layout'), interval: 60000, width: 100, height: 24 }));
+  t.after(() => instance.unmount()); await tick();
+  assert.match(frame(instance), /A task title that previously disappeared into the oversized status column/);
+  assert.match(frame(instance), /\[Todo\]/);
+});
+
+test('long question scroll reaches the beginning and end without losing the answer or publishing it', async t => {
+  const longQuestion = { ...question, summary: Array.from({ length: 45 }, (_, i) => `Question detail ${String(i + 1).padStart(2, '0')}`).join('\n') };
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, inbox: [longQuestion] }), detailInbox: async () => longQuestion,
+    decideInbox: async value => { writes.push(value); return { state: 'recorded' }; }, interval: 60000, width: 90, height: 24 }));
+  t.after(() => instance.unmount()); await tick(); await inbox(instance); await input(instance, '\r');
+  await input(instance, 'Retained answer');
+  assert.match(frame(instance), /Retained answer/);
+  await input(instance, '\x1b[H');
+  assert.match(frame(instance), /Question detail 01/); assert.match(frame(instance), /1–/);
+  await input(instance, '\x1b[B'); assert.match(frame(instance), /2–/);
+  await input(instance, '\x1b[A'); assert.match(frame(instance), /1–/);
+  await input(instance, '\x1b[6~');
+  assert.doesNotMatch(frame(instance), /Question detail 01/);
+  await input(instance, '\x1b[F'); assert.match(frame(instance), /Retained answer/);
+  await input(instance, '\r');
+  await input(instance, '\x1b[H'); assert.match(frame(instance), /Question detail 01/);
+  assert.equal(writes.length, 0);
+  await input(instance, '\x1b[F'); await input(instance, '\r');
+  assert.equal(writes.length, 1); assert.equal(writes[0].body, 'Retained answer');
+});
+
+test('review paging does not change the decision or reason while reading a long result', async t => {
+  const item = { ...review, summary: Array.from({ length: 50 }, (_, i) => `Result line ${i + 1}`).join('\n') };
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, inbox: [item] }), detailInbox: async () => item,
+    decideInbox: async value => { writes.push(value); return { state: 'recorded' }; }, interval: 60000, width: 90, height: 24 }));
+  t.after(() => instance.unmount()); await tick(); await inbox(instance); await input(instance, '\r');
+  await input(instance, '\x1b[B'); // Select request changes, not scroll, in the decision field.
+  await input(instance, '\r'); await input(instance, 'Keep this review reason');
+  await input(instance, '\x1b[H'); assert.match(frame(instance), /Result line 1/);
+  await input(instance, '\x1b[6~'); await input(instance, '\x1b[F');
+  assert.match(frame(instance), /Keep this review reason/);
+  assert.equal(writes.length, 0);
+  await input(instance, '\r'); await input(instance, '\r');
+  assert.equal(writes[0].decision, 'reject'); assert.equal(writes[0].reason, 'Keep this review reason');
+});
 
 test('native board Inbox answers only after exact preview and confirmation, without slash commands', async t => {
   const writes = []; let resolved = false;

@@ -47,7 +47,12 @@ stay in the agent's inbox unless explicitly forwarded to the human.
 - A reminder offers acknowledgement, without starting a model turn.
 - `Ctrl+T` expands technical identity/revision/candidate details in an editor.
   `t` remains available in read-only decision inspection.
-  `PgUp/PgDn` scrolls long context. `Esc` goes back or leaves the item pending.
+   `PgUp/PgDn` scrolls a page, and `Home/End` reaches the beginning/end. In an answer
+   or reason field, arrows scroll one line without changing the draft. In a review
+   choice field, arrows still choose the decision; page/home/end keys scroll.
+   The visible line range is shown while editing and confirming. Scrolling to line
+   one stays there rather than jumping back to the answer. Typing follows the draft
+   again. `Esc` goes back or leaves the item pending.
 - Editing supports ordinary typing, backspace and Shift+Enter for a newline.
   Answers/reasons are bounded to 4,000 characters.
 
@@ -75,12 +80,20 @@ The detail Overview names both. Pending human actions appear in an **Actions**
 section. Selecting one opens the same decision component as Inbox. Results,
 comments and recorded question/review activity remain accessible after resolution.
 `Tab` inside task detail changes sections rather than changing the board view.
+Task descriptions, results and comments use a fixed scrollable viewport with
+arrows or `j/k`, `PgUp/PgDn`, and `Home/End`. Scroll position is retained per section.
+Long unbroken text and wide Unicode characters wrap within the viewport instead
+of hiding the rest of a line. The title/status headers remain single-line so they
+cannot push the content controls off screen.
 
 The native layout uses a view-specific heading and counters, subdued rounded
 borders, highlighted tabs and spaced cards for agents, decisions and schedules.
 Secondary metadata is dimmed, while selection and decision types retain colour.
 Empty views explain what to do next. Scheduling instants are displayed in SAST.
 This presentation does not alter keyboard controls or decision semantics.
+Task status columns use their actual content width, capped at one third of the
+available row width and 48 cells. Remaining width goes to the task title rather
+than an empty fixed status column. Full attention text remains in task detail.
 
 ## Agents, nodes and machines
 
