@@ -1,5 +1,11 @@
 # Herdr Relay
 
+**0.2.0-rc.1: native-workflow release candidate for trusted local testing.**
+See [RC scope, installation and limitations](docs/release-0.2.0-rc.1.md).
+The native backend does not require Paperclip. Legacy Paperclip operation remains
+available and is documented separately below. This is not complete specification
+v3 certification or a production/public-ingress release.
+
 Connect Paperclip work to persistent OpenCode and Hermes agents in herdr.
 
 Relay is a herdr plugin, local coordination service, CLI and external Paperclip
@@ -39,6 +45,10 @@ Native [durable agents and receiving chats](docs/native-receivers.md) separate
 standing enrolment from `/relay-attach`. Persistent crons target the stable agent,
 while admitted work retains its original native conversation. The explicit Herdr
 launcher and new-chat TUI path support replacement without recreating schedules.
+Native [interactive provisioning](docs/native-interactive-provisioning.md) adds
+backend-addressed Herdr workspace creation, existing-instance reuse, replacement
+attachment and separately authorised task dispatch. Same-node testing uses that
+same request path, not a local shortcut.
 
 ## Implemented
 

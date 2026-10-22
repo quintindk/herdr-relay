@@ -53,6 +53,8 @@ export class NodeJournal {
     for (const schedule of snapshot.collections.schedule ?? []) events.push({ id: `snapshot:schedule:${schedule.id}:${schedule.revision}`,
       type: schedule.transfer?.state === 'requested' ? 'schedule.transfer_request' : schedule.cancelled ? 'schedule.cancel' : 'schedule.install',
       entityId: schedule.id, revision: schedule.revision, data: schedule });
+    for (const request of snapshot.collections.provision_request ?? []) events.push({ id: `snapshot:provision:${request.id}:${request.revision}`,
+      type: 'interactive.request', entityId: request.id, revision: request.revision, data: request });
     // Native delivery intent/history is never replaced from a shared snapshot.
     // Only newer backend projections and new addressed work are merged.
     this.consume({ items: events, cursor: snapshot.cursor });
@@ -67,6 +69,12 @@ export class NodeJournal {
         const previous = this.db.prepare('SELECT data FROM inbox WHERE id=?').get(event.id);
         if (previous) { requireValue(previous.data === JSON.stringify(event), 'event_conflict', 'Event identity payload changed'); continue; }
         this.db.prepare('INSERT INTO inbox VALUES (?,?)').run(event.id, JSON.stringify(event));
+        if (['interactive.request', 'interactive.progress', 'interactive.cancel'].includes(event.type) && event.data.nodeId === this.nodeId) {
+          const key = `interactive-request:${event.entityId}`;
+          const old = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+          if (!old || JSON.parse(old.value).revision < event.revision) this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(key, JSON.stringify(event.data));
+        }
         const cacheKind = event.type.startsWith('task.') ? 'task' : event.type.startsWith('comment.') ? 'comment' :
           event.type.startsWith('agent.') ? 'agent' : event.type.startsWith('node.') ? 'node' :
           event.type.startsWith('question.') ? 'question' : null;

@@ -1,6 +1,6 @@
 {
   "name": "@herdr/relay-opencode-v2-spike",
-  "version": "0.2.0-dev.1",
+  "version": "0.2.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Isolated OpenCode v2 compatibility spike for Herdr Relay",
@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@opencode/cli": "2.1.0",
-    "solid-js": "1.9.15"
+    "solid-js": "1.9.17"
   },
   "engines": {
     "node": ">=24.0.0"

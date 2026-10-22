@@ -19,6 +19,7 @@ import { nodeTasks } from './node-tasks.mjs';
 import { enrolledDirectory, resolveFolderBinding } from './node-folder.mjs';
 import { configureV2WorkerSession, v2WorkerInstructions, usesV2WorkerTools } from './node-worker-instructions.mjs';
 import { NativeReceivers } from './native-receivers.mjs';
+import { tickInteractive } from './node-interactive.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 try {
@@ -103,7 +104,7 @@ try {
           resume: entry.resume === true });
         ownedDefinitions.set(entry.agentId, { entry, contextFile, failures: 0 });
       } else {
-        const { OpenCode } = await import('../packages/opencode-relay/node_modules/@opencode/client/dist/promise/index.js');
+        const { OpenCode } = await import('@opencode/client');
         const { NativeOpenCodeV2, observeV2, checkV2Version } = await import('../packages/opencode-relay/native.mjs');
         requireValue(entry.identity && entry.url && entry.authFile && entry.reserved === true,
           'invalid_binding', 'Exact OpenCode identity, private auth and explicit conversation reservation required');
@@ -195,7 +196,13 @@ try {
       requireValue(lstatSync(socketPath).isSocket(), 'socket_conflict', 'Node socket path is not a socket');
       unlinkSync(socketPath);
     }
-    service = await startNodeService({ journal, socketPath, workers, api, tasks });
+    service = await startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel: async worker => {
+      const binding = historicalBindings.get(worker.bindingId);
+      requireValue(binding?.native.verify, 'native_model_unavailable', 'Requester native model cannot be resolved');
+      const session = await binding.native.verify(), model = session.model;
+      requireValue(model?.providerID && model.id, 'native_model_unavailable', 'Requester has no resolved native model');
+      return { providerID: model.providerID, id: model.id, ...(model.variant && model.variant !== 'default' ? { variant: model.variant } : {}) };
+    } });
     let lastHeartbeat = 0;
     const tick = () => {
       if (closed) return;
@@ -234,6 +241,7 @@ try {
       };
       resolveBinding.folder = directory => resolveFolderBinding(bindings, directory, resolveBinding);
       pending = refreshReceivers().then(() => tickNode(journal, api, resolveBinding)).finally(async () => {
+        await tickInteractive(journal, api, config, resolveBinding);
         await tickAutomation(journal, resolveBinding, Date.now(), api);
         await tickAgentNotices(journal, api, resolveBinding);
         for (const [agentId, owned] of ownedDefinitions) {

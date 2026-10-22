@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { BackendStore, backendProtocol } from './backend-store.mjs';
 import { RelayError, requireValue } from './protocol.mjs';
+import { interactiveAuthority } from './interactive-contract.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
@@ -22,7 +23,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       requireValue(!req.headers.origin, 'origin_not_allowed', 'Browser Origin requests are not supported by the native API', 403);
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
-        features: { nodeMachineAdvertisement: true } };
+        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true } };
+      else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && url.pathname === '/v1/snapshot') result = store.snapshot();
       else if (req.method === 'GET' && url.pathname === '/v1/activity') result = store.activity({
         from: url.searchParams.get('from'), to: url.searchParams.get('to'), taskId: url.searchParams.get('taskId') ?? undefined,
@@ -34,7 +36,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       }
       else if (req.method === 'GET' && url.pathname === '/v1/events') result = store.events({ cursor: url.searchParams.get('cursor') ?? undefined,
         limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined });
-      else if (req.method === 'GET' && /^\/v1\/(task|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact)s(?:\/[^/]+)?$/.test(url.pathname)) {
+      else if (req.method === 'GET' && /^\/v1\/(task|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact|provision_grant|provision_request)s(?:\/[^/]+)?$/.test(url.pathname)) {
         const [, plural, id] = url.pathname.split('/').slice(1);
         const kind = plural.slice(0, -1);
         requireValue([...url.searchParams.keys()].every(key => ['cursor', 'taskId', 'status', 'limit'].includes(key)),

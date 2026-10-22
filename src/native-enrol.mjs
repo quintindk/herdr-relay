@@ -6,6 +6,7 @@ import { requireValue, digest } from './protocol.mjs';
 import { NativeOpenCodeV2, checkV2Version } from '../packages/opencode-relay/native.mjs';
 import { NodeJournal } from './node-journal.mjs';
 import { NativeReceivers } from './native-receivers.mjs';
+import { canonicalDirectory } from './interactive-contract.mjs';
 
 export const nativeNodeConfig = () => join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-native/node.json');
 const writePrivate = (path, value, exclusive = false) => {
@@ -17,8 +18,33 @@ const writePrivate = (path, value, exclusive = false) => {
   try { fsyncSync(directory); } finally { closeSync(directory); }
 };
 
+export function configureInteractiveNode({ configFile = nativeNodeConfig(), policy }) {
+  requireValue(policy && typeof policy === 'object' && !Array.isArray(policy) && Object.keys(policy).every(k =>
+    ['mode', 'roots', 'herdrSocketPath', 'serviceRegistration', 'allowNewEnrolments', 'allowCreateDirectories', 'allowReplacement', 'profiles', 'maxAgents', 'environment', 'model'].includes(k)),
+    'invalid_policy', 'Only explicit interactive node policy fields are supported');
+  requireValue(['roots', 'localUser'].includes(policy.mode) && canonicalDirectory(policy.herdrSocketPath) &&
+    (policy.mode === 'localUser' ? !policy.roots?.length : Array.isArray(policy.roots) && policy.roots.length > 0 &&
+      policy.roots.length <= 32 && policy.roots.every(p => canonicalDirectory(p) && realpathSync(p) === p)),
+    'invalid_policy', 'Explicit Herdr socket and canonical directory scope required');
+  for (const k of ['allowNewEnrolments', 'allowCreateDirectories', 'allowReplacement']) requireValue(policy[k] === undefined || typeof policy[k] === 'boolean', 'invalid_policy', 'Permissions must be boolean');
+  requireValue(Number.isSafeInteger(policy.maxAgents ?? 10) && (policy.maxAgents ?? 10) > 0 && (policy.maxAgents ?? 10) <= 100 &&
+    (policy.profiles === undefined || Array.isArray(policy.profiles) && policy.profiles.length > 0 && policy.profiles.every(p => typeof p === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(p))),
+    'invalid_policy', 'Bounded agent limit and native profiles required');
+  if (policy.serviceRegistration) requireValue(canonicalDirectory(policy.serviceRegistration), 'invalid_policy', 'Absolute native service registration required');
+  if (policy.model) requireValue(typeof policy.model.providerID === 'string' && typeof policy.model.id === 'string' &&
+    Object.keys(policy.model).every(k => ['providerID', 'id', 'variant'].includes(k)) && (!policy.model.variant || typeof policy.model.variant === 'string'),
+    'invalid_policy', 'Explicit native model reference required');
+  if (policy.environment) requireValue(typeof policy.environment === 'object' && !Array.isArray(policy.environment) &&
+    Object.values(policy.environment).every(v => typeof v === 'string'), 'invalid_policy', 'Node-controlled environment must contain only strings');
+  const config = JSON.parse(readFileSync(configFile, 'utf8'));
+  requireValue(config.identityVersion === 2, 'configuration_conflict', 'Stable node installation required');
+  if (digest(config.interactive ?? null) === digest(policy)) return { state: 'existing', nodeId: config.nodeId, restartRequired: false };
+  writePrivate(configFile, { ...config, interactive: policy });
+  return { state: 'configured', nodeId: config.nodeId, restartRequired: true, nativePermissionsChanged: false };
+}
+
 export async function nativeConnection(input, dependencies = {}) {
-  const discover = dependencies.discover ?? (await import('../packages/opencode-relay/node_modules/@opencode/client/dist/promise/service.js')).Service.discover;
+  const discover = dependencies.discover ?? (await import('@opencode/client/service')).Service.discover;
   const endpoint = await discover({ ...(input.serviceRegistration ? { file: input.serviceRegistration } : {}), version: version => {
     try { checkV2Version(version); return true; } catch { return false; }
   } });
@@ -27,7 +53,7 @@ export async function nativeConnection(input, dependencies = {}) {
   const origin = new URL(endpoint.url);
   requireValue(origin.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(origin.hostname) && !origin.username && !origin.password,
     'invalid_binding', 'Native service must be authenticated loopback HTTP');
-  const makeClient = dependencies.makeClient ?? (await import('../packages/opencode-relay/node_modules/@opencode/client/dist/promise/index.js')).OpenCode.make;
+  const makeClient = dependencies.makeClient ?? (await import('@opencode/client')).OpenCode.make;
   const client = makeClient({ baseUrl: origin.origin, headers: { authorization:
     `Basic ${Buffer.from(`opencode:${endpoint.auth.password}`).toString('base64')}` },
   fetch: (url, options) => fetch(url, { ...options, signal: options?.signal ?? AbortSignal.timeout(15000) }) });

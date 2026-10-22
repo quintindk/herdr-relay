@@ -4,6 +4,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { isAbsolute, normalize } from 'node:path';
+import { applyInteractive } from './interactive-contract.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -61,7 +62,7 @@ export class BackendStore {
   snapshot() {
     return this.transaction(() => ({ instanceId: this.instance, protocol: backendProtocol,
       collections: Object.fromEntries(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
-        .map(kind => [kind, this.all(kind)])),
+        .concat(['provision_grant', 'provision_request']).map(kind => [kind, this.all(kind)])),
       cursor: Buffer.from(JSON.stringify({ instance: this.instance,
         after: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq) })).toString('base64url'), fetchedAt: now() }));
   }
@@ -171,6 +172,7 @@ export class BackendStore {
       return this.save(kind, { ...input, revision: 1, createdAt: now(), updatedAt: now() });
     };
     const changed = (kind, entity, patch) => this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
+    if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed });
     const taskDisposition = (taskId, status, causation) => {
       const task = this.get('task', taskId);
       if (terminal(task)) return task;
@@ -203,7 +205,7 @@ export class BackendStore {
       return { id: p.id, revision: 1, revoked: true };
     }
     if (action === 'agent.enrol') {
-      this.ownerOnly(actor);
+      if (!authority.interactiveRequest) this.ownerOnly(actor);
       fields(p, ['id', 'nodeId', 'name', 'directory'], ['id', 'nodeId', 'name', 'directory']);
       this.get('node', p.nodeId);
       string(p.name, 'name', 256);
@@ -212,10 +214,11 @@ export class BackendStore {
       requireValue(!this.all('agent').some(a => a.nodeId === p.nodeId && a.directory === p.directory && a.name === p.name && a.standingGrant),
         'enrolment_exists', 'This workspace and agent name already have an enrolment', 409);
       return created('agent', { ...p, mode: 'interactive', capabilities: [], ownerId: this.owner, bindingRevision: 0,
-        standingGrant: { autoAttach: true, scheduleManagement: true, userId: actor.id, at: now() } });
+        standingGrant: { autoAttach: true, scheduleManagement: true, userId: this.owner, at: now(),
+          ...(authority.interactiveRequest ? { provisioningRequestId: authority.interactiveRequest.id } : {}) } });
     }
     if (action === 'agent.attach') {
-      this.ownerOnly(actor);
+      if (!authority.interactiveRequest) this.ownerOnly(actor);
       fields(p, ['id', 'expectedBindingRevision', 'conversationId', 'directory', 'bindingId'],
         ['id', 'expectedBindingRevision', 'conversationId', 'directory', 'bindingId']);
       const agent = this.get('agent', p.id);
@@ -228,7 +231,8 @@ export class BackendStore {
         'conversation_alias', 'Conversation already receives work for another agent');
       return changed('agent', agent, { bindingId: p.bindingId, bindingRevision: agent.bindingRevision + 1,
         conversationId: p.conversationId, availability: 'unknown',
-        attachment: { userId: actor.id, previousConversationId: agent.conversationId ?? null, at: now() } });
+        attachment: { userId: this.owner, previousConversationId: agent.conversationId ?? null, at: now(),
+          ...(authority.interactiveRequest ? { provisioningRequestId: authority.interactiveRequest.id } : {}) } });
     }
     if (action === 'agent.register') {
       fields(p, ['id', 'nodeId', 'name', 'capabilities', 'mode', 'directory'], ['id', 'nodeId', 'name', 'mode']);
@@ -485,7 +489,7 @@ export class BackendStore {
     }
     if (action === 'task.create') {
       // Node-originated capture needs an explicit scoped grant, not operator powers.
-      this.ownerOnly(actor);
+      if (!authority.interactiveRequest) this.ownerOnly(actor);
       fields(p, ['id', 'title', 'description', 'status', 'priority', 'parentId', 'dependencies', 'labels', 'externalReference'], ['id', 'title']);
       if (p.externalReference) {
         const identity = this.referenceIdentity(p.externalReference);
@@ -572,7 +576,7 @@ export class BackendStore {
       requireValue(!terminal(task), 'task_terminal', 'Cannot execute terminal task', 409);
       requireValue(task.status !== 'in_review' && !this.all('question').some(q => q.taskId === task.id && q.status === 'open' && q.blocking),
         'task_waiting', 'Resolve pending review/questions before a fresh execution');
-      this.ownerOnly(actor);
+      if (!authority.interactiveRequest) this.ownerOnly(actor);
       if (p.originAgentId) this.get('agent', p.originAgentId);
       if (p.originConversation !== undefined) string(p.originConversation, 'originConversation', 512);
       const target = this.get('agent', p.targetAgentId);
@@ -1003,7 +1007,7 @@ export class BackendStore {
   }
 
   query(kind, { cursor, limit = 100, taskId, status } = {}) {
-    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'monitor_result', 'artifact'].includes(kind), 'invalid_query', 'Unknown collection');
+    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'monitor_result', 'artifact', 'provision_grant', 'provision_request'].includes(kind), 'invalid_query', 'Unknown collection');
     requireValue(Number.isSafeInteger(limit) && limit > 0 && limit <= 500 &&
       (!taskId || validId(taskId)) && (!status || typeof status === 'string' && status.length <= 100), 'invalid_query', 'Invalid collection scope');
     const scope = digest({ kind, limit, taskId: taskId ?? null, status: status ?? null });

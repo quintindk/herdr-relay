@@ -5,7 +5,7 @@ import { nativeTasksProvider } from './tasks-provider.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
-export async function startNodeService({ journal, socketPath, workers, api, tasks }) {
+export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel }) {
   tasks ??= api ? { ...nativeTasksProvider(api), type: 'native' } : null;
   requireValue(!existsSync(socketPath), 'socket_exists', 'Node socket already exists. Verify the old service before removing it');
   const server = createServer(async (req, res) => {
@@ -31,6 +31,45 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       const ownsWork = work => work?.execution.targetAgentId === worker.agentId &&
         (!worker.sessionId || !work.nativeConversationId || work.nativeConversationId === worker.sessionId) &&
         (!worker.bindingId || work.bindingId === worker.bindingId);
+      if (path === '/agent/interactive-context') {
+        requireValue(Object.keys(body).length === 0, 'invalid_request', 'Discussion context takes no overrides');
+        const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`interactive-context:${worker.bindingId}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(row ? JSON.parse(row.value) : { topic: null })); return;
+      }
+      if (path === '/agent/interactive-grants') {
+        requireValue(api && Object.keys(body).length === 0, 'invalid_request', 'Grant discovery takes no overrides');
+        const items = [];
+        let cursor;
+        do {
+          const page = await api('GET', `/v1/provision_grants?${new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) })}`);
+          items.push(...page.items.filter(g => g.requesterAgentId === worker.agentId)); cursor = page.nextCursor;
+        } while (cursor);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ items, complete: true })); return;
+      }
+      if (path === '/agent/interactive-status') {
+        requireValue(api && Object.keys(body).length === 1 && typeof body.id === 'string', 'invalid_request', 'Exact preparation ID required');
+        const request = await api('GET', `/v1/provision_requests/${encodeURIComponent(body.id)}`);
+        requireValue(request.requesterAgentId === worker.agentId, 'forbidden', 'Only the initiating agent may inspect this request', 403);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(request)); return;
+      }
+      if (['/agent/interactive-prepare', '/agent/interactive-dispatch', '/agent/interactive-cancel'].includes(path)) {
+        currentReceiver();
+        requireValue(api && Object.keys(body).every(k => ['key', 'payload'].includes(k)) && typeof body.key === 'string' &&
+          body.key.trim() && body.key.length <= 100 && body.payload, 'invalid_request', 'Immutable key and bounded provisioning payload required');
+        requireValue(!journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
+          'interactive_human_context_required', 'Scheduled and delegated executions cannot create agents through the human-chat route', 403);
+        const operation = path.slice('/agent/interactive-'.length);
+        const allowed = operation === 'prepare' ? ['id', 'grantId', 'nodeId', 'directory', 'agentId', 'name', 'createDirectory', 'instance', 'profile', 'topic'] :
+          operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'title', 'instructions'] : ['id', 'expectedRevision', 'reason'];
+        requireValue(Object.keys(body.payload).every(k => allowed.includes(k)), 'invalid_request', 'Caller cannot override its provisioning identity');
+        const key = `interactive-source:${worker.agentId}:${body.key}`;
+        const previous = journal.receipt(key);
+        const inheritedModel = operation === 'prepare' ? previous ? previous.command.payload.model : await getNativeModel?.(worker) : undefined;
+        const command = { key, action: `interactive.${operation === 'prepare' ? 'request' : operation}`,
+          payload: { ...body.payload, ...(inheritedModel ? { model: inheritedModel } : {}), requesterAgentId: worker.agentId, sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision } };
+        journal.queue(command); await journal.flush(api);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(journal.receipt(command.key))); return;
+      }
       if (path === '/agent/status') {
         requireValue(Object.keys(body).length === 0, 'invalid_request', 'Status takes no overrides');
         const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${worker.agentId}`);

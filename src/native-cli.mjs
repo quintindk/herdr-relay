@@ -11,7 +11,7 @@ import { call } from './client.mjs';
 import { nativeBackendClient } from './backend-client.mjs';
 import { requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
-import { enrolInteractive, attachInteractive, listEnrolments, launchInteractive, nativeConnection } from './native-enrol.mjs';
+import { enrolInteractive, attachInteractive, listEnrolments, launchInteractive, nativeConnection, configureInteractiveNode } from './native-enrol.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
   agent enrol --here|--session ID --reserved [--config PRIVATE_NODE_JSON] [--directory DIR] [--name NAME] [--transport tools|cli]
@@ -19,8 +19,12 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   agent enrolments [--directory DIR] [--config PRIVATE_NODE_JSON] --context OWNER_JSON
   agent attach --here|--session ID --agent ID --generation N --key KEY [--config PRIVATE_NODE_JSON] [--directory DIR] --context OWNER_JSON
   agent launch [--agent ID] [--directory DIR] [--config PRIVATE_NODE_JSON] [--key KEY] [--json] --context OWNER_JSON
+  interactive grant|request|dispatch --file PAYLOAD_JSON --key KEY --context OWNER_JSON
+  interactive list|inspect [ID] --context OWNER_JSON
+  interactive revoke|cancel ID --revision N --key KEY [--reason TEXT] --context OWNER_JSON
   node install|run --config PRIVATE_NODE_JSON
   node ensure --config PRIVATE_NODE_JSON --session ID  [reuse the running node, otherwise install/start it]
+  node configure-interactive --config PRIVATE_NODE_JSON --file POLICY_JSON  [local operator only, restart node afterwards]
   inbox install --here|--session HUMAN_SESSION_ID --context OWNER_JSON [--config-dir DIR] [--evidence-file FILE]
   task|comment|agent|node|execution|schedule|occurrence list [--limit N] [--cursor TOKEN]
   task|comment|agent|node|execution|schedule|occurrence inspect ID
@@ -57,6 +61,7 @@ export async function main(args) {
   const output = value => console.log(JSON.stringify(value, null, 2));
   requireValue(positionals.length <= 3, 'invalid_request', 'Unexpected positional arguments');
   const allowed = group === 'node' && ['install', 'run'].includes(action) ? ['config']
+    : group === 'node' && action === 'configure-interactive' ? ['config', 'file']
     : group === 'node' && action === 'ensure' ? ['config', 'session']
     : group === 'inbox' && action === 'install' ? ['context', 'here', 'session', 'config-dir', 'evidence-file']
     : group === 'agent' && action === 'enrol' ? ['context', 'here', 'session', 'config', 'reserved', 'directory', 'transport', 'service-registration', 'name', 'key']
@@ -65,6 +70,7 @@ export async function main(args) {
     : group === 'agent' && action === 'launch' ? ['context', 'config', 'directory', 'agent', 'key', 'json', 'service-registration']
     : group === 'schedule' && action === 'preview' ? ['cron', 'timezone']
     : group === 'board' ? ['context', 'json']
+    : group === 'interactive' && ['grant', 'request', 'dispatch'].includes(action) ? ['context', 'file', 'key']
     : action === 'list' ? ['context', 'limit', 'cursor'] : action === 'inspect' ? ['context']
     : group === 'command' ? ['context', 'file']
     : ['create', 'edit', 'comment', 'request'].includes(action) ? ['context', 'file', 'key']
@@ -75,6 +81,10 @@ export async function main(args) {
     requireValue(values.config && !id, 'invalid_request', 'Node operation requires --config');
     const script = new URL(action === 'install' ? '../scripts/install-native-node.mjs' : './node-cli.mjs', import.meta.url);
     execFileSync(process.execPath, [fileURLToPath(script), '--config', resolve(values.config)], { stdio: 'inherit' }); return;
+  }
+  if (group === 'node' && action === 'configure-interactive') {
+    requireValue(!id && values.file, 'invalid_request', 'Explicit policy file required');
+    output(configureInteractiveNode({ configFile: values.config, policy: JSON.parse(readFileSync(values.file, 'utf8')) })); return;
   }
   if (group === 'node' && action === 'ensure') {
     requireValue(values.config && values.session && !id, 'invalid_request', 'Node readiness requires --config and --session');
@@ -169,7 +179,7 @@ export async function main(args) {
     } finally { journal.close(); }
     return;
   }
-  const collections = { task: 'tasks', comment: 'comments', agent: 'agents', node: 'nodes', execution: 'executions', schedule: 'schedules', occurrence: 'occurrences' };
+  const collections = { task: 'tasks', comment: 'comments', agent: 'agents', node: 'nodes', execution: 'executions', schedule: 'schedules', occurrence: 'occurrences', interactive: 'provision_requests' };
   if (collections[group] && ['list', 'inspect'].includes(action)) {
     requireValue(action === 'list' ? !id : Boolean(id), 'invalid_request', 'Inspect requires an ID. List takes no ID');
     const query = new URLSearchParams();
@@ -183,11 +193,12 @@ export async function main(args) {
   }
   if (group === 'command') { output(await api('POST', '/v1/commands', payload())); return; }
   const fileActions = { 'task:create': 'task.create', 'task:edit': 'task.update', 'task:comment': 'comment.create',
-    'execution:request': 'execution.request', 'schedule:create': 'schedule.install' };
+    'execution:request': 'execution.request', 'schedule:create': 'schedule.install', 'interactive:grant': 'interactive.grant',
+    'interactive:request': 'interactive.request', 'interactive:dispatch': 'interactive.dispatch' };
   let nativeAction = fileActions[`${group}:${action}`], data;
   if (nativeAction) { requireValue(!id, 'invalid_request', 'The payload file supplies the entity ID'); data = payload(); }
   else if ((group === 'task' && ['complete', 'cancel'].includes(action)) || (group === 'schedule' && ['pause', 'resume', 'cancel'].includes(action)) ||
-    (group === 'execution' && action === 'cancel')) {
+    (group === 'execution' && action === 'cancel') || (group === 'interactive' && ['revoke', 'cancel'].includes(action))) {
     requireValue(id && values.revision && /^[1-9]\d*$/.test(values.revision) && Number.isSafeInteger(Number(values.revision)), 'invalid_request', 'Exact ID and --revision positive integer are required');
     data = { id, expectedRevision: Number(values.revision) };
     nativeAction = group === 'task' ? 'task.update' : `${group}.${action}`;

@@ -1,0 +1,21 @@
+{
+  "verifiedOn": "2026-10-22",
+  "version": "0.2.0-rc.1",
+  "artifact": "herdr-relay-0.2.0-rc.1.tgz",
+  "sha256": "8fb3cd02fd03bbc4767aa5bf40241069f5374d1c87b46aaf19b0cc9f5be75e50",
+  "command": "node scripts/verify-package.mjs --output /absolute/artifact/directory --skip-audit",
+  "cleanProductionInstall": true,
+  "cliEntrypointPassed": true,
+  "serverAndTuiImportsPassed": true,
+  "nativeBackendStarted": true,
+  "developmentNodeModulesRequired": false,
+  "rootTests": { "passed": 1534, "skipped": 1, "failed": 0 },
+  "v2TestsPassed": 57,
+  "syntaxAndWhitespaceChecksPassed": true,
+  "auditVerified": false,
+  "vulnerabilities": null,
+  "auditLimitation": "A fresh registry audit failed with EAI_AGAIN for registry.npmjs.org. It was explicitly skipped for this offline artifact check, not counted as passed. Earlier dependency installations reported zero vulnerabilities after pinning Solid 1.9.17.",
+  "published": false,
+  "gitTagCreated": false,
+  "scope": "Native-workflow candidate for trusted local evaluation. Not complete specification v3, physical second-machine, public-ingress or production release certification."
+}

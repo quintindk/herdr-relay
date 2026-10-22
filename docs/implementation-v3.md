@@ -73,6 +73,13 @@ Tests verify local execution without backend calls and deferred single publicati
 
 ## Next gates
 
+Native interactive provisioning now implements owner grants, addressed local/remote
+requests, conservative Herdr workspace/native-launch recovery, durable attachment,
+discussion context and separate scoped dispatch. The same-node live Herdr/model
+test passes with verified native model and placement. Read the
+[new native contract](native-interactive-provisioning.md), rather than assuming
+the legacy Paperclip bridge-worker implementation is the native execution path.
+
 Durable receiving-chat follow-up: [the receiver contract](native-receivers.md)
 now separates stable installation/agent identity from exact conversation bindings.
 Human-only `/relay-enrol` and `/relay-attach`, a fresh-chat launcher, automatic

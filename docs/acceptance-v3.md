@@ -404,3 +404,43 @@ these probes. Actual-human landing-screen acceptance is still open. Evidence:
 The full root regression again passed 1,522 tests with one skipped and zero
 failures. OpenCode configuration was reloaded without restarting the server.
 The live Wright and Relay TUIs reported the updated landing-command version.
+
+## Native interactive provisioning and first RC scope
+
+The [native interactive provisioning contract](native-interactive-provisioning.md)
+adds separate owner-issued grants, addressed preparation, node-local policy,
+existing-instance reuse, new enrolment, explicit replacement and separately
+authorised one-task dispatch. Same-node operation uses the same backend request
+and receipt path as a remote destination. Ready receipts pin the Herdr placement,
+native session, durable agent and receiver generation.
+
+The live same-node test opened a visible discussion without assigning work,
+reused it without another launch, attached a replacement to the same agent and
+completed a separately dispatched real-model check. It used GPT-6.1 Sol explicitly.
+The actual TUI supplied native-selection evidence through Herdr's installed
+OpenCode source contract. The narrow test grant was revoked after success.
+Evidence: [interactive provisioning live](evidence/native-interactive-provisioning-live.json).
+
+The live test also exposed a model-selection mismatch. New native sessions now
+explicitly pin the captured initiating model or destination operator override,
+rather than relying on a service default which can differ from the TUI display.
+Existing conversations preserve their human-selected model. Earlier interrupted
+or stalled attempts were not replayed, erased or presented as successful.
+
+Version `0.2.0-rc.1` is a native-workflow candidate for trusted local testing,
+not closure of the full v3 acceptance ledger. Runtime dependencies are included
+at the root so a clean production-only artifact installation does not depend on
+the checkout's nested development node_modules. Solid was pinned to 1.9.17 after
+the dependency audit identified transitive Seroval advisories. Both dependency
+installations then reported zero vulnerabilities. A later fresh registry audit
+was blocked by DNS and is explicitly not counted as a passed artifact audit.
+See [RC scope and limitations](release-0.2.0-rc.1.md).
+
+Final RC checkpoint: **1,534 root tests passed, one skipped, zero failed**, plus
+all **57 v2 package tests** and syntax checks. The OpenCode 2.1.0 real-TUI landing
+and replacement-scheduling probe also passed after the runtime dependency update.
+A clean production-only artifact install passed CLI startup, server/TUI imports
+and native backend startup. The fresh artifact audit is explicitly unverified
+because registry DNS is unavailable. No npm publication or Git release tag was
+created. The candidate is for trusted local evaluation while the listed release
+gates remain open.

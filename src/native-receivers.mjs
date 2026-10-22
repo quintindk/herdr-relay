@@ -17,14 +17,15 @@ export class NativeReceivers {
   list(prefix) {
     return this.journal.db.prepare('SELECT value FROM settings WHERE key LIKE ? ORDER BY key').all(`${prefix}:%`).map(row => JSON.parse(row.value));
   }
-  enrol({ directory, name, transport }) {
+  enrol({ directory, name, transport, id }) {
     return this.journal.transaction(() => {
       const existing = this.list('enrolment').find(e => e.directory === directory && e.name === name);
       if (existing) {
+        requireValue(!id || existing.id === id, 'enrolment_exists', 'Select the existing enrolled identity explicitly');
         requireValue(existing.transport === transport, 'configuration_conflict', 'Enrolment transport cannot change implicitly');
         return existing;
       }
-      const enrolment = { id: `agent_${randomUUID()}`, directory, name, transport, autoAttach: true, scheduleManagement: true };
+      const enrolment = { id: id ?? `agent_${randomUUID()}`, directory, name, transport, autoAttach: true, scheduleManagement: true };
       return this.put(`enrolment:${enrolment.id}`, enrolment);
     });
   }

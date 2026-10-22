@@ -1,6 +1,6 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.0-dev.1",
+  "version": "0.2.0-rc.1",
   "private": true,
   "license": "MIT",
   "description": "Connect Paperclip work to agents in herdr",
@@ -24,6 +24,8 @@
     "scripts/native-board-launch.mjs",
     "scripts/native-agent-launch.mjs",
     "scripts/install-native-node.mjs",
+    "scripts/install-native-backend.mjs",
+    "scripts/verify-backend-ingress.mjs",
     "herdr-plugin.toml",
     "docs/*.md"
   ],
@@ -40,8 +42,11 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.27",
+    "@opencode/client": "2.1.0",
+    "@opencode/plugin": "2.1.0",
     "ink": "^8.0.0",
-    "react": "^19.3.0"
+    "react": "^19.3.0",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
     "ink-testing-library": "^4.0.0"

@@ -1,0 +1,52 @@
+{
+  "verifiedOn": "2026-10-22T06:06:37.438Z",
+  "scope": "Same-physical-node interactive Herdr provisioning through the scoped source socket, shared backend and addressed destination-node driver, followed by separate real-model work dispatch.",
+  "passed": true,
+  "realHerdr": true,
+  "realNativeModel": true,
+  "model": { "providerID": "github-copilot", "id": "gpt-6.1-sol" },
+  "sourceAgentId": "agent_4237e875-b008-420d-a578-437e556da7f5",
+  "destinationNodeId": "node_0ecdd46b-a168-46c2-8200-4bb23d61a61d",
+  "preparedAgentId": "agent_6460085c9e597ef7909e85d3b2c0c044990b2325a7b2a4fe953f563f6dea0d2e",
+  "preparation": {
+    "createdVisibleDiscussionWithoutWork": true,
+    "workspaceId": "w16",
+    "paneId": "w16:p1",
+    "conversationId": "ses_6460085c9e597ef7909e85d3b2",
+    "generation": 1,
+    "existingInstanceReusedWithoutAnotherLaunch": true
+  },
+  "replacement": {
+    "sameDurableAgent": true,
+    "workspaceId": "w17",
+    "paneId": "w17:p1",
+    "conversationId": "ses_859efc44c89fd42b399a8c2d96",
+    "generation": 2,
+    "nativeModelVerifiedBeforeReadiness": true
+  },
+  "separateDispatch": {
+    "id": "local-interactive-b3251a5c-run",
+    "state": "completed",
+    "summary": "Interactive provisioning check passed.",
+    "terminalMessageId": "msg_16237f121001xrMsROhficnun1",
+    "runId": "run_a2dc5d3e798b1478181956b3a6c53aeef69ac06aed4f7dfef45b26d9b65b60c0",
+    "resultDigest": "13d01f477bec4a86a7ec7ea3d5671549e131e15c36560887c2ead3df1b076d48"
+  },
+  "grantRevokedAfterTest": true,
+  "earlierAttemptDispositions": [
+    { "executionId": "local-interactive-37d4aa08-run", "state": "failed", "nativeOutcome": "interrupted", "humanModelChangePreserved": true },
+    { "executionId": "local-interactive-331d1083-run", "state": "cancelled", "cancellationRequested": true }
+  ],
+  "regression": { "rootPassed": 1534, "rootSkipped": 1, "rootFailed": 0, "v2PackagePassed": 57 },
+  "readinessSource": "The actual OpenCode TUI reports its selected session through Herdr's installed herdr:opencode selection contract. No state/completion report is fabricated by the node.",
+  "discoveries": [
+    "Initial Herdr launch acknowledged an idle TUI without native-session attribution. Readiness remained blocked until TUI-originated selection reporting was installed.",
+    "A fresh session initially inherited the service's free-model default, rather than the model the user expected. The user interrupted that attempt and selected GPT-6.1 Sol. That interrupted receipt was retained, not replayed.",
+    "The corrected source connector captures the initiating native session's model, destination creation pins it explicitly, and readiness verifies it. Existing conversations retain human-selected models."
+  ],
+  "limitations": [
+    "One physical machine, not remote-node or physical second-machine certification.",
+    "The initiating test controller used the maintained scoped agent connector. This is not natural-language parsing certification for every requesting model.",
+    "Earlier failed/stalled attempts were retained with cancellation requested and provisioning grants revoked. Human-edited conversations were not reset or interrupted."
+  ]
+}

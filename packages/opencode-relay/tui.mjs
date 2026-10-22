@@ -5,6 +5,7 @@ import { RelaySpike } from './rpc.mjs';
 import { decisionPresenter } from './decision.mjs';
 import { registerHumanInbox } from './human-inbox.mjs';
 import { registerEnrolmentCommands } from './enrolment-commands.mjs';
+import { registerHerdrSession } from './herdr-session.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.spike.tui',
@@ -24,6 +25,7 @@ export default Plugin.define({
     };
     const stopHumanInbox = registerHumanInbox(ctx, { clientId, selectedSession: sessionId, record });
     const stopEnrolment = registerEnrolmentCommands(ctx, { selectedSession: sessionId, record });
+    const stopHerdr = registerHerdrSession(ctx, { selectedSession: sessionId, record });
     const decisions = decisionPresenter({ clientId, selectedSession: sessionId,
       readSource: async sessionID => {
         const page = await ctx.client.message.list({ sessionID, order: 'desc', type: 'user', limit: 1 });
@@ -84,6 +86,7 @@ export default Plugin.define({
       decisions.dispose();
       stopHumanInbox();
       stopEnrolment();
+      stopHerdr();
       stop();
       record({ type: 'disposed' });
     };
