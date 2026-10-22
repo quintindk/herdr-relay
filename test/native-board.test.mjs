@@ -91,3 +91,24 @@ test('native board refuses repeated collection cursors instead of silently hidin
     ? { items: [], nextCursor: 'loop' } : { items: [] });
   await assert.rejects(board.read(), { code: 'incomplete_collection' });
 });
+
+test('native board renders stable-agent schedules rather than rejecting their persistent target mode', async () => {
+  const backend = await startBackend({ database: ':memory:' });
+  try {
+    const token = backend.store.bootstrap().token, owner = backend.store.authenticate(token);
+    const command = (key, action, payload) => backend.store.command(owner, { key, action, payload });
+    command('node', 'node.enrol', { id: 'node', name: 'Machine' });
+    command('enrol', 'agent.enrol', { id: 'wright', nodeId: 'node', name: 'Wright', directory: '/workspace' });
+    command('attach', 'agent.attach', { id: 'wright', expectedBindingRevision: 0, directory: '/workspace', conversationId: 'ses_fresh', bindingId: 'binding' });
+    for (const [id, timing] of [['persistent-cron', { cron: '* * * * *' }], ['persistent-one-shot', { at: '2099-01-01T06:00:00Z' }]]) {
+      command(id, 'schedule.install', { id, definition: { nodeId: 'node', targetAgentId: 'wright', instructions: 'Bounded check', enabled: true, ...timing } });
+    }
+    const snapshot = await nativeBoard(nativeBackendClient({ url: backend.origin, token })).read();
+    assert.ok(snapshot.routines.every(r => r.executionMode === 'interactive_agent'));
+    assert.doesNotThrow(() => buildBoardRows(snapshot));
+    const frame = renderTaskBoard(snapshot, { width: 160, height: 40 });
+    assert.match(frame.text, /persistent-cron/); assert.match(frame.text, /persistent-one-shot/);
+    const malformed = { ...snapshot, routines: snapshot.routines.map(r => ({ ...r, executionMode: 'arbitrary-unsafe-mode' })) };
+    assert.throws(() => buildBoardRows(malformed), /Invalid task board routines/);
+  } finally { await backend.close(); }
+});

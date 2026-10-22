@@ -444,3 +444,15 @@ and native backend startup. The fresh artifact audit is explicitly unverified
 because registry DNS is unavailable. No npm publication or Git release tag was
 created. The candidate is for trusted local evaluation while the listed release
 gates remain open.
+
+### Persistent schedule board projection follow-up
+
+The live board exposed a missing renderer mode: native persistent-agent schedules
+project as `interactive_agent`, while the safe routine validator still accepted
+only legacy headless/exact/folder modes. The validator now accepts the explicit
+native mode and still rejects unknown modes. An integration regression enrols an
+agent, creates both persistent cron and one-shot schedules, reads the native board
+and renders its rows/frame. All 52 focused board tests pass. The actual
+`herdr-relay tui` command also rendered the deployed backend in a disposable PTY
+and exited cleanly on `q`, without any backend mutation. The unpublished RC1
+artifact was rebuilt with this correction.

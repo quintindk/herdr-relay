@@ -94,7 +94,7 @@ function validate(value) {
   if (value.routines !== undefined && (!Array.isArray(value.routines) || value.routines.some(item => !item ||
     typeof item.id !== 'string' || typeof item.companyId !== 'string' || typeof item.title !== 'string' ||
     typeof item.state !== 'string' || (item.executionMode !== undefined &&
-      !['headless', 'interactive_exact', 'interactive_folder'].includes(item.executionMode)) ||
+      !['headless', 'interactive_exact', 'interactive_folder', 'interactive_agent'].includes(item.executionMode)) ||
     typeof item.cron !== 'string' || typeof item.timezone !== 'string'))) {
     throw new TypeError('Invalid task board routines: expected safe routine projections');
   }

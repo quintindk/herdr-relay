@@ -12,6 +12,10 @@ dispatch test passed. Clean production-only artifact installation, CLI startup,
 server/TUI imports and backend startup passed. A fresh artifact audit remains
 unverified because npm registry DNS is unavailable.
 
+A subsequent stable-agent schedule projection regression was fixed before
+publication. All 52 focused board checks and an actual deployed-backend TUI
+read/render/quit probe pass. The unpublished candidate was rebuilt with the fix.
+
 ## Included native scope
 
 - Standalone Tasks/Collaboration backend, native board and owner CLI.
