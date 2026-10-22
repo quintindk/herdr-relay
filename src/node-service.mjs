@@ -6,7 +6,7 @@ import { nativeTasksProvider } from './tasks-provider.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
-export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel, getHeadlessConnections, getHeadlessAccess, maintenance = () => false }) {
+export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel, getHeadlessConnections, getHeadlessAccess, getBackendFeatures, maintenance = () => false }) {
   tasks ??= api ? { ...nativeTasksProvider(api), type: 'native' } : null;
   requireValue(!existsSync(socketPath), 'socket_exists', 'Node socket already exists. Verify the old service before removing it');
   const server = createServer(async (req, res) => {
@@ -58,6 +58,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       }
       if (['/agent/headless-setup', '/agent/headless-status', '/agent/headless-grants'].includes(path)) {
         currentReceiver(); requireValue(api, 'backend_unavailable', 'Native backend required');
+        requireValue((await getBackendFeatures?.())?.headlessSetup, 'backend_upgrade_required', 'Backend must support authenticated headless setup');
         let result;
         if (path.endsWith('grants')) {
           requireValue(Object.keys(body).length === 0, 'invalid_request', 'Grant discovery takes no overrides');
@@ -152,9 +153,12 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           .map(row => JSON.parse(row.data)).find(n => n.kind === 'message' && n.bindingId === worker.bindingId);
         requireValue(!incoming || typeof body.replyToMessageId === 'string' && body.replyToMessageId === incoming.messageId,
           'message_reply_not_authorised', 'An incoming informational message does not authorise automatic replies or message chains', 403);
-        const { key, ...payload } = body;
+        const supportsReplies = (await getBackendFeatures?.())?.agentMessageReplies === true;
+        requireValue(supportsReplies || !body.replyToMessageId && body.replyPolicy !== 'once', 'backend_upgrade_required', 'Backend must be upgraded before reply envelopes can be used');
+        const { key, replyPolicy, replyToMessageId, ...payload } = body;
         const command = { key: `message-send:${worker.agentId}:${key}`, action: 'message.send', payload: {
-          ...payload, replyPolicy: body.replyToMessageId ? 'none' : body.replyPolicy ?? 'once', id: `message_${digest([worker.agentId, key])}`, senderAgentId: worker.agentId,
+          ...payload, ...(supportsReplies ? { replyPolicy: replyToMessageId ? 'none' : replyPolicy ?? 'once', ...(replyToMessageId ? { replyToMessageId } : {}) } : {}),
+          id: `message_${digest([worker.agentId, key])}`, senderAgentId: worker.agentId,
           sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision,
         } };
         journal.queue(command); await journal.flush(api);

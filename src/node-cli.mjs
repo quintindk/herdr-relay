@@ -224,6 +224,7 @@ try {
       return binding;
     };
     service = await startNodeService({ journal, socketPath, workers, api, tasks, maintenance,
+      getBackendFeatures: async () => (await api('GET', '/v1/info')).features,
       getHeadlessConnections: async worker => {
         const binding = coordinatorClient(worker); return binding.native.client.rpc(HeadlessAccess).inspect({}, { location: { directory: binding.identity.directory } });
       },

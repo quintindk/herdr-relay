@@ -106,6 +106,24 @@ test('body text cannot authorise replies to historical or none-policy messages o
   assert.equal(f.store.all('message').length, 1);
 });
 
+test('rolling node-only upgrades omit reply fields for old backends and refuse explicit replies before queueing', async t => {
+  for (const supported of [false, true]) {
+    const f = fixture(t), commands = [], socketPath = join(f.root, 'node.sock');
+    const service = await startNodeService({ journal: f.journal, socketPath,
+      workers: [{ token: 'worker', agentId: 'target', sessionId: 'ses_target', bindingId: 'binding-target', bindingRevision: 1 }],
+      getBackendFeatures: async () => ({ agentMessageReplies: supported }),
+      api: async (method, path, body) => { if (method === 'POST') commands.push(body); return f.api(method, path, body); } });
+    t.after(() => service.close());
+    const connection = { socketPath, token: 'worker' };
+    await call(connection, 'POST', '/agent/message-send', { key: 'root', recipientAgentId: 'source', body: 'A status update, no task.' });
+    assert.equal(commands[0].payload.replyPolicy, supported ? 'once' : undefined);
+    if (!supported) {
+      await assert.rejects(call(connection, 'POST', '/agent/message-send', { key: 'explicit-once', recipientAgentId: 'source', body: 'One reply requested', replyPolicy: 'once' }), { code: 'backend_upgrade_required' });
+      assert.equal(commands.length, 1);
+    }
+  }
+});
+
 test('native HTTP message APIs enforce participant scope, exact pagination fields and node-authored attribution', async t => {
   const backend = await startBackend({ database: ':memory:' });
   t.after(() => backend.close());

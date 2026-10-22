@@ -76,6 +76,9 @@ States are `queued`, `delivering`, `uncertain`, `delivered` or `blocked`:
   one optional informational response with `replyToMessageId` identifying the
   original message and the original sender as recipient. `replyPolicy: "none"`
   explicitly disables replies. Historical envelopes without a policy remain none.
+  New nodes negotiate backend support. During a node-only upgrade against an old
+  backend, ordinary messages retain the old no-reply format; explicit reply use
+  is refused before queueing until the backend supports it.
 - Replies always have policy `none`. A second reply, a reply-to-reply, a different
   recipient or a replaced receiving chat is refused transactionally. A retry with
   the same key/payload returns its original receipt without consuming another slot.

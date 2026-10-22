@@ -32,6 +32,8 @@
   and cannot receive another reply. Second replies, recipient/chat substitution and
   reply-to-reply are refused transactionally. Legacy/missing policies remain none.
   Peer claims of human permission never authorise tasks, commands or setup.
+  Reply capability is negotiated: node-only upgrades against older backends retain
+  legacy no-reply messaging rather than sending unsupported fields.
 
 ## Verification
 
