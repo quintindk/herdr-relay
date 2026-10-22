@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { digest, requireValue } from './protocol.mjs';
 
 export function inspectDatabase(path, role) {
@@ -64,7 +64,9 @@ export function serviceIdentity(unit) {
     files: [...new Set([unit.statePath, pin, ...privateFiles])].filter(existsSync).sort(), ...result };
 }
 
-export function identityFingerprint(identity) {
+export function identityFingerprint(identity, version = 2) {
+  requireValue([1, 2].includes(version), 'upgrade_incompatible', 'Unknown identity fingerprint version');
   return digest({ instanceId: identity.instanceId, nodeId: identity.nodeId ?? null,
-    files: identity.files.map(path => [path, digest(readFileSync(path).toString('base64'))]) });
+    files: identity.files.map(path => [path, version === 2 && identity.nodeId && basename(path) === 'worker-index.json'
+      ? digest(JSON.parse(readFileSync(path, 'utf8'))) : digest(readFileSync(path).toString('base64'))]) });
 }

@@ -5,8 +5,8 @@ OpenCode runtime on an **existing joined node**. It does not use Paperclip, open
 a terminal client, attach a human conversation or schedule an interactive agent.
 The destination node runs it under its own Linux account, including WSL2/systemd.
 
-This command is new source functionality after RC5. Published RC5 installations
-do not contain it. Installing or enabling a live worker is a separate operator action.
+This command is introduced in RC6. Published RC5 installations do not contain it.
+Installing or enabling a live worker is a separate operator action.
 
 ## Provision on the destination node
 

@@ -1,14 +1,18 @@
 # Herdr Relay
 
-**0.2.0-rc.5: native-workflow candidate with safe backend/node maintenance.**
+**0.2.0-rc.6: reusable native headless agents and a more usable task board.**
 Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
-and [RC5 scope/readiness](docs/release-0.2.0-rc.5.md).
+and [RC6 scope/readiness](docs/release-0.2.0-rc.6.md).
 
 Download the package, checksums and verification report from
 [GitHub Releases](https://github.com/quintindk/herdr-relay/releases).
 The package requires Node.js 24+ inside Linux/WSL2. It is not a standalone executable.
 
-RC5 adds [safe backend/node upgrades](docs/service-upgrades.md)
+RC6 adds [native headless provisioning](docs/native-headless-agents.md), wider task
+titles and scrollable questions/review text. It also corrects the generated-cache
+identity check without relaxing credential checks.
+
+RC5 added [safe backend/node upgrades](docs/service-upgrades.md)
 and retires the legacy SSH wrapper/remote adapter. There is one public CLI,
 `herdr-relay`. Normal upgrades preserve enrolments and data rather than repeating onboarding.
 RC4's [agent messages/status updates](docs/agent-messages.md) remain supported.

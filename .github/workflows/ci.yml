@@ -48,7 +48,11 @@ jobs:
         run: npm --prefix packages/opencode-relay run smoke:messages
       - name: Native reusable headless provisioning and schedule smoke
         run: node scripts/verify-headless.mjs
-      - name: Installed RC4 upgrade, rollback and chat-continuity smoke
+      - name: Installed RC5 upgrade, rollback and chat-continuity smoke
+        run: node scripts/verify-upgrade.mjs
+      - name: Retained RC4 adoption and rollback compatibility
+        env:
+          RELAY_UPGRADE_BASELINE: 0.2.0-rc.4
         run: node scripts/verify-upgrade.mjs
 
   package:

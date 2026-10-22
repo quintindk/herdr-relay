@@ -27,7 +27,7 @@ const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-desti
 assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firecrawl|\.git)(\/|$)/.test(f.path)), 'Package contains private or development files');
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'scripts/migrate-paperclip-tasks.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
-  'src/agent-messages.mjs', 'src/node-messages.mjs',
+  'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
@@ -44,6 +44,26 @@ assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--v
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
 assert.match(help, /interactive grant\|request\|dispatch/);
+assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['headless', '--help'], { encoding: 'utf8' }), /headless provision/);
+execFileSync(process.execPath, ['--input-type=module', '-e', `
+  import assert from 'node:assert/strict';
+  import {mkdirSync,writeFileSync,readFileSync} from 'node:fs';
+  import {join} from 'node:path';
+  import {execFileSync} from 'node:child_process';
+  const root=${JSON.stringify(join(root, 'installed-headless'))}; mkdirSync(root);
+  const config=join(root,'node.json'), manifest=join(root,'headless.json'), schedule=join(root,'schedule.json');
+  writeFileSync(config,JSON.stringify({identityVersion:2,nodeId:'fixture',stateDirectory:root,backend:{url:'http://127.0.0.1:1',token:'fixture'},bindings:[]}));
+  writeFileSync(manifest,JSON.stringify({key:'fixture',name:'fixture',directory:root,executable:process.execPath,
+    config:{model:'fixture/model',permissions:[{action:'*',resource:'*',effect:'deny'}]},
+    schedule:{id:'fixture',instructions:'Fixture only',cron:'0 7-18 * * 1-5',timezone:'Africa/Johannesburg',reviewPolicy:'none'}}));
+  const cli=join(process.cwd(),'src/cli.mjs'), args=[cli,'headless','provision','--file',manifest,'--config',config,'--schedule-output',schedule];
+  assert.equal(JSON.parse(execFileSync(process.execPath,args)).state,'headless_plan');
+  assert.equal(JSON.parse(readFileSync(config)).bindings.length,0);
+  const applied=JSON.parse(execFileSync(process.execPath,[...args,'--apply']));
+  assert.equal(applied.runtimeStarted,false); assert.equal(applied.scheduleInstalled,false);
+  assert.equal(JSON.parse(readFileSync(schedule)).definition.enabled,false);
+  assert.equal(JSON.parse(execFileSync(process.execPath,[...args,'--apply'])).agentId,applied.agentId);
+`], { cwd: installed, stdio: 'pipe' });
 execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';
   await import('./packages/opencode-relay/server.mjs');

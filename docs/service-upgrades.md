@@ -2,6 +2,10 @@
 
 RC5 introduces one public CLI, `herdr-relay`. A **node** is a Relay participant.
 **nodejs** is its runtime. The SSH remote CLI/adapter transport is retired.
+RC6 corrects identity checks for generated `worker-index.json`: JSON key ordering
+is ignored, but changed mappings still block maintenance. Credentials and all other
+configuration files remain byte-checked. Fingerprint versioning preserves the
+original checks for retained RC5 operations rather than reinterpreting old receipts.
 Automatic service maintenance targets Linux user-systemd, including WSL2. Other
 process managers are not silently adopted.
 

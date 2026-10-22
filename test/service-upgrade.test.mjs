@@ -9,6 +9,7 @@ import { parseManagedUnit } from '../src/managed-service-unit.mjs';
 import { pluginUpgradeFiles } from '../src/upgrade-plugin.mjs';
 import { compatibility, releaseInfo } from '../src/release-info.mjs';
 import { readOpenCodeConfig } from '../src/opencode-config-file.mjs';
+import { serviceIdentity, identityFingerprint } from '../src/upgrade-safety.mjs';
 
 function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/upgrade-');
@@ -75,6 +76,40 @@ test('managed service parsing preserves quoted paths, port, runtime executable a
   assert.equal(after.args[0], process.execPath);
   assert.throws(() => parseManagedUnit(before.replace('# Managed', '# Unmanaged'), 'backend'), { code: 'unmanaged_service' });
   assert.throws(() => releaseInfo(fixture(t).root));
+});
+
+test('generated worker index key reordering during service restart does not block upgrade or compatible rollback', async t => {
+  const f = fixture(t), index = join(f.node, 'worker-index.json');
+  writeFileSync(index, '{"nodeId":"test-node","sessions":{"ses_a":"a","ses_b":"b"}}');
+  f.onHealth = service => { if (service.role === 'node') writeFileSync(index, '{"sessions":{"ses_b":"b","ses_a":"a"},"nodeId":"test-node"}'); };
+  const result = await f.apply(); assert.equal(result.state, 'committed');
+  const record = JSON.parse(readFileSync(join(f.operation(result.operationId), 'operation.json'), 'utf8'));
+  assert.ok(record.services.every(s => s.identityFingerprintVersion === 2));
+  const rollback = await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
+  assert.equal(rollback.state, 'rolled_back');
+});
+
+test('retained RC5 operation records without a fingerprint version still use their original byte-level guard', async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.node, 'worker-index.json'), '{"nodeId":"test-node","sessions":{}}');
+  const result = await f.apply(), path = join(f.operation(result.operationId), 'operation.json');
+  const record = JSON.parse(readFileSync(path, 'utf8'));
+  for (const service of record.services) {
+    delete service.identityFingerprintVersion;
+    const unit = parseManagedUnit(readFileSync(service.unitPath, 'utf8'), service.role);
+    service.identityFingerprint = identityFingerprint(serviceIdentity(unit), 1);
+  }
+  writeFileSync(path, JSON.stringify(record));
+  const rollback = await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
+  assert.equal(rollback.state, 'rolled_back');
+});
+
+test('compatible rollback verifies the restored node is unpaused before reporting success', async t => {
+  const f = fixture(t), result = await f.apply(), observations = [];
+  f.onHealth = (service, unit, paused, required) => observations.push({ role: service.role, paused, required });
+  await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
+  assert.deepEqual(observations.filter(o => o.role === 'node').map(o => o.paused), [true, false]);
+  assert.ok(observations.every(o => o.required === false));
 });
 
 test('plan stages a compatible release without stopping services, changing configuration or activating a CLI', async t => {

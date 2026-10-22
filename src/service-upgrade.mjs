@@ -131,7 +131,7 @@ export async function installCliRelease(input, dependencies = {}) {
 function identityCheck(service, originalUnit, { allowBusy = false } = {}) {
   requireValue(originalUnit.release.fingerprint === service.previousFingerprint, 'release_conflict', 'The retained previous release changed. Refuse using modified rollback code');
   const identity = serviceIdentity(originalUnit);
-  requireValue(identityFingerprint(identity) === service.identityFingerprint, 'upgrade_identity_changed', 'Service identity/credentials/configuration changed. Refuse recreating or substituting them');
+  requireValue(identityFingerprint(identity, service.identityFingerprintVersion ?? 1) === service.identityFingerprint, 'upgrade_identity_changed', 'Service identity/credentials/configuration changed. Refuse recreating or substituting them');
   requireValue(allowBusy || identity.blockers.length === 0, 'upgrade_busy', `Unsettled ${service.role} work prevents upgrade/rollback. Inspect status and retry after settlement`);
   return identity;
 }
@@ -201,7 +201,7 @@ export async function serviceUpgrade(input, dependencies = {}) {
       if (last) throw new RelayError('upgrade_health_failed', `${service.role} health verification failed; original state is retained`, 503);
       const original = originals().find(item => item.service.role === service.role).unit;
       const identity = serviceIdentity(original);
-      requireValue(identityFingerprint(identity) === service.identityFingerprint, 'upgrade_identity_changed', 'Upgrade changed identity, credentials or node configuration');
+      requireValue(identityFingerprint(identity, service.identityFingerprintVersion ?? 1) === service.identityFingerprint, 'upgrade_identity_changed', 'Upgrade changed identity, credentials or node configuration');
     }
   };
   const rollback = async () => {
@@ -233,7 +233,7 @@ export async function serviceUpgrade(input, dependencies = {}) {
     // supervisor rather than leaving live native work unsupervised.
     if (beforeSwitch) maintenance(false);
     await start(); await checkHealth(false, !beforeSwitch);
-    maintenance(false); save({ phase: 'rolled_back', databasesRestored: false });
+    maintenance(false); await checkHealth(false, false); save({ phase: 'rolled_back', databasesRestored: false });
   };
   try {
     if (input.resume || input.rollback) {
@@ -274,7 +274,7 @@ export async function serviceUpgrade(input, dependencies = {}) {
         requireValue(identity.blockers.length === 0, 'upgrade_busy', `Unsettled ${role} work prevents upgrade. Run ${role} status and retry after settlement`);
         const descriptor = { role, name, unitPath: current.path, active: current.active, previousVersion: unit.release.version,
           previousDirectory: unit.release.directory, previousFingerprint: unit.release.fingerprint, database: identity.database, stateDirectory: identity.stateDirectory,
-          instanceId: identity.instanceId, nodeId: identity.nodeId ?? null, identityFingerprint: identityFingerprint(identity), identityFiles: identity.files };
+          instanceId: identity.instanceId, nodeId: identity.nodeId ?? null, identityFingerprintVersion: 2, identityFingerprint: identityFingerprint(identity), identityFiles: identity.files };
         await health(descriptor, unit, manager, false, unit.release.version !== '0.2.0-rc.4');
         services.push(descriptor);
         files.push({ path: current.path, before, kind: 'unit', role, unit });

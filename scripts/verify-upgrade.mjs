@@ -6,7 +6,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stageRelease, hashBytes } from '../src/release-install.mjs';
 import { pathToFileURL } from 'node:url';
@@ -17,6 +17,7 @@ import { enrolInteractive } from '../src/native-enrol.mjs';
 import { launchOwnedV2 } from '../packages/opencode-relay/owned-runtime.mjs';
 import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
 import { call } from '../src/client.mjs';
+import { digest } from '../src/protocol.mjs';
 
 process.umask(0o077);
 const execute = promisify(execFile), root = mkdtempSync('/tmp/opencode/relay-upgrade-smoke-');
@@ -57,7 +58,7 @@ const model = createServer(async (req, res) => {
   res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
 });
 try {
-  const old = await stageRelease({ version: '0.2.0-rc.4', directory: releases });
+  const old = await stageRelease({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.5', directory: releases });
   const [packed] = JSON.parse((await execute('npm', ['pack', '--json', '--pack-destination', root])).stdout);
   const tarball = join(root, packed.filename), artifactHash = hashBytes(readFileSync(tarball));
   const candidate = await stageRelease({ artifact: tarball, sha256: artifactHash, directory: releases });
@@ -111,7 +112,8 @@ try {
   };
   await send('before-upgrade');
   const identityFiles = [ownerPath, ...readdirSync(nodeState).filter(name => name.endsWith('.json') && !['runtime.json', 'maintenance.json'].includes(name)).map(name => join(nodeState, name))];
-  const identities = identityFiles.map(path => hashBytes(readFileSync(path)));
+  const identityHash = path => basename(path) === 'worker-index.json' ? digest(JSON.parse(readFileSync(path, 'utf8'))) : hashBytes(readFileSync(path));
+  const identities = identityFiles.map(identityHash);
   const nativeConfig = join(root, 'runtime/home/.config/opencode');
   writeFileSync(join(nativeConfig, 'cli.json'), JSON.stringify({ theme: 'preserve', plugins: [{ package: join(old.directory, 'packages/opencode-relay'),
     options: { ownerContextFile: joined.operatorContextFile, notificationSessionId: sender.sessionId } }] }), { mode: 0o600 });
@@ -130,7 +132,7 @@ try {
   const result = await serviceUpgrade(request, upgradeDependencies);
   assert.equal(result.state, 'committed'); assert.equal((await owner('GET', '/v1/info')).version, candidate.version);
   assert.equal((await owner('GET', '/v1/info')).instanceId, oldInfo.instanceId);
-  assert.deepEqual(identityFiles.map(path => hashBytes(readFileSync(path))), identities);
+  assert.deepEqual(identityFiles.map(identityHash), identities);
   assert.equal((await runtime.client.server.info()).pid, nativePid);
   assert.equal((await runtime.client.session.get({ sessionID: receiver.sessionId })).id, receiver.sessionId);
   const deliveredAfterUpgrade = await send('after-upgrade');
@@ -144,7 +146,7 @@ try {
   await owner('POST', '/v1/commands', { key: 'later-task', action: 'task.create', payload: { id: 'later-task', title: 'Must survive rollback' } });
   await serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
   assert.equal((await owner('GET', '/v1/tasks/later-task')).title, 'Must survive rollback');
-  assert.deepEqual(identityFiles.map(path => hashBytes(readFileSync(path))), identities);
+  assert.deepEqual(identityFiles.map(identityHash), identities);
   const backendPid = (await manager.inspect(backendName)).pid;
   const nodeOnly = await serviceUpgrade({ ...request, services: ['node'], key: 'node-only' }, upgradeDependencies);
   assert.equal((await manager.inspect(backendName)).pid, backendPid);
@@ -158,7 +160,7 @@ try {
   const snapshot = await owner('GET', '/v1/snapshot');
   assert.equal(snapshot.collections.task.length, 2); assert.equal(snapshot.collections.execution.length, 0);
   assert.equal(snapshot.collections.message.length, 3); assert.equal(snapshot.collections.agent.length, 2);
-  assert.deepEqual(identityFiles.map(path => hashBytes(readFileSync(path))), identities);
+  assert.deepEqual(identityFiles.map(identityHash), identities);
   console.log(JSON.stringify({ passed: true, from: old.version, to: candidate.version, actualBackendAndNodeProcesses: true,
     installedUpgradeEntrypoint: true, nativeToolsWithoutInjectedRuntimePaths: true,
     versionedCliActivationPassed: true, cachedReleaseAuditPassed: true,
