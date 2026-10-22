@@ -23,6 +23,8 @@ import { tickInteractive } from './node-interactive.mjs';
 import { releaseVersion } from './release-info.mjs';
 import { writePrivateJson } from './private-files.mjs';
 import { nodeAgentInstructions } from './node-agent-instructions.mjs';
+import { tickHeadlessSetups, assertHeadlessAccess } from './node-headless-setup.mjs';
+import { HeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 try {
@@ -75,6 +77,7 @@ try {
     const contextFiles = new Map();
     let workerIndexDigest;
     const loadBinding = async entry => {
+      if (historicalBindings.has(entry.id)) return historicalBindings.get(entry.id);
       requireValue(['opencode-v2', 'opencode-v2-owned', 'hermes'].includes(entry.harness) && entry.agentId && entry.id,
         'invalid_binding', 'Explicit supported native binding required');
       const directWorkerTools = usesV2WorkerTools(entry);
@@ -125,6 +128,16 @@ try {
         // Historical conversations can be archived. They must not prevent the
         // new receiver starting or erase their pinned recovery obligations.
         if (!entry.receiverGeneration) await native.verify();
+        if (entry.headlessSetupId) {
+          const verify = native.verify.bind(native);
+          native.verify = async () => {
+            const { grant } = await assertHeadlessAccess(api, client, entry.headlessSetupId, entry.identity.directory);
+            const session = await verify();
+            requireValue(session.model?.providerID === grant.model.providerID && session.model?.id === grant.model.id,
+              'headless_model_changed', 'Headless session model changed from the authorised connection');
+            return session;
+          };
+        }
         binding = { id: entry.id, identity: entry.identity, native, observe: observeV2 };
       }
       if (entry.harness.startsWith('opencode-v2')) await configureV2WorkerSession(binding, entry.sessionPermissions);
@@ -136,6 +149,7 @@ try {
       nativeEndpoints.set(nativeIdentity, entry.agentId);
       const worker = existsSync(contextFile) ? JSON.parse(readFileSync(contextFile, 'utf8')) :
         { socketPath, agentId: entry.agentId, sessionId: binding.identity?.sessionId ?? entry.identity?.sessionId ?? entry.conversationId,
+          ...(entry.headlessSetupId ? { headlessSetupId: entry.headlessSetupId } : {}),
           ...(entry.receiverGeneration ? { bindingId: entry.id, bindingRevision: entry.receiverGeneration } : {}), token: randomBytes(32).toString('hex') };
       requireValue(worker.socketPath === socketPath && worker.agentId === entry.agentId, 'context_conflict', 'Worker context changed');
       requireValue(worker.sessionId === (binding.identity?.sessionId ?? entry.identity?.sessionId ?? entry.conversationId),
@@ -177,6 +191,10 @@ try {
       }
     };
     for (const entry of config.bindings) await loadBinding(entry);
+    for (const op of receivers.list('headless-op')) if (op.binding) {
+      try { await loadBinding(op.binding); }
+      catch { console.error(JSON.stringify({ code: 'headless_binding_blocked', agentId: op.binding.agentId })); }
+    }
     await refreshReceivers();
     if (connectedAtStartup) {
       for (const entry of config.bindings) {
@@ -200,7 +218,17 @@ try {
       requireValue(lstatSync(socketPath).isSocket(), 'socket_conflict', 'Node socket path is not a socket');
       unlinkSync(socketPath);
     }
-    service = await startNodeService({ journal, socketPath, workers, api, tasks, maintenance, getNativeModel: async worker => {
+    const coordinatorClient = worker => {
+      const binding = historicalBindings.get(worker.bindingId);
+      requireValue(binding?.native?.client && binding.identity?.directory, 'native_integration_unavailable', 'Coordinator requires a verified OpenCode binding');
+      return binding;
+    };
+    service = await startNodeService({ journal, socketPath, workers, api, tasks, maintenance,
+      getHeadlessConnections: async worker => {
+        const binding = coordinatorClient(worker); return binding.native.client.rpc(HeadlessAccess).inspect({}, { location: { directory: binding.identity.directory } });
+      },
+      getHeadlessAccess: async (worker, setup) => assertHeadlessAccess(api, coordinatorClient(worker).native.client, setup.id, setup.directory),
+      getNativeModel: async worker => {
       const binding = historicalBindings.get(worker.bindingId);
       requireValue(binding?.native.verify, 'native_model_unavailable', 'Requester native model cannot be resolved');
       const session = await binding.native.verify(), model = session.model;
@@ -257,6 +285,7 @@ try {
       }).finally(async () => {
         if (maintenance()) return;
         await tickInteractive(journal, api, config, resolveBinding);
+        if (info.features?.headlessSetup) await tickHeadlessSetups(journal, api, config, loadBinding, resolveBinding);
         await tickAutomation(journal, resolveBinding, Date.now(), api);
         await tickAgentNotices(journal, api, resolveBinding);
         for (const [agentId, owned] of ownedDefinitions) {

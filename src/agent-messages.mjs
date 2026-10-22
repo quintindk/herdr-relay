@@ -8,7 +8,7 @@ const text = (value, max) => requireValue(typeof value === 'string' && value.tri
 // Agent messages carry information, never execution, delegation or human authority.
 export function applyMessage(store, actor, action, p, { created, changed }) {
   if (action === 'message.send') {
-    fields(p, ['id', 'senderAgentId', 'sourceConversationId', 'sourceBindingRevision', 'recipientAgentId', 'kind', 'subject', 'body'],
+    fields(p, ['id', 'senderAgentId', 'sourceConversationId', 'sourceBindingRevision', 'recipientAgentId', 'kind', 'subject', 'body', 'replyPolicy', 'replyToMessageId'],
       ['id', 'senderAgentId', 'sourceConversationId', 'sourceBindingRevision', 'recipientAgentId', 'body']);
     const sender = store.get('agent', p.senderAgentId), recipient = store.get('agent', p.recipientAgentId);
     store.nodeOnly(actor, sender.nodeId);
@@ -19,11 +19,23 @@ export function applyMessage(store, actor, action, p, { created, changed }) {
     requireValue(['message', 'status'].includes(p.kind ?? 'message'), 'invalid_request', 'Use message or status, not a task or instruction');
     text(p.body, 8000);
     if (p.subject !== undefined) text(p.subject, 256);
+    requireValue(['none', 'once'].includes(p.replyPolicy ?? 'none'), 'invalid_request', 'Reply policy must be none or once');
+    let parent;
+    if (p.replyToMessageId !== undefined) {
+      text(p.replyToMessageId, 256); parent = store.get('message', p.replyToMessageId);
+      requireValue(parent.replyPolicy === 'once' && !parent.replyToMessageId && !parent.replyMessageId &&
+        parent.recipient.agentId === sender.id && parent.sender.agentId === recipient.id &&
+        ['delivering', 'delivered'].includes(parent.state) && parent.delivery?.conversationId === sender.conversationId && parent.delivery?.bindingRevision === sender.bindingRevision &&
+        (p.replyPolicy ?? 'none') === 'none', 'message_reply_not_authorised', 'Only one reply to the original sender from its exact receiving chat is permitted', 403);
+    }
     requireValue(store.all('message').filter(m => m.recipient.agentId === recipient.id && ['queued', 'delivering', 'uncertain'].includes(m.state)).length < 100,
       'message_queue_full', 'Recipient already has 100 outstanding messages', 409);
-    return created('message', { id: p.id, kind: p.kind ?? 'message', subject: p.subject ?? '', body: p.body,
+    const message = created('message', { id: p.id, kind: p.kind ?? 'message', subject: p.subject ?? '', body: p.body,
       sender: { agentId: sender.id, nodeId: sender.nodeId, name: sender.name, conversationId: sender.conversationId, bindingRevision: sender.bindingRevision },
-      recipient: { agentId: recipient.id, nodeId: recipient.nodeId, name: recipient.name }, state: 'queued', authority: 'context_only' });
+      recipient: { agentId: recipient.id, nodeId: recipient.nodeId, name: recipient.name }, state: 'queued', authority: 'context_only',
+      replyPolicy: parent ? 'none' : p.replyPolicy ?? 'none', ...(parent ? { replyToMessageId: parent.id } : {}) });
+    if (parent) { const updated = changed('message', parent, { replyMessageId: message.id }); store.event('message.replied', updated, actor, message.id); }
+    return message;
   }
   const message = store.get('message', p.id);
   store.nodeOnly(actor, message.recipient.nodeId);

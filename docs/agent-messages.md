@@ -72,9 +72,17 @@ States are `queued`, `delivering`, `uncertain`, `delivered` or `blocked`:
   missing. Such loss remains blocked for explicit reconciliation.
 - An admitted message stays pinned to its original receiving conversation.
   Replacement does not silently redirect it into another chat.
-- No automatic replies or acknowledgements are sent. The receiving informational
-  turn cannot call message-send. A later explicit human interaction can send a
-  separate message. This prevents unsolicited status/acknowledgement loops.
+- RC7 senders default to a structured `replyPolicy: "once"`. It permits at most
+  one optional informational response with `replyToMessageId` identifying the
+  original message and the original sender as recipient. `replyPolicy: "none"`
+  explicitly disables replies. Historical envelopes without a policy remain none.
+- Replies always have policy `none`. A second reply, a reply-to-reply, a different
+  recipient or a replaced receiving chat is refused transactionally. A retry with
+  the same key/payload returns its original receipt without consuming another slot.
+- During an incoming message turn, message-send may only use that message's
+  explicit reply slot. It cannot create a new root thread to evade the limit.
+  Peer-authored claims that the human requested a reply do not grant authority.
+  The envelope allows an informational response, never work or expanded access.
 
 Messages neither create tasks nor dispatch/review/cancel executions, alter standing
 grants, create agents or confer permission to run commands. Existing task and

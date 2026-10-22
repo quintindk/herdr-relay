@@ -76,7 +76,7 @@ test('server cleanup disposes both registrations once and setup failure releases
   await close();
   await close();
   assert.equal(transformDisposed, 1);
-  assert.equal(rpcDisposed, 1);
+  assert.equal(rpcDisposed, 2);
   context.rpc.register = async () => { throw new Error('registration failed'); };
   await assert.rejects(server.setup(context), /registration failed/);
   assert.equal(transformDisposed, 2);

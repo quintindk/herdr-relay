@@ -55,6 +55,8 @@ export class NodeJournal {
       entityId: schedule.id, revision: schedule.revision, data: schedule });
     for (const request of snapshot.collections.provision_request ?? []) events.push({ id: `snapshot:provision:${request.id}:${request.revision}`,
       type: 'interactive.request', entityId: request.id, revision: request.revision, data: request });
+    for (const setup of snapshot.collections.headless_setup ?? []) events.push({ id: `snapshot:headless:${setup.id}:${setup.revision}`,
+      type: 'headless.request', entityId: setup.id, revision: setup.revision, data: setup });
     for (const message of snapshot.collections.message ?? []) events.push({ id: `snapshot:message:${message.id}:${message.revision}`,
       type: 'message.snapshot', entityId: message.id, revision: message.revision, data: message });
     // Native delivery intent/history is never replaced from a shared snapshot.
@@ -71,6 +73,12 @@ export class NodeJournal {
         const previous = this.db.prepare('SELECT data FROM inbox WHERE id=?').get(event.id);
         if (previous) { requireValue(previous.data === JSON.stringify(event), 'event_conflict', 'Event identity payload changed'); continue; }
         this.db.prepare('INSERT INTO inbox VALUES (?,?)').run(event.id, JSON.stringify(event));
+        if (['headless.request', 'headless.activate', 'headless.block'].includes(event.type) && event.data.nodeId === this.nodeId) {
+          const key = `headless-setup:${event.entityId}`;
+          const old = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+          if (!old || JSON.parse(old.value).revision < event.revision) this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(key, JSON.stringify(event.data));
+        }
         if (['interactive.request', 'interactive.progress', 'interactive.cancel'].includes(event.type) && event.data.nodeId === this.nodeId) {
           const key = `interactive-request:${event.entityId}`;
           const old = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);

@@ -1,11 +1,12 @@
 import { createServer } from 'node:http';
-import { chmodSync, existsSync, unlinkSync } from 'node:fs';
+import { chmodSync, existsSync, unlinkSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { digest, requireValue, RelayError, canonical } from './protocol.mjs';
 import { nativeTasksProvider } from './tasks-provider.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
-export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel, maintenance = () => false }) {
+export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel, getHeadlessConnections, getHeadlessAccess, maintenance = () => false }) {
   tasks ??= api ? { ...nativeTasksProvider(api), type: 'native' } : null;
   requireValue(!existsSync(socketPath), 'socket_exists', 'Node socket already exists. Verify the old service before removing it');
   const server = createServer(async (req, res) => {
@@ -26,7 +27,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       const path = new URL(req.url, 'http://node').pathname;
       const readOnly = ['/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
         '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/comments', '/agent/relations',
-        '/agent/questions', '/agent/messages', '/agent/message'];
+        '/agent/questions', '/agent/messages', '/agent/message', '/agent/headless-status', '/agent/headless-grants', '/agent/headless-access', '/agent/headless-connections'];
       requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
       const currentReceiver = () => {
         requireValue(worker.bindingId && worker.bindingRevision, 'standing_enrolment_required', 'Stable agent enrolment required', 403);
@@ -35,6 +36,62 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       const ownsWork = work => work?.execution.targetAgentId === worker.agentId &&
         (!worker.sessionId || !work.nativeConversationId || work.nativeConversationId === worker.sessionId) &&
         (!worker.bindingId || work.bindingId === worker.bindingId);
+      const checkContract = (setup, grant) => {
+        const op = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`headless-op:${setup.id}`);
+        if (!op) return;
+        const path = join(setup.directory, grant.contract);
+        requireValue(existsSync(path) && JSON.parse(op.value).contractDigest === digest(readFileSync(path, 'utf8')),
+          'job_contract_changed', 'The authorised job contract changed; reauthorisation required');
+      };
+      if (path === '/agent/headless-access') {
+        requireValue(api && worker.headlessSetupId && Object.keys(body).length === 0, 'headless_grant_required', 'Exact headless worker scope required', 403);
+        const result = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
+        requireValue(result.setup.agentId === worker.agentId && result.setup.sessionId === worker.sessionId, 'headless_scope_mismatch', 'Headless session scope changed', 403);
+        checkContract(result.setup, result.grant);
+        const { accessReferences } = await import('../packages/opencode-relay/headless-access.mjs');
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(accessReferences(result.grant))); return;
+      }
+      if (path === '/agent/headless-connections') {
+        currentReceiver(); requireValue(Object.keys(body).length === 0 && getHeadlessConnections, 'native_integration_unavailable', 'Existing authenticated OpenCode connection discovery unavailable');
+        const result = await getHeadlessConnections(worker);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
+      if (['/agent/headless-setup', '/agent/headless-status', '/agent/headless-grants'].includes(path)) {
+        currentReceiver(); requireValue(api, 'backend_unavailable', 'Native backend required');
+        let result;
+        if (path.endsWith('grants')) {
+          requireValue(Object.keys(body).length === 0, 'invalid_request', 'Grant discovery takes no overrides');
+          const items = []; let cursor;
+          do { const page = await api('GET', `/v1/headless_grants?${new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) })}`);
+            items.push(...page.items.filter(g => g.requesterAgentId === worker.agentId)); cursor = page.nextCursor;
+          } while (cursor);
+          result = { items, complete: true };
+        } else if (path.endsWith('setup')) {
+          requireValue(Object.keys(body).every(k => ['key', 'grantId', 'retry'].includes(k)) && typeof body.key === 'string' && body.key.trim() && body.key.length <= 100 && typeof body.grantId === 'string' && (body.retry === undefined || typeof body.retry === 'boolean'),
+            'invalid_request', 'Stable key and authorised grant ID required');
+          requireValue(!journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
+            'headless_human_context_required', 'Scheduled/delegated work cannot reuse human-chat setup authority', 403);
+          requireValue(!journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
+            .some(row => { const notice = JSON.parse(row.data); return notice.kind === 'message' && notice.bindingId === worker.bindingId; }),
+            'headless_human_context_required', 'Peer messages cannot authorise headless setup', 403);
+          const command = { key: `headless-source:${worker.agentId}:${body.key}`, action: 'headless.request', payload: { grantId: body.grantId, ...(body.retry ? { retry: true } : {}),
+            requesterAgentId: worker.agentId, sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision } };
+          journal.queue(command); await journal.flush(api); result = journal.receipt(command.key);
+        } else {
+          requireValue(Object.keys(body).length === 1 && typeof body.id === 'string', 'invalid_request', 'Exact setup ID required');
+          const setup = await api('GET', `/v1/headless_setups/${encodeURIComponent(body.id)}`);
+          requireValue(setup.requesterAgentId === worker.agentId, 'forbidden', 'Only the original coordinator may inspect this setup', 403);
+          let schedule = null; try { schedule = await api('GET', `/v1/schedules/${setup.scheduleId}`); } catch (e) { if (e.status !== 404) throw e; }
+          const local = journal.db.prepare('SELECT data FROM schedules WHERE id=?').get(setup.scheduleId);
+          const installed = local && JSON.parse(local.data);
+          let blocker = setup.blocker ?? null;
+          try { const authority = await api('GET', `/v1/headless_setups/${setup.id}/authority`); checkContract(setup, authority.grant); await getHeadlessAccess?.(worker, setup); } catch (error) { blocker = error.code ?? 'headless_grant_unavailable'; }
+          result = { id: setup.id, agentId: setup.agentId, scheduleId: setup.scheduleId, state: blocker ? setup.state === 'ready' || setup.state === 'blocked' ? 'blocked' : 'waiting_for_access' : setup.state === 'ready' && schedule?.appliedRevision !== schedule?.revision ? 'awaiting_schedule_ack' : setup.state,
+            blocker, revision: schedule?.revision ?? null, appliedRevision: schedule?.appliedRevision ?? null,
+            nextFiring: !blocker && installed?.state === 'active' ? installed.nextAt : null, runtime: 'shared-auth-headless', restartRequired: false };
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
       if (path === '/agent/interactive-context') {
         requireValue(Object.keys(body).length === 0, 'invalid_request', 'Discussion context takes no overrides');
         const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`interactive-context:${worker.bindingId}`);
@@ -88,15 +145,16 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       }
       if (path === '/agent/message-send') {
         currentReceiver();
-        requireValue(api && Object.keys(body).every(k => ['key', 'recipientAgentId', 'kind', 'subject', 'body'].includes(k)) &&
+        requireValue(api && Object.keys(body).every(k => ['key', 'recipientAgentId', 'kind', 'subject', 'body', 'replyPolicy', 'replyToMessageId'].includes(k)) &&
           typeof body.key === 'string' && body.key.trim() && body.key.length <= 100 && typeof body.recipientAgentId === 'string' &&
           typeof body.body === 'string', 'invalid_request', 'Immutable key, exact recipient and message body required');
-        requireValue(!journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
-          .some(row => { const n = JSON.parse(row.data); return n.kind === 'message' && n.bindingId === worker.bindingId; }),
+        const incoming = journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
+          .map(row => JSON.parse(row.data)).find(n => n.kind === 'message' && n.bindingId === worker.bindingId);
+        requireValue(!incoming || typeof body.replyToMessageId === 'string' && body.replyToMessageId === incoming.messageId,
           'message_reply_not_authorised', 'An incoming informational message does not authorise automatic replies or message chains', 403);
         const { key, ...payload } = body;
         const command = { key: `message-send:${worker.agentId}:${key}`, action: 'message.send', payload: {
-          ...payload, id: `message_${digest([worker.agentId, key])}`, senderAgentId: worker.agentId,
+          ...payload, replyPolicy: body.replyToMessageId ? 'none' : body.replyPolicy ?? 'once', id: `message_${digest([worker.agentId, key])}`, senderAgentId: worker.agentId,
           sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision,
         } };
         journal.queue(command); await journal.flush(api);

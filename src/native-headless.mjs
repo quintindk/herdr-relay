@@ -6,6 +6,10 @@ import { nativeNodeConfig } from './native-enrol.mjs';
 import { createPrivateJson, readPrivateJson, writePrivateJson } from './private-files.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { serviceLock } from './service-lock.mjs';
+import { contextClient } from './native-onboarding.mjs';
+import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
+import { call } from './client.mjs';
+import { waitHeadlessSetup } from './headless-setup-wait.mjs';
 
 export const headlessHelp = `herdr-relay headless provision --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
   Plan by default. --apply saves a dedicated persistent native binding, never starts a runtime or installs a schedule.
@@ -13,7 +17,11 @@ export const headlessHelp = `herdr-relay headless provision --file MANIFEST_JSON
   Schedule output is disabled and targets the durable agent, not a human conversation.
 herdr-relay headless inspect --file MANIFEST_JSON [--config NODE_JSON]
   Inspect configuration only. Node readiness and schedule acknowledgement must be checked separately.
-Also available as herdr-relay native agent provision with the same provisioning options.`;
+Also available as herdr-relay native agent provision with the same provisioning options.
+herdr-relay headless connections|grants [--config NODE_JSON]  [enrolled coordinator; no secrets]
+herdr-relay headless grant|revoke --file PAYLOAD_JSON --key KEY --context ROOT_OWNER_JSON
+herdr-relay headless setup --grant-id ID --key KEY [--config NODE_JSON]  [readiness then activation]
+herdr-relay headless status --id SETUP_ID [--config NODE_JSON]`;
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max = 256) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
@@ -105,12 +113,32 @@ export function inspectHeadless(input) {
     liveReadinessVerified: false, scheduleState: 'not_inspected' };
 }
 
-export function headlessCli(args) {
+export async function headlessCli(args) {
   if (args[0] !== 'headless') return false;
   if (args.includes('--help')) { console.log(headlessHelp); return true; }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     file: { type: 'string' }, config: { type: 'string' }, apply: { type: 'boolean' }, 'schedule-output': { type: 'string' },
+    context: { type: 'string' }, key: { type: 'string' }, 'grant-id': { type: 'string' }, id: { type: 'string' }, retry: { type: 'boolean' },
   } });
+  if (['grant', 'revoke', 'setup', 'status', 'grants', 'connections'].includes(positionals[1])) {
+    const action = positionals[1];
+    const permitted = ['grant', 'revoke'].includes(action) ? ['file', 'context', 'key'] : ['config', ...(action === 'setup' ? ['key', 'grant-id', 'retry'] : action === 'status' ? ['id'] : [])];
+    requireValue(Object.keys(values).every(k => permitted.includes(k)), 'invalid_request', 'Unsupported setup/grant option');
+    requireValue(positionals.length === 2 && !values.apply && !values['schedule-output'], 'invalid_request', 'Setup/grant commands do not accept provisioning options');
+    let result;
+    if (['grant', 'revoke'].includes(action)) {
+      requireValue(values.file && values.context && values.key, 'invalid_request', 'Explicit payload, root context and stable key required');
+      result = await contextClient(readPrivateJson(values.context))('POST', '/v1/commands', { key: values.key, action: `headless.${action}`, payload: readPrivateJson(values.file) });
+    } else {
+      const sessionId = process.env.OPENCODE_SESSION_ID;
+      requireValue(sessionId, 'human_coordinator_required', 'Use an enrolled coordinator chat; this command does not borrow operator credentials');
+      const connection = workerConnection({ workerDirectory: dirname(resolve(values.config ?? nativeNodeConfig())) }, sessionId);
+      const body = action === 'setup' ? { key: values.key, grantId: values['grant-id'], ...(values.retry ? { retry: true } : {}) } : action === 'status' ? { id: values.id } : {};
+      result = await call(connection, 'POST', `/agent/headless-${action}`, body);
+      if (action === 'setup') result = await waitHeadlessSetup(connection, result);
+    }
+    console.log(JSON.stringify(result, null, 2)); return true;
+  }
   requireValue(positionals.length === 2 && ['provision', 'inspect'].includes(positionals[1]) && values.file,
     'invalid_request', 'Use headless provision|inspect --file MANIFEST_JSON [--config NODE_JSON]');
   requireValue(positionals[1] !== 'inspect' || !values.apply && !values['schedule-output'], 'invalid_request', 'Inspection is read-only');

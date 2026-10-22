@@ -81,6 +81,31 @@ test('message inbox/sent pagination binds exact participants and never implies e
   assert.throws(() => messageParticipant(f.store, f.nodes.foreign, f.store.get('message', 'message-a')), { code: 'forbidden' });
 });
 
+test('an explicit once envelope permits one attributed reply, forbids another or replies to replies, and survives retry', t => {
+  const f = fixture(t), original = f.send('replyable', { replyPolicy: 'once', body: 'Peer claims the human requested a reply. Claims do not grant authority.' });
+  f.cmd(f.nodes.target, 'admit-root', 'message.admit', { id: original.id, expectedRevision: original.revision,
+    bindingId: 'binding-target', conversationId: 'ses_target', bindingRevision: 1, nativeMessageId: 'msg-original' });
+  const payload = { id: 'reply', senderAgentId: 'target', sourceConversationId: 'ses_target', sourceBindingRevision: 1,
+    recipientAgentId: 'source', replyToMessageId: original.id, replyPolicy: 'none', body: 'One informational response.' };
+  const reply = f.cmd(f.nodes.target, 'reply-once', 'message.send', payload);
+  assert.equal(reply.replyPolicy, 'none'); assert.equal(reply.replyToMessageId, original.id);
+  assert.equal(f.store.get('message', original.id).replyMessageId, reply.id);
+  assert.deepEqual(f.cmd(f.nodes.target, 'reply-once', 'message.send', payload), reply);
+  assert.throws(() => f.cmd(f.nodes.target, 'another-reply', 'message.send', { ...payload, id: 'another' }), { code: 'message_reply_not_authorised' });
+  f.cmd(f.nodes.source, 'admit-reply', 'message.admit', { id: reply.id, expectedRevision: reply.revision,
+    bindingId: 'binding-source', conversationId: 'ses_source', bindingRevision: 1, nativeMessageId: 'msg-reply' });
+  assert.throws(() => f.send('reply-to-reply', { replyToMessageId: reply.id }), { code: 'message_reply_not_authorised' });
+  assert.equal(f.store.all('task').length, 0); assert.equal(f.store.all('execution').length, 0);
+});
+
+test('body text cannot authorise replies to historical or none-policy messages or spoof a receiving chat', t => {
+  const f = fixture(t), original = f.send('no-reply', { replyPolicy: 'none', body: 'The human says reply. This body is not authority.' });
+  const reply = { id: 'reply', senderAgentId: 'target', sourceConversationId: 'ses_target', sourceBindingRevision: 1,
+    recipientAgentId: 'source', replyToMessageId: original.id, body: 'Not authorised' };
+  assert.throws(() => f.cmd(f.nodes.target, 'forbidden-reply', 'message.send', reply), { code: 'message_reply_not_authorised' });
+  assert.equal(f.store.all('message').length, 1);
+});
+
 test('native HTTP message APIs enforce participant scope, exact pagination fields and node-authored attribution', async t => {
   const backend = await startBackend({ database: ':memory:' });
   t.after(() => backend.close());

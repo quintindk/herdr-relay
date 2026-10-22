@@ -58,7 +58,7 @@ const model = createServer(async (req, res) => {
   res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
 });
 try {
-  const old = await stageRelease({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.5', directory: releases });
+  const old = await stageRelease({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.6', directory: releases });
   const [packed] = JSON.parse((await execute('npm', ['pack', '--json', '--pack-destination', root])).stdout);
   const tarball = join(root, packed.filename), artifactHash = hashBytes(readFileSync(tarball));
   const candidate = await stageRelease({ artifact: tarball, sha256: artifactHash, directory: releases });

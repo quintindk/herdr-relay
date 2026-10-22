@@ -48,7 +48,9 @@ jobs:
         run: npm --prefix packages/opencode-relay run smoke:messages
       - name: Native reusable headless provisioning and schedule smoke
         run: node scripts/verify-headless.mjs
-      - name: Installed RC5 upgrade, rollback and chat-continuity smoke
+      - name: Authenticated coordinator headless setup and revocation smoke
+        run: node scripts/verify-headless-setup.mjs
+      - name: Installed RC6 upgrade, rollback and chat-continuity smoke
         run: node scripts/verify-upgrade.mjs
       - name: Retained RC4 adoption and rollback compatibility
         env:

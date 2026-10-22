@@ -26,6 +26,10 @@ export function inspectDatabase(path, role) {
         const p = JSON.parse(row.data);
         if (!['ready', 'blocked', 'cancelled'].includes(p.state)) blockers.push({ kind: 'preparation', id: p.id, state: p.state });
       }
+      for (const row of db.prepare("SELECT data FROM entities WHERE kind='headless_setup'").all()) {
+        const setup = JSON.parse(row.data);
+        if (!['ready', 'blocked'].includes(setup.state)) blockers.push({ kind: 'headless_setup', id: setup.id, state: setup.state });
+      }
       return { instanceId, blockers };
     }
     const identity = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='identity'").get()?.value ?? 'null');
@@ -40,6 +44,10 @@ export function inspectDatabase(path, role) {
       if (!['pending', 'settled', 'obsolete'].includes(row.state) || row.state === 'pending' && JSON.parse(row.data).invocation) blockers.push({ kind: 'notice', id: row.id, state: row.state });
     }
     for (const row of db.prepare("SELECT key,state FROM outbox WHERE state NOT IN ('recorded','superseded')").all()) blockers.push({ kind: 'publication', id: row.key, state: row.state });
+    for (const row of db.prepare("SELECT value FROM settings WHERE key LIKE 'headless-setup:%'").all()) {
+      const setup = JSON.parse(row.value);
+      if (!['ready', 'blocked'].includes(setup.state)) blockers.push({ kind: 'headless_setup', id: setup.id, state: setup.state });
+    }
     for (const row of db.prepare('SELECT id,state FROM occurrences').all()) {
       if (!['pending', 'completed', 'failed', 'cancelled', 'in_review', 'waiting_question'].includes(row.state)) blockers.push({ kind: 'occurrence', ...row });
     }

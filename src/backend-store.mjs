@@ -5,6 +5,7 @@ import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { isAbsolute, normalize } from 'node:path';
 import { applyInteractive } from './interactive-contract.mjs';
+import { applyHeadlessSetup } from './headless-setup-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
 
@@ -64,7 +65,7 @@ export class BackendStore {
   snapshot() {
     return this.transaction(() => ({ instanceId: this.instance, protocol: backendProtocol,
       collections: Object.fromEntries(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
-        .concat(['provision_grant', 'provision_request', 'message']).map(kind => [kind, this.all(kind)])),
+        .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'message']).map(kind => [kind, this.all(kind)])),
       cursor: Buffer.from(JSON.stringify({ instance: this.instance,
         after: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq) })).toString('base64url'), fetchedAt: now() }));
   }
@@ -177,6 +178,7 @@ export class BackendStore {
     };
     const changed = (kind, entity, patch) => this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
     if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed });
+    if (action.startsWith('headless.')) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     const taskDisposition = (taskId, status, causation) => {
       const task = this.get('task', taskId);
@@ -302,7 +304,7 @@ export class BackendStore {
       return this.apply(actor, `schedule.${operation}`, p.payload, { scheduleAgent: agent });
     }
     if (action === 'schedule.install') {
-      if (!authority.scheduleAgent) this.ownerOnly(actor);
+      if (!authority.scheduleAgent && !authority.headlessSetup) this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision', 'definition'], ['id', 'definition']);
       fields(p.definition, ['nodeId', 'targetAgentId', 'targetFolder', 'targetConversationId', 'instructions', 'cron', 'timezone', 'at', 'enabled', 'reviewPolicy', 'expiresAt', 'intent'],
         ['nodeId', 'instructions', 'enabled']);
@@ -494,7 +496,7 @@ export class BackendStore {
     }
     if (action === 'task.create') {
       // Node-originated capture needs an explicit scoped grant, not operator powers.
-      if (!authority.interactiveRequest) this.ownerOnly(actor);
+      if (!authority.interactiveRequest && !authority.headlessSetup) this.ownerOnly(actor);
       fields(p, ['id', 'title', 'description', 'status', 'priority', 'parentId', 'dependencies', 'labels', 'externalReference'], ['id', 'title']);
       if (p.externalReference) {
         const identity = this.referenceIdentity(p.externalReference);
@@ -581,7 +583,7 @@ export class BackendStore {
       requireValue(!terminal(task), 'task_terminal', 'Cannot execute terminal task', 409);
       requireValue(task.status !== 'in_review' && !this.all('question').some(q => q.taskId === task.id && q.status === 'open' && q.blocking),
         'task_waiting', 'Resolve pending review/questions before a fresh execution');
-      if (!authority.interactiveRequest) this.ownerOnly(actor);
+      if (!authority.interactiveRequest && !authority.headlessSetup) this.ownerOnly(actor);
       if (p.originAgentId) this.get('agent', p.originAgentId);
       if (p.originConversation !== undefined) string(p.originConversation, 'originConversation', 512);
       const target = this.get('agent', p.targetAgentId);
@@ -1012,7 +1014,7 @@ export class BackendStore {
   }
 
   query(kind, { cursor, limit = 100, taskId, status } = {}) {
-    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'monitor_result', 'artifact', 'provision_grant', 'provision_request'].includes(kind), 'invalid_query', 'Unknown collection');
+    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'monitor_result', 'artifact', 'provision_grant', 'provision_request', 'headless_grant', 'headless_setup'].includes(kind), 'invalid_query', 'Unknown collection');
     requireValue(Number.isSafeInteger(limit) && limit > 0 && limit <= 500 &&
       (!taskId || validId(taskId)) && (!status || typeof status === 'string' && status.length <= 100), 'invalid_query', 'Invalid collection scope');
     const scope = digest({ kind, limit, taskId: taskId ?? null, status: status ?? null });

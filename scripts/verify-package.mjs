@@ -29,6 +29,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'scripts/install-native-node.mjs', 'scripts/migrate-paperclip-tasks.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/skill-install.mjs',
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md', 'docs/legacy-paperclip-work-skill.md',
+  'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
