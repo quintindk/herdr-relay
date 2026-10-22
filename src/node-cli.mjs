@@ -286,7 +286,9 @@ try {
       }).finally(async () => {
         if (maintenance()) return;
         await tickInteractive(journal, api, config, resolveBinding);
-        if (info.features?.headlessSetup) await tickHeadlessSetups(journal, api, config, loadBinding, resolveBinding);
+        // Requests arrive through the durable journal after capability negotiation.
+        // Do not pin this gate to startup features: backend-only upgrades can add it.
+        await tickHeadlessSetups(journal, api, config, loadBinding, resolveBinding);
         await tickAutomation(journal, resolveBinding, Date.now(), api);
         await tickAgentNotices(journal, api, resolveBinding);
         for (const [agentId, owned] of ownedDefinitions) {
