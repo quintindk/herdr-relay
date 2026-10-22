@@ -5,6 +5,7 @@ import { autoAttachmentCandidate, registerEnrolmentCommands } from '../enrolment
 
 function fixture(t) {
   const f = { session: 'ses_current', runtime: 'one', commands: [], calls: [], events: new Map(), toasts: [], records: [],
+    createdSessions: new Map(), creates: [], navigations: [], model: { providerID: 'fixture', modelID: 'selected', variant: 'high' },
     outbox: { pending: null }, enrolments: [{ id: 'wright', name: 'Wright', directory: '/workspace', autoAttach: true,
       installedSchedules: 2, obligations: [], receiver: { state: 'active', conversationId: 'ses_old', generation: 1 } }] };
   f.confirm = async () => true;
@@ -17,13 +18,25 @@ function fixture(t) {
     f.enrolments[0].receiver = { state: 'active', conversationId: sessionId, generation: 2 };
     return { configFile: '/private/node.json', agentId: 'wright', sessionId, generation: 2 };
   };
+  f.createSession = async input => {
+    f.creates.push(input);
+    const session = { ...structuredClone(input), time: { created: Date.now() } };
+    f.createdSessions.set(input.id, session);
+    return session;
+  };
   const ctx = { options: { ownerContextFile: '/private/owner.json', nativeNodeConfigFile: '/private/node.json' },
     location: { directory: '/workspace' },
     client: { rpc: () => ({ inspect: async () => ({ generation: f.runtime }) }),
-      session: { get: async ({ sessionID }) => ({ id: sessionID, location: { directory: '/workspace' } }) } },
+      session: { get: async ({ sessionID }) => {
+        if (f.createdSessions.has(sessionID)) return f.createdSessions.get(sessionID);
+        if (sessionID === f.outbox.sessionCreation?.id) throw Object.assign(Error('Session not found'), { status: 404 });
+        return { id: sessionID, location: { directory: '/workspace' } };
+      }, create: input => f.createSession(input) } },
     data: { on: (name, callback) => { f.events.set(name, callback); return () => f.events.delete(name); } },
     storage: { store: () => [f.outbox, async update => update(f.outbox)] },
-    ui: { toast: { show: value => f.toasts.push(value) }, dialog: {
+    ui: { model: { current: () => f.model }, router: { navigate: destination => {
+      f.navigations.push(destination); f.session = destination.sessionID; f.track(f.session);
+    } }, toast: { show: value => f.toasts.push(value) }, dialog: {
       confirm: options => f.confirm(options), prompt: async () => 'Wright', select: async () => 'wright',
     } },
     keymap: { layer: factory => { f.commands.push(...factory().commands); } },
@@ -123,4 +136,102 @@ test('a definitively refused attachment clears only its TUI retry slot so a fres
   await f.run('relay-attach');
   assert.equal(f.outbox.pending, null);
   assert.equal(f.records.at(-1).type, 'attachment_refused');
+});
+
+for (const command of ['relay-enrol', 'relay-attach']) test(`${command} creates and opens an empty root session from Home before explicit confirmation`, async t => {
+  const f = fixture(t);
+  f.session = null;
+  let confirmedSession;
+  f.confirm = async () => { confirmedSession = f.session; return true; };
+  await f.run(command);
+  assert.equal(f.creates.length, 1);
+  assert.deepEqual(f.creates[0].location, { directory: '/workspace' });
+  assert.deepEqual(f.creates[0].model, { providerID: 'fixture', id: 'selected', variant: 'high' });
+  assert.equal(f.creates[0].parentID, undefined);
+  assert.equal(f.creates[0].permissions, undefined);
+  assert.equal(f.creates[0].text, undefined);
+  assert.equal(confirmedSession, f.creates[0].id);
+  assert.deepEqual(f.navigations, [{ type: 'session', sessionID: f.creates[0].id }]);
+  assert.equal(f.outbox.sessionCreation, null);
+  assert.equal(f.records.at(-1).type, 'receiver_attached');
+});
+
+test('Home attach without an enrolment reports the prerequisite without creating an unused chat', async t => {
+  const f = fixture(t);
+  f.session = null; f.enrolments = [];
+  await f.run('relay-attach');
+  assert.equal(f.creates.length, 0);
+  assert.match(f.toasts.at(-1).message, /relay-enrol/);
+});
+
+test('a lost Home session-create reply reuses its saved native ID and original model instead of creating another chat', async t => {
+  const f = fixture(t);
+  f.session = null;
+  const create = f.createSession;
+  f.createSession = async input => { await create(input); throw Error('Lost session reply'); };
+  await f.run('relay-attach');
+  assert.equal(f.creates.length, 1);
+  const original = structuredClone(f.outbox.sessionCreation);
+  assert.ok(original);
+  f.model = { providerID: 'other', modelID: 'changed' };
+  await f.run('relay-attach');
+  assert.equal(f.creates.length, 1);
+  assert.equal(f.navigations.at(-1).sessionID, original.id);
+  assert.equal(f.outbox.sessionCreation, null);
+  assert.equal(f.records.at(-1).sessionId, original.id);
+});
+
+test('retrying an undelivered Home create unwraps reactive storage and retains its original native ID', async t => {
+  const f = fixture(t);
+  f.session = null;
+  const create = f.createSession;
+  f.createSession = async () => { throw Error('Create was not delivered'); };
+  await f.run('relay-attach');
+  const id = f.outbox.sessionCreation.id;
+  f.outbox.sessionCreation = new Proxy(f.outbox.sessionCreation, {});
+  f.createSession = create;
+  await f.run('relay-attach');
+  assert.equal(f.creates.length, 1);
+  assert.equal(f.creates[0].id, id);
+  assert.equal(f.records.at(-1).type, 'receiver_attached');
+});
+
+test('a dismissed Home attachment cannot be bypassed by its delayed session-created notification', async t => {
+  const f = fixture(t);
+  f.session = 'ses_old'; await setImmediate();
+  f.session = null; f.track(null); f.confirm = async () => false;
+  await f.run('relay-attach');
+  assert.equal(f.creates.length, 1);
+  f.events.get('session.created')({ created: Date.now(), data: { sessionID: f.session, location: { directory: '/workspace' } } });
+  f.tick(); await setImmediate();
+  assert.equal(f.calls.filter(args => args[1] === 'attach').length, 0);
+});
+
+for (const change of ['switch', 'reconnect', 'reload', 'dispose']) test(`Home session creation cannot hijack navigation or publish a grant after ${change}`, async t => {
+  const f = fixture(t);
+  f.session = null;
+  const create = f.createSession;
+  f.createSession = async input => {
+    const session = await create(input);
+    if (change === 'switch') { f.session = 'ses_other'; f.track(f.session); }
+    if (change === 'reconnect') f.events.get('server.connected')();
+    if (change === 'reload') f.runtime = 'changed';
+    if (change === 'dispose') f.stop();
+    return session;
+  };
+  await f.run('relay-enrol');
+  assert.equal(f.navigations.length, 0);
+  assert.equal(f.calls.filter(args => ['attach', 'enrol'].includes(args[1])).length, 0);
+  assert.ok(f.outbox.sessionCreation);
+});
+
+test('Home reconciles an already confirmed attachment without creating a new chat', async t => {
+  const f = fixture(t);
+  f.failure = true; await f.run('relay-attach');
+  const pending = structuredClone(f.outbox.pending);
+  f.session = null; f.failure = false;
+  await f.run('relay-attach');
+  assert.equal(f.creates.length, 0);
+  assert.deepEqual(f.calls.filter(args => args[1] === 'attach').at(-1), pending.args);
+  assert.equal(f.outbox.pending, null);
 });

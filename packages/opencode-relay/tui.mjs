@@ -77,7 +77,7 @@ export default Plugin.define({
         },
       }],
     }));
-    record({ type: 'loaded', sessionId: sessionId() });
+    record({ type: 'loaded', sessionId: sessionId(), enrolmentCommandsVersion: 3 });
     return () => {
       if (closed) return;
       closed = true;

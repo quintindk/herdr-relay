@@ -39,6 +39,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
   let closed = false, busy = false, generation = 0;
   let previous = selectedSession(), enrolments = [], continuity = null;
   const created = new Map();
+  const manualSessions = new Set();
   const loadedAt = Date.now();
   const captureOrigin = session => {
     const own = enrolments.find(e => e.receiver?.state === 'active' && e.receiver.conversationId === session);
@@ -76,6 +77,40 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     enrolments = await runCli(['agent', 'enrolments', ...common, '--directory', location.directory]);
     captureOrigin(selectedSession());
   };
+  const openLandingSession = async origin => {
+    let input = outbox.sessionCreation ? JSON.parse(JSON.stringify(outbox.sessionCreation)) : null;
+    if (!input) {
+      const selectedModel = ctx.ui.model?.current();
+      const id = `ses_${randomUUID().replaceAll('-', '').slice(0, 26)}`;
+      input = { id, location: { directory: location.directory }, metadata: { relayLandingSession: id },
+        ...(selectedModel ? { model: { providerID: selectedModel.providerID, id: selectedModel.modelID,
+          ...(selectedModel.variant ? { variant: selectedModel.variant } : {}) } } : {}) };
+      await updateOutbox(draft => { draft.sessionCreation = input; });
+    }
+    check(origin);
+    if (input.location.directory !== location.directory) throw new Error('Pending session creation belongs to another workspace');
+    // Explicit slash-command creation must not also trigger automatic attachment,
+    // including when its creation event arrives after a dismissed confirmation.
+    manualSessions.add(input.id);
+    let session;
+    try { session = await ctx.client.session.get({ sessionID: input.id }); }
+    catch (error) { if (error.status !== 404 && !['NotFoundError', 'SessionNotFoundError'].includes(error.name)) throw error; }
+    check(origin);
+    if (!session) session = await ctx.client.session.create(structuredClone(input));
+    check(origin);
+    if (session.id !== input.id || session.location?.directory !== location.directory || session.parentID || session.time?.archived ||
+      session.metadata?.relayLandingSession !== input.id) throw new Error('Created session does not match the original landing-screen request');
+    if (origin.runtime !== await runtimeGeneration()) throw new Error('Relay reloaded during session creation');
+    check(origin);
+    ctx.ui.router.navigate({ type: 'session', sessionID: session.id });
+    track(selectedSession());
+    if (selectedSession() !== session.id) throw new Error('Open the created session before continuing Relay attachment');
+    origin.session = session.id; origin.generation = generation;
+    await updateOutbox(draft => { if (draft.sessionCreation?.id === input.id) draft.sessionCreation = null; });
+    check(origin);
+    record({ type: 'landing_session_created', sessionId: session.id });
+    return session;
+  };
   const publish = async pending => {
     const result = await runCli(pending.args);
     // Reuse a healthy node, or install/start it. Never restart OpenCode.
@@ -89,14 +124,12 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     record({ type: 'receiver_attached', sessionId: result.sessionId, agentId: result.agentId, generation: result.generation });
   };
   const run = async (kind, automatic) => {
-    if (closed || busy || !selectedSession()) return;
+    if (closed || busy || automatic && !selectedSession()) return;
     busy = true;
     const origin = { session: selectedSession(), generation };
     try {
       origin.runtime = await runtimeGeneration();
-      const session = await ctx.client.session.get({ sessionID: origin.session });
       check(origin);
-      if (session.parentID || session.location?.directory !== location.directory) throw new Error('Attach from an existing root chat in this exact workspace');
       if (outbox.pending) {
         if (automatic) return;
         if (!await ctx.ui.dialog.confirm({ title: 'Reconcile confirmed Relay attachment', message: 'Retry the previously confirmed operation with its original key. This does not claim another chat.' })) return;
@@ -104,6 +137,10 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
         await publish(JSON.parse(JSON.stringify(outbox.pending))); return;
       }
       await refresh(); check(origin);
+      if (kind === 'attach' && !enrolments.length) { toast('No standing enrolment for this workspace. Use /relay-enrol first.'); return; }
+      const session = origin.session ? await ctx.client.session.get({ sessionID: origin.session }) : await openLandingSession(origin);
+      check(origin);
+      if (session.parentID || session.location?.directory !== location.directory) throw new Error('Attach from a root chat in this exact workspace');
       let enrolment = automatic;
       let name;
       if (kind === 'enrol') {
@@ -153,6 +190,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
   };
   const stopConnection = ctx.data.on('server.connected', () => { generation++; created.clear(); continuity = null; });
   const stopCreated = ctx.data.on('session.created', event => {
+    if (manualSessions.has(event.data.sessionID)) return;
     if (event.data.parentID || event.data.location?.directory !== location.directory || !continuity || event.created < loadedAt) return;
     created.set(event.data.sessionID, { session: event.data, ...structuredClone(continuity) });
     if (created.size > 32) created.delete(created.keys().next().value);

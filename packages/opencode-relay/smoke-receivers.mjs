@@ -22,6 +22,7 @@ const workspace = join(root, 'workspace'), state = join(root, 'node');
 mkdirSync(workspace); mkdirSync(state);
 const binary = process.env.RELAY_V2_BINARY ?? join(here, 'node_modules/.bin/opencode2');
 const tuiOnly = process.argv.includes('--tui-only');
+const landing = process.argv.includes('--landing');
 let runtime, backend, daemon, journal, log = '', requests = 0;
 const wait = async (label, check, timeout = 100000) => {
   const deadline = Date.now() + timeout;
@@ -132,7 +133,7 @@ try {
     writeFileSync(registration, JSON.stringify({ id: 'receiver-smoke', pid: info.pid, version: info.version,
       url: runtime.descriptor.origin, password }), { mode: 0o600 });
     for (const kind of ['attach', 'enrol']) {
-      const session = await runtime.client.session.create({ location: { directory: workspace }, title: `Human ${kind} fixture` });
+      const session = landing ? null : await runtime.client.session.create({ location: { directory: workspace }, title: `Human ${kind} fixture` });
       const directory = join(root, `tui-${kind}`), configuration = join(directory, 'config/opencode');
       mkdirSync(configuration, { recursive: true });
       const evidenceFile = join(directory, 'evidence.jsonl');
@@ -148,7 +149,7 @@ try {
       const tui = spawn('python3', [join(here, 'pty-client.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
       let diagnostics = '';
       tui.stdout.on('data', () => {}); tui.stderr.on('data', chunk => { diagnostics += chunk; });
-      tui.stdin.end(JSON.stringify({ args: [binary, '--server', runtime.descriptor.origin, '--session', session.id, workspace],
+      tui.stdin.end(JSON.stringify({ args: [binary, '--server', runtime.descriptor.origin, ...(!landing ? ['--session', session.id] : []), workspace],
         cwd: workspace, env: { PATH: process.env.PATH, HOME: directory, TERM: 'xterm-256color',
           XDG_CONFIG_HOME: join(directory, 'config'), XDG_DATA_HOME: join(directory, 'data'), XDG_STATE_HOME: join(directory, 'state'),
           OPENCODE_PASSWORD: password }, evidenceFile, [kind]: true, autoNewChat: kind === 'attach', newChatTrigger,
@@ -158,7 +159,14 @@ try {
       const events = readFileSync(evidenceFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       const receipt = events.find(e => e.type === 'receiver_attached');
       assert.ok(receipt, diagnostics);
-      assert.equal(receipt.sessionId, session.id);
+      if (landing) {
+        const created = events.find(e => e.type === 'landing_session_created');
+        assert.ok(created, diagnostics); assert.equal(receipt.sessionId, created.sessionId);
+        const native = await runtime.client.session.get({ sessionID: created.sessionId });
+        assert.equal(native.metadata.relayLandingSession, created.sessionId);
+        assert.equal(native.location.directory, workspace);
+        assert.equal((await runtime.client.message.list({ sessionID: created.sessionId, order: 'asc', limit: 100 })).data.length, 0);
+      } else assert.equal(receipt.sessionId, session.id);
       if (kind === 'attach') {
         assert.equal(receipt.agentId, first.agentId); assert.equal(receipt.generation, 3);
         const automatic = events.filter(e => e.type === 'receiver_attached')[1];
@@ -187,7 +195,8 @@ try {
     model: 'deterministic fixture', physicalMachines: 1, actualHuman: false, stableAgentId: first.agentId, stableNodeId: first.nodeId,
     conversations: [first.sessionId, second.sessionId], cronFirings: tuiOnly ? 0 : 2, realMinuteTicks: !tuiOnly, nodeHotAttachment: true,
     replacementChatScheduleManagement: true, staleCredentialRefused: true, restartPreservedReceiver: true,
-    keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands, state: root }, null, 2));
+    keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands,
+    landingScreenCommands: keyboardCommands && landing, state: root }, null, 2));
 } finally {
   await stopDaemon(); journal?.close(); await runtime?.stop(); await backend?.close();
   model.closeAllConnections(); await new Promise(resolve => model.close(resolve));

@@ -373,3 +373,34 @@ locations. The two old session-derived interactive test daemons were stopped and
 disabled, their advertisements marked offline and their state retained. The
 unrelated local headless schedules were not changed. No user chat was silently
 enrolled. Actual-human `/relay-enrol` in the visible Wright chat is the next gate.
+
+### Wright live replacement-chat delivery, 2026-10-22
+
+Quintin enrolled Wright, opened a fresh chat and explicitly attached it. The agent
+and node identities remained unchanged while the receiver advanced to generation
+2. A one-shot schedule created before replacement retained revision 1, fired in
+the replacement conversation and published one successful, natively settled result.
+Quintin confirmed seeing the firing in Wright. The controller only inspected the
+backend and local journal. It did not recreate the schedule or submit the result.
+This passes that bounded actual-human replacement-chat delivery check, not a
+recurring cron, automatic attachment or landing-screen acceptance gate. Evidence:
+[Wright replacement schedule](evidence/native-wright-replacement-schedule-live.json).
+
+### Landing-screen enrolment and attachment
+
+The human test exposed silent no-ops when the selected OpenCode route had no
+session. Explicit `/relay-enrol` and `/relay-attach` now create and select an empty
+root session before continuing to confirmation. The selected model/variant is
+preserved. No model turn or permission change occurs. Lost create replies reuse a
+persisted native ID, and cancelled confirmation cannot be bypassed by the session's
+delayed creation event. Existing pending confirmed operations reconcile without
+creating another chat.
+
+Both commands pass real-TUI landing-screen keyboard probes on OpenCode 2.1.0 and
+2.1.2. All 53 v2 package tests and syntax checks pass. Input remains synthetic in
+these probes. Actual-human landing-screen acceptance is still open. Evidence:
+[landing enrolment](evidence/native-landing-enrolment.json).
+
+The full root regression again passed 1,522 tests with one skipped and zero
+failures. OpenCode configuration was reloaded without restarting the server.
+The live Wright and Relay TUIs reported the updated landing-command version.

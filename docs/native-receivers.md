@@ -11,6 +11,15 @@ Install the native server/TUI plugins with `native inbox install` as documented
 in [the CLI guide](native-cli.md). The local TUI holds the owner-context path.
 The server and model get only exact-session worker credentials.
 
+Both commands also work on OpenCode's landing screen. An explicit command creates
+and opens an empty root session in the current workspace, preserving the selected
+model and variant, then continues to the same confirmation. It sends no prompt,
+starts no model turn and changes no permissions. Repeated attempts after a lost
+create reply reuse the persisted session ID. Background discovery never creates
+sessions. If attachment has no enrolment to select, it reports that prerequisite
+without creating an unused chat. Dismissing confirmation leaves the empty chat
+open but does not attach it, including through a delayed automatic-attachment event.
+
 - `/relay-enrol` asks for a durable agent name, displays the workspace and standing
   grant, then enrols and attaches the current root chat after keyboard confirmation.
   Repeat calls reuse the same workspace/name enrolment.
@@ -121,6 +130,7 @@ npm run test:v2
 npm --prefix packages/opencode-relay run smoke:receivers
 npm --prefix packages/opencode-relay run smoke:receivers -- --tui
 npm --prefix packages/opencode-relay run smoke:receivers -- --tui-only
+npm --prefix packages/opencode-relay run smoke:receivers -- --tui-only --landing
 ```
 
 The receiver smoke uses an isolated real OpenCode service, native worker tools,
@@ -133,3 +143,5 @@ The TUI probe also drives Home, native root-session creation and selection throu
 a disposable navigation plugin, then verifies automatic attachment and subsequent
 scheduled delivery. `--tui-only` skips the minute-cron checks for this focused probe
 and explicitly reports zero verified minute firings.
+`--landing` starts the actual TUIs without a session and verifies native session
+creation, navigation and both human-confirmed commands with empty transcripts.
