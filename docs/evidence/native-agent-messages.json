@@ -9,9 +9,11 @@
   "regression": {
     "messageTestsPassed": 13,
     "focusedMessageAndNativeCliTestsPassed": 20,
-    "rootCheckpoint": { "passed": 1559, "skipped": 1, "failed": 0 },
-    "rootCheckpointPredatesFinalRecoveryFollowUp": true,
-    "finalCi": "pending",
+    "rootCheckpoint": { "passed": 1561, "skipped": 1, "failed": 0 },
+    "rootCheckpointPredatesFinalRecoveryFollowUp": false,
+    "finalCi": "passed",
+    "finalCiUrl": "https://github.com/quintindk/herdr-relay/actions/runs/39749890930",
+    "sourceCommit": "44b78f5fd73fd7038657c252b28d55e2451482b4",
     "v2TestsPassed": 57,
     "syntaxAndWhitespacePassed": true,
     "workflowLintPassed": true
@@ -40,6 +42,17 @@
     "productionVulnerabilities": 0,
     "releaseVerified": false,
     "limitation": "Dirty-source preflight before final commit, not the final release report"
+  },
+  "cleanSourceArtifactVerification": {
+    "command": "node scripts/verify-package.mjs --release --output /tmp/opencode/herdr-relay-rc.4",
+    "sourceCommit": "44b78f5fd73fd7038657c252b28d55e2451482b4",
+    "sourceTreeClean": true,
+    "releaseVerified": true,
+    "cleanProductionInstall": true,
+    "taskIndependentAgentMessages": true,
+    "auditVerified": true,
+    "productionVulnerabilities": 0,
+    "publication": "Separate tagged GitHub release pipeline"
   },
   "safetyAndRecovery": [
     "Exact sender binding and participant-scoped inbox/sent reads",
