@@ -1,6 +1,6 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "private": true,
   "license": "MIT",
   "description": "Connect Paperclip work to agents in herdr",

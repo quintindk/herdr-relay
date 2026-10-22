@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Test and package exact tag
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish immutable GitHub release
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: release
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Verify artifact provenance and tag before publication
+        working-directory: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, readdirSync } from 'node:fs';
+          const reports = readdirSync('.').filter(file => file.endsWith('.tgz.verification.json'));
+          assert.equal(reports.length, 1);
+          const report = JSON.parse(readFileSync(reports[0], 'utf8'));
+          assert.equal(`v${report.version}`, process.env.RELEASE_TAG);
+          assert.equal(report.sourceCommit, process.env.SOURCE_COMMIT);
+          assert.equal(report.sourceTreeClean, true);
+          assert.equal(report.releaseVerified, true);
+          assert.equal(report.auditVerified, true);
+          assert.equal(report.vulnerabilities.total, 0);
+          NODE
+          sha256sum -c SHA256SUMS
+      - name: Publish without replacing an existing release or assets
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists. Refusing to replace it or its assets."
+            exit 1
+          fi
+          FLAGS=(--latest=false)
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            FLAGS+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "Herdr Relay $RELEASE_TAG" \
+            --notes-file RELEASE-NOTES.md "${FLAGS[@]}" \
+            ./*.tgz ./SHA256SUMS ./*.tgz.verification.json

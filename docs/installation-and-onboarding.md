@@ -1,6 +1,6 @@
 # Evo backend, Evo node and Surface node onboarding
 
-Target: `0.2.0-rc.2`. Evo runs the backend and a node. Surface runs a node inside
+Target: `0.2.0-rc.3`. Evo runs the backend and a node. Surface runs a node inside
 **WSL2 with systemd**. The source Paperclip instance is on **Surface**.
 
 This guide uses installed-release commands only. It does not require cloning a
@@ -24,15 +24,19 @@ Evo/Surface home directories are not physical Surface acceptance.
 
 ## 1. Select the same immutable release on both machines
 
-Recommended distribution: a GitHub **prerelease** with these immutable assets:
+Distribution: a [GitHub **prerelease**](https://github.com/quintindk/herdr-relay/releases)
+with these immutable assets:
 
-- `herdr-relay-0.2.0-rc.2.tgz`
+- `herdr-relay-0.2.0-rc.3.tgz`
 - `SHA256SUMS`
-- `herdr-relay-0.2.0-rc.2.tgz.verification.json`
+- `herdr-relay-0.2.0-rc.3.tgz.verification.json`
 - Release notes and this guide.
 
-No prerelease is created automatically. Verify checksums from the trusted release
-channel. Checksums detect changed bytes; they are not a signing-key attestation.
+An explicitly pushed version tag publishes only after GitHub Actions tests,
+installed-package checks and audit pass. Download the three assets into one
+directory. This is a Node.js package with executable CLI entrypoints, not a
+standalone native binary. Verify checksums from the trusted release channel.
+Checksums detect changed bytes; they are not a signing-key attestation.
 
 ```bash
 umask 077
@@ -47,8 +51,8 @@ Require Node.js **24+**, Linux binaries inside WSL and Git. Do not use Windows
 installing over an active deployment:
 
 ```bash
-RELEASE="$HOME/.local/share/herdr-relay/releases/0.2.0-rc.2"
-npm install --prefix "$RELEASE" /absolute/download/herdr-relay-0.2.0-rc.2.tgz
+RELEASE="$HOME/.local/share/herdr-relay/releases/0.2.0-rc.3"
+npm install --prefix "$RELEASE" /absolute/download/herdr-relay-0.2.0-rc.3.tgz
 RELAY="$RELEASE/node_modules/.bin/herdr-relay"
 "$RELAY" native --help
 ```

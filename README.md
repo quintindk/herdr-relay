@@ -1,8 +1,12 @@
 # Herdr Relay
 
-**0.2.0-rc.2: native-workflow candidate with scoped node onboarding.**
+**0.2.0-rc.3: native-workflow candidate with scoped node onboarding and GitHub releases.**
 Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
-and [RC2 scope/readiness](docs/release-0.2.0-rc.2.md).
+and [RC3 scope/readiness](docs/release-0.2.0-rc.3.md).
+
+Download the package, checksums and verification report from
+[GitHub Releases](https://github.com/quintindk/herdr-relay/releases).
+The package requires Node.js 24+ inside Linux/WSL2. It is not a standalone executable.
 The native backend does not require Paperclip. Legacy Paperclip operation remains
 available and is documented separately below. This is not complete specification
 v3 certification or a production/public-ingress release.
