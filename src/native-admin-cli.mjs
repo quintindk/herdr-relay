@@ -9,6 +9,7 @@ import { createPrivateJson, readPrivateJson } from './private-files.mjs';
 import { createNodeBundle, joinNode, revokeNodeBundle, contextClient, defaultNodeConfig, defaultOperatorContext, defaultOwnerContext, cloudflareTransportFromFile } from './native-onboarding.mjs';
 import { installNativeInbox, uninstallNativePlugin } from './native-inbox-install.mjs';
 import { nativeDoctor } from './native-doctor.mjs';
+import { installSkills, skillStatus } from './skill-install.mjs';
 
 export const adminHelp = `Installed-release administration (no checkout scripts required):
   backend install [--state-dir DIR] [--port PORT] [--dry-run]
@@ -22,6 +23,8 @@ export const adminHelp = `Installed-release administration (no checkout scripts 
   node revoke --bundle PRIVATE_BUNDLE --key KEY --context ROOT_OWNER_JSON
   plugin install [--config NODE_JSON] [--context OPERATOR_JSON] [--config-dir DIR] [--here|--session ID] [--replace-context]
   plugin uninstall [--config-dir DIR]
+  skills status [--config-dir DIR]
+  skills install [--config-dir DIR] [--dry-run] [--replace-modified]
   doctor [--config NODE_JSON] [--context OPERATOR_JSON] [--backend-only]
   tasks source --url PAPERCLIP_ORIGIN --output PRIVATE_SOURCE_JSON --local-trusted|--token-file PRIVATE_TOKEN_FILE
   tasks companies --source PRIVATE_SOURCE_JSON  [read-only discovery]
@@ -54,14 +57,14 @@ export function inventoryProjection(snapshot) {
 }
 export async function nativeAdmin(args) {
   const [group, action] = args;
-  const selected = ['backend', 'plugin', 'doctor', 'tasks'].includes(group) || group === 'node' && ['bootstrap', 'join', 'revoke'].includes(action);
+  const selected = ['backend', 'plugin', 'doctor', 'tasks', 'skills'].includes(group) || group === 'node' && ['bootstrap', 'join', 'revoke'].includes(action);
   if (!selected) return false;
   if (args.includes('--help')) { console.log(adminHelp); return true; }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     ...Object.fromEntries(['context', 'state-dir', 'port', 'output', 'key', 'name', 'url', 'bundle', 'config', 'transport', 'max-agents', 'config-dir',
       'session', 'evidence-file', 'access', 'source', 'company', 'file', 'confirm-digest', 'token-file'].map(k => [k, { type: 'string' }])),
     root: { type: 'string', multiple: true },
-    ...Object.fromEntries(['dry-run', 'local-user', 'here', 'replace-context', 'backend-only', 'local-trusted', 'source-frozen', 'legacy-relay-settled'].map(k => [k, { type: 'boolean' }])),
+    ...Object.fromEntries(['dry-run', 'local-user', 'here', 'replace-context', 'replace-modified', 'backend-only', 'local-trusted', 'source-frozen', 'legacy-relay-settled'].map(k => [k, { type: 'boolean' }])),
   } });
   requireValue(positionals.length === (group === 'doctor' ? 1 : 2), 'invalid_request', 'Unexpected administrative positional arguments');
   const permitted = group === 'doctor' ? ['config', 'context', 'backend-only'] : {
@@ -71,6 +74,7 @@ export async function nativeAdmin(args) {
     'node:bootstrap': ['context', 'key', 'name', 'url', 'output', 'local-user', 'root', 'max-agents', 'transport', 'access'],
     'node:join': ['bundle', 'config'], 'node:revoke': ['bundle', 'key', 'context'],
     'plugin:install': ['config', 'context', 'config-dir', 'here', 'session', 'replace-context', 'evidence-file'], 'plugin:uninstall': ['config-dir'],
+    'skills:status': ['config-dir'], 'skills:install': ['config-dir', 'dry-run', 'replace-modified'],
     'tasks:source': ['url', 'output', 'local-trusted', 'token-file'], 'tasks:companies': ['source'], 'tasks:export': ['source', 'company', 'output'],
     'tasks:plan': ['file', 'output'], 'tasks:import': ['file', 'context', 'state-dir', 'confirm-digest', 'source-frozen', 'legacy-relay-settled'],
   }[`${group}:${action}`];
@@ -82,7 +86,12 @@ export async function nativeAdmin(args) {
     execFileSync(process.execPath, [fileURLToPath(new URL(name, import.meta.url)), ...parts], { stdio: 'inherit' });
   };
   const ownerApi = () => { requireValue(values.context, 'invalid_request', 'Explicit --context required'); return contextClient(readPrivateJson(values.context)); };
-  if (group === 'backend') {
+  if (group === 'skills') {
+    const result = action === 'status' ? skillStatus({ configDirectory: values['config-dir'] })
+      : installSkills({ configDirectory: values['config-dir'], dryRun: values['dry-run'], replaceModified: values['replace-modified'] });
+    output(result);
+    if (result.state === 'skill_conflict') process.exitCode = 1;
+  } else if (group === 'backend') {
     if (action === 'install') script('../scripts/install-native-backend.mjs', values);
     else if (action === 'init' || action === 'run') {
       requireValue(values['state-dir'], 'invalid_request', 'Explicit --state-dir required');

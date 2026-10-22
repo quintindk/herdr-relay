@@ -4,9 +4,10 @@ import { join, resolve } from 'node:path';
 import { requireValue } from './protocol.mjs';
 import { readPrivateJson } from './private-files.mjs';
 import { serviceUpgrade, installationStatus, upgradeDirectory, installCliRelease } from './service-upgrade.mjs';
+import { installSkills } from './skill-install.mjs';
 
 export const upgradeHelp = `Relay service maintenance (node means Relay node, not nodejs):
-  release install --version VERSION  [verified version store and normal CLI; no service changes]
+  release install --version VERSION [--config-dir DIR]  [verified CLI and safe skill sync; no service changes]
   node status [--config PRIVATE_NODE_JSON]
   backend status
   node upgrade --version VERSION [--apply] [--key KEY]
@@ -29,7 +30,7 @@ export async function maintenanceCli(args) {
     apply: { type: 'boolean' },
   } });
   const operation = group === 'upgrade' ? action : 'service';
-  const permitted = group === 'release' ? ['version', 'artifact', 'sha256', 'upgrade-dir', 'releases-dir', 'bin-dir'] : group !== 'upgrade' && action === 'status' ? ['config'] :
+  const permitted = group === 'release' ? ['version', 'artifact', 'sha256', 'upgrade-dir', 'releases-dir', 'bin-dir', 'config-dir'] : group !== 'upgrade' && action === 'status' ? ['config'] :
     ['status', 'resume', 'rollback'].includes(operation) ? ['upgrade-dir', ...(operation !== 'status' ? ['apply'] : [])] :
     ['version', 'artifact', 'sha256', 'key', 'services', 'config', 'upgrade-dir', 'releases-dir', 'config-dir', 'bin-dir', 'apply'];
   for (const key of Object.keys(values)) requireValue(permitted.includes(key), 'invalid_request', `--${key} is not supported here`);
@@ -37,8 +38,9 @@ export async function maintenanceCli(args) {
   if (group === 'release') {
     requireValue(positionals.length === 2 && (values.artifact ? values.sha256 && !values.version : values.version && !values.sha256),
       'invalid_request', 'Choose exact --version or --artifact plus --sha256');
-    output(await installCliRelease({ version: values.version, artifact: values.artifact, sha256: values.sha256,
-      directory: values['upgrade-dir'], releasesDirectory: values['releases-dir'], binDirectory: values['bin-dir'] })); return true;
+    const result = await installCliRelease({ version: values.version, artifact: values.artifact, sha256: values.sha256,
+      directory: values['upgrade-dir'], releasesDirectory: values['releases-dir'], binDirectory: values['bin-dir'] });
+    output({ ...result, skills: installSkills({ sourceDirectory: result.installation, configDirectory: values['config-dir'] }) }); return true;
   }
   if (group !== 'upgrade' && action === 'status') {
     requireValue(positionals.length === 2 && (group === 'node' || !values.config), 'invalid_request', 'Unexpected service status arguments');

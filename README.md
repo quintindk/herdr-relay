@@ -183,10 +183,11 @@ directories, bounded by the service account and an active-worker limit. See
 - [Task hierarchy pane](docs/task-board.md): browse tasks by agent or human owner
   through Relay, with folding, search and live refresh.
 - [Herdr Relay skill](skills/herdr-relay/SKILL.md) replaces the former envoy skill.
-  Install it as `~/.config/opencode/skills/herdr-relay/SKILL.md`, then restart
-  OpenCode when idle without interrupting active workers. It teaches paginated
-  task reads, explicit enrolment, Relay chat tools, origin-bound human review and safe
-  recovery. [Relay work](skills/relay-work/SKILL.md) remains the worker CLI protocol.
+  The RC7 development [skill installer](docs/skill-installation.md) manages both
+  shipped native skills with safe updates, local-edit conflicts and private backups.
+  It does not restart chats. [Relay work](skills/relay-work/SKILL.md) teaches the
+  scoped native execution protocol. Historical Paperclip instructions remain in
+  separate legacy documentation, not in the installed native skills.
 - [Specification v3 for version 0.2.0](docs/spec-v3.md),
   [current handover](docs/handover.md) and
   [archived designs and evaluations](docs/archive/README.md).

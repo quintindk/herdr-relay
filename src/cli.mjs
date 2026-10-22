@@ -15,7 +15,7 @@ import { releaseVersion } from './release-info.mjs';
 
 const help = `herdr-relay ${releaseVersion}
 ${upgradeHelp}
-  backend|node|plugin|doctor|tasks|headless --help  [native installed-release administration]
+  backend|node|plugin|doctor|tasks|headless|skills --help  [native installed-release administration]
   native --help  [full native task and agent command reference]
 
 Local Paperclip compatibility commands (legacy SSH transport is retired):
@@ -112,7 +112,7 @@ terminal response. Automatic interruption requires a dedicated owned runtime.`;
 export async function main(args) {
   if (args.length === 1 && args[0] === '--version') { console.log(releaseVersion); return; }
   if (await maintenanceCli(args)) return;
-  if (['backend', 'node', 'plugin', 'doctor', 'tasks', 'headless'].includes(args[0]) && !(args[0] === 'backend' && args[1] === 'recover')) {
+  if (['backend', 'node', 'plugin', 'doctor', 'tasks', 'headless', 'skills'].includes(args[0]) && !(args[0] === 'backend' && args[1] === 'recover')) {
     const { main: native } = await import('./native-cli.mjs');
     return native(args);
   }

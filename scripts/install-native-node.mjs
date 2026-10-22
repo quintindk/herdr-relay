@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { requireValue } from '../src/protocol.mjs';
+import { installSkills } from '../src/skill-install.mjs';
 
 const { values } = parseArgs({ options: { config: { type: 'string' } } });
 requireValue(values.config, 'invalid_request', 'Use --config PRIVATE_NODE_JSON');
@@ -39,4 +40,4 @@ if (changed) writeFileSync(path, unit, { mode: 0o600 });
 execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
 execFileSync('systemctl', ['--user', 'enable', '--now', name], { stdio: 'inherit' });
 if (changed) execFileSync('systemctl', ['--user', 'restart', name], { stdio: 'inherit' });
-console.log(JSON.stringify({ service: name, nodeId: config.nodeId, config: configPath }));
+console.log(JSON.stringify({ service: name, nodeId: config.nodeId, config: configPath, skills: installSkills() }));

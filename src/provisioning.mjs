@@ -62,7 +62,7 @@ export async function provisionAgent(store, directory, api, input) {
   const hermes = request.harness === 'hermes';
   const skillDirectory = join(request.directory, hermes ? '.hermes/skills/relay-work' : '.opencode/skills/relay-work');
   mkdirSync(skillDirectory, { recursive: true });
-  const skill = readFileSync(fileURLToPath(new URL('../skills/relay-work/SKILL.md', import.meta.url)), 'utf8');
+  const skill = readFileSync(fileURLToPath(new URL('../docs/legacy-paperclip-work-skill.md', import.meta.url)), 'utf8');
   const skillPath = join(skillDirectory, 'SKILL.md');
   if (existsSync(skillPath)) requireValue(readFileSync(skillPath, 'utf8') === skill, 'skill_conflict', 'Existing Relay skill differs. Resolve it explicitly.', 409);
   else writeFileSync(skillPath, skill, { flag: 'wx' });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, execFile } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, constants } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, constants, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
@@ -27,7 +27,8 @@ const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-desti
 assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firecrawl|\.git)(\/|$)/.test(f.path)), 'Package contains private or development files');
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'scripts/migrate-paperclip-tasks.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
-  'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs',
+  'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/skill-install.mjs',
+  'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md', 'docs/legacy-paperclip-work-skill.md',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
@@ -45,6 +46,20 @@ assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upg
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
 assert.match(help, /interactive grant\|request\|dispatch/);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['headless', '--help'], { encoding: 'utf8' }), /headless provision/);
+const skillConfig = join(root, 'installed-skills'); mkdirSync(skillConfig);
+const installedCli = join(consumer, 'node_modules/.bin/herdr-relay');
+const installedSkills = JSON.parse(execFileSync(installedCli, ['skills', 'install', '--config-dir', skillConfig], { encoding: 'utf8' }));
+assert.equal(installedSkills.state, 'skills_installed');
+assert.match(readFileSync(join(skillConfig, 'skills/herdr-relay/SKILL.md'), 'utf8'), /Native Relay does not require Paperclip/);
+assert.equal(JSON.parse(execFileSync(installedCli, ['skills', 'install', '--config-dir', skillConfig], { encoding: 'utf8' })).state, 'skills_current');
+if (!values['skip-audit']) {
+  const activationBin = join(root, 'activation-bin'); mkdirSync(activationBin);
+  symlinkSync(join(installed, 'src/cli.mjs'), join(activationBin, 'herdr-relay'));
+  const activation = JSON.parse(execFileSync(installedCli, ['release', 'install', '--artifact', artifact, '--sha256', sha(artifact),
+    '--upgrade-dir', join(root, 'activation-upgrades'), '--releases-dir', join(root, 'activation-releases'), '--bin-dir', activationBin,
+    '--config-dir', skillConfig], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+  assert.equal(activation.servicesChanged, false); assert.equal(activation.skills.state, 'skills_current');
+}
 execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';
   import {mkdirSync,writeFileSync,readFileSync} from 'node:fs';
@@ -177,6 +192,7 @@ if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
   cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, nativeBackendStarted: true,
   onboarding,
+  skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
   auditVerified: Boolean(audit), vulnerabilities: audit?.metadata.vulnerabilities ?? null, published: false, gitTagCreated: false };
 writeFileSync(join(artifactDirectory, `${packed.filename}.verification.json`), JSON.stringify(result, null, 2));
 const sums = `${result.sha256}  ${packed.filename}\n`, sumsPath = join(artifactDirectory, 'SHA256SUMS');
