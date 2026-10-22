@@ -120,7 +120,7 @@ try {
   const request = { services: ['backend', 'node'], version: candidate.version, key: 'real-upgrade', nodeConfig: joined.configFile,
     directory: join(root, 'upgrades'), configDirectory: nativeConfig, binDirectory: bin, apply: true };
   const upgradeDependencies = { manager, stageRelease: async () => candidate,
-    health: async (...args) => { if (failCandidate && args[4]) throw Error('Intentional health failure'); return verifyServiceHealth(...args); },
+    health: async (...args) => { if (failCandidate && args[4] && args[1].release.version === candidate.version) throw Error('Intentional health failure'); return verifyServiceHealth(...args); },
     healthAttempts: 20, healthDelay: 100 };
   const pendingForm = await runtime.client.session.form.create({ sessionID: sender.sessionId, title: 'Fixture pending decision',
     fields: [{ type: 'boolean', key: 'fixture', title: 'Fixture only', required: true }] });
