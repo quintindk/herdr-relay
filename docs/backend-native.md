@@ -42,7 +42,10 @@ without installing a plugin, reloading the native service or changing permission
 It is not an automatic fallback for workers whose shell access is denied.
 Owned v2 bindings retain their direct-tool default and reject this override.
 
-`opencode-v2-owned` bindings additionally accept `executable`, `directory`,
+`herdr-relay headless provision` provides a guarded, plan-first configuration path
+for reusable `opencode-v2-owned` bindings. See [native headless agents](native-headless-agents.md).
+
+Owned bindings require `executable`, `directory`,
 `reserved: true` and an explicit v2 `config`. Provisioning journals a dedicated
 runtime and exact session before writes, reuses both on repeated calls, and exposes
 interruption only through that owned process identity. A real isolated provisioning

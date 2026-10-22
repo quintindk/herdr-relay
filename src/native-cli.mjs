@@ -18,6 +18,8 @@ import { readPrivateJson } from './private-files.mjs';
 import { maintenanceCli } from './upgrade-cli.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
+  headless provision|inspect --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
+  agent provision --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]  [native headless, plans by default]
   agent enrol --here|--session ID --reserved [--config PRIVATE_NODE_JSON] [--directory DIR] [--name NAME] [--transport tools|cli]
     [--service-registration FILE] --context OWNER_JSON
   agent enrolments [--directory DIR] [--config PRIVATE_NODE_JSON] --context OWNER_JSON
@@ -54,6 +56,10 @@ Run-now for an existing native cron is not implemented. Use an explicit executio
 Pause must be acknowledged by the owner node. Already admitted work is not interrupted.`;
 
 export async function main(args) {
+  if (args[0] === 'headless' || args[0] === 'agent' && args[1] === 'provision') {
+    const { headlessCli } = await import('./native-headless.mjs');
+    return headlessCli(args[0] === 'agent' ? ['headless', ...args.slice(1)] : args);
+  }
   if (args[1] === 'upgrade' || args[0] === 'upgrade') { if (await maintenanceCli(args)) return; }
   if (args[0] === 'work') {
     const { main: worker } = await import('./node-worker-cli.mjs');

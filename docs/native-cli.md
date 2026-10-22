@@ -1,8 +1,10 @@
 # Native Relay CLI
 
-The development entry point is `node src/cli.mjs native`. An installed build uses
-`herdr-relay native`. Commands without `native` retain their legacy
-Paperclip-backed behaviour. Native commands never silently fall back to Paperclip.
+The full native entry point is `node src/cli.mjs native`, or `herdr-relay native`
+in an installed build. Public `backend`, `node`, `plugin`, `doctor`, `tasks` and
+`headless` administration commands also use the native implementation. Legacy
+unqualified `agent`/`schedule` commands remain separate. Native commands never
+silently fall back to Paperclip.
 
 ```bash
 npm ci
@@ -16,6 +18,11 @@ their own exact-session credential and local node socket instead. Keep credentia
 outside the checkout. Enrolment never prints a token.
 
 ## Existing conversation enrolment
+
+For dedicated recurring automation without an interactive conversation, use the
+[native headless agent](native-headless-agents.md) provisioning path. The public
+`herdr-relay headless provision` command plans by default; `--apply` configures one
+persistent owned binding. It never starts work or silently enables a schedule.
 
 Native enrolment now creates a **durable workspace/role agent**, not a session-
 derived node and agent. See [receiving chats](native-receivers.md) for human-only
