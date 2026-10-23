@@ -3,7 +3,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { BackendStore, backendProtocol } from './backend-store.mjs';
 import { RelayError, requireValue } from './protocol.mjs';
 import { interactiveAuthority } from './interactive-contract.mjs';
-import { headlessAuthority } from './headless-setup-contract.mjs';
+import { headlessAuthority, headlessProbeId } from './headless-setup-contract.mjs';
+import { headlessExecutionScope, headlessReferenceLookup } from './headless-tasks.mjs';
 import { bootstrapNode } from './node-bootstrap.mjs';
 import { messageParticipant, queryMessages } from './agent-messages.mjs';
 import { existsSync } from 'node:fs';
@@ -31,7 +32,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true } };
+        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
@@ -65,7 +66,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
           cursor: url.searchParams.get('cursor') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });
-      } else if (req.method === 'POST' && ['/v1/commands', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap'].includes(url.pathname)) {
+      } else if (req.method === 'POST' && ['/v1/commands', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read'].includes(url.pathname)) {
         let size = 0;
         const chunks = [];
         for await (const chunk of req) {
@@ -76,7 +77,17 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString()); }
         catch { throw new RelayError('invalid_json', 'JSON body required', 400); }
-        if (url.pathname === '/v1/node-bootstrap') result = bootstrapNode(store, actor, body);
+        if (url.pathname === '/v1/headless/read') {
+          requireValue(body && ['access', 'references'].includes(body.operation), 'invalid_headless_request', 'Exact headless read operation required');
+          const { operation, ...payload } = body;
+          if (operation === 'references') result = headlessReferenceLookup(store, actor, payload);
+          else {
+            requireValue(Object.keys(payload).every(k => ['executionId', 'runId'].includes(k)), 'invalid_headless_request', 'Scope lookup takes no overrides');
+            const scope = headlessExecutionScope(store, actor, payload);
+            result = { id: scope.setup.id, directory: scope.setup.directory, profile: scope.profile, readiness: scope.execution.id === headlessProbeId(scope.setup) };
+          }
+        }
+        else if (url.pathname === '/v1/node-bootstrap') result = bootstrapNode(store, actor, body);
         else if (url.pathname.startsWith('/v1/node-credentials')) {
           requireValue(body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).every(key => ['nodeId', 'key'].includes(key)),
             'invalid_request', 'Only nodeId and issuance key are supported');

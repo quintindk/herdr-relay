@@ -7,6 +7,7 @@ import { registerOperatorTools } from './operator-tools.mjs';
 import { randomUUID } from 'node:crypto';
 import { HeadlessAccess, checkHeadlessAccess, inspectHeadlessConnections } from './headless-access.mjs';
 import { waitHeadlessSetup } from '../../src/headless-setup-wait.mjs';
+import { digest } from '../../src/protocol.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.spike.server',
@@ -54,7 +55,7 @@ export default Plugin.define({
             key: { type: 'string', minLength: 1 }, candidate: { type: 'string', minLength: 1, maxLength: 512 }, summary: { type: 'string', minLength: 1, maxLength: 16000 },
            }, required: ['key', 'candidate', 'summary'], additionalProperties: false }, execute: (input, context) => worker(context, 'submit', input) });
         editor.add({ name: 'relay_workiq_read', description: 'Read through this headless worker\'s explicitly authorised existing WorkIQ connection. Only the granted read tool is callable. No credentials or arbitrary server selection.',
-          options: { codemode: false }, input: { type: 'object', properties: { arguments: { type: 'object', maxProperties: 64, additionalProperties: true } }, required: ['arguments'], additionalProperties: false },
+          options: { codemode: false }, input: { type: 'object', properties: { arguments: { type: 'object', maxProperties: 64, additionalProperties: true }, sourceNamespace: { type: 'string', minLength: 1, maxLength: 128 } }, required: ['arguments'], additionalProperties: false },
           async execute(input, context) {
             const connection = workerConnection(ctx.options, context.sessionID);
             if (!connection.headlessSetupId || JSON.stringify(input.arguments).length > 16000) throw new Error('headless_workiq_scope_required');
@@ -65,10 +66,43 @@ export default Plugin.define({
             if (!tool?.execute || refs.workiq.readTool === 'relay_workiq_read') throw new Error('workiq_read_tool_unavailable');
             await ctx.permission.assert({ sessionID: context.sessionID, agent: context.agent, action: refs.workiq.readTool, resources: ['*'],
               source: { type: 'tool', messageID: context.messageID, id: context.id } });
+            let current;
+            if (input.sourceNamespace) {
+              current = await call(connection, 'POST', '/work/current', { sessionId: context.sessionID });
+              const scope = await call(connection, 'POST', '/work/headless-scope', { executionId: current.execution.id, runId: current.execution.runId, payload: {} });
+              if (!scope.sourceNamespaces.includes(input.sourceNamespace)) throw new Error('headless_source_forbidden');
+            }
             const result = await tool.execute(input.arguments, context);
+            let evidence;
+            if (current) evidence = await call(connection, 'POST', '/work/headless-observation', { executionId: current.execution.id, runId: current.execution.runId,
+              payload: { id: context.id, namespace: input.sourceNamespace, inputDigest: digest(input.arguments), outputDigest: digest(result) } });
             // MCP structured output belongs to the underlying tool's schema. The
             // generic bridge returns content, not undeclared typed output.
-            return { content: result.content, metadata: { ...(result.metadata ?? {}), headlessWorkiqTool: refs.workiq.readTool } };
+            return { content: evidence ? [...(Array.isArray(result.content) ? result.content : [{ type: 'text', text: String(result.content) }]),
+              { type: 'text', text: JSON.stringify({ relayHeadlessObservation: evidence, businessPolicy: 'external_job_contract' }) }] : result.content,
+              metadata: { ...(result.metadata ?? {}), headlessWorkiqTool: refs.workiq.readTool, ...(evidence ? { headlessObservationId: evidence.id } : {}) } };
+          } });
+        const sourceSchema = { type: 'object', properties: { namespace: { type: 'string', minLength: 1, maxLength: 128 }, externalId: { type: 'string', minLength: 1, maxLength: 512 }, url: { type: 'string', maxLength: 4096 } }, required: ['namespace', 'externalId'], additionalProperties: false };
+        editor.add({ name: 'relay_headless_scope', description: 'Inspect the exact active headless execution\'s approved task actions, source namespaces and artifact paths. No authority expansion or arbitrary filesystem access.', options: { codemode: false },
+          input: { type: 'object', properties: {}, additionalProperties: false }, execute: (input, context) => worker(context, 'headless-scope', { payload: input }) });
+        editor.add({ name: 'relay_headless_task', description: 'Apply an explicitly granted human-owned native task create/update/comment/reference operation. Requires an exact active headless run, stable source identity, idempotency key and inspected revisions. No owner context, execution dispatch or arbitrary mutation.', options: { codemode: false },
+          input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 128 }, operation: { enum: ['task.create', 'task.update', 'comment.create', 'reference.attach'] }, source: sourceSchema, payload: { type: 'object', maxProperties: 8, additionalProperties: true } }, required: ['key', 'operation', 'source', 'payload'], additionalProperties: false },
+          execute: (input, context) => worker(context, 'headless-task', { key: input.key, payload: input }) });
+        editor.add({ name: 'relay_headless_reference_lookup', description: 'Read exact native source identity and explicit imported aliases under the headless capability grant. Does not infer missing legacy references or mutate tasks.', options: { codemode: false },
+          input: { type: 'object', properties: { reference: sourceSchema, aliases: { type: 'array', maxItems: 16, items: sourceSchema } }, required: ['reference'], additionalProperties: false },
+          execute: (input, context) => worker(context, 'headless-reference', { payload: input }) });
+        editor.add({ name: 'relay_headless_artifacts', description: 'Read or durably update receipts, history, run records and revisioned checkpoints in explicitly approved paths. No arbitrary filesystem access. Job-specific cursor meanings and business completion rules remain in the external contract.', options: { codemode: false },
+          input: { type: 'object', properties: {
+            operation: { enum: ['inventory', 'read', 'state', 'receipt', 'checkpoint', 'run'] }, key: { type: 'string', minLength: 1, maxLength: 128 },
+            id: { type: 'string' }, legacyFile: { type: 'string', maxLength: 192 }, revision: { type: 'integer', minimum: 1 }, source: sourceSchema, action: { type: 'string', maxLength: 80 }, expectedRevision: { type: 'integer', minimum: 0 },
+            status: { enum: ['pending', 'uncertain', 'blocked', 'failed', 'applied', 'no_change', 'complete', 'partial'] }, data: { type: 'object', additionalProperties: true }, details: { type: 'object', additionalProperties: true },
+            summary: { type: 'string', maxLength: 4000 }, observationIds: { type: 'array', maxItems: 1000, items: { type: 'string' } },
+            receiptIds: { type: 'array', maxItems: 10000, items: { type: 'string' } }, legacyRefs: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: true } },
+          }, required: ['operation'], additionalProperties: false }, execute: (input, context) => worker(context, 'headless-artifacts', { payload: input }) });
+        editor.add({ name: 'relay_headless_capabilities', description: 'Run readiness-only canaries for the exact approved native task actions and artifact paths. Task canaries roll back; artifact canaries use an isolated approved history lane. Never certifies business-job completion.', options: { codemode: false },
+          input: { type: 'object', properties: {}, additionalProperties: false }, async execute(input, context) {
+            const result = await worker(context, 'headless-capabilities', { payload: input });
+            return { ...result, metadata: { headlessCapabilitiesDigest: JSON.parse(result.content).digest } };
           } });
         for (const [name, action, properties, required, description] of [
           ['relay_delegate', 'delegate', { id: { type: 'string' }, taskId: { type: 'string' }, title: { type: 'string' },

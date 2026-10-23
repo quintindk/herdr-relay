@@ -42,6 +42,9 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
         const permissions = [{ action: '*', resource: '*', effect: 'deny' }, { action: 'read', resource: contract, effect: 'allow' },
           ...['relay_work_read', 'relay_work_submit', 'relay_work_ask', 'relay_task_list', 'relay_task_inspect', 'relay_task_comments', 'relay_task_relations', 'relay_workiq_read', grant.workiq.readTool]
             .map(action => ({ action, resource: '*', effect: 'allow' }))];
+        if (grant.capabilities) permissions.push(...['relay_headless_scope', 'relay_headless_capabilities',
+          ...(grant.capabilities.taskActions.length ? ['relay_headless_task', 'relay_headless_reference_lookup'] : []),
+          ...(grant.capabilities.artifacts ? ['relay_headless_artifacts'] : [])].map(action => ({ action, resource: '*', effect: 'allow' })));
         let session;
         try { session = await connection.client.session.get({ sessionID: setup.sessionId }); }
         catch (error) { if (error.status !== 404 && !['NotFoundError', 'SessionNotFoundError'].includes(error._tag ?? error.name)) throw error; }
@@ -83,8 +86,16 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
         const read = tools.find(t => t.name === 'relay_workiq_read' && t.state.status === 'completed' && digest(t.state.input.arguments) === digest(grant.workiq.probeInput) && t.state.metadata?.headlessWorkiqTool === grant.workiq.readTool);
         requireValue(read && read.state.content?.length && read.state.metadata?.isError !== true, 'workiq_readiness_not_proven', 'An actual successful WorkIQ read with the bounded input is required');
         requireValue(tools.some(t => t.name === 'relay_work_submit' && t.state.status === 'completed'), 'readiness_submission_missing', 'Actual native result submission required');
+        let capabilities;
+        if (grant.capabilities) {
+          const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`headless-capability-proof:${probe.id}:${probe.runId}`);
+          const proof = row && JSON.parse(row.value);
+          requireValue(proof && tools.some(t => t.name === 'relay_headless_capabilities' && t.state.status === 'completed' && t.state.metadata?.headlessCapabilitiesDigest === proof.digest),
+            'headless_capabilities_unverified', 'Actual scoped task/artifact capability canaries are required before activation');
+          capabilities = { taskDigest: proof.task.digest, fileDigest: proof.files.digest, digest: proof.digest };
+        }
         await command('headless.activate', { id: setup.id, receipt: { nativeTerminalId: work.observation.messageId, workiqToolCallId: read.id,
-          workiqInputDigest: digest(grant.workiq.probeInput), accessDigest: check.accessDigest } });
+          workiqInputDigest: digest(grant.workiq.probeInput), accessDigest: check.accessDigest, ...(capabilities ? { capabilities } : {}) } });
         save({ phase: 'ready' });
       }
     } catch (error) {

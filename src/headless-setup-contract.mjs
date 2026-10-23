@@ -1,6 +1,7 @@
 import { digest, requireValue } from './protocol.mjs';
 import { canonicalDirectory } from './interactive-contract.mjs';
 import { previewCron } from './cron-schedule.mjs';
+import { validateHeadlessCapabilities } from './headless-capabilities.mjs';
 
 const fields = (p, keys, required = keys) => requireValue(p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).every(k => keys.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_headless_setup', 'Missing or unsupported headless setup fields');
 const text = (s, max = 256) => requireValue(typeof s === 'string' && s.trim() && s.length <= max && !/[\x00-\x1f]/.test(s), 'invalid_headless_setup', 'Bounded text required');
@@ -17,7 +18,8 @@ export function headlessAuthority(store, actor, id) {
 export function applyHeadlessSetup(store, actor, action, p, { created, changed }) {
   if (action === 'headless.grant') {
     store.rootOwnerOnly(actor);
-    fields(p, ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'workiq', 'contract', 'schedule', 'expiresAt'], ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'workiq', 'contract', 'schedule']);
+    fields(p, ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'workiq', 'contract', 'schedule', 'expiresAt', 'capabilities'], ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'workiq', 'contract', 'schedule']);
+    if (p.capabilities !== undefined) validateHeadlessCapabilities(p.capabilities);
     for (const key of ['id', 'name', 'requesterAgentId', 'nodeId']) text(p[key]);
     const requester = store.get('agent', p.requesterAgentId); store.get('node', p.nodeId);
     requireValue(requester.nodeId === p.nodeId && requester.mode === 'interactive' && requester.standingGrant, 'headless_requester_scope', 'An enrolled coordinator on the destination node is required');
@@ -94,7 +96,7 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed }
     const existing = store.get('execution', headlessProbeId(setup), false); if (existing) return existing;
     const agent = store.get('agent', setup.agentId);
     requireValue(agent.conversationId === setup.sessionId && agent.availability === 'available', 'headless_not_ready', 'Worker must be loaded and idle before readiness probing');
-    const instructions = `Bounded readiness check only. Call relay_workiq_read once with arguments exactly ${JSON.stringify(grant.workiq.probeInput)}. This invokes the authorised ${grant.workiq.readTool} connection. This is a read, not a sweep. Do not modify external data. Then use relay_work_submit with candidate "headless-readiness" and a short pass/fail summary without private content. Finish the turn.`;
+    const instructions = `Bounded readiness check only. Call relay_workiq_read once with arguments exactly ${JSON.stringify(grant.workiq.probeInput)}.${grant.capabilities ? ` Supply sourceNamespace ${JSON.stringify(grant.capabilities.sourceNamespaces[0])} and then call relay_headless_capabilities to verify the granted task actions and approved artifact paths using isolated canaries. Never mutate real job data during readiness.` : ''} This invokes the authorised ${grant.workiq.readTool} connection. Do not modify external data. Then use relay_work_submit with candidate "headless-readiness" and a short pass/fail summary without private content. Finish the turn.`;
     const authority = { headlessSetup: setup };
     const task = store.apply(actor, 'task.create', { id: `probe_task_${setup.id}_${setup.attempt ?? 1}`, title: `Readiness: ${setup.name}`, description: instructions }, authority);
     store.event('task.create', task, actor, setup.id);
@@ -104,13 +106,20 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed }
   }
   if (action === 'headless.activate') {
     if (setup.state === 'ready') return setup;
-    fields(p.receipt, ['nativeTerminalId', 'workiqToolCallId', 'workiqInputDigest', 'accessDigest']);
+    fields(p.receipt, ['nativeTerminalId', 'workiqToolCallId', 'workiqInputDigest', 'accessDigest', 'capabilities'], ['nativeTerminalId', 'workiqToolCallId', 'workiqInputDigest', 'accessDigest']);
     for (const key of ['nativeTerminalId', 'workiqToolCallId', 'workiqInputDigest', 'accessDigest']) text(p.receipt[key]);
     const execution = store.get('execution', headlessProbeId(setup));
     requireValue(execution.state === 'completed' && execution.result?.candidate === 'headless-readiness' && execution.targetAgentId === setup.agentId &&
       p.receipt.workiqInputDigest === digest(grant.workiq.probeInput), 'headless_readiness_required', 'Correlated model, WorkIQ and native submission evidence required');
+    if (grant.capabilities) {
+      const proof = setup.capabilityProbe, supplied = p.receipt.capabilities;
+      fields(supplied, ['taskDigest', 'fileDigest', 'digest']);
+      requireValue(proof?.executionId === execution.id && proof.runId === execution.runId && digest(proof.taskActions) === digest(grant.capabilities.taskActions) && proof.rolledBack &&
+        supplied.taskDigest === proof.digest && /^[a-f0-9]{64}$/.test(supplied.fileDigest) && supplied.digest === digest({ task: proof.digest, files: supplied.fileDigest }),
+      'headless_capabilities_unverified', 'Confirmed proof for the exact granted task/artifact capabilities required');
+    } else requireValue(!p.receipt.capabilities, 'headless_capability_not_authorised', 'Read-only grants do not authorise task/artifact writes');
     const schedule = store.apply(actor, 'schedule.install', { id: setup.scheduleId, definition: { nodeId: setup.nodeId, targetAgentId: setup.agentId,
-      instructions: `Perform the authorised job contract at ${grant.directory}/${grant.contract}. Read that exact skill, follow its scope, and submit the native Relay result. Use relay_workiq_read with {arguments:{...}} for the authorised WorkIQ read tool. Do not use shell or generic execute as an authentication workaround.`,
+      instructions: `Perform the authorised job contract at ${grant.directory}/${grant.contract}. Read that exact skill, follow its scope, and submit the native Relay result. Use relay_workiq_read with {arguments:{...}} for the authorised WorkIQ read tool.${grant.capabilities ? ' Use relay_headless_task/reference tools only for granted actions, and relay_headless_artifacts for approved receipt/history/checkpoint paths. Checkpoint data and business policy are defined by the job contract, never inferred by Relay. Do not use arbitrary filesystem writes.' : ''} Do not use shell or generic execute as an authentication workaround.`,
       cron: grant.schedule.cron, timezone: grant.schedule.timezone, reviewPolicy: 'none', enabled: true } }, { headlessSetup: setup });
     store.event('schedule.install', schedule, actor, setup.id);
     return changed('headless_setup', setup, { state: 'ready', readiness: p.receipt, scheduleRevision: schedule.revision });

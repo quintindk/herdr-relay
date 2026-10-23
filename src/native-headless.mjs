@@ -128,7 +128,10 @@ export async function headlessCli(args) {
     let result;
     if (['grant', 'revoke'].includes(action)) {
       requireValue(values.file && values.context && values.key, 'invalid_request', 'Explicit payload, root context and stable key required');
-      result = await contextClient(readPrivateJson(values.context))('POST', '/v1/commands', { key: values.key, action: `headless.${action}`, payload: readPrivateJson(values.file) });
+      const api = contextClient(readPrivateJson(values.context)), payload = readPrivateJson(values.file);
+      if (action === 'grant' && payload.capabilities) requireValue((await api('GET', '/v1/info')).features?.headlessCapabilities,
+        'backend_upgrade_required', 'Backend must support approved headless task/artifact capabilities');
+      result = await api('POST', '/v1/commands', { key: values.key, action: `headless.${action}`, payload });
     } else {
       const sessionId = process.env.OPENCODE_SESSION_ID;
       requireValue(sessionId, 'human_coordinator_required', 'Use an enrolled coordinator chat; this command does not borrow operator credentials');

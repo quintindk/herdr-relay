@@ -8,6 +8,7 @@ import { applyInteractive } from './interactive-contract.mjs';
 import { applyHeadlessSetup } from './headless-setup-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
+import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -169,6 +170,8 @@ export class BackendStore {
     string(action, 'action', 100);
     requireValue(payload && typeof payload === 'object' && !Array.isArray(payload), 'invalid_request', 'Payload required');
     authoriseOperator(this, actor, action, payload);
+    if (action === 'headless.task') return headlessTaskCommand(this, actor, key, payload);
+    if (action === 'headless.capability_probe') return this.mutate(actor, key, action, payload, () => headlessTaskProbe(this, actor, payload));
     return this.mutate(actor, key, action, payload, () => this.apply(actor, action, structuredClone(payload)));
   }
   apply(actor, action, p, authority = {}) {
@@ -496,7 +499,7 @@ export class BackendStore {
     }
     if (action === 'task.create') {
       // Node-originated capture needs an explicit scoped grant, not operator powers.
-      if (!authority.interactiveRequest && !authority.headlessSetup) this.ownerOnly(actor);
+      if (!authority.interactiveRequest && !authority.headlessSetup && !authority.headlessTask) this.ownerOnly(actor);
       fields(p, ['id', 'title', 'description', 'status', 'priority', 'parentId', 'dependencies', 'labels', 'externalReference'], ['id', 'title']);
       if (p.externalReference) {
         const identity = this.referenceIdentity(p.externalReference);
@@ -523,7 +526,7 @@ export class BackendStore {
       fields(p, ['id', 'expectedRevision', 'changes', 'comment'], ['id', 'expectedRevision', 'changes']);
       fields(p.changes, ['title', 'description', 'status', 'priority', 'parentId', 'dependencies', 'labels']);
       const task = this.get('task', p.id); this.revision(task, p.expectedRevision);
-      if (actor.type !== 'user') {
+      if (actor.type !== 'user' && !authority.headlessTask) {
         requireValue(this.all('execution').some(e => e.taskId === task.id && e.targetNodeId === actor.id && e.state === 'accepted' && !e.cancellationRequested),
           'forbidden', 'Node needs an accepted execution for task mutation', 403);
       }
@@ -560,12 +563,12 @@ export class BackendStore {
     }
     if (action === 'comment.create') {
       fields(p, ['id', 'taskId', 'body'], ['id', 'taskId', 'body']); this.get('task', p.taskId); string(p.body, 'body');
-      if (actor.type !== 'user') requireValue(this.all('execution').some(e => e.taskId === p.taskId && e.targetNodeId === actor.id &&
+      if (actor.type !== 'user' && !authority.headlessTask) requireValue(this.all('execution').some(e => e.taskId === p.taskId && e.targetNodeId === actor.id &&
         e.state === 'accepted' && !e.cancellationRequested), 'forbidden', 'Comments require current in-scope execution', 403);
       return created('comment', { ...p, author: { type: actor.type, id: actor.id } });
     }
     if (action === 'reference.attach') {
-      this.ownerOnly(actor);
+      if (!authority.headlessTask) this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision', 'reference'], ['id', 'expectedRevision', 'reference']);
       const task = this.get('task', p.id); this.revision(task, p.expectedRevision);
       const id = this.referenceIdentity(p.reference);

@@ -85,6 +85,18 @@ compatibility: opencode
 
 ## Work, questions and review
 
+- In versions exposing approved headless capabilities, inspect `relay_headless_scope`.
+  Use only the exact task-action and artifact-path grants. The generic
+  `relay_headless_task`, `relay_headless_reference_lookup` and
+  `relay_headless_artifacts` tools do not authorise dispatch, review, arbitrary
+  file access or a business-specific workflow. A `refused` operation did not apply.
+- Receipt/checkpoint keys and revisions are durable concurrency controls, not
+  hints. Retain uncertain outcomes and reconcile original keys. Native applied
+  task receipts must reference an actual confirmed backend operation.
+- Checkpoint data and business completion policy belong to the external job
+  contract. A platform capability canary does not prove a job completed, a source
+  was exhausted or a business cursor may advance.
+
 - During assigned executions, use `relay_work_read` and the supplied exact scope.
   Check cancellation. Stage one result with `relay_work_submit` or ask through
   `relay_work_ask`, then finish the turn immediately. See the `relay-work` skill.

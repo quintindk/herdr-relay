@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import { chmodSync, existsSync, unlinkSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { headlessArtifactOperation, recordHeadlessObservation, probeHeadlessArtifacts } from './headless-artifacts.mjs';
+import { headlessProbeId } from './headless-setup-contract.mjs';
 import { digest, requireValue, RelayError, canonical } from './protocol.mjs';
 import { nativeTasksProvider } from './tasks-provider.mjs';
 
@@ -285,6 +287,67 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       let result;
       if (path === '/work/read') result = { execution: work.execution, localState: work.state,
         answer: work.answer ?? null, cancellationRequested: work.execution.cancellationRequested };
+      else if (['/work/headless-task', '/work/headless-reference', '/work/headless-artifacts', '/work/headless-observation', '/work/headless-capabilities', '/work/headless-scope'].includes(path)) {
+        requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
+          Object.keys(body).every(k => ['executionId', 'runId', 'key', 'payload'].includes(k)) && body.payload && typeof body.payload === 'object',
+        'headless_execution_inactive', 'Exact active headless execution and capability payload required', 403);
+        const scopeKey = `headless-authority:${work.id}:${body.runId}`;
+        let scope, offline = false;
+        try {
+          scope = await api('POST', '/v1/headless/read', { operation: 'access', executionId: work.id, runId: body.runId });
+          journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(scopeKey, JSON.stringify(scope));
+        } catch (error) {
+          const cached = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(scopeKey);
+          const auditOnly = path === '/work/headless-observation' || path === '/work/headless-artifacts' && body.payload.operation === 'receipt' && ['pending', 'uncertain'].includes(body.payload.status);
+          requireValue(auditOnly && cached && (!error.status || error.status >= 500), error.code ?? 'headless_authority_unavailable', 'Fresh authorisation required; only uncertain audit records can use cached scope offline');
+          scope = JSON.parse(cached.value); offline = true;
+        }
+        if (path === '/work/headless-scope') {
+          requireValue(Object.keys(body.payload).length === 0, 'invalid_headless_request', 'Capability inspection takes no overrides');
+          result = { sourceNamespaces: scope.profile.sourceNamespaces, taskActions: scope.profile.taskActions, artifacts: scope.profile.artifacts ?? null };
+        } else if (path === '/work/headless-task') {
+          requireValue(typeof body.key === 'string' && body.key === body.payload.key, 'invalid_headless_request', 'Exact stable mutation key required');
+          const command = { key: `headless-transport:${digest([work.id, body.runId, body.payload.source, body.payload.operation, body.key])}`, action: 'headless.task',
+            payload: { executionId: work.id, runId: body.runId, ...body.payload } };
+          requireValue(!Object.hasOwn(body.payload, 'executionId') && !Object.hasOwn(body.payload, 'runId'), 'invalid_headless_request', 'Worker cannot override execution scope');
+          journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(`headless-task-intent:${command.key}`, JSON.stringify({ setupId: scope.id, commandKey: command.key }));
+          journal.queue(command);
+          try { await journal.flush(api); }
+          catch (error) {
+            const refused = journal.receipt(command.key);
+            const definitive = ['stale_revision', 'headless_task_busy', 'headless_task_forbidden', 'headless_operation_forbidden', 'reference_conflict', 'task_blocked', 'execution_unsettled', 'acceptance_required'];
+            if (refused?.state !== 'conflict' || !definitive.includes(refused.error)) throw error;
+            // These transaction refusals prove no mutation committed. Retain the
+            // command/error as a refusal, not an unresolved or applied operation.
+            const retained = { ...refused, state: 'superseded', outcome: 'refused', applied: false };
+            journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify(retained), command.key);
+          }
+          result = journal.receipt(command.key);
+          if (result?.outcome === 'refused') result = { ...result, state: 'refused' };
+          if (result?.state === 'recorded') journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(`headless-task-proof:${scope.id}:${result.receipt.id}`, JSON.stringify(result.receipt));
+        } else if (path === '/work/headless-reference') {
+          requireValue(!Object.hasOwn(body.payload, 'executionId') && !Object.hasOwn(body.payload, 'runId'), 'invalid_headless_request', 'No scope overrides permitted');
+          result = await api('POST', '/v1/headless/read', { ...body.payload, operation: 'references', executionId: work.id, runId: body.runId });
+        } else if (path === '/work/headless-artifacts') {
+          requireValue(!scope.readiness || ['inventory', 'read', 'state'].includes(body.payload.operation), 'headless_probe_forbidden', 'Readiness cannot mutate real job artifacts or checkpoints');
+          result = { ...headlessArtifactOperation(journal, scope, work, body.payload), ...(offline ? { authorisation: 'cached_uncertain_audit_only' } : {}) };
+        } else if (path === '/work/headless-observation') result = recordHeadlessObservation(journal, scope, work, body.payload);
+        else {
+          requireValue(Object.keys(body.payload).length === 0, 'invalid_headless_request', 'Capability canary takes no overrides');
+          const authority = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
+          requireValue(work.id === headlessProbeId(authority.setup), 'headless_probe_forbidden', 'Only readiness execution can run capability canaries');
+          const key = `headless-capability:${digest([work.id, body.runId])}`;
+          journal.queue({ key, action: 'headless.capability_probe', payload: { executionId: work.id, runId: body.runId } }); await journal.flush(api);
+          const taskProof = journal.receipt(key);
+          requireValue(taskProof?.state === 'recorded' && taskProof.receipt.capabilityProbe, 'headless_probe_failed', 'Backend task canary is not confirmed');
+          const files = probeHeadlessArtifacts(journal, scope, work), task = taskProof.receipt.capabilityProbe;
+          result = { task, files, digest: digest({ task: task.digest, files: files.digest }), businessCoverageVerified: false };
+          journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(`headless-capability-proof:${work.id}:${body.runId}`, JSON.stringify(result));
+        }
+      }
       else if (path === '/work/delegate') {
         requireValue(api && work.execution.allowDelegation && work.execution.state === 'accepted' && !work.execution.cancellationRequested &&
           !work.staged, 'delegation_not_authorised', 'Current execution needs an explicit delegation grant', 403);
