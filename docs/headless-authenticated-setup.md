@@ -1,6 +1,7 @@
 # Headless setup with existing authorised integrations
 
-The RC7 coordinator flow creates a dedicated headless session in the **existing
+The RC8 coordinator flow, superseding the unpublished RC7 candidate, creates a
+dedicated headless session in the **existing
 authenticated OpenCode service**. It does not create another private HOME, copy
 credential stores, open a TUI or reuse Mason's conversation. The worker retains
 its own durable Relay identity, session and default-deny permissions.

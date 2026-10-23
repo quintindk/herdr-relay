@@ -1,8 +1,8 @@
 # Herdr Relay
 
-**0.2.0-rc.7: authenticated headless setup, safe skill updates and clearer local agents.**
+**0.2.0-rc.8: authenticated headless setup, safe skill updates and clearer local agents.**
 Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
-and [RC7 scope/readiness](docs/release-0.2.0-rc.7.md).
+and [RC8 scope/readiness](docs/release-0.2.0-rc.8.md).
 
 Download the package, checksums and verification report from
 [GitHub Releases](https://github.com/quintindk/herdr-relay/releases).
@@ -11,9 +11,11 @@ The package requires Node.js 24+ inside Linux/WSL2. It is not a standalone execu
 RC6 adds [native headless provisioning](docs/native-headless-agents.md), wider task
 titles and scrollable questions/review text. It also corrects the generated-cache
 identity check without relaxing credential checks.
-RC7 adds [coordinator setup using existing authorised integrations](docs/headless-authenticated-setup.md),
+RC8 includes [coordinator setup using existing authorised integrations](docs/headless-authenticated-setup.md),
 [safe skill updates](docs/skill-installation.md), green local-agent badges and
 [one-reply message envelopes](docs/agent-messages.md).
+It supersedes the unpublished RC7 candidate and removes an unused vulnerable V1
+SDK dependency chain while retaining the legacy tool-definition contract.
 
 RC5 added [safe backend/node upgrades](docs/service-upgrades.md)
 and retires the legacy SSH wrapper/remote adapter. There is one public CLI,
@@ -186,7 +188,7 @@ directories, bounded by the service account and an active-worker limit. See
 - [Task hierarchy pane](docs/task-board.md): browse tasks by agent or human owner
   through Relay, with folding, search and live refresh.
 - [Herdr Relay skill](skills/herdr-relay/SKILL.md) replaces the former envoy skill.
-  The RC7 development [skill installer](docs/skill-installation.md) manages both
+  The RC8 [skill installer](docs/skill-installation.md) manages both
   shipped native skills with safe updates, local-edit conflicts and private backups.
   It does not restart chats. [Relay work](skills/relay-work/SKILL.md) teaches the
   scoped native execution protocol. Historical Paperclip instructions remain in

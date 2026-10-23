@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { call } from './client.mjs';
-import { tool } from '@opencode-ai/plugin';
+import { tool } from './legacy-tool.mjs';
 import { digest } from './protocol.mjs';
 import { deliverCompletionTurn } from './completion-turn.mjs';
 

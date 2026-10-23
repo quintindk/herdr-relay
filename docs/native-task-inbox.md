@@ -104,7 +104,7 @@ node, workspace, reported availability and last-seen time. Stale reports remain
 visible as unknown, not as proof that a worker stopped. Enter opens fresh detail
 and outstanding task summaries. `t` reveals stable agent/node/conversation IDs.
 
-The RC7 development view identifies the local node with a green **LOCAL** badge in
+The RC8 view identifies the local node with a green **LOCAL** badge in
 the header and matching badges beside its agents. The text stays readable without colour.
 Agent detail labels local/remote ownership, and searching `local` or `remote`
 matches that classification. Identity comes from the selected node-operator

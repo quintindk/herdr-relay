@@ -1,7 +1,7 @@
 # Native Relay skill installation and updates
 
-RC7 development adds management of the shipped `herdr-relay` and `relay-work`
-OpenCode skills. This is not yet a published RC7 feature. The packaged native
+RC8 adds management of the shipped `herdr-relay` and `relay-work`
+OpenCode skills, superseding the unpublished RC7 candidate. The packaged native
 skills no longer describe legacy Paperclip commands as the native workflow.
 Legacy provisioning uses the retained historical work protocol separately.
 
@@ -35,7 +35,7 @@ No backend credentials or running node are required.
 
 ## Automatic synchronisation
 
-The RC7 `release install` CLI and `node install` synchronise skills using the safe
+The RC8 `release install` CLI and `node install` synchronise skills using the safe
 default rules. Their JSON includes the skill result. `skill_conflict` means the
 skill files were preserved, not that the installed instructions are current.
 It does not erase an otherwise successful CLI/service installation.

@@ -18,6 +18,7 @@ import { launchOwnedV2 } from '../packages/opencode-relay/owned-runtime.mjs';
 import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
 import { call } from '../src/client.mjs';
 import { digest } from '../src/protocol.mjs';
+import { historicalUpgradeFixture } from './historical-upgrade-fixture.mjs';
 
 process.umask(0o077);
 const execute = promisify(execFile), root = mkdtempSync('/tmp/opencode/relay-upgrade-smoke-');
@@ -58,7 +59,7 @@ const model = createServer(async (req, res) => {
   res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
 });
 try {
-  const old = await stageRelease({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.6', directory: releases });
+  const old = await historicalUpgradeFixture({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.6', directory: releases });
   const [packed] = JSON.parse((await execute('npm', ['pack', '--json', '--pack-destination', root])).stdout);
   const tarball = join(root, packed.filename), artifactHash = hashBytes(readFileSync(tarball));
   const candidate = await stageRelease({ artifact: tarball, sha256: artifactHash, directory: releases });
@@ -162,6 +163,8 @@ try {
   assert.equal(snapshot.collections.message.length, 3); assert.equal(snapshot.collections.agent.length, 2);
   assert.deepEqual(identityFiles.map(identityHash), identities);
   console.log(JSON.stringify({ passed: true, from: old.version, to: candidate.version, actualBackendAndNodeProcesses: true,
+    historicalBaselineFixtureOnly: old.historicalFixtureOnly, baselineProductionAuditFindings: old.productionAuditFindings,
+    baselineProductionActivationAllowed: old.productionActivationAllowed, candidateFreshProductionAuditPassed: candidate.auditVerified,
     installedUpgradeEntrypoint: true, nativeToolsWithoutInjectedRuntimePaths: true,
     versionedCliActivationPassed: true, cachedReleaseAuditPassed: true,
     pendingFormPreservedDuringRefusal: true,

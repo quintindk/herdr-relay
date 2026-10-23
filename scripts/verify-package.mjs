@@ -37,11 +37,14 @@ const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex'
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
 else copyFileSync(join(staging, packed.filename), artifact, constants.COPYFILE_EXCL);
 assert.ok(!packed.files.some(file => ['src/remote.mjs', 'src/remote-adapter.mjs'].includes(file.path)), 'Retired SSH execution is still packaged');
+assert.ok(!packed.files.some(file => file.path === 'scripts/historical-upgrade-fixture.mjs'), 'Historical advisory-bearing fixture installer must never ship');
 mkdirSync(consumer);
 execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-scripts', '--no-fund', '--no-audit',
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
 const installed = join(consumer, 'node_modules/herdr-relay');
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
+assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, '4.1.8', 'Keep the legacy tool validation contract pinned');
 assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--version'], { encoding: 'utf8' }).trim(), packed.version);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
