@@ -16,6 +16,10 @@ kills human chats or restores a database automatically.
 
 ## Check the installed versions
 
+RC9 → RC10 is a compatible schema-2 upgrade and does not repeat task-reference
+migration. Use `--version 0.2.0-rc.10` with the usual plan/apply sequence. The general
+MCP grant format requires RC10 backend, node and Relay plugins before setup.
+
 ```bash
 herdr-relay --version
 herdr-relay node status

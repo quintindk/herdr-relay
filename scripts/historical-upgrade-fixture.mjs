@@ -10,7 +10,7 @@ import { requireValue } from '../src/protocol.mjs';
 // releases may acquire new advisories. Rehearse leaving them without pretending
 // they pass today's production gate. stageRelease's candidate audit stays strict.
 export async function historicalUpgradeFixture({ version, directory }, dependencies = {}) {
-  requireValue(['0.2.0-rc.4', '0.2.0-rc.5', '0.2.0-rc.6', '0.2.0-rc.8'].includes(version), 'invalid_fixture_baseline', 'Only explicit historical upgrade baselines are supported');
+  requireValue(['0.2.0-rc.4', '0.2.0-rc.5', '0.2.0-rc.6', '0.2.0-rc.8', '0.2.0-rc.9'].includes(version), 'invalid_fixture_baseline', 'Only explicit historical upgrade baselines are supported');
   directory = resolve(directory);
   const root = dirname(directory);
   requireValue(dirname(root) === '/tmp/opencode' && basename(root).startsWith('relay-upgrade-smoke-') && basename(directory) === 'releases' && realpathSync(root) === root,

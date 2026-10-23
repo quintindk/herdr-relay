@@ -3,7 +3,7 @@
 The native headless provisioning command configures a dedicated Relay-owned
 OpenCode runtime on an **existing joined node**. It does not use Paperclip, open
 a terminal client, attach a human conversation or schedule an interactive agent.
-For explicit reuse of already authorised model/WorkIQ connections without another
+For explicit reuse of an already authorised model connection and existing MCP transports without another
 login, use the RC7 [authenticated coordinator setup flow](headless-authenticated-setup.md).
 The isolated-runtime provisioner below remains separate and does not inherit those connections.
 The destination node runs it under its own Linux account, including WSL2/systemd.

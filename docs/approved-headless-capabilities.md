@@ -28,7 +28,9 @@ An optional `capabilities` section extends a human-approved headless grant:
 
 `taskActions` is an exact allowlist and may be empty. `artifacts` is optional;
 tasks-only agents do not gain file access, and artifacts-only agents do not gain
-task mutations. Existing grants without this profile remain read-only.
+task mutations. Grants without this profile cannot mutate native tasks/artifacts.
+The separate MCP permission may allow provider-side writes; it is not a read-only
+classification of the whole worker.
 
 Paths are explicit workspace-relative resources, with canonical-directory/link
 checks. Only the summary directory may alternatively be `/tmp/opencode`, when

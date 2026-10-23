@@ -18,10 +18,10 @@ function fixture(t) {
   const node = store.authenticate(store.enrolCredential(owner, 'surface', 'node-token').token);
   command(owner, 'mason', 'agent.enrol', { id: 'mason', nodeId: 'surface', name: 'Mason', directory: '/work/twd' });
   command(owner, 'attach', 'agent.attach', { id: 'mason', expectedBindingRevision: 0, conversationId: 'ses_mason', directory: '/work/twd', bindingId: 'binding_mason' });
-  const grant = { id: 'sweep-grant', requesterAgentId: 'mason', nodeId: 'surface', name: 'inbox-sweep', directory: '/work/twd',
+  const grant = { id: 'approved-grant', requesterAgentId: 'mason', nodeId: 'surface', name: 'approved-worker', directory: '/work/twd',
     model: { providerID: 'provider', id: 'model', integrationID: 'model-auth', connectionId: 'credential-ref' },
-    workiq: { server: 'workiq', readTool: 'workiq_read', probeInput: { query: 'Read a bounded fixture only' } },
-    contract: '.opencode/skills/inbox-sweep/SKILL.md', schedule: { id: 'inbox-sweep', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' } };
+    permissions: { mcp: true, shell: false },
+    contract: '.opencode/skills/approved-job/SKILL.md', schedule: { id: 'approved-job', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' } };
   const request = { grantId: grant.id, requesterAgentId: 'mason', sourceConversationId: 'ses_mason', sourceBindingRevision: 1 };
   return { store, owner, node, command, grant, request };
 }
@@ -36,7 +36,18 @@ test('headless setup requires an explicit owner grant and exact coordinator, reu
   assert.equal(c(node, 'another-key', 'headless.request', request).id, setup.id);
   assert.equal(f.store.all('headless_setup').length, 1); assert.equal(f.store.all('schedule').length, 0);
   assert.throws(() => c(node, 'activate-without-probe', 'headless.activate', { id: setup.id, receipt: {
-    nativeTerminalId: 'idle', workiqToolCallId: 'tool', workiqInputDigest: digest(grant.workiq.probeInput), accessDigest: 'ref' } }));
+    nativeTerminalId: 'idle', mcpPolicyToolCallId: 'tool', mcpAllowed: true, accessDigest: 'ref' } }));
+});
+
+test('new grants require one explicit MCP boolean and reject connector-specific fields or native shell access', t => {
+  const f = fixture(t);
+  for (const [index, permissions] of [{}, { mcp: '*' }, { mcp: true, allowedServers: ['one'] }, { mcp: true, shell: true }].entries()) {
+    assert.throws(() => f.command(f.owner, `bad-${index}`, 'headless.grant', { ...f.grant, permissions }), { code: 'invalid_headless_permissions' });
+  }
+  assert.throws(() => f.command(f.owner, 'connector-fields', 'headless.grant', { ...f.grant, connector: { server: 'one' } }), { code: 'invalid_headless_setup' });
+  const grant = f.command(f.owner, 'denied-policy', 'headless.grant', { ...f.grant, permissions: { mcp: false } });
+  assert.deepEqual(grant.permissions, { mcp: false, shell: false });
+  assert.equal(f.store.all('headless_setup').length, 0); assert.equal(f.store.all('schedule').length, 0);
 });
 
 test('only successful probe evidence activates one schedule, and revocation pauses it without borrowing owner context', t => {
@@ -48,8 +59,8 @@ test('only successful probe evidence activates one schedule, and revocation paus
   assert.equal(probe.reviewPolicy, 'none'); assert.equal(store.all('schedule').length, 0);
   // Store-fixture terminal evidence only. Real process acceptance is a separate smoke.
   store.save('execution', { ...probe, state: 'completed', result: { candidate: 'headless-readiness' } });
-  const ready = c(node, 'activate', 'headless.activate', { id: setup.id, receipt: { nativeTerminalId: 'idle', workiqToolCallId: 'tool',
-    workiqInputDigest: digest(grant.workiq.probeInput), accessDigest: 'refs' } });
+  const ready = c(node, 'activate', 'headless.activate', { id: setup.id, receipt: { nativeTerminalId: 'idle', mcpPolicyToolCallId: 'tool',
+    mcpAllowed: true, accessDigest: 'refs' } });
   assert.equal(ready.state, 'ready'); const schedule = store.get('schedule', grant.schedule.id);
   assert.equal(schedule.definition.targetAgentId, setup.agentId); assert.equal(schedule.definition.enabled, true);
   assert.equal(schedule.definition.targetConversationId, undefined);
@@ -58,22 +69,23 @@ test('only successful probe evidence activates one schedule, and revocation paus
   assert.throws(() => c(node, 'retry-after-revocation', 'headless.request', request), { code: 'headless_grant_inactive' });
 });
 
-test('connection checks use only metadata, pin selected connections, and never expose secrets or accept disconnected WorkIQ', async () => {
-  const refs = { model: { providerID: 'provider', id: 'model', integrationID: 'auth', connectionId: 'selected' }, workiq: { server: 'workiq', readTool: 'workiq_read' } };
+test('connection checks pin only the model, expose no secrets and do not couple MCP permission to a particular server', async () => {
+  const refs = { model: { providerID: 'provider', id: 'model', integrationID: 'auth', connectionId: 'selected' }, permissions: { mcp: true } };
   let active = 'selected', status = 'connected';
-  const ctx = { session: { hook() {} }, provider: { get: async () => ({ data: { integrationID: 'auth', settings: { apiKey: 'NEVER-EXPOSE' } } }) },
+  const ctx = { session: { hook() {}, update() {} }, provider: { get: async () => ({ data: { integrationID: 'auth', settings: { apiKey: 'NEVER-EXPOSE' } } }) },
     integration: { connection: { active: async () => ({ type: 'credential', id: active }), resolve: () => assert.fail('Do not resolve credentials') } },
     credential: { list: () => assert.fail('Credential list includes secrets') }, model: { list: async () => ({ data: [{ providerID: 'provider', id: 'model' }] }) },
-    mcp: { list: async () => ({ data: [{ name: 'workiq', status: { status } }] }) }, tool: { list: async () => [{ id: 'workiq_read' }] } };
+    mcp: { list: async () => ({ data: [{ name: 'arbitrary', status: { status } }] }) }, tool: { hook() {}, list: async () => [{ id: 'arbitrary_read', options: { namespace: 'arbitrary' } }] } };
   const result = await checkHeadlessAccess(ctx, refs); assert.equal(result.allowed, true); assert.doesNotMatch(JSON.stringify(result), /NEVER-EXPOSE/);
   active = 'other'; assert.equal((await checkHeadlessAccess(ctx, refs)).blocker, 'model_connection_unavailable');
-  active = 'selected'; status = 'needs_auth'; assert.equal((await checkHeadlessAccess(ctx, refs)).blocker, 'workiq_not_connected');
+  active = 'selected'; status = 'needs_auth'; const unavailable = await checkHeadlessAccess(ctx, refs);
+  assert.equal(unavailable.allowed, true); assert.deepEqual(unavailable.mcpToolIds, []);
 });
 
 test('explicit retry preserves worker identity, retains the failed attempt and refuses unsettled readiness work', t => {
   const f = fixture(t), { command: c, owner, node, grant, request, store } = f;
   c(owner, 'grant', 'headless.grant', grant); const first = c(node, 'request', 'headless.request', request);
-  c(node, 'block', 'headless.block', { id: first.id, reason: 'workiq_not_connected' });
+  c(node, 'block', 'headless.block', { id: first.id, reason: 'connector_unavailable' });
   const second = c(node, 'retry', 'headless.request', { ...request, retry: true });
   assert.equal(second.agentId, first.agentId); assert.equal(second.sessionId, first.sessionId); assert.equal(second.attempt, 2);
   assert.notEqual(headlessProbeId(first), headlessProbeId(second));
@@ -83,10 +95,10 @@ test('explicit retry preserves worker identity, retains the failed attempt and r
   assert.equal(store.all('agent').length, 1); assert.equal(store.all('schedule').length, 0);
 });
 
-test('a model success claim and native submission without an actual WorkIQ read never activate the schedule', async t => {
+test('a model success claim without actual native MCP policy inspection never activates the schedule', async t => {
   const f = fixture(t), root = mkdtempSync('/tmp/opencode/setup-proof-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const contractDirectory = join(root, '.opencode/skills/inbox-sweep'); mkdirSync(contractDirectory, { recursive: true });
+  const contractDirectory = join(root, '.opencode/skills/approved-job'); mkdirSync(contractDirectory, { recursive: true });
   writeFileSync(join(contractDirectory, 'SKILL.md'), 'Read fixture only');
   const grant = { ...f.grant, directory: root }, setup = { id: 'setup-proof', nodeId: 'surface', agentId: 'headless', directory: root, grantId: grant.id, state: 'requested', attempt: 1 };
   const journal = new NodeJournal(':memory:', { nodeId: 'surface', instanceId: 'backend' }); t.after(() => journal.close());
@@ -107,5 +119,5 @@ test('a model success claim and native submission without an actual WorkIQ read 
   ] }) } };
   await tickHeadlessSetups(journal, api, { identityVersion: 2 }, () => assert.fail('No binding creation'), async () => binding, { native: async () => ({ client }) });
   assert.deepEqual(mutations.map(m => m.action), ['headless.block']);
-  assert.equal(mutations[0].payload.reason, 'workiq_readiness_not_proven');
+  assert.equal(mutations[0].payload.reason, 'mcp_readiness_not_proven');
 });

@@ -52,7 +52,13 @@ jobs:
         run: node scripts/verify-headless-setup.mjs
       - name: Approved headless task and artifact capability canaries
         run: node scripts/verify-headless-setup.mjs --capabilities
-      - name: Installed RC8 migration, compatible node rollback and chat-continuity smoke
+      - name: Headless MCP denied without connector permissions
+        run: node scripts/verify-headless-setup.mjs --mcp-denied
+      - name: Installed RC9 compatible upgrade, rollback and chat-continuity smoke
+        run: node scripts/verify-upgrade.mjs
+      - name: Installed RC8 task-reference migration and old-writer refusal
+        env:
+          RELAY_UPGRADE_BASELINE: 0.2.0-rc.8
         run: node scripts/verify-upgrade.mjs
       - name: Retained RC4 adoption and rollback compatibility
         env:

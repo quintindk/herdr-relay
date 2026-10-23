@@ -72,18 +72,21 @@ compatibility: opencode
   a disabled schedule. It does not start work or enable the schedule. The operator
   separately restarts the safely settled node and installs/activates the schedule
   using authorised backend administration. No root credential belongs on the node.
-- RC7's `relay_headless_connections` discovers non-secret existing model/MCP
+- `relay_headless_connections` discovers non-secret existing model/MCP
   connection references, not authority. A human backend operator must explicitly
-  grant the exact coordinator, workspace, job contract, integration references and
-  schedule. Do not self-issue that grant or borrow owner credentials.
+  grant the exact coordinator, workspace, job contract, model connection, MCP
+  allow/deny capability and schedule. Do not self-issue that grant or borrow owner credentials.
 - With that grant, use `relay_headless_setup` once and inspect `relay_headless_status`.
   It creates/reuses a dedicated headless session in the existing authenticated
   OpenCode service. No credential store is copied and no second login is needed.
-  Model, bounded WorkIQ read and native result submission must actually pass before
+  Model, native MCP allow/deny inspection and result submission must actually pass before
   activation. A request receipt or `awaiting_schedule_ack` is not successful setup.
-- `relay_workiq_read` bridges only the granted read tool through its existing
-  authenticated MCP transport. Do not use shell or generic execute to work around
-  missing access. Different connections, revoked grants and changed contracts fail closed.
+- Headless grants explicitly allow or deny MCP as a capability. Use
+  `relay_mcp_tools` and `relay_mcp_call`, not a connector-specific bridge. MCP allowed
+  includes write-capable and subsequently configured tools. It grants no native
+  shell, arbitrary file writes or generic Code Mode execution. Do not use those
+  as workarounds. Revoked grants, changed model connections and changed contracts
+  fail closed. Do not automatically repeat uncertain external effects.
 - This coordinator flow currently requires the coordinator and worker on the same
   node. Cross-node authenticated headless setup is not implemented. Do not substitute
   interactive provisioning or Paperclip for an unsupported destination.

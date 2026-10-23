@@ -294,6 +294,15 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       let result;
       if (path === '/work/read') result = { execution: work.execution, localState: work.state,
         answer: work.answer ?? null, cancellationRequested: work.execution.cancellationRequested };
+      else if (path === '/work/mcp-access') {
+        requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested &&
+          Object.keys(body).every(key => ['executionId', 'runId'].includes(key)), 'headless_execution_inactive', 'Exact active headless MCP scope required', 403);
+        const result = await api('POST', '/v1/headless/read', { operation: 'mcp', executionId: work.id, runId: body.runId });
+        requireValue(result.id === worker.headlessSetupId && result.sessionId === worker.sessionId, 'headless_scope_mismatch', 'Connector grant belongs to another worker', 403);
+        const authority = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
+        checkContract(authority.setup, authority.grant);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ...result, outcomeStaged: Boolean(work.staged) })); return;
+      }
       else if (['/work/headless-task', '/work/headless-reference', '/work/headless-artifacts', '/work/headless-observation', '/work/headless-capabilities', '/work/headless-scope'].includes(path)) {
         requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
           Object.keys(body).every(k => ['executionId', 'runId', 'key', 'payload'].includes(k)) && body.payload && typeof body.payload === 'object',

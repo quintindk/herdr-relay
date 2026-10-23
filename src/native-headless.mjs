@@ -20,6 +20,7 @@ herdr-relay headless inspect --file MANIFEST_JSON [--config NODE_JSON]
 Also available as herdr-relay native agent provision with the same provisioning options.
 herdr-relay headless connections|grants [--config NODE_JSON]  [enrolled coordinator; no secrets]
 herdr-relay headless grant|revoke --file PAYLOAD_JSON --key KEY --context ROOT_OWNER_JSON
+  Grants require permissions:{mcp:BOOLEAN,shell:false}. MCP is one capability, not a connector/tool allowlist.
 herdr-relay headless setup --grant-id ID --key KEY [--config NODE_JSON]  [readiness then activation]
 herdr-relay headless status --id SETUP_ID [--config NODE_JSON]`;
 
@@ -129,6 +130,8 @@ export async function headlessCli(args) {
     if (['grant', 'revoke'].includes(action)) {
       requireValue(values.file && values.context && values.key, 'invalid_request', 'Explicit payload, root context and stable key required');
       const api = contextClient(readPrivateJson(values.context)), payload = readPrivateJson(values.file);
+      if (action === 'grant' && payload.permissions) requireValue((await api('GET', '/v1/info')).features?.headlessMcpPermissions,
+        'backend_upgrade_required', 'Backend must support general headless MCP permissions');
       if (action === 'grant' && payload.capabilities) requireValue((await api('GET', '/v1/info')).features?.headlessCapabilities,
         'backend_upgrade_required', 'Backend must support approved headless task/artifact capabilities');
       result = await api('POST', '/v1/commands', { key: values.key, action: `headless.${action}`, payload });

@@ -31,6 +31,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md', 'docs/legacy-paperclip-work-skill.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
+  'src/headless-permissions.mjs', 'packages/opencode-relay/headless-mcp.mjs',
   'src/task-identity.mjs', 'src/task-identity-migration.mjs', 'scripts/migrate-task-references.mjs',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
@@ -90,11 +91,12 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';
   await import('./packages/opencode-relay/server.mjs');
   await import('./packages/opencode-relay/tui.mjs');
+  await import('./packages/opencode-relay/headless-mcp.mjs');
   await import('@opencode/client/service');
   const {startBackend}=await import('./src/backend-service.mjs');
   const backend=await startBackend({database:':memory:'});
   try { const token=backend.store.bootstrap().token; const response=await fetch(backend.origin+'/v1/info',{headers:{authorization:'Bearer '+token}});
-    assert.equal((await response.json()).features.interactiveProvisioning,true); }
+    const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessMcpPermissions,true); }
   finally { await backend.close(); }
 `], { cwd: installed, stdio: 'pipe' });
 const sourceMethods = [], taskId = '00000000-0000-4000-8000-000000000001';

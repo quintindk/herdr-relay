@@ -1,6 +1,6 @@
 # Evo backend, Evo node and Surface node onboarding
 
-Target: `0.2.0-rc.9`. Evo runs the backend and a node. Surface runs a node inside
+Target: `0.2.0-rc.10`. Evo runs the backend and a node. Surface runs a node inside
 **WSL2 with systemd**. The source Paperclip instance is on **Surface**.
 
 This guide uses installed-release commands only. It does not require cloning a
@@ -30,9 +30,9 @@ Evo/Surface home directories are not physical Surface acceptance.
 Distribution: a [GitHub **prerelease**](https://github.com/quintindk/herdr-relay/releases)
 with these immutable assets:
 
-- `herdr-relay-0.2.0-rc.9.tgz`
+- `herdr-relay-0.2.0-rc.10.tgz`
 - `SHA256SUMS`
-- `herdr-relay-0.2.0-rc.9.tgz.verification.json`
+- `herdr-relay-0.2.0-rc.10.tgz.verification.json`
 - Release notes and this guide.
 
 An explicitly pushed version tag publishes only after GitHub Actions tests,
@@ -54,9 +54,9 @@ Require Node.js **24+**, Linux binaries inside WSL and Git. Do not use Windows
 installation, then activate the verified version store before installing services:
 
 ```bash
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.0-rc.9.tgz
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.0-rc.10.tgz
 herdr-relay --version
-herdr-relay release install --version 0.2.0-rc.9
+herdr-relay release install --version 0.2.0-rc.10
 RELAY=herdr-relay
 "$RELAY" native --help
 ```

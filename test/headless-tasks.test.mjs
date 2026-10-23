@@ -15,7 +15,7 @@ function fixture(t, { capabilities = true, readiness = false, directory = '/work
   command(owner, 'agent', 'agent.enrol', { id: 'coordinator', nodeId: 'node', name: 'Coordinator', directory });
   command(owner, 'attach', 'agent.attach', { id: 'coordinator', expectedBindingRevision: 0, conversationId: 'ses_coordinator', directory, bindingId: 'binding_coordinator' });
   command(owner, 'grant', 'headless.grant', { id: 'grant', requesterAgentId: 'coordinator', nodeId: 'node', name: 'approved-worker', directory,
-    model: { providerID: 'fixture', id: 'fixture', integrationID: 'fixture', connectionId: 'fixture' }, workiq: { server: 'workiq', readTool: 'workiq_read', probeInput: { query: 'bounded' } },
+    model: { providerID: 'fixture', id: 'fixture', integrationID: 'fixture', connectionId: 'fixture' }, permissions: { mcp: false },
     contract: '.opencode/skills/approved-job/SKILL.md', schedule: { id: 'schedule', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' },
     ...(capabilities ? { capabilities: { sourceNamespaces: ['external:record'], taskActions, artifacts: { receipts: 'approved/receipts', state: 'approved/state.json', history: 'approved/history', runs: 'approved/runs', summaries: 'approved/summaries' } } } : {}) });
   const setup = command(node, 'setup', 'headless.request', { grantId: 'grant', requesterAgentId: 'coordinator', sourceConversationId: 'ses_coordinator', sourceBindingRevision: 1 });

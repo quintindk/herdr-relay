@@ -6,6 +6,7 @@ import { nativeConnection } from './native-enrol.mjs';
 import { writePrivateJson } from './private-files.mjs';
 import { HeadlessAccess, accessReferences } from '../packages/opencode-relay/headless-access.mjs';
 import { setupTerminal, headlessProbeId } from './headless-setup-contract.mjs';
+import { headlessSessionPermissions } from './headless-permissions.mjs';
 
 export async function assertHeadlessAccess(api, client, setupId, directory) {
   const authority = await api('GET', `/v1/headless_setups/${encodeURIComponent(setupId)}/authority`);
@@ -39,12 +40,7 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
       const contractDigest = digest(readFileSync(contract, 'utf8'));
       requireValue(!op.contractDigest || op.contractDigest === contractDigest, 'job_contract_changed', 'Job contract changed during setup; do not activate against stale approval');
       if (op.phase === 'requested') {
-        const permissions = [{ action: '*', resource: '*', effect: 'deny' }, { action: 'read', resource: contract, effect: 'allow' },
-          ...['relay_work_read', 'relay_work_submit', 'relay_work_ask', 'relay_task_list', 'relay_task_inspect', 'relay_task_comments', 'relay_task_relations', 'relay_workiq_read', grant.workiq.readTool]
-            .map(action => ({ action, resource: '*', effect: 'allow' }))];
-        if (grant.capabilities) permissions.push(...['relay_headless_scope', 'relay_headless_capabilities',
-          ...(grant.capabilities.taskActions.length ? ['relay_headless_task', 'relay_headless_reference_lookup'] : []),
-          ...(grant.capabilities.artifacts ? ['relay_headless_artifacts'] : [])].map(action => ({ action, resource: '*', effect: 'allow' })));
+        const permissions = headlessSessionPermissions(grant, (check.mcpToolIds ?? []).map(id => ({ id })));
         let session;
         try { session = await connection.client.session.get({ sessionID: setup.sessionId }); }
         catch (error) { if (error.status !== 404 && !['NotFoundError', 'SessionNotFoundError'].includes(error._tag ?? error.name)) throw error; }
@@ -83,8 +79,8 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
         const end = snapshot.messages.findIndex(m => m.id === work.observation.messageId);
         requireValue(begin >= 0 && end > begin, 'readiness_terminal_missing', 'Probe transcript bounds must be exact');
         const tools = snapshot.messages.slice(begin + 1, end).filter(m => m.type === 'assistant').flatMap(m => m.content.filter(c => c.type === 'tool'));
-        const read = tools.find(t => t.name === 'relay_workiq_read' && t.state.status === 'completed' && digest(t.state.input.arguments) === digest(grant.workiq.probeInput) && t.state.metadata?.headlessWorkiqTool === grant.workiq.readTool);
-        requireValue(read && read.state.content?.length && read.state.metadata?.isError !== true, 'workiq_readiness_not_proven', 'An actual successful WorkIQ read with the bounded input is required');
+        const read = tools.find(t => t.name === 'relay_mcp_tools' && t.state.status === 'completed' && t.state.metadata?.headlessMcpAllowed === grant.permissions.mcp && t.state.metadata?.headlessSetupId === setup.id);
+        requireValue(read && read.state.content?.length && read.state.metadata?.isError !== true, 'mcp_readiness_not_proven', 'A successful native capability inspection is required, not a model-authored success claim');
         requireValue(tools.some(t => t.name === 'relay_work_submit' && t.state.status === 'completed'), 'readiness_submission_missing', 'Actual native result submission required');
         let capabilities;
         if (grant.capabilities) {
@@ -94,14 +90,15 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
             'headless_capabilities_unverified', 'Actual scoped task/artifact capability canaries are required before activation');
           capabilities = { taskDigest: proof.task.digest, fileDigest: proof.files.digest, digest: proof.digest };
         }
-        await command('headless.activate', { id: setup.id, receipt: { nativeTerminalId: work.observation.messageId, workiqToolCallId: read.id,
-          workiqInputDigest: digest(grant.workiq.probeInput), accessDigest: check.accessDigest, ...(capabilities ? { capabilities } : {}) } });
+        await command('headless.activate', { id: setup.id, receipt: { nativeTerminalId: work.observation.messageId,
+          mcpPolicyToolCallId: read.id, mcpAllowed: grant.permissions.mcp,
+          accessDigest: check.accessDigest, ...(capabilities ? { capabilities } : {}) } });
         save({ phase: 'ready' });
       }
     } catch (error) {
       if (['headless_publication_pending', 'headless_not_ready'].includes(error.code)) continue;
       const blocker = /^[a-z][a-z0-9_]{1,95}$/.test(error.code ?? '') ? error.code : 'native_setup_unavailable';
-      // No raw errors, provider bodies, credential material or WorkIQ content is published.
+      // No raw errors, provider bodies, credential material or MCP content is published.
       await command('headless.block', { id: setup.id, reason: blocker });
       save({ phase: 'blocked', blocker });
     }

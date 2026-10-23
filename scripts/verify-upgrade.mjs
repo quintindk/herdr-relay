@@ -59,7 +59,8 @@ const model = createServer(async (req, res) => {
   res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
 });
 try {
-  const old = await historicalUpgradeFixture({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.8', directory: releases });
+  const old = await historicalUpgradeFixture({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.9', directory: releases });
+  const migration = old.compatibility.backendSchema === 1;
   const [packed] = JSON.parse((await execute('npm', ['pack', '--json', '--pack-destination', root])).stdout);
   const tarball = join(root, packed.filename), artifactHash = hashBytes(readFileSync(tarball));
   const candidate = await stageRelease({ artifact: tarball, sha256: artifactHash, directory: releases });
@@ -119,7 +120,7 @@ try {
   writeFileSync(join(nativeConfig, 'cli.json'), JSON.stringify({ theme: 'preserve', plugins: [{ package: join(old.directory, 'packages/opencode-relay'),
     options: { ownerContextFile: joined.operatorContextFile, notificationSessionId: sender.sessionId } }] }), { mode: 0o600 });
   const request = { services: ['backend', 'node'], version: candidate.version, key: 'real-upgrade', nodeConfig: joined.configFile,
-    migrateTaskReferences: true,
+    migrateTaskReferences: migration,
     directory: join(root, 'upgrades'), configDirectory: nativeConfig, binDirectory: bin, apply: true };
   const upgradeDependencies = { manager, stageRelease: async () => candidate,
     health: async (...args) => { if (failCandidate && args[4] && args[1].release.version === candidate.version) throw Error('Intentional health failure'); return verifyServiceHealth(...args); },
@@ -156,7 +157,8 @@ try {
   const recorded = JSON.parse((await execute(join(bin, 'herdr-relay'), ['upgrade', 'status', result.operationId, '--upgrade-dir', request.directory])).stdout);
   assert.equal(recorded.operations[0].phase, 'committed');
   await owner('POST', '/v1/commands', { key: 'later-task', action: 'task.create', payload: { id: 'later-task', title: 'Must survive rollback' } });
-  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies), { code: 'upgrade_incompatible' });
+  if (migration) await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies), { code: 'upgrade_incompatible' });
+  else await serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
   assert.equal((await owner('GET', '/v1/tasks/later-task')).title, 'Must survive rollback');
   assert.match((await owner('GET', '/v1/tasks/keep-task')).reference, /^REL-[1-9][0-9]*$/);
   assert.match((await owner('GET', '/v1/tasks/later-task')).reference, /^REL-[1-9][0-9]*$/);
@@ -175,7 +177,8 @@ try {
     pendingFormPreservedDuringRefusal: true,
     realOpenCodeChatsPreserved: true, backendInstanceAndNodeIdentityPreserved: true, credentialsUnchanged: true,
     taskDataAndPostUpgradeEditsPreserved: true, nodeOnlyDidNotRestartBackend: true, messageDeliveryBeforeAndAfterPassed: true,
-    explicitCompatibleNodeRollbackPassed: true, failedHealthAutomaticRollbackPassed: true, schema2MigrationPassed: true, schema1RollbackRefused: true, databasesRestored: false,
+    explicitCompatibleNodeRollbackPassed: true, explicitCompatibleBackendRollbackPassed: !migration, failedHealthAutomaticRollbackPassed: true,
+    schema2MigrationPassed: migration, schema1RollbackRefused: migration, databasesRestored: false,
     userServicesTouched: false, userChatsTouched: false, physicalMachines: 1, state: root }, null, 2));
 } finally {
   for (const role of ['node', 'backend']) for (const [name, entry] of services) if (entry.role === role) await manager.stop(name);

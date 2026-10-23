@@ -1,20 +1,13 @@
 import { digest, requireValue } from './protocol.mjs';
-import { headlessAuthority, headlessProbeId } from './headless-setup-contract.mjs';
+import { headlessRunAuthority, headlessProbeId } from './headless-setup-contract.mjs';
 import { headlessSource } from './headless-capabilities.mjs';
 
 const fields = (p, allowed, required = []) => requireValue(p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).every(k => allowed.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_headless_request', 'Missing or unsupported headless capability fields');
 
 export function headlessExecutionScope(store, actor, p) {
-  const execution = store.get('execution', p.executionId);
-  store.nodeOnly(actor, execution.targetNodeId);
-  const agent = store.get('agent', execution.targetAgentId);
-  requireValue(agent.headlessSetupId && execution.state === 'accepted' && !execution.cancellationRequested && execution.runId === p.runId &&
-    execution.bindingId && (!execution.targetConversationId || execution.targetConversationId === agent.conversationId),
-  'headless_execution_inactive', 'Exact active, uncancelled headless execution required', 403);
-  const { setup, grant } = headlessAuthority(store, actor, agent.headlessSetupId);
-  requireValue(grant.capabilities && setup.agentId === agent.id && setup.sessionId === agent.conversationId && execution.bindingId === setup.bindingId,
+  const { execution, agent, setup, grant } = headlessRunAuthority(store, actor, p);
+  requireValue(grant.capabilities,
     'headless_capability_not_authorised', 'An explicit headless capability grant is required', 403);
-  requireValue(setup.state === 'ready' || execution.id === headlessProbeId(setup), 'headless_not_ready', 'Job operations require completed setup; readiness uses only isolated canaries');
   return { execution, agent, setup, grant, profile: grant.capabilities };
 }
 
