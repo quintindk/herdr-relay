@@ -40,7 +40,7 @@ try:
             if b"\x1b[6n" in chunk:
                 os.write(master, b"\x1b[1;1R")
         if time.monotonic() >= next_attempt and os.path.exists(config["evidenceFile"]):
-            command = b"/relay-enrol" if config.get("enrol") else b"/relay-attach" if config.get("attach") else b"/relay-reminders" if config.get("reminder") else b"/relay-reviews" if config.get("review") else b"/relay-decisions" if config.get("proposals") else b"/relay-questions" if config.get("inbox") else b"/relay-spike-confirm" if config.get("decision") else b"/relay-spike"
+            command = b"/relay-enrol" if config.get("enrol") else b"/relay-attach" if config.get("attach") else b"/relay-reminders" if config.get("reminder") else b"/relay-reviews" if config.get("review") else b"/relay-decisions" if config.get("proposals") else b"/relay-questions" if config.get("inbox") else b"/relay-diagnostic-confirm" if config.get("decision") else b"/relay-status"
             os.write(master, b"\x15" + command)
             time.sleep(0.5)
             os.write(master, b"\r")
@@ -101,6 +101,14 @@ try:
                     if not config.get("passiveUntil"):
                         break
                     next_attempt = deadline
+    # Optional private installed-package rendering evidence, always redacted.
+    if config.get("outputFile"):
+        text = output.decode("utf-8", errors="replace")
+        for secret in config.get("redact", []):
+            text = text.replace(secret, "[redacted]")
+        fd = os.open(config["outputFile"], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
     # Only surface terminal output on failure, with credentials redacted.
     if not notified:
         text = output.decode("utf-8", errors="replace")

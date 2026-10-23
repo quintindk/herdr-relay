@@ -20,7 +20,7 @@ function fixture(t) {
     mkdirSync(join(directory, 'packages/opencode-relay'), { recursive: true });
     writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'herdr-relay', version, ...(contract ? { relayCompatibility: contract } : {}) }));
     for (const file of ['cli.mjs', 'backend-cli.mjs', 'node-cli.mjs']) writeFileSync(join(directory, 'src', file), '#!/usr/bin/env node\n');
-    writeFileSync(join(directory, 'packages/opencode-relay/package.json'), JSON.stringify({ name: '@herdr/relay-opencode-v2-spike', version }));
+    writeFileSync(join(directory, 'packages/opencode-relay/package.json'), JSON.stringify({ name: '@herdr/relay-opencode', version }));
     return directory;
   };
   // Synthetic compatible packages, not claims that historical RC4 supported schema 2.

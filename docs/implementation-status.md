@@ -6,7 +6,7 @@ The next contract is [specification v3 for 0.2.0](spec-v3.md), targeting OpenCod
 v2 and a native backend. The evidence below describes the current 0.1.x build and
 does not certify that target.
 
-The [OpenCode v2 spike](opencode-v2-spike.md) records initial 2.1.0 server/tool/RPC,
+The [OpenCode v2 verification](opencode-v2-verification.md) records initial 2.1.0 server/tool/RPC,
 native prompt/settlement and two-real-TUI results. It is isolated from the current
 bridge. Human confirmation, production integration and native backend work remain
 pending.

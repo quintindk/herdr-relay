@@ -44,10 +44,10 @@ See the [migration assessment](docs/opencode-v2-migration-assessment.md).
 This is planned architecture. The implementation and requirements below describe
 the current build.
 
-The isolated [OpenCode v2 spike](docs/opencode-v2-spike.md) now verifies a real
-2.1.0 service, read-only tool, typed RPC, native settlement and two TUI clients.
-See [the spike package](packages/opencode-relay/README.md) for reproducible checks
-and remaining migration gates.
+The [OpenCode integration](packages/opencode-relay/README.md) provides the server
+tools, typed RPC, native execution adapter and terminal UI. The
+[initial verification report](docs/opencode-v2-verification.md) records the early
+2.1.0 baseline; installed-package tests cover the production entrypoints.
 
 The [v3 implementation ledger](docs/implementation-v3.md) tracks the native
 backend, node journal/execution, offline scheduling and provider work. A separate

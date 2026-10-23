@@ -33,7 +33,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessMcpPermissions: true, taskIdentity: true } };
+        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
@@ -84,9 +84,9 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         try { body = JSON.parse(Buffer.concat(chunks).toString()); }
         catch { throw new RelayError('invalid_json', 'JSON body required', 400); }
         if (url.pathname === '/v1/headless/read') {
-          requireValue(body && ['access', 'references', 'mcp'].includes(body.operation), 'invalid_headless_request', 'Exact headless read operation required');
+          requireValue(body && ['access', 'references', 'permissions'].includes(body.operation), 'invalid_headless_request', 'Exact headless read operation required');
           const { operation, ...payload } = body;
-          if (operation === 'mcp') {
+          if (operation === 'permissions') {
             requireValue(Object.keys(payload).every(key => ['executionId', 'runId'].includes(key)), 'invalid_headless_request', 'No connector scope overrides permitted');
             const { setup, grant, execution } = headlessRunAuthority(store, actor, payload);
             result = { id: setup.id, sessionId: setup.sessionId, model: grant.model, permissions: grant.permissions, directory: grant.directory,

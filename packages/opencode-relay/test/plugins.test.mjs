@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import server from '../server.mjs';
-import tui from '../tui.mjs';
+import { setupTui } from '../tui-setup.mjs';
+const tui = { setup: setupTui };
 
 function terminal() {
   let listener, commands, stopped = 0;

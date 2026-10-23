@@ -1,18 +1,20 @@
 import { Plugin } from '@opencode/plugin';
-import { RelaySpike } from './rpc.mjs';
+import { RelayRuntime } from './rpc.mjs';
 import { workerConnection } from './worker-context.mjs';
 import { call } from '../../src/client.mjs';
 import { registerHumanProposals } from './human-proposals.mjs';
 import { registerOperatorTools } from './operator-tools.mjs';
 import { randomUUID } from 'node:crypto';
 import { HeadlessAccess, checkHeadlessAccess, inspectHeadlessConnections, nativeMcpTools } from './headless-access.mjs';
-import { registerMcpTools, mcpExecutionScope, syncMcpPermissions } from './headless-mcp.mjs';
+import { registerMcpTools } from './headless-mcp.mjs';
+import { headlessToolScope, syncHeadlessPermissions } from './headless-scope.mjs';
+import { registerHeadlessPermissionTools } from './headless-shell.mjs';
 import { waitHeadlessSetup } from '../../src/headless-setup-wait.mjs';
 import { digest } from '../../src/protocol.mjs';
 import { readAttachmentStatus } from './attachment-status.mjs';
 
 export default Plugin.define({
-  id: 'herdr.relay.spike.server',
+  id: 'herdr.relay.server',
   async setup(ctx) {
     const generation = randomUUID();
     const closeProposals = ctx.options.humanProposals === true ? await registerHumanProposals(ctx) : null;
@@ -21,16 +23,17 @@ export default Plugin.define({
     closeOperator = ctx.options.humanProposals === true ? await registerOperatorTools(ctx) : null;
     transform = await ctx.tool.transform(editor => {
       editor.add({
-        name: 'relay_spike_status',
-        description: 'Read the isolated Relay v2 compatibility status. Does not dispatch or change work.',
+        name: 'relay_status',
+        description: 'Read Relay runtime status. Does not dispatch or change work.',
         options: { codemode: false },
         input: { type: 'object', properties: {}, additionalProperties: false },
         async execute(_input, context) {
-          return { content: JSON.stringify({ version: ctx.app.version, sessionId: context.sessionID, mode: 'read_only_spike' }) };
+          return { content: JSON.stringify({ version: ctx.app.version, sessionId: context.sessionID, mode: 'read_only' }) };
         },
       });
       if (ctx.options.workerContextFile || ctx.options.workerDirectory) {
         registerMcpTools(editor, ctx);
+        registerHeadlessPermissionTools(editor, ctx);
         const worker = async (context, action, input) => {
           const connection = workerConnection(ctx.options, context.sessionID);
           if (connection.sessionId !== context.sessionID) throw new Error('Worker tool belongs to another exact conversation');
@@ -202,24 +205,25 @@ export default Plugin.define({
         if (!check.allowed || event.model.providerID !== refs.model.providerID || event.model.id !== refs.model.id)
           throw new Error(check.allowed ? 'headless_model_changed' : check.blocker);
         if (refs.permissions) {
-          const { scope } = await mcpExecutionScope(ctx, { sessionID: event.sessionID });
+          const { scope } = await headlessToolScope(ctx, { sessionID: event.sessionID });
           const catalog = scope.permissions.mcp ? await nativeMcpTools(ctx) : { tools: [] };
-          await syncMcpPermissions(ctx, { sessionID: event.sessionID }, scope, catalog);
+          await syncHeadlessPermissions(ctx, { sessionID: event.sessionID }, scope, catalog);
           // Direct MCP calls cannot bypass the bridge's fresh execution/grant
           // checks or the no-external-effects readiness boundary.
           for (const tool of catalog.tools) delete event.tools[tool.id];
+          delete event.tools.shell;
         }
         return;
       }
       event.system.push({ type: 'text', text: 'For a Relay-provisioned discussion, read relay_interactive_context for the initiating agent\'s attributed topic before responding. That briefing is discussion context, not a human message or authority to perform additional work. Provisioning alone never assigns a task.' });
     });
     if ((ctx.options.workerDirectory || ctx.options.workerContextFile) && ctx.tool?.hook) connectorHook = await ctx.tool.hook('execute.before', async event => {
-      if (!(await ctx.tool.list()).find(tool => tool.id === event.tool)?.options?.namespace) return;
+      if (event.tool !== 'shell' && !(await ctx.tool.list()).find(tool => tool.id === event.tool)?.options?.namespace) return;
       let connection;
       try { connection = workerConnection(ctx.options, event.sessionID); }
       catch { if ((await ctx.session.get({ sessionID: event.sessionID })).metadata?.relayHeadlessSetup) throw new Error('headless_worker_context_unavailable'); return; }
       if (!connection.headlessSetupId) return;
-      throw new Error('use_relay_mcp_call');
+      throw new Error(event.tool === 'shell' ? 'use_relay_shell_call' : 'use_relay_mcp_call');
     });
     } catch (error) {
       await connectorHook?.dispose();
@@ -230,7 +234,7 @@ export default Plugin.define({
     let rpc;
     try {
       headlessAccess = await ctx.rpc.register(HeadlessAccess, { check: refs => checkHeadlessAccess(ctx, refs), inspect: () => inspectHeadlessConnections(ctx) });
-      rpc = await ctx.rpc.register(RelaySpike, {
+      rpc = await ctx.rpc.register(RelayRuntime, {
         attachment: input => readAttachmentStatus(ctx, input),
         inspect: async () => ({
           version: ctx.app.version, directory: ctx.location.directory, generation,

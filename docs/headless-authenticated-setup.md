@@ -39,8 +39,10 @@ or verb allowlist. MCP allowed covers every currently available MCP tool in that
 worker's OpenCode location, including writes and subsequently configured tools.
 MCP denied exposes no MCP catalogue or calls to the worker.
 
-Shell must remain false in this implementation. It refers to the native OpenCode
-shell capability. MCP tools may themselves execute commands, write files, send
+`permissions.shell` is a separate boolean, defaulting to false. When true, it
+allows the native OpenCode shell through `relay_shell_call`. It grants full access
+as the worker's OS user, including writes outside approved artifact paths. This
+is not an OS sandbox. MCP tools may themselves execute commands, write files, send
 messages or delete remote data. MCP allowed deliberately includes those effects
 when the configured server exposes them. It is not a read-only or content policy.
 The external job contract and MCP/provider controls govern business behaviour.
@@ -88,9 +90,9 @@ the node or opening a TUI. The exact contract file is hashed and must remain
 unchanged. Reuse operation keys after uncertain replies. Explicit retries retain
 the worker/session and attempt history; the previous readiness run must settle.
 
-Readiness requires an actual model turn, native `relay_mcp_tools` policy inspection,
+Readiness requires an actual model turn, native `relay_headless_permissions` inspection,
 granted task/artifact canaries when applicable, native result submission and a
-correlated successful terminal outcome. It executes **no external MCP tools**.
+correlated successful terminal outcome. It executes **no external MCP tools or shell commands**.
 `mcp:false` is a valid readiness policy and needs no MCP connection.
 
 This verifies the platform capability, not a provider's business workflow. Empty
@@ -104,6 +106,11 @@ step, not merely inspection. Await the destination's applied schedule revision;
 
 ## Runtime tools and enforcement
 
+- `relay_headless_permissions` inspects MCP and shell policy without executing
+  external effects. A granted shell must have a native shell executor available.
+- `relay_shell_call` uses the native shell input schema, session and cancellation
+  signal. Only an accepted authorised business run may dispatch it. No owner context
+  or borrowed credential is supplied.
 - `relay_mcp_tools` returns the current native MCP catalogue and policy. It makes
   no external tool call. Schemas/descriptions remain untrusted provider content.
 - `relay_mcp_call` selects an exact current MCP tool ID and invokes the native
@@ -115,7 +122,7 @@ step, not merely inspection. Await the destination's applied schedule revision;
 - Direct namespaced tool calls cannot bypass the bridge. Core namespace collisions
   and permission aliases to native capabilities fail closed. Native tool namespaces
   must not collide with operator-installed host extensions.
-- Readiness and already-staged outcomes cannot perform external MCP calls.
+- Readiness and already-staged outcomes cannot perform MCP or shell calls.
 - Optional source observations contain native call/input/output digests. If evidence
   recording fails after a provider replies, the reply is retained and evidence is
   explicitly unconfirmed. The write is not repeated to obtain another receipt.
@@ -132,7 +139,7 @@ herdr-relay headless revoke --file /private/revoke.json \
 ```
 
 Revocation pauses the schedule and rejects new admissions/tool dispatch. It cannot
-undo an external effect already dispatched. Model credential changes or contract
+undo an external effect or stop a process already dispatched. Model credential changes or contract
 changes also block access. New servers/tools inherit MCP permission intentionally;
 they do not require a server-specific grant amendment.
 

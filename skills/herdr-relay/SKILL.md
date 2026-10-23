@@ -75,18 +75,23 @@ compatibility: opencode
 - `relay_headless_connections` discovers non-secret existing model/MCP
   connection references, not authority. A human backend operator must explicitly
   grant the exact coordinator, workspace, job contract, model connection, MCP
-  allow/deny capability and schedule. Do not self-issue that grant or borrow owner credentials.
+  and shell allow/deny capabilities and schedule. Do not self-issue that grant or borrow owner credentials.
 - With that grant, use `relay_headless_setup` once and inspect `relay_headless_status`.
   It creates/reuses a dedicated headless session in the existing authenticated
   OpenCode service. No credential store is copied and no second login is needed.
-  Model, native MCP allow/deny inspection and result submission must actually pass before
+  Model, native permission inspection and result submission must actually pass before
   activation. A request receipt or `awaiting_schedule_ack` is not successful setup.
 - Headless grants explicitly allow or deny MCP as a capability. Use
-  `relay_mcp_tools` and `relay_mcp_call`, not a connector-specific bridge. MCP allowed
+  `relay_headless_permissions`, `relay_mcp_tools` and `relay_mcp_call`, not a connector-specific bridge. MCP allowed
   includes write-capable and subsequently configured tools. It grants no native
   shell, arbitrary file writes or generic Code Mode execution. Do not use those
   as workarounds. Revoked grants, changed model connections and changed contracts
   fail closed. Do not automatically repeat uncertain external effects.
+- A separate `permissions.shell:true` explicitly allows `relay_shell_call` using
+  the native shell schema. This is full OS-user access, including writes outside
+  artifact paths, not an OS sandbox. Readiness and staged outcomes never execute
+  shell commands or MCP effects. Revocation blocks new dispatch but cannot undo
+  effects or stop processes already started.
 - This coordinator flow currently requires the coordinator and worker on the same
   node. Cross-node authenticated headless setup is not implemented. Do not substitute
   interactive provisioning or Paperclip for an unsupported destination.

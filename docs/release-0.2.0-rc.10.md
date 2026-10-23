@@ -1,7 +1,9 @@
 # Herdr Relay 0.2.0-rc.10
 
-GitHub prerelease only. No npm publication. Release publication does not activate
-a job, issue a grant, create a worker or enable a schedule.
+Unpublished candidate retained as a historical record. Its local tag is frozen,
+not retargeted or published. RC11 supersedes this candidate with the installed TUI
+repair and separate shell permission. The commands below describe the abandoned
+RC10 proposal, not an available release.
 
 ## General MCP permission
 

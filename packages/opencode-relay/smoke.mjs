@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode } from '@opencode/client';
-import { RelaySpike } from './rpc.mjs';
+import { RelayRuntime } from './rpc.mjs';
 import { NativeOpenCodeV2, observeV2, checkV2Version } from './native.mjs';
 import { startBackend } from '../../src/backend-service.mjs';
 import { nativeBackendClient } from '../../src/backend-client.mjs';
@@ -68,7 +68,7 @@ const model = createServer(async (req, res) => {
   const agentQuestion = String(input.messages[lastUser]?.content ?? '').includes('Relay agent question');
   const escalate = process.argv.includes('--escalate');
   const humanPrompt = String(input.messages[lastUser]?.content ?? '').includes('human answer fixture');
-  const name = humanPrompt ? 'relay_answer' : agentQuestion ? (escalate ? 'relay_agent_forward' : 'relay_agent_answer') : workerToolMode === 'question' ? 'relay_work_ask' : workerToolMode === 'result' ? 'relay_work_submit' : 'relay_spike_status';
+  const name = humanPrompt ? 'relay_answer' : agentQuestion ? (escalate ? 'relay_agent_forward' : 'relay_agent_answer') : workerToolMode === 'question' ? 'relay_work_ask' : workerToolMode === 'result' ? 'relay_work_submit' : 'relay_status';
   const tool = input.tools?.find(item => item.function?.name.endsWith(name));
   const callTool = tool && !alreadyCalled;
   let agentQuestionInput;
@@ -124,11 +124,11 @@ try {
   const info = await client.server.info();
   assert.equal(info.version, runtimeVersion);
   const location = { directory: workspace };
-  const session = await client.session.create({ location, title: 'Relay v2 disposable spike', model: { providerID: 'relay-fixture', id: 'fixture' } });
-  const rpc = client.rpc(RelaySpike);
+  const session = await client.session.create({ location, title: 'Relay disposable runtime verification', model: { providerID: 'relay-fixture', id: 'fixture' } });
+  const rpc = client.rpc(RelayRuntime);
   const status = await rpc.inspect({}, { location });
   assert.equal(status.directory, workspace);
-  assert.ok(status.tools.includes('relay_spike_status'));
+  assert.ok(status.tools.includes('relay_status'));
   if (process.argv.includes('--proposals')) {
     assert.ok(status.tools.includes('relay_answer'));
     assert.deepEqual(await client.rpc(HumanProposals).list({ sessionId: session.id }, { location }), { items: [] });
@@ -139,7 +139,7 @@ try {
     directory: workspace, createdAt: session.time.created });
   const before = await native.snapshot();
   assert.equal(before.idle, true);
-  const id = 'msg_relay_v2_spike';
+  const id = 'msg_relay_runtime_verification';
   const prompt = 'Return the fixture acknowledgement.';
   const invocation = { messageId: id, prompt, priorMessageIds: before.messages.map(message => message.id) };
   const receipt = await native.send(invocation);
@@ -155,7 +155,7 @@ try {
   assert.equal(terminal?.outcome, 'succeeded', JSON.stringify(messages));
   assert.ok(messages.some(message => message.type === 'assistant' && message.content.some(part => part.type === 'text' && part.text.includes('RELAY_V2_FIXTURE_OK'))));
   assert.equal(toolCalls, 1, `Fixture must invoke the registered read-only tool: ${JSON.stringify([...advertisedTools])}`);
-  const toolResult = messages.flatMap(message => message.content ?? []).find(part => part.type === 'tool' && part.name === 'relay_spike_status');
+  const toolResult = messages.flatMap(message => message.content ?? []).find(part => part.type === 'tool' && part.name === 'relay_status');
   assert.equal(toolResult?.state.status, 'completed', JSON.stringify(toolResult));
   assert.equal(observeV2(await native.snapshot(), invocation).outcome, 'succeeded');
   assert.equal((await client.session.get({ sessionID: session.id })).location.directory, workspace);

@@ -79,8 +79,9 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
         const end = snapshot.messages.findIndex(m => m.id === work.observation.messageId);
         requireValue(begin >= 0 && end > begin, 'readiness_terminal_missing', 'Probe transcript bounds must be exact');
         const tools = snapshot.messages.slice(begin + 1, end).filter(m => m.type === 'assistant').flatMap(m => m.content.filter(c => c.type === 'tool'));
-        const read = tools.find(t => t.name === 'relay_mcp_tools' && t.state.status === 'completed' && t.state.metadata?.headlessMcpAllowed === grant.permissions.mcp && t.state.metadata?.headlessSetupId === setup.id);
-        requireValue(read && read.state.content?.length && read.state.metadata?.isError !== true, 'mcp_readiness_not_proven', 'A successful native capability inspection is required, not a model-authored success claim');
+        const read = tools.find(t => t.name === 'relay_headless_permissions' && t.state.status === 'completed' &&
+          digest(t.state.metadata?.headlessPermissions) === digest(grant.permissions) && t.state.metadata?.headlessSetupId === setup.id);
+        requireValue(read && read.state.content?.length && read.state.metadata?.isError !== true, 'permissions_readiness_not_proven', 'A successful native capability inspection is required, not a model-authored success claim');
         requireValue(tools.some(t => t.name === 'relay_work_submit' && t.state.status === 'completed'), 'readiness_submission_missing', 'Actual native result submission required');
         let capabilities;
         if (grant.capabilities) {
@@ -91,7 +92,7 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
           capabilities = { taskDigest: proof.task.digest, fileDigest: proof.files.digest, digest: proof.digest };
         }
         await command('headless.activate', { id: setup.id, receipt: { nativeTerminalId: work.observation.messageId,
-          mcpPolicyToolCallId: read.id, mcpAllowed: grant.permissions.mcp,
+          permissionsToolCallId: read.id, permissions: grant.permissions,
           accessDigest: check.accessDigest, ...(capabilities ? { capabilities } : {}) } });
         save({ phase: 'ready' });
       }

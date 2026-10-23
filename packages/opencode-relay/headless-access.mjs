@@ -4,7 +4,7 @@ import { validateHeadlessPermissions } from '../../src/headless-permissions.mjs'
 
 const string = { type: 'string', minLength: 1, maxLength: 256 };
 const model = { type: 'object', properties: { providerID: string, id: string, integrationID: string, connectionId: string }, required: ['providerID', 'id', 'integrationID', 'connectionId'], additionalProperties: false };
-const permissions = { type: 'object', properties: { mcp: { type: 'boolean' }, shell: { const: false } }, required: ['mcp'], additionalProperties: false };
+const permissions = { type: 'object', properties: { mcp: { type: 'boolean' }, shell: { type: 'boolean' } }, required: ['mcp'], additionalProperties: false };
 export const HeadlessAccess = Rpc.define({ id: 'herdr.relay.headless.access', methods: {
   inspect: { input: { type: 'object', properties: {}, additionalProperties: false }, output: { type: 'object', properties: {
     models: { type: 'array', items: model },
@@ -49,6 +49,12 @@ export async function inspectHeadlessConnections(ctx) {
 
 export const accessReferences = grant => ({ model: grant.model, permissions: validateHeadlessPermissions(grant.permissions) });
 
+export async function nativeShellTool(ctx) {
+  const tool = (await ctx.tool.list()).find(tool => tool.id === 'shell' && !tool.options?.namespace && (!tool.options?.permission || tool.options.permission === 'shell'));
+  if (!tool?.execute) throw Object.assign(Error('Native shell tool is unavailable'), { code: 'native_shell_unavailable' });
+  return tool;
+}
+
 // Model credential identity remains explicit. MCP is a general capability, not
 // an integration/server/tool whitelist. No credential listing/resolution occurs.
 export async function checkHeadlessAccess(ctx, refs) {
@@ -63,6 +69,7 @@ export async function checkHeadlessAccess(ctx, refs) {
     const models = (await ctx.model.list()).data;
     if (!models.some(model => model.providerID === refs.model.providerID && model.id === refs.model.id)) return blocked('model_unavailable');
     const catalog = policy.mcp ? await nativeMcpTools(ctx) : { tools: [] };
+    if (policy.shell) await nativeShellTool(ctx);
     return { allowed: true, blocker: 'none', accessDigest: digest(refs), mcpToolIds: catalog.tools.map(tool => tool.id) };
-  } catch (error) { return blocked(['mcp_namespace_conflict', 'mcp_permission_alias_forbidden', 'invalid_headless_permissions'].includes(error.code) ? error.code : 'integration_inspection_unavailable'); }
+  } catch (error) { return blocked(['mcp_namespace_conflict', 'mcp_permission_alias_forbidden', 'native_shell_unavailable', 'invalid_headless_permissions'].includes(error.code) ? error.code : 'integration_inspection_unavailable'); }
 }

@@ -628,7 +628,7 @@ activate imported schedules.
 | Stage | Deliverable and exit condition |
 | --- | --- |
 | 1. Contracts/identity | Tasks/Collaboration models, ownership, capabilities, migration format and pinned OpenCode v2 baseline |
-| 2. OpenCode v2 spike | Read-only server tool, pane-local notification, typed RPC, exact managed prompt/settlement and two-client isolation |
+| 2. OpenCode v2 compatibility | Read-only server tool, pane-local notification, typed RPC, exact managed prompt/settlement and two-client isolation |
 | 3. Native backend | Transactional records/events, credentials and conditional/idempotent operations through a real service |
 | 4. Standalone v2 node | Complete v2 tools/native runtime port, dispatch, questions, review and continuation without Paperclip heartbeats |
 | 5. Two-node collaboration | Directory, remote execution, initiating-agent questions and human escalation |
@@ -707,7 +707,7 @@ coverage. Report baseline failures explicitly rather than claiming unrun tests p
 - Artifact transport/storage beyond Git commits and URLs.
 - GitHub whole-backend versus task-only scope and status/priority mapping.
 - Pinned OpenCode v2 package set, supported confirmation primitive and exact
-  server/TUI RPC schema, validated by the initial v2 spike.
+  server/TUI RPC schema, validated by the initial v2 verification.
 
 These refine the contract. They do not reopen native-first delivery, equal nodes,
 backend-mediated collaboration or first-class interactions.

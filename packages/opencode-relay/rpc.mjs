@@ -4,9 +4,9 @@ const object = properties => ({ type: 'object', properties, required: Object.key
 const string = { type: 'string', minLength: 1, maxLength: 1024 };
 
 // Read-only status and diagnostic transport. A client-supplied session/client ID is NOT proof of
-// pane identity or human authority. No backend mutations are exposed by this spike.
-export const RelaySpike = Rpc.define({
-  id: 'herdr.relay.spike',
+// pane identity or human authority. This transport exposes no backend mutations.
+export const RelayRuntime = Rpc.define({
+  id: 'herdr.relay.runtime',
   methods: {
     attachment: {
       input: object({ sessionId: string }),

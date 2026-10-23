@@ -4,7 +4,7 @@ import { createEffect, createRoot } from 'solid-js';
 import { nativeBackendClient } from '../../src/backend-client.mjs';
 import { HumanProposals, humanSource, proposalDigest } from './human-proposals.mjs';
 import { proposedActions } from './operator-tools.mjs';
-import { RelaySpike } from './rpc.mjs';
+import { RelayRuntime } from './rpc.mjs';
 import { humanInboxNotifications } from './human-inbox-notifications.mjs';
 
 // Bootstrap owner.json deliberately omits the local origin. Match native CLI
@@ -25,7 +25,7 @@ export function registerHumanInbox(ctx, { clientId, selectedSession, record = ()
     notifications?.invalidate();
     record({ type: 'connection_context_invalidated', sessionId: selectedSession() });
   });
-  const runtimeGeneration = async () => (await ctx.client.rpc(RelaySpike).inspect({},
+  const runtimeGeneration = async () => (await ctx.client.rpc(RelayRuntime).inspect({},
     { location: ctx.location ?? ctx.data.location.default() })).generation;
   const checkRuntime = async origin => {
     if (origin.runtimeGeneration !== await runtimeGeneration()) throw new Error('Relay service reloaded during confirmation');

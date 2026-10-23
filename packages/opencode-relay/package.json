@@ -1,9 +1,9 @@
 {
-  "name": "@herdr/relay-opencode-v2-spike",
-  "version": "0.2.0-rc.10",
+  "name": "@herdr/relay-opencode",
+  "version": "0.2.0-rc.11",
   "private": true,
   "type": "module",
-  "description": "Isolated OpenCode v2 compatibility spike for Herdr Relay",
+  "description": "Herdr Relay server and terminal integration for OpenCode",
   "exports": {
     ".": "./server.mjs",
     "./server": "./server.mjs",
@@ -24,6 +24,15 @@
   "devDependencies": {
     "@opencode/cli": "2.1.0",
     "solid-js": "1.9.17"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.6.6 <0.7.0",
+    "@opentui/solid": ">=0.6.6 <0.7.0",
+    "solid-js": ">=1.9.0 <2"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": { "optional": true },
+    "@opentui/solid": { "optional": true }
   },
   "engines": {
     "node": ">=24.0.0"

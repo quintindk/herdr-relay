@@ -29,7 +29,7 @@ function fixture() {
   const request = async (_connection, _method, path) => {
     if (f.revoked) throw Object.assign(Error('Revoked'), { code: 'headless_grant_inactive' });
     if (path === '/work/current') return { execution: { id: 'execution', runId: 'run' } };
-    if (path === '/work/mcp-access') return structuredClone(f.scope);
+    if (path === '/work/headless-access') return structuredClone(f.scope);
     if (path === '/work/headless-observation') { if (f.evidenceFailure) throw Error('Offline after provider reply'); return { confirmed: true }; }
     assert.fail(`Unexpected connector route ${path}`);
   };
@@ -42,7 +42,8 @@ function fixture() {
 test('MCP is one explicit boolean permission, not a service/tool allowlist', () => {
   assert.deepEqual(validateHeadlessPermissions({ mcp: false }), { mcp: false, shell: false });
   assert.deepEqual(validateHeadlessPermissions({ mcp: true, shell: false }), { mcp: true, shell: false });
-  for (const permissions of [{}, { mcp: '*' }, { mcp: true, servers: ['example'] }, { mcp: true, shell: true }])
+  assert.deepEqual(validateHeadlessPermissions({ mcp: true, shell: true }), { mcp: true, shell: true });
+  for (const permissions of [{}, { mcp: '*' }, { mcp: true, servers: ['example'] }, { mcp: true, shell: 'yes' }])
     assert.throws(() => validateHeadlessPermissions(permissions), { code: 'invalid_headless_permissions' });
 });
 

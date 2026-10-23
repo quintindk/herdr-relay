@@ -597,7 +597,7 @@ Treat OpenCode 2 support as a dedicated compatibility milestone. Do not hide it
 behind path aliases or a few HTTP route conditionals. Shared-server pane authority is
 architectural and Relay's security guarantees depend on handling it explicitly.
 
-The first deliverable should be a V2 spike with:
+The first deliverable should be a V2 compatibility verification with:
 
 1. one server plugin exposing a read-only Relay tool;
 2. one pane-local TUI plugin displaying a toast;
@@ -605,4 +605,4 @@ The first deliverable should be a V2 spike with:
 4. one managed session with exact prompt/settlement proof;
 5. a two-pane test proving authority does not cross sessions.
 
-Only after that spike passes should the complete workflow port begin.
+Only after that verification passes should the complete workflow port begin.

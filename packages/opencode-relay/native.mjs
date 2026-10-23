@@ -12,7 +12,7 @@ export function checkV2Version(version) {
   return version;
 }
 
-// A versioned spike adapter, not wired into the v1 Relay execution service yet.
+// Versioned OpenCode adapter used by Relay node execution and observation.
 export class NativeOpenCodeV2 {
   constructor(client, identity) {
     check(identity && typeof identity.sessionId === 'string' && identity.sessionId &&

@@ -294,10 +294,10 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       let result;
       if (path === '/work/read') result = { execution: work.execution, localState: work.state,
         answer: work.answer ?? null, cancellationRequested: work.execution.cancellationRequested };
-      else if (path === '/work/mcp-access') {
+      else if (path === '/work/headless-access') {
         requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested &&
-          Object.keys(body).every(key => ['executionId', 'runId'].includes(key)), 'headless_execution_inactive', 'Exact active headless MCP scope required', 403);
-        const result = await api('POST', '/v1/headless/read', { operation: 'mcp', executionId: work.id, runId: body.runId });
+          Object.keys(body).every(key => ['executionId', 'runId'].includes(key)), 'headless_execution_inactive', 'Exact active headless tool scope required', 403);
+        const result = await api('POST', '/v1/headless/read', { operation: 'permissions', executionId: work.id, runId: body.runId });
         requireValue(result.id === worker.headlessSetupId && result.sessionId === worker.sessionId, 'headless_scope_mismatch', 'Connector grant belongs to another worker', 403);
         const authority = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
         checkContract(authority.setup, authority.grant);

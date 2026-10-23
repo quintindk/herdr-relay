@@ -267,7 +267,7 @@ An online SQLite backup and integrity check passed without stopping the service.
 
 No release or full spec completion is claimed until the corresponding acceptance
 criteria have evidence. See [native backend](backend-native.md) and
-[OpenCode v2 evidence](opencode-v2-spike.md) for commands and limitations.
+[OpenCode v2 evidence](opencode-v2-verification.md) for commands and limitations.
 
 Artifact references now enforce the owning node, exact run, result digest,
 candidate and execution revision. Validation rejects local/non-HTTPS URLs,
@@ -387,7 +387,7 @@ or tests.
 ## Existing interactive session, 2026-10-21
 
 The user explicitly requested enrolling this already-open conversation and testing
-a cron here. Its native service was OpenCode 2.1.2 rather than the 2.1.0 spike
+a cron here. Its native service was OpenCode 2.1.2 rather than the initial 2.1.0 verification
 baseline. Read-only exact identity/history verification passed, followed by the
 isolated 2.1.2 backend/worker-tool/daemon/two-TUI smoke. At that checkpoint, version
 admission allowed only the explicitly exercised 2.1.0 and 2.1.2 releases. The

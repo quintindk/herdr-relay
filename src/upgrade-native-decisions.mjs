@@ -1,13 +1,39 @@
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readPrivateJson } from './private-files.mjs';
 import { requireValue, RelayError } from './protocol.mjs';
 
+// Plugin IDs scope SDK storage. Never abandon a confirmed or uncertain command
+// under an earlier ID. Empty old files stay intact for rollback and inspection.
+export function assertNoPendingRelayOutboxes(stateDirectory) {
+  if (!existsSync(stateDirectory)) return { outboxesChecked: 0 };
+  let outboxesChecked = 0;
+  for (const channel of readdirSync(stateDirectory, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
+    const directory = join(stateDirectory, channel.name, 'tui');
+    if (!existsSync(directory)) continue;
+    for (const name of readdirSync(directory).filter(name => /^plugin\.herdr\.relay\..*\.(?:enrolment|human)-outbox\.json$/.test(name))) {
+      let state;
+      try { state = readPrivateJson(join(directory, name)); }
+      catch { throw new RelayError('upgrade_plugin_state_unavailable', 'Cannot inspect a durable Relay outbox. No pending command was discarded', 409); }
+      requireValue(state && typeof state === 'object' && !Array.isArray(state), 'upgrade_plugin_state_unavailable', 'Unsupported durable Relay outbox');
+      requireValue(Object.entries(state).every(([key, value]) => ['pending', 'sessionCreation'].includes(key) && value === null),
+        'upgrade_pending_decisions', 'A durable Relay outbox contains pending or unrecognised state. Reconcile it with the installed plugin before upgrading. Its original key and payload are unchanged', 409);
+      outboxesChecked++;
+    }
+  }
+  return { outboxesChecked };
+}
+
 // OpenCode configuration reload cancels pending forms/permissions. Inspect known
 // running services only, without starting/reloading one or resolving a decision.
 export async function assertNoOpenCodeDecisions({ nodeConfig, configDirectory }, dependencies = {}) {
+  const standard = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'opencode');
+  const canonical = path => existsSync(path) ? realpathSync(path) : resolve(path);
+  const outboxes = dependencies.stateDirectory || configDirectory && canonical(configDirectory) === canonical(standard)
+    ? assertNoPendingRelayOutboxes(dependencies.stateDirectory ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'opencode'))
+    : { outboxesChecked: 0 };
   let clients = dependencies.clients;
   if (!clients) {
     const [{ OpenCode }, { Service }] = await Promise.all([import('@opencode/client'), import('@opencode/client/service')]);
@@ -24,8 +50,6 @@ export async function assertNoOpenCodeDecisions({ nodeConfig, configDirectory },
       requireValue(typeof auth.password === 'string' && auth.password, 'upgrade_plugin_state_unavailable', 'Existing native authentication is unavailable');
       endpoints.set(url.origin, { url: url.origin, auth: { type: 'basic', username: 'opencode', password: auth.password } });
     }
-    const standard = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'opencode');
-    const canonical = path => existsSync(path) ? realpathSync(path) : resolve(path);
     if (canonical(configDirectory) === canonical(standard)) {
       const endpoint = await (dependencies.discover ?? Service.discover)({ version: version => version.startsWith('2.') });
       if (endpoint) endpoints.set(new URL(endpoint.url).origin, endpoint);
@@ -38,7 +62,7 @@ export async function assertNoOpenCodeDecisions({ nodeConfig, configDirectory },
         fetch: (url, options) => fetch(url, { ...options, signal: options?.signal ?? AbortSignal.timeout(5000) }) });
     });
   }
-  const result = { servicesChecked: clients.length, locationsChecked: 0, pendingForms: 0, pendingPermissions: 0 };
+  const result = { servicesChecked: clients.length, locationsChecked: 0, pendingForms: 0, pendingPermissions: 0, ...outboxes };
   try {
     for (const client of clients) {
       const locations = await client.debug.location.list();

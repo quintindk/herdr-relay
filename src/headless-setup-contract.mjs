@@ -108,7 +108,7 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed }
     const existing = store.get('execution', headlessProbeId(setup), false); if (existing) return existing;
     const agent = store.get('agent', setup.agentId);
     requireValue(agent.conversationId === setup.sessionId && agent.availability === 'available', 'headless_not_ready', 'Worker must be loaded and idle before readiness probing');
-    const instructions = `Bounded platform readiness only. Call relay_mcp_tools to verify the explicit MCP allow/deny policy and native tool catalogue.${grant.capabilities ? ' Then call relay_headless_capabilities for the granted task actions and approved artifact paths using isolated canaries.' : ''} Do not execute any external MCP tool or modify real job data during readiness. A catalogue is not proof of business-job completeness. Then use relay_work_submit with candidate "headless-readiness" and a short summary without private content. Finish the turn.`;
+    const instructions = `Bounded platform readiness only. Call relay_headless_permissions to verify explicit MCP and shell permissions without executing effects.${grant.capabilities ? ' Then call relay_headless_capabilities for the granted task actions and approved artifact paths using isolated canaries.' : ''} Do not execute MCP tools or shell commands or modify real job data during readiness. Permission inspection is not proof of business-job completeness. Then use relay_work_submit with candidate "headless-readiness" and a short summary without private content. Finish the turn.`;
     const authority = { headlessSetup: setup };
     const task = store.apply(actor, 'task.create', { id: `probe_task_${setup.id}_${setup.attempt ?? 1}`, title: `Readiness: ${setup.name}`, description: instructions }, authority);
     store.event('task.create', task, actor, setup.id);
@@ -118,11 +118,12 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed }
   }
   if (action === 'headless.activate') {
     if (setup.state === 'ready') return setup;
-    fields(p.receipt, ['nativeTerminalId', 'mcpPolicyToolCallId', 'mcpAllowed', 'accessDigest', 'capabilities'], ['nativeTerminalId', 'mcpPolicyToolCallId', 'mcpAllowed', 'accessDigest']);
-    for (const key of ['nativeTerminalId', 'accessDigest', 'mcpPolicyToolCallId']) text(p.receipt[key]);
+    fields(p.receipt, ['nativeTerminalId', 'permissionsToolCallId', 'permissions', 'accessDigest', 'capabilities'], ['nativeTerminalId', 'permissionsToolCallId', 'permissions', 'accessDigest']);
+    for (const key of ['nativeTerminalId', 'accessDigest', 'permissionsToolCallId']) text(p.receipt[key]);
+    const provenPermissions = validateHeadlessPermissions(p.receipt.permissions);
     const execution = store.get('execution', headlessProbeId(setup));
     requireValue(execution.state === 'completed' && execution.result?.candidate === 'headless-readiness' && execution.targetAgentId === setup.agentId &&
-      p.receipt.mcpAllowed === grant.permissions.mcp,
+      digest(provenPermissions) === digest(grant.permissions),
     'headless_readiness_required', 'Correlated model, granted capability inspection and native submission evidence required');
     if (grant.capabilities) {
       const proof = setup.capabilityProbe, supplied = p.receipt.capabilities;
@@ -132,7 +133,7 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed }
       'headless_capabilities_unverified', 'Confirmed proof for the exact granted task/artifact capabilities required');
     } else requireValue(!p.receipt.capabilities, 'headless_capability_not_authorised', 'Grants without native capabilities do not authorise task/artifact writes');
     const schedule = store.apply(actor, 'schedule.install', { id: setup.scheduleId, definition: { nodeId: setup.nodeId, targetAgentId: setup.agentId,
-      instructions: `Perform the authorised job contract at ${grant.directory}/${grant.contract}. Read that exact skill and submit the native Relay result. ${grant.permissions.mcp ? 'MCP is allowed: use relay_mcp_tools to discover current native MCP tools and relay_mcp_call to invoke them. This includes write-capable tools. Follow the external contract and provider idempotency rules. Do not automatically retry uncertain external effects.' : 'MCP is denied. Do not invoke MCP tools.'}${grant.capabilities ? ' Use relay_headless_task/reference only for granted actions and relay_headless_artifacts only for approved paths. Checkpoint data and business policy belong to the job contract.' : ''} Shell and arbitrary file writes remain denied. Do not use generic execute as a workaround.`,
+      instructions: `Perform the authorised job contract at ${grant.directory}/${grant.contract}. Read that exact skill and submit the native Relay result. Inspect relay_headless_permissions.${grant.permissions.mcp ? ' MCP is allowed: use relay_mcp_tools and relay_mcp_call, including write-capable tools. Follow provider idempotency rules and never automatically repeat uncertain effects.' : ' MCP is denied.'}${grant.permissions.shell ? ' Native shell is allowed through relay_shell_call with the native shell input schema. This is full OS-user access, including file writes outside artifact paths. It is not a sandbox. Never inspect/copy credentials or use an owner context as an authentication workaround.' : ' Native shell is denied.'}${grant.capabilities ? ' Use native task/artifact capabilities only in their explicit scopes. Business policy belongs to the job contract.' : ''} Generic execute and native file-write tools remain denied.`,
       cron: grant.schedule.cron, timezone: grant.schedule.timezone, reviewPolicy: 'none', enabled: true } }, { headlessSetup: setup });
     store.event('schedule.install', schedule, actor, setup.id);
     return changed('headless_setup', setup, { state: 'ready', readiness: p.receipt, scheduleRevision: schedule.revision });

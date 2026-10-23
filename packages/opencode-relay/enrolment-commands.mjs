@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { RelaySpike } from './rpc.mjs';
+import { RelayRuntime } from './rpc.mjs';
 import { createRoot, createEffect } from 'solid-js';
 import { renameHerdrWorkspace } from './herdr-session.mjs';
 
@@ -70,7 +70,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
   });
   const location = ctx.location ?? ctx.data.location.default();
   const toast = (message, variant = 'info') => ctx.ui.toast.show({ message, variant, sessionID: selectedSession() });
-  const runtimeGeneration = async () => (await ctx.client.rpc(RelaySpike).inspect({}, { location })).generation;
+  const runtimeGeneration = async () => (await ctx.client.rpc(RelayRuntime).inspect({}, { location })).generation;
   const check = origin => {
     if (closed || origin.session !== selectedSession() || origin.generation !== generation) throw new Error('Relay attachment context changed');
   };

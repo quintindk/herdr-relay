@@ -36,17 +36,19 @@ test('headless setup requires an explicit owner grant and exact coordinator, reu
   assert.equal(c(node, 'another-key', 'headless.request', request).id, setup.id);
   assert.equal(f.store.all('headless_setup').length, 1); assert.equal(f.store.all('schedule').length, 0);
   assert.throws(() => c(node, 'activate-without-probe', 'headless.activate', { id: setup.id, receipt: {
-    nativeTerminalId: 'idle', mcpPolicyToolCallId: 'tool', mcpAllowed: true, accessDigest: 'ref' } }));
+    nativeTerminalId: 'idle', permissionsToolCallId: 'tool', permissions: grant.permissions, accessDigest: 'ref' } }));
 });
 
-test('new grants require one explicit MCP boolean and reject connector-specific fields or native shell access', t => {
+test('new grants require boolean MCP and shell permissions and reject connector-specific fields', t => {
   const f = fixture(t);
-  for (const [index, permissions] of [{}, { mcp: '*' }, { mcp: true, allowedServers: ['one'] }, { mcp: true, shell: true }].entries()) {
+  for (const [index, permissions] of [{}, { mcp: '*' }, { mcp: true, allowedServers: ['one'] }, { mcp: true, shell: 'yes' }].entries()) {
     assert.throws(() => f.command(f.owner, `bad-${index}`, 'headless.grant', { ...f.grant, permissions }), { code: 'invalid_headless_permissions' });
   }
   assert.throws(() => f.command(f.owner, 'connector-fields', 'headless.grant', { ...f.grant, connector: { server: 'one' } }), { code: 'invalid_headless_setup' });
   const grant = f.command(f.owner, 'denied-policy', 'headless.grant', { ...f.grant, permissions: { mcp: false } });
   assert.deepEqual(grant.permissions, { mcp: false, shell: false });
+  const allowed = f.command(f.owner, 'shell-policy', 'headless.grant', { ...f.grant, id: 'shell-grant', permissions: { mcp: true, shell: true } });
+  assert.deepEqual(allowed.permissions, { mcp: true, shell: true });
   assert.equal(f.store.all('headless_setup').length, 0); assert.equal(f.store.all('schedule').length, 0);
 });
 
@@ -59,8 +61,8 @@ test('only successful probe evidence activates one schedule, and revocation paus
   assert.equal(probe.reviewPolicy, 'none'); assert.equal(store.all('schedule').length, 0);
   // Store-fixture terminal evidence only. Real process acceptance is a separate smoke.
   store.save('execution', { ...probe, state: 'completed', result: { candidate: 'headless-readiness' } });
-  const ready = c(node, 'activate', 'headless.activate', { id: setup.id, receipt: { nativeTerminalId: 'idle', mcpPolicyToolCallId: 'tool',
-    mcpAllowed: true, accessDigest: 'refs' } });
+  const ready = c(node, 'activate', 'headless.activate', { id: setup.id, receipt: { nativeTerminalId: 'idle', permissionsToolCallId: 'tool',
+    permissions: grant.permissions, accessDigest: 'refs' } });
   assert.equal(ready.state, 'ready'); const schedule = store.get('schedule', grant.schedule.id);
   assert.equal(schedule.definition.targetAgentId, setup.agentId); assert.equal(schedule.definition.enabled, true);
   assert.equal(schedule.definition.targetConversationId, undefined);
@@ -95,7 +97,7 @@ test('explicit retry preserves worker identity, retains the failed attempt and r
   assert.equal(store.all('agent').length, 1); assert.equal(store.all('schedule').length, 0);
 });
 
-test('a model success claim without actual native MCP policy inspection never activates the schedule', async t => {
+test('a model success claim without actual native permission inspection never activates the schedule', async t => {
   const f = fixture(t), root = mkdtempSync('/tmp/opencode/setup-proof-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const contractDirectory = join(root, '.opencode/skills/approved-job'); mkdirSync(contractDirectory, { recursive: true });
@@ -119,5 +121,5 @@ test('a model success claim without actual native MCP policy inspection never ac
   ] }) } };
   await tickHeadlessSetups(journal, api, { identityVersion: 2 }, () => assert.fail('No binding creation'), async () => binding, { native: async () => ({ client }) });
   assert.deepEqual(mutations.map(m => m.action), ['headless.block']);
-  assert.equal(mutations[0].payload.reason, 'mcp_readiness_not_proven');
+  assert.equal(mutations[0].payload.reason, 'permissions_readiness_not_proven');
 });

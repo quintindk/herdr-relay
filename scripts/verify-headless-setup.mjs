@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startBackend } from '../src/backend-service.mjs';
@@ -19,10 +19,12 @@ import { waitHeadlessSetup } from '../src/headless-setup-wait.mjs';
 process.umask(0o077);
 const capabilityMode = process.argv.includes('--capabilities');
 const mcpDenied = process.argv.includes('--mcp-denied');
+const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
+const shellOutput = join(root, 'outside-workspace-shell.txt');
 mkdirSync(workspace); mkdirSync(state); mkdirSync(join(workspace, '.opencode/skills/approved-job'), { recursive: true });
 writeFileSync(join(workspace, '.opencode/skills/approved-job/SKILL.md'), 'Inspect the approved fixture only. Submit a native result.');
-let reads = 0, writes = 0, runtime, backend, daemon, log = '';
+let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden = false;
 const mcpSessions = [];
 const mcp = createServer(async (req, res) => {
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
@@ -47,13 +49,17 @@ const model = createServer(async (req, res) => {
   const input = JSON.parse(body), last = input.messages.findLastIndex(m => m.role === 'user');
   const called = input.messages.slice(last + 1).filter(m => m.role === 'tool').length;
   const probe = JSON.stringify(input.messages[last]?.content).includes('Bounded platform readiness');
-  const steps = probe ? ['relay_mcp_tools', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
-    ['relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), 'relay_work_submit'];
+  if (shellMode && !shellAllowed) {
+    assert.equal(input.tools?.some(t => ['shell', 'relay_shell_call'].includes(t.function.name)), false, 'Denied shell must not be advertised');
+    shellDeniedHidden = true;
+  }
+  const steps = probe ? ['relay_headless_permissions', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
+    ['relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), ...(shellAllowed ? ['relay_shell_call'] : []), 'relay_work_submit'];
   const name = steps[called];
   const tool = name && input.tools?.find(t => t.function.name.endsWith(name));
   if (name && !tool) console.error(JSON.stringify({ missingTool: name, advertised: input.tools?.map(t => t.function.name) }));
   const args = name === 'relay_mcp_call' ? { tool: called === 1 ? 'records_read' : 'actions_send', arguments: called === 1 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
-    ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : ['relay_headless_capabilities', 'relay_mcp_tools'].includes(name) ? {} :
+    ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : name === 'relay_shell_call' ? { command: `printf '%s' 'shell-fixture' > '${shellOutput}'` } : ['relay_headless_capabilities', 'relay_headless_permissions', 'relay_mcp_tools'].includes(name) ? {} :
     { key: probe ? 'ready' : 'job', candidate: probe ? 'headless-readiness' : 'fixture-job', summary: 'Native capability and result submission verified.' };
   const delta = tool ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${called}`, type: 'function', function: { name: tool.function.name, arguments: JSON.stringify(args) } }] }
     : { role: 'assistant', content: 'Fixture done.' };
@@ -120,7 +126,7 @@ try {
   config.headless = { serviceRegistration: registration }; writeFileSync(joined.configFile, JSON.stringify(config));
   await command('grant', 'headless.grant', { id: 'approved-job-grant', requesterAgentId: coordinator.agentId, nodeId: joined.nodeId, name: 'approved-worker', directory: workspace,
     model: { providerID: 'openai', id: 'fixture', integrationID: provider.integrationID, connectionId },
-    permissions: { mcp: !mcpDenied, shell: false }, contract: '.opencode/skills/approved-job/SKILL.md',
+    permissions: { mcp: !mcpDenied, shell: shellAllowed }, contract: '.opencode/skills/approved-job/SKILL.md',
     schedule: { id: 'approved-job-weekdays', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' },
     ...(capabilityMode ? { capabilities: { sourceNamespaces: ['external:record'], taskActions: ['task.create', 'task.update', 'comment.create', 'reference.attach'],
       artifacts: { receipts: 'artifacts/receipts', state: 'artifacts/state.json', history: 'artifacts/history', runs: 'artifacts/runs', summaries: 'artifacts/summaries' } } } : {}) });
@@ -131,6 +137,7 @@ try {
   const result = await waitHeadlessSetup(worker, receipt);
   assert.equal(result.state, 'ready', `Setup did not complete: ${result.blocker}`);
   assert.equal(reads, 0); assert.equal(writes, 0, 'Readiness must never execute external tools');
+  assert.equal(existsSync(shellOutput), false, 'Readiness must never execute shell commands');
   assert.equal(result.restartRequired, false); assert.equal(result.appliedRevision, result.revision);
   const approvedSetup = await owner('GET', `/v1/headless_setups/${id}`);
   assert.notEqual(approvedSetup.sessionId, session.id);
@@ -158,6 +165,9 @@ try {
     return execution.state === 'completed';
   });
   assert.equal(reads, mcpDenied ? 0 : 1); assert.equal(writes, mcpDenied ? 0 : 1);
+  assert.equal(existsSync(shellOutput), shellAllowed);
+  if (shellMode && !shellAllowed) assert.equal(shellDeniedHidden, true);
+  if (shellAllowed) assert.equal(readFileSync(shellOutput, 'utf8'), 'shell-fixture');
   assert.ok(mcpSessions.every(sessionId => sessionId === approvedSetup.sessionId), 'MCP calls must retain the dedicated worker session context');
   const unchangedGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
   assert.equal(unchangedGrant.revision, 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
@@ -170,7 +180,7 @@ try {
   await command('revoke', 'headless.revoke', { id: 'approved-job-grant', expectedRevision: 1 });
   assert.equal((await owner('GET', '/v1/schedules/approved-job-weekdays')).definition.enabled, false);
   console.log(JSON.stringify({ passed: true, singleCoordinatorSetup: true, existingAuthenticatedServiceReused: true, mcpAllowed: !mcpDenied,
-    readCalls: reads, writeCalls: writes, readinessHadNoExternalEffects: true, toolsAddedAfterSetupCovered: true,
+    readCalls: reads, writeCalls: writes, shellAllowed, shellAttempted: shellAllowed, shellDeniedHidden, outsideWorkspaceShellWrite: existsSync(shellOutput), readinessHadNoExternalEffects: true, toolsAddedAfterSetupCovered: true,
     nativeResultSubmission: true, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
     scopedTaskAndFileCanaries: capabilityMode, credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {

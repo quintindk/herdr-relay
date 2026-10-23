@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installNativeInbox, uninstallNativePlugin } from '../src/native-inbox-install.mjs';
 import { readOpenCodeConfig } from '../src/opencode-config-file.mjs';
+import { pluginUpgradeFiles } from '../src/upgrade-plugin.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'relay-inbox-install-'));
@@ -13,6 +14,25 @@ function fixture(t) {
   writeFileSync(contextFile, JSON.stringify({ url: 'http://127.0.0.1:3210', token: 'owner-secret' }), { mode: 0o600 });
   return { root, input: { contextFile, configDirectory: root, sessionId: 'ses_human123', evidenceFile: join(root, 'evidence.jsonl') } };
 }
+
+test('bundled product detection and exact disable preferences survive a package and plugin-ID rename', t => {
+  const f = fixture(t), release = join(f.root, 'previous-release'), old = join(release, 'packages/opencode-relay');
+  mkdirSync(old, { recursive: true });
+  writeFileSync(join(release, 'package.json'), JSON.stringify({ name: 'herdr-relay' }));
+  writeFileSync(join(old, 'package.json'), JSON.stringify({ name: '@herdr/previous-brand' }));
+  writeFileSync(join(old, 'server.mjs'), "export default {id:'herdr.relay.previous.server'};");
+  writeFileSync(join(old, 'tui.mjs'), "export default {id:'herdr.relay.previous.tui'};");
+  writeFileSync(join(f.root, 'opencode.json'), JSON.stringify({ plugins: [{ package: old, options: { workerDirectory: '/unchanged' } }] }));
+  writeFileSync(join(f.root, 'cli.json'), '{"theme":{"name":"unchanged"},"plugins":["-herdr.relay.previous.tui","-other.tui"]}');
+  const changes = pluginUpgradeFiles(f.root, '/candidate');
+  assert.equal(changes.length, 2);
+  assert.deepEqual(JSON.parse(changes.find(file => file.path.endsWith('cli.json')).after),
+    { theme: { name: 'unchanged' }, plugins: ['-herdr.relay.tui', '-other.tui'] });
+  assert.deepEqual(JSON.parse(changes.find(file => file.path.endsWith('opencode.json')).after).plugins,
+    [{ package: '/candidate/packages/opencode-relay', options: { workerDirectory: '/unchanged' } }]);
+  writeFileSync(join(f.root, 'opencode.json'), JSON.stringify({ plugins: [{ package: old, options: { humanProposals: true } }] }));
+  assert.throws(() => pluginUpgradeFiles(f.root, '/candidate'), { code: 'upgrade_plugin_state_migration_required' });
+});
 
 test('inbox installer preserves unrelated configuration, makes private backups and is repeat-safe', t => {
   const f = fixture(t), serverFile = join(f.root, 'opencode.json'), cliFile = join(f.root, 'cli.json');
@@ -79,7 +99,7 @@ test('plugin installation supports JSONC without losing unrelated comments/setti
 
 test('plugin upgrades replace a recognised old release path rather than installing a duplicate', t => {
   const f = fixture(t), old = join(f.root, 'old-release'); mkdirSync(old);
-  writeFileSync(join(old, 'package.json'), JSON.stringify({ name: '@herdr/relay-opencode-v2-spike' }));
+  writeFileSync(join(old, 'package.json'), JSON.stringify({ name: '@herdr/relay-opencode' }));
   writeFileSync(join(f.root, 'opencode.json'), JSON.stringify({ plugins: [{ package: old, options: { retained: true } }] }));
   installNativeInbox(f.input);
   const plugins = readOpenCodeConfig(join(f.root, 'opencode.json')).value.plugins;
@@ -93,7 +113,7 @@ test('plugin installation does not suppress first-run V1 terminal migration or b
   assert.equal(existsSync(join(f.root, 'cli.json')), false);
   rmSync(join(f.root, 'tui.json'));
   const old = join(f.root, 'disabled-release'); mkdirSync(old);
-  writeFileSync(join(old, 'package.json'), JSON.stringify({ name: '@herdr/relay-opencode-v2-spike' }));
+  writeFileSync(join(old, 'package.json'), JSON.stringify({ name: '@herdr/relay-opencode' }));
   writeFileSync(join(f.root, 'opencode.json'), JSON.stringify({ plugins: [`-${old}`] }));
   assert.throws(() => installNativeInbox(f.input), { code: 'configuration_conflict' });
 });

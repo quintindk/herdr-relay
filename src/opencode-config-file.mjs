@@ -38,11 +38,17 @@ export function replacePluginDirectives(source, plugins) {
 export function isRelayPlugin(directive, directory, currentPackage) {
   const name = typeof directive === 'string' ? directive : directive?.package;
   if (typeof name !== 'string' || /^[!-]/.test(name)) return false;
-  if (name === currentPackage || name === '@herdr/relay-opencode-v2-spike') return true;
+  if (name === currentPackage || name === '@herdr/relay-opencode') return true;
   if (!name.startsWith('/') && !name.startsWith('.') && !name.startsWith('file:')) return false;
   try {
     const path = name.startsWith('file:') ? fileURLToPath(name) : resolve(directory, name);
     const manifest = join(path, 'package.json');
-    return existsSync(manifest) && JSON.parse(readFileSync(manifest, 'utf8')).name === '@herdr/relay-opencode-v2-spike';
+    if (!existsSync(manifest)) return false;
+    if (JSON.parse(readFileSync(manifest, 'utf8')).name === '@herdr/relay-opencode') return true;
+    // Recognise previously bundled releases by their owning product and stable
+    // package location, not an obsolete nested package brand.
+    const root = resolve(path, '../..');
+    return path === join(root, 'packages/opencode-relay') && existsSync(join(root, 'package.json')) &&
+      JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name === 'herdr-relay';
   } catch { return false; }
 }

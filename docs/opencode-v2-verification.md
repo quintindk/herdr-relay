@@ -1,8 +1,10 @@
-# OpenCode v2 spike
+# OpenCode v2 initial verification
 
 Date: 20 October 2026
 
-Status: initial real-runtime spike passed. Full bridge migration remains pending.
+Historical status at the date below: initial real-runtime verification passed.
+The full bridge migration was pending at that point. See current release notes
+for the implemented integration; the historical measurements below are retained.
 Target: [specification v3, OpenCode v2](spec-v3.md#13-opencode-v2-target-and-migration).
 
 ## Baseline
@@ -43,7 +45,7 @@ npm --prefix packages/opencode-relay run smoke -- --decision
 The real-runtime smoke uses isolated HOME/XDG directories, a private authenticated
 loopback server, disposable sessions and a local deterministic model. No real
 provider credentials or active configuration are used. Sanitised result:
-[OpenCode v2 spike evidence](evidence/opencode-v2-spike.json).
+[OpenCode v2 initial evidence](evidence/opencode-v2-initial.json).
 
 Verification after the initial implementation:
 
@@ -52,7 +54,7 @@ Verification after the initial implementation:
 - `npm run smoke:v2`: real service, tool call and two TUI clients passed.
 - `smoke -- --decision`: two real clients displayed the supported native confirmation
   dialog and recorded diagnostic decisions from synthetic PTY input. No human
-  authority is claimed. Details: [decision probe evidence](evidence/opencode-v2-decision-spike.json).
+  authority is claimed. Details: [decision probe evidence](evidence/opencode-v2-initial-decision.json).
 - `node --test --test-concurrency=1 test/*.test.mjs`: 1,369 passed, one skipped
   because the pinned Paperclip validator source is not installed, zero failures.
 - `git diff --check`: passed.
@@ -91,7 +93,7 @@ authorise a backend mutation. Route-away-and-back invalidation also needs reacti
 client integration rather than just checking the selected session on return.
 
 - Implement exact human-source confirmation through supported server/TUI contracts.
-  Client-supplied routing labels in this spike confer no authority.
+  Client-supplied routing labels in this initial verification confer no authority.
 - Exercise negative cross-client/pane-switch/reload/reconnect cases in real TUIs.
 - Prove owned runtime isolation, scoped interruption and restart reconciliation.
 - Validate real models and the actual Herdr integration.

@@ -8,7 +8,7 @@ function client({ forms = [], permissions = [] } = {}) {
 }
 test('plugin upgrade inspection reads pending native decisions without approving, cancelling or exposing their contents', async () => {
   const result = await assertNoOpenCodeDecisions({}, { clients: [client()] });
-  assert.deepEqual(result, { servicesChecked: 1, locationsChecked: 1, pendingForms: 0, pendingPermissions: 0 });
+  assert.deepEqual(result, { servicesChecked: 1, locationsChecked: 1, pendingForms: 0, pendingPermissions: 0, outboxesChecked: 0 });
   for (const value of [client({ forms: [{ privateBody: 'must not appear in errors' }] }), client({ permissions: [{ privateBody: 'must not appear in errors' }] })]) {
     await assert.rejects(assertNoOpenCodeDecisions({}, { clients: [value] }), error => {
       assert.equal(error.code, 'upgrade_pending_decisions'); assert.doesNotMatch(error.message, /must not appear/); return true;

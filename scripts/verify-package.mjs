@@ -35,7 +35,9 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/task-identity.mjs', 'src/task-identity-migration.mjs', 'scripts/migrate-task-references.mjs',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
-  'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+  'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
+  'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
+  'packages/opencode-relay/headless-scope.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
@@ -46,6 +48,16 @@ mkdirSync(consumer);
 execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-scripts', '--no-fund', '--no-audit',
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
 const installed = join(consumer, 'node_modules/herdr-relay');
+const installedTuiVerifications = [];
+for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0']]) {
+  if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
+  const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
+    '--binary', process.env[variable]], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  process.stdout.write(output);
+  const { passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors } = JSON.parse(output);
+  assert.equal(runtime, version, `Expected exact ${version} host for ${variable}`);
+  installedTuiVerifications.push({ passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors });
+}
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
 assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
 assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, '4.1.8', 'Keep the legacy tool validation contract pinned');
@@ -90,13 +102,13 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
 execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';
   await import('./packages/opencode-relay/server.mjs');
-  await import('./packages/opencode-relay/tui.mjs');
+  await import('./packages/opencode-relay/tui-setup.mjs');
   await import('./packages/opencode-relay/headless-mcp.mjs');
   await import('@opencode/client/service');
   const {startBackend}=await import('./src/backend-service.mjs');
   const backend=await startBackend({database:':memory:'});
   try { const token=backend.store.bootstrap().token; const response=await fetch(backend.origin+'/v1/info',{headers:{authorization:'Bearer '+token}});
-    const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessMcpPermissions,true); }
+    const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessToolPermissions,true); }
   finally { await backend.close(); }
 `], { cwd: installed, stdio: 'pipe' });
 const sourceMethods = [], taskId = '00000000-0000-4000-8000-000000000001';
@@ -199,7 +211,7 @@ try {
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, nativeBackendStarted: true,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, nativeBackendStarted: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
   auditVerified: Boolean(audit), vulnerabilities: audit?.metadata.vulnerabilities ?? null, published: false, gitTagCreated: false };
