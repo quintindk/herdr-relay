@@ -16,6 +16,7 @@ import { nativeAdmin, adminHelp } from './native-admin-cli.mjs';
 import { boardContext } from './native-onboarding.mjs';
 import { readPrivateJson } from './private-files.mjs';
 import { maintenanceCli } from './upgrade-cli.mjs';
+import { renameHerdrWorkspace } from '../packages/opencode-relay/herdr-session.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
   headless provision|inspect --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
@@ -81,6 +82,12 @@ export async function main(args) {
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(`${nativeHelp}\n\n${adminHelp}`); return; }
   const output = value => console.log(JSON.stringify(value, null, 2));
+  const presentAttachment = async result => {
+    let workspaceRename;
+    try { workspaceRename = await renameHerdrWorkspace(null, result); }
+    catch { workspaceRename = { state: 'unconfirmed' }; }
+    output({ ...result, workspaceRename });
+  };
   requireValue(positionals.length <= 3, 'invalid_request', 'Unexpected positional arguments');
   const allowed = group === 'node' && ['install', 'run'].includes(action) ? ['config']
     : group === 'node' && action === 'configure-interactive' ? ['config', 'file']
@@ -156,7 +163,7 @@ export async function main(args) {
   };
   if (group === 'agent' && action === 'enrol') {
     requireValue(!id && Boolean(values.here) !== Boolean(values.session), 'invalid_request', 'Choose --here or --session ID');
-    output(await enrolInteractive({ configFile: values.config, sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
+    await presentAttachment(await enrolInteractive({ configFile: values.config, sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
       directory: values.directory ?? process.cwd(), reserved: values.reserved === true, transport: values.transport,
       serviceRegistration: values['service-registration'], name: values.name, key: values.key, backend, api })); return;
   }
@@ -167,7 +174,7 @@ export async function main(args) {
   if (group === 'agent' && action === 'attach') {
     requireValue(!id && Boolean(values.here) !== Boolean(values.session) && /^\d+$/.test(values.generation ?? ''),
       'invalid_request', 'Choose --here or --session and supply the inspected --generation');
-    output(await attachInteractive({ configFile: values.config, sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
+    await presentAttachment(await attachInteractive({ configFile: values.config, sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
       directory: values.directory ?? process.cwd(), agentId: values.agent, expectedGeneration: Number(values.generation),
       key: values.key, serviceRegistration: values['service-registration'], backend, api })); return;
   }

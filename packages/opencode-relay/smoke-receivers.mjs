@@ -156,12 +156,16 @@ try {
         cwd: workspace, env: { PATH: process.env.PATH, HOME: directory, TERM: 'xterm-256color',
           XDG_CONFIG_HOME: join(directory, 'config'), XDG_DATA_HOME: join(directory, 'data'), XDG_STATE_HOME: join(directory, 'state'),
           OPENCODE_PASSWORD: password }, evidenceFile, [kind]: true, autoNewChat: kind === 'attach', newChatTrigger,
-        timeoutSeconds: 45, redact: [password, ownerToken, tuiToken] }));
+        columns: 180, requireAttachmentSidebar: true, timeoutSeconds: 45, redact: [password, ownerToken, tuiToken] }));
       await once(tui, 'exit');
       assert.ok(existsSync(evidenceFile), diagnostics);
       const events = readFileSync(evidenceFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       const receipt = events.find(e => e.type === 'receiver_attached');
       assert.ok(receipt, diagnostics);
+      const latestReceipt = events.filter(event => event.type === 'receiver_attached').at(-1);
+      assert.ok(events.some(event => event.type === 'attachment_sidebar' && event.state === 'attached' && event.sessionId === latestReceipt.sessionId),
+        'The selected receiving chat must show an actual attached status in the sidebar');
+      assert.ok(events.some(event => event.type === 'attachment_sidebar_rendered' && event.sessionId === latestReceipt.sessionId), 'The attachment sidebar must mount');
       if (landing) {
         const created = events.find(e => e.type === 'landing_session_created');
         assert.ok(created, diagnostics); assert.equal(receipt.sessionId, created.sessionId);

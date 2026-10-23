@@ -32,6 +32,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
   'src/task-identity.mjs', 'src/task-identity-migration.mjs', 'scripts/migrate-task-references.mjs',
+  'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');

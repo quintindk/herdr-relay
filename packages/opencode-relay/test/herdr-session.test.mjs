@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
-import { registerHerdrSession } from '../herdr-session.mjs';
+import { registerHerdrSession, renameHerdrWorkspace } from '../herdr-session.mjs';
 
 async function fixture(t, { wrongDirectory = false, wrongPane = false } = {}) {
   const root = mkdtempSync('/tmp/opencode/herdr-report-'), socket = join(root, 'herdr.sock');
@@ -46,4 +46,43 @@ test('reporter is inert outside an explicitly identified Herdr TUI', () => {
   let timer = false;
   const close = registerHerdrSession({}, { selectedSession: () => 'session', environment: {}, interval: () => { timer = true; } });
   close(); assert.equal(timer, false);
+});
+
+function renameFixture() {
+  const f = { current: true, calls: [], snapshot: { panes: [{ pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', cwd: '/work' }],
+    workspaces: [{ workspace_id: 'w1', label: 'Old name' }], agents: [{ pane_id: 'w1:p1', agent: 'opencode', agent_session: { kind: 'id', value: 'a' } }] } };
+  f.ctx = { location: { directory: '/work' }, client: { session: { get: async () => ({ id: 'a', location: { directory: '/work' } }) } } };
+  f.receipt = { sessionId: 'a', agentName: 'Mason', directory: '/work' };
+  f.options = { environment: { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/fixture/herdr.sock', HERDR_PANE_ID: 'w1:p1', HERDR_WORKSPACE_ID: 'w1', HERDR_TAB_ID: 'w1:t1' },
+    current: () => f.current, request: async (_env, method, params) => { f.calls.push({ method, params }); return { snapshot: f.snapshot }; } };
+  return f;
+}
+
+test('confirmed attachment renames only the caller workspace and setting the same name is idempotent', async () => {
+  const f = renameFixture();
+  assert.equal((await renameHerdrWorkspace(f.ctx, f.receipt, f.options)).state, 'renamed');
+  assert.deepEqual(f.calls.at(-1), { method: 'workspace.rename', params: { workspace_id: 'w1', label: 'Mason' } });
+  f.calls.length = 0; f.snapshot.workspaces[0].label = 'Mason';
+  assert.equal((await renameHerdrWorkspace(f.ctx, f.receipt, f.options)).state, 'already_named');
+  assert.equal(f.calls.some(call => call.method === 'workspace.rename'), false);
+});
+
+for (const change of ['pane', 'workspace', 'tab', 'directory', 'session', 'late-switch']) test(`workspace naming refuses changed ${change} without mutating Herdr`, async () => {
+  const f = renameFixture();
+  if (change === 'pane') f.snapshot.panes[0].pane_id = 'other';
+  if (change === 'workspace') f.snapshot.panes[0].workspace_id = 'other';
+  if (change === 'tab') f.snapshot.panes[0].tab_id = 'other';
+  if (change === 'directory') f.snapshot.panes[0].cwd = '/elsewhere';
+  if (change === 'session') f.ctx.client.session.get = async () => ({ id: 'b' });
+  if (change === 'late-switch') f.ctx.client.session.get = async () => { f.current = false; return { id: 'a', location: { directory: '/work' } }; };
+  await assert.rejects(renameHerdrWorkspace(f.ctx, f.receipt, f.options));
+  assert.equal(f.calls.some(call => call.method === 'workspace.rename'), false);
+});
+
+test('CLI naming requires actual Herdr native selection evidence and stays inert outside Herdr', async () => {
+  const f = renameFixture();
+  assert.equal((await renameHerdrWorkspace(null, f.receipt, f.options)).state, 'renamed');
+  f.calls.length = 0; f.snapshot.agents[0].agent_session.value = 'another-chat';
+  await assert.rejects(renameHerdrWorkspace(null, f.receipt, f.options)); assert.equal(f.calls.some(call => call.method === 'workspace.rename'), false);
+  assert.equal((await renameHerdrWorkspace(null, f.receipt, { environment: {} })).state, 'not_in_herdr');
 });

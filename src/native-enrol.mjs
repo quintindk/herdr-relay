@@ -204,6 +204,7 @@ export async function attachInteractive(input, dependencies = {}) {
     requireValue(current.state === 'active' && current.bindingId === operation.binding.id,
       'attachment_superseded', 'This attachment was replaced. Do not reclaim it by retrying', 409);
     return { state: operation.state === 'existing' ? 'existing' : 'attached', agentId: input.agentId, nodeId: config.nodeId,
+      agentName: receivers.get(`enrolment:${input.agentId}`).name, directory: operation.binding.identity.directory,
       sessionId: operation.binding.identity.sessionId, bindingId: operation.binding.id, generation: current.generation,
       nativeUrl: operation.binding.url, configFile };
   } finally { journal.close(); }

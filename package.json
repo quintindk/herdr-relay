@@ -15,6 +15,7 @@
   "files": [
     "src",
     "packages/opencode-relay/*.mjs",
+    "packages/opencode-relay/*.tsx",
     "packages/opencode-relay/package.json",
     "packages/opencode-relay/package-lock.json",
     "skills",

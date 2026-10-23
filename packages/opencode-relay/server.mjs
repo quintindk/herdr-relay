@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { HeadlessAccess, checkHeadlessAccess, inspectHeadlessConnections } from './headless-access.mjs';
 import { waitHeadlessSetup } from '../../src/headless-setup-wait.mjs';
 import { digest } from '../../src/protocol.mjs';
+import { readAttachmentStatus } from './attachment-status.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.spike.server',
@@ -238,6 +239,7 @@ export default Plugin.define({
     try {
       headlessAccess = await ctx.rpc.register(HeadlessAccess, { check: refs => checkHeadlessAccess(ctx, refs), inspect: () => inspectHeadlessConnections(ctx) });
       rpc = await ctx.rpc.register(RelaySpike, {
+        attachment: input => readAttachmentStatus(ctx, input),
         inspect: async () => ({
           version: ctx.app.version, directory: ctx.location.directory, generation,
           tools: (await ctx.tool.list()).map(tool => tool.name),

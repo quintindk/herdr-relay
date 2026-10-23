@@ -6,6 +6,7 @@ import { decisionPresenter } from './decision.mjs';
 import { registerHumanInbox } from './human-inbox.mjs';
 import { registerEnrolmentCommands } from './enrolment-commands.mjs';
 import { registerHerdrSession } from './herdr-session.mjs';
+import { registerAttachmentSidebar } from './attachment-sidebar.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.spike.tui',
@@ -23,6 +24,7 @@ export default Plugin.define({
       const route = ctx.ui.router.current();
       return route.type === 'session' ? route.sessionID : null;
     };
+    const stopAttachment = await registerAttachmentSidebar(ctx, { selectedSession: sessionId, record });
     const stopHumanInbox = registerHumanInbox(ctx, { clientId, selectedSession: sessionId, record });
     const stopEnrolment = registerEnrolmentCommands(ctx, { selectedSession: sessionId, record });
     const stopHerdr = registerHerdrSession(ctx, { selectedSession: sessionId, record });
@@ -84,6 +86,7 @@ export default Plugin.define({
       if (closed) return;
       closed = true;
       decisions.dispose();
+      stopAttachment();
       stopHumanInbox();
       stopEnrolment();
       stopHerdr();

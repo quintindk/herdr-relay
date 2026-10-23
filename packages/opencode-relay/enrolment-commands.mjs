@@ -6,6 +6,7 @@ import { homedir, hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { RelaySpike } from './rpc.mjs';
 import { createRoot, createEffect } from 'solid-js';
+import { renameHerdrWorkspace } from './herdr-session.mjs';
 
 const execute = promisify(execFile);
 const launcher = fileURLToPath(new URL('../../scripts/plugin-launch.sh', import.meta.url));
@@ -31,7 +32,7 @@ export function autoAttachmentCandidate({ created, selected, previous, enrolment
 // Human-only terminal commands. The owner credential stays in the local CLI.
 // No RPC method or model tool can enrol an agent or claim a receiving chat.
 export function registerEnrolmentCommands(ctx, { selectedSession, record = () => {}, runCli = runEnrolmentCli,
-  interval = setInterval, clear = clearInterval, observeSelection }) {
+  interval = setInterval, clear = clearInterval, observeSelection, renameWorkspace = renameHerdrWorkspace }) {
   if (!ctx.options.ownerContextFile) return () => {};
   const configFile = ctx.options.nativeNodeConfigFile ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-native/node.json');
   const common = ['--context', ctx.options.ownerContextFile, '--config', configFile];
@@ -111,15 +112,26 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     record({ type: 'landing_session_created', sessionId: session.id });
     return session;
   };
-  const publish = async pending => {
+  const publish = async (pending, origin) => {
     const result = await runCli(pending.args);
     // Reuse a healthy node, or install/start it. Never restart OpenCode.
     await runCli(['node', 'ensure', '--config', result.configFile, '--session', result.sessionId]);
     await updateOutbox(draft => { if (draft.pending?.key === pending.key) draft.pending = null; });
     await refresh();
     const enrolment = enrolments.find(e => e.id === result.agentId);
+    let renameUnconfirmed = false;
+    if (!closed && generation === origin.generation && result.sessionId === selectedSession() && enrolment?.name) {
+      try {
+        const rename = await renameWorkspace(ctx, { ...result, agentName: enrolment.name, directory: location.directory },
+          { current: () => !closed && generation === origin.generation && selectedSession() === result.sessionId });
+        record({ type: 'workspace_name_synced', sessionId: result.sessionId, state: rename.state });
+      } catch {
+        renameUnconfirmed = true;
+        record({ type: 'workspace_name_unconfirmed', sessionId: result.sessionId });
+      }
+    }
     toast(result.sessionId === selectedSession() ?
-      `Attached to ${enrolment?.name ?? result.agentId}. Future work and cron firings route here. ${enrolment?.installedSchedules ?? 0} installed schedules, ${enrolment?.obligations.length ?? 0} outstanding obligations.` :
+      `Attached to ${enrolment?.name ?? result.agentId}. Future work and cron firings route here. ${enrolment?.installedSchedules ?? 0} installed schedules, ${enrolment?.obligations.length ?? 0} outstanding obligations.${renameUnconfirmed ? ' Herdr workspace name is unconfirmed. Re-run /relay-attach to retry it.' : ''}` :
       `Confirmed the previous attachment to ${result.sessionId}. The current chat was not attached.`, 'success');
     record({ type: 'receiver_attached', sessionId: result.sessionId, agentId: result.agentId, generation: result.generation });
   };
@@ -134,7 +146,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
         if (automatic) return;
         if (!await ctx.ui.dialog.confirm({ title: 'Reconcile confirmed Relay attachment', message: 'Retry the previously confirmed operation with its original key. This does not claim another chat.' })) return;
         check(origin);
-        await publish(JSON.parse(JSON.stringify(outbox.pending))); return;
+        await publish(JSON.parse(JSON.stringify(outbox.pending)), origin); return;
       }
       await refresh(); check(origin);
       if (kind === 'attach' && !enrolments.length) { toast('No standing enrolment for this workspace. Use /relay-enrol first.'); return; }
@@ -177,7 +189,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
         ...(kind === 'enrol' ? ['--reserved', '--name', name, '--transport', 'tools'] : ['--agent', enrolment.id, '--generation', String(enrolment.receiver?.generation ?? 0)])];
       const pending = { key, args };
       await updateOutbox(draft => { draft.pending = pending; });
-      await publish(pending);
+      await publish(pending, origin);
     } catch (error) {
       if (['attachment_refused', 'attachment_superseded', 'stale_binding', 'native_session_reserved'].includes(error.code)) {
         await updateOutbox(draft => { draft.pending = null; });

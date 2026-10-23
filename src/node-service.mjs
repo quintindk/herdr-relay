@@ -138,10 +138,11 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         requireValue(Object.keys(body).length === 0, 'invalid_request', 'Status takes no overrides');
         const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${worker.agentId}`);
         const receiver = row ? JSON.parse(row.value) : null;
+        const enrolment = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`enrolment:${worker.agentId}`);
         const works = journal.works().filter(w => w.execution.targetAgentId === worker.agentId &&
           !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state));
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ agentId: worker.agentId, sessionId: worker.sessionId, receiver,
+        res.end(JSON.stringify({ agentId: worker.agentId, agentName: enrolment ? JSON.parse(enrolment.value).name : null, sessionId: worker.sessionId, receiver,
           receivingHere: receiver?.state === 'active' && receiver.bindingId === worker.bindingId,
           obligations: works.map(w => ({ id: w.id, state: w.execution.state, conversationId: w.nativeConversationId,
             recovery: w.recovery ?? null })) })); return;

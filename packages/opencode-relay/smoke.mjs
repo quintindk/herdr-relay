@@ -629,12 +629,16 @@ try {
       tui.stderr.on('data', chunk => { diagnostics += chunk; });
       tui.stdin.end(JSON.stringify({ args: [binary, '--server', origin, '--session', sessionID, workspace],
         cwd: workspace, env: { ...env, OPENCODE_PASSWORD: password, XDG_CONFIG_HOME: join(root, `client-${index}`) },
-        evidenceFile, decision: decisionProbe, redact: [password] }));
+        evidenceFile, columns: 180, decision: decisionProbe, redact: [password] }));
       const [code] = await once(tui, 'exit');
       assert.equal(code, 0, diagnostics);
       let events;
       try { events = readFileSync(evidenceFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)); }
       catch { throw new Error(`TUI did not load: ${diagnostics}`); }
+      assert.ok(events.some(event => event.type === 'attachment_sidebar' && event.sessionId === sessionID && ['attached', 'not_attached', 'pending'].includes(event.state)),
+        `Sidebar attachment status missing: ${JSON.stringify(events)} ${diagnostics}`);
+      assert.ok(events.some(event => event.type === 'attachment_sidebar_rendered' && event.sessionId === sessionID),
+        `Sidebar was not mounted: ${JSON.stringify(events)} ${diagnostics}`);
       if (decisionProbe) {
         assert.ok(events.some(event => event.type === 'decision' && event.sessionId === sessionID && event.decision === 'confirmed' &&
           event.authority === 'unverified_client_local'), `Diagnostic confirmation missing: ${JSON.stringify(events)} ${diagnostics}`);

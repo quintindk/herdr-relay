@@ -250,6 +250,16 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
         await binding.native.snapshot();
         if (!exactPlacement(await snapshot(), op, true)) continue;
         await guard();
+        // Keep the recovery marker until placement and attachment are proven.
+        // Naming is presentation only and must never replay an attachment.
+        let workspaceNameState = 'unconfirmed';
+        try {
+          requireValue(typeof request.name === 'string' && request.name.trim() && request.name.length <= 256 &&
+            !/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(request.name), 'invalid_workspace_label', 'Safe agent label required');
+          await rpc('workspace.rename', { workspace_id: op.placement.workspaceId, label: request.name });
+          workspaceNameState = 'renamed';
+        } catch {}
+        save({ workspaceNameState });
         const receipt = { ...op.placement, agentId: request.agentId, conversationId: op.sessionId, bindingId: op.bindingId,
           generation: op.generation, directory: op.directory, reused: op.reused, readyAt: now(), ...(currentSession.model ? { model: currentSession.model } : {}) };
         await progress('ready', { receipt }); save({ phase: 'ready', receipt });

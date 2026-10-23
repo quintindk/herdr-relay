@@ -9,6 +9,8 @@ function fixture(t) {
     outbox: { pending: null }, enrolments: [{ id: 'wright', name: 'Wright', directory: '/workspace', autoAttach: true,
       installedSchedules: 2, obligations: [], receiver: { state: 'active', conversationId: 'ses_old', generation: 1 } }] };
   f.confirm = async () => true;
+  f.renames = [];
+  f.renameWorkspace = async (_ctx, receipt, options) => { assert.equal(options.current(), true); f.renames.push(receipt); return { state: 'renamed' }; };
   f.runCli = async args => {
     f.calls.push(args);
     if (args[1] === 'enrolments') return structuredClone(f.enrolments);
@@ -42,6 +44,7 @@ function fixture(t) {
     keymap: { layer: factory => { f.commands.push(...factory().commands); } },
   };
   f.stop = registerEnrolmentCommands(ctx, { selectedSession: () => f.session, runCli: args => f.runCli(args), record: e => f.records.push(e),
+    renameWorkspace: (...args) => f.renameWorkspace(...args),
     interval: callback => { f.tick = callback; return {}; }, clear: () => { f.cleared = true; },
     observeSelection: listener => { f.track = listener; return () => {}; } });
   t.after(f.stop);
@@ -60,6 +63,32 @@ test('human-only attach command confirms exact receiver, persists immutable inte
   assert.equal(f.outbox.pending, null);
   assert.ok(f.calls.some(args => args[0] === 'node' && args[1] === 'ensure'));
   assert.equal(f.records.at(-1).type, 'receiver_attached');
+  assert.equal(f.renames[0].agentName, 'Wright'); assert.equal(f.renames[0].sessionId, 'ses_current');
+});
+
+test('workspace rename failure never replays or rolls back a confirmed attachment', async t => {
+  const f = fixture(t); f.renameWorkspace = async () => { throw Error('Herdr unavailable'); };
+  await f.run('relay-attach');
+  assert.equal(f.outbox.pending, null); assert.equal(f.records.at(-1).type, 'receiver_attached');
+  assert.match(f.toasts.at(-1).message, /workspace name is unconfirmed/);
+  assert.equal(f.calls.filter(args => args[1] === 'attach').length, 1);
+});
+
+test('enrolment synchronises the new durable agent name after its attachment is acknowledged', async t => {
+  const f = fixture(t), run = f.runCli;
+  f.enrolments[0].name = 'Existing role';
+  f.runCli = async args => { if (args[1] === 'enrol') f.enrolments[0].name = 'Wright'; return run(args); };
+  await f.run('relay-enrol');
+  assert.ok(f.calls.some(args => args[1] === 'enrol' && args.includes('--name')));
+  assert.equal(f.renames[0].agentName, 'Wright');
+  assert.equal(f.outbox.pending, null);
+});
+
+test('a chat switch while confirmed attachment is publishing never renames the newly selected workspace', async t => {
+  const f = fixture(t), run = f.runCli;
+  f.runCli = async args => { const result = await run(args); if (args[1] === 'attach') { f.session = 'ses_elsewhere'; f.track(f.session); } return result; };
+  await f.run('relay-attach'); assert.deepEqual(f.renames, []);
+  assert.equal(f.outbox.pending, null); assert.equal(f.records.at(-1).type, 'receiver_attached');
 });
 
 for (const invalidation of ['decline', 'switch', 'roundtrip', 'reconnect', 'reload', 'dispose']) test(`attachment confirmation refuses ${invalidation} without publishing an enrolment or claiming a chat`, async t => {

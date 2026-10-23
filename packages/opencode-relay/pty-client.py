@@ -13,7 +13,7 @@ import time
 
 config = json.loads(sys.stdin.readline())
 master, slave = pty.openpty()
-fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, config.get("columns", 120), 0, 0))
 child = subprocess.Popen(config["args"], cwd=config["cwd"], env=config["env"],
                          stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
 os.close(slave)
@@ -90,7 +90,13 @@ try:
                     decision_sent = True
                     next_attempt = deadline
                 done = '"type":"receiver_attached"' if config.get("enrol") or config.get("attach") else '"type":"human_decision_refused"' if config.get('expectRefused') else '"type":"human_decision"' if config.get("inbox") or config.get("proposals") or config.get("review") else '"type":"decision"' if config.get("decision") else '"type":"notification"'
-                if done in evidence and (not config.get("autoNewChat") or evidence.count('"type":"receiver_attached"') >= 2):
+                attachment_ready = True
+                if config.get("requireAttachmentSidebar"):
+                    events = [json.loads(line) for line in evidence.splitlines() if line.strip()]
+                    receipts = [event for event in events if event.get("type") == "receiver_attached"]
+                    attachment_ready = bool(receipts) and any(event.get("type") == "attachment_sidebar" and event.get("state") == "attached"
+                        and event.get("sessionId") == receipts[-1].get("sessionId") for event in events)
+                if done in evidence and attachment_ready and (not config.get("autoNewChat") or evidence.count('"type":"receiver_attached"') >= 2):
                     notified = True
                     if not config.get("passiveUntil"):
                         break

@@ -42,6 +42,12 @@ function fixture(t) {
   f.api = f.apiFor(actors.destination);
   f.rpc = async (method, input) => {
     if (method === 'session.snapshot') return { snapshot: structuredClone(f.view) };
+    if (method === 'workspace.rename') {
+      if (f.failRename) throw Error('Naming unavailable');
+      const workspace = f.view.workspaces.find(workspace => workspace.workspace_id === input.workspace_id);
+      assert.ok(workspace); workspace.label = input.label;
+      return { type: 'workspace_renamed', workspace };
+    }
     if (method === 'workspace.create') {
       f.workspaceCreates++;
       const id = `w-test-${f.workspaceCreates}`;
@@ -86,12 +92,21 @@ test('addressed interactive preparation opens an empty native chat, enrols/attac
   const f = fixture(t), ready = await f.ready();
   assert.equal(ready.state, 'ready'); assert.equal(f.workspaceCreates, 1); assert.equal(f.starts, 1); assert.equal(f.nativeCreates, 1);
   assert.equal(ready.receipt.conversationId, f.request.desiredSessionId);
+  assert.equal(f.view.workspaces[0].label, f.request.name);
   assert.equal(f.store.all('task').length, 0); assert.equal(f.store.all('execution').length, 0);
   assert.equal(f.sessions.get(f.request.desiredSessionId).metadata.relayDiscussionTopic, f.request.topic);
   assert.deepEqual(f.sessions.get(f.request.desiredSessionId).model, { id: 'configured', providerID: 'fixture' });
   assert.equal(f.receivers.get(`interactive-context:${ready.receipt.bindingId}`).authority, 'discussion_context_only');
   await f.tick(); assert.equal(f.starts, 1);
   assert.equal(JSON.stringify(ready).includes('disposable'), false);
+});
+
+test('provisioned workspace naming failure does not undo or duplicate the active attachment', async t => {
+  const f = fixture(t); f.failRename = true;
+  assert.equal((await f.ready()).state, 'ready');
+  assert.equal(f.receivers.get(`interactive-op:${f.request.id}`).workspaceNameState, 'unconfirmed');
+  assert.equal(f.receivers.receiver(f.request.agentId).state, 'active');
+  await f.tick(); assert.equal(f.starts, 1); assert.equal(f.nativeCreates, 1);
 });
 
 for (const loss of ['loseWorkspaceReply', 'loseStartReply']) test(`${loss} reconciles exact observations without repeating Herdr effects`, async t => {
