@@ -37,7 +37,8 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
-  'packages/opencode-relay/headless-scope.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+  'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
+  'src/native-cli-surface.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
@@ -48,7 +49,7 @@ mkdirSync(consumer);
 execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-scripts', '--no-fund', '--no-audit',
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
 const installed = join(consumer, 'node_modules/herdr-relay');
-const installedTuiVerifications = [];
+const installedTuiVerifications = [], installedCliBridgeVerifications = [];
 for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0']]) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
@@ -57,6 +58,14 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   const { passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors } = JSON.parse(output);
   assert.equal(runtime, version, `Expected exact ${version} host for ${variable}`);
   installedTuiVerifications.push({ passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors });
+  const bridgeOutput = execFileSync(process.execPath, ['scripts/verify-cli-bridge.mjs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+    env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
+  process.stdout.write(bridgeOutput);
+  const bridge = JSON.parse(bridgeOutput);
+  assert.equal(bridge.runtime, version); assert.equal(bridge.passed, true);
+  installedCliBridgeVerifications.push({ runtime: bridge.runtime, passed: bridge.passed, realModelToolTurn: bridge.realModelToolTurn,
+    pluginInvokedActualCli: bridge.pluginInvokedActualCli, humanTaskCreated: bridge.humanTaskCreated,
+    existingPeerExecutionRequested: bridge.existingPeerExecutionRequested, activeParentRequired: bridge.activeParentRequired });
 }
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
 assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
@@ -211,7 +220,7 @@ try {
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, nativeBackendStarted: true,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, installedCliBridgeVerifications, nativeBackendStarted: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
   auditVerified: Boolean(audit), vulnerabilities: audit?.metadata.vulnerabilities ?? null, published: false, gitTagCreated: false };

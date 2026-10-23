@@ -82,3 +82,15 @@ test('server cleanup disposes both registrations once and setup failure releases
   await assert.rejects(server.setup(context), /registration failed/);
   assert.equal(transformDisposed, 2);
 });
+
+test('runtime status does not mislabel the entire interactive chat as read-only', async () => {
+  const tools = [];
+  const close = await server.setup({ options: {}, app: { version: '2.1.2' },
+    tool: { transform: async callback => { callback({ add: tool => tools.push(tool) }); return { dispose() {} }; } },
+    rpc: { register: async () => ({ dispose() {} }) } });
+  try {
+    const value = JSON.parse((await tools.find(tool => tool.name === 'relay_status').execute({}, { sessionID: 'session' })).content);
+    assert.equal(value.statusOnly, true); assert.equal(Object.hasOwn(value, 'mode'), false);
+    assert.match(value.permissions, /does not determine the chat capabilities/);
+  } finally { await close(); }
+});

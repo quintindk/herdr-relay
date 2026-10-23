@@ -56,6 +56,11 @@ jobs:
             assert.equal(test.passed && test.productionPackageTuiLoaded && test.sidebarMounted && test.scopedStatusReceived && test.runtimeCommandAndNotification, true);
             assert.equal(test.pluginLoadErrors, 0);
           }
+          assert.deepEqual(report.installedCliBridgeVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2']);
+          for (const test of report.installedCliBridgeVerifications) {
+            assert.equal(test.passed && test.realModelToolTurn && test.pluginInvokedActualCli && test.humanTaskCreated && test.existingPeerExecutionRequested, true);
+            assert.equal(test.activeParentRequired, false);
+          }
           NODE
           sha256sum -c SHA256SUMS
       - name: Publish without replacing an existing release or assets

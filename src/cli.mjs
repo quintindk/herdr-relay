@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { maintenanceCli, upgradeHelp } from './upgrade-cli.mjs';
 import { releaseVersion } from './release-info.mjs';
+import { nativeAdministrationGroups } from './native-cli-surface.mjs';
 
 const help = `herdr-relay ${releaseVersion}
 ${upgradeHelp}
@@ -112,7 +113,7 @@ terminal response. Automatic interruption requires a dedicated owned runtime.`;
 export async function main(args) {
   if (args.length === 1 && args[0] === '--version') { console.log(releaseVersion); return; }
   if (await maintenanceCli(args)) return;
-  if (['backend', 'node', 'plugin', 'doctor', 'tasks', 'headless', 'skills'].includes(args[0]) && !(args[0] === 'backend' && args[1] === 'recover')) {
+  if (nativeAdministrationGroups.includes(args[0]) && !(args[0] === 'backend' && args[1] === 'recover')) {
     const { main: native } = await import('./native-cli.mjs');
     return native(args);
   }

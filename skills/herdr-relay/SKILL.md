@@ -22,6 +22,15 @@ compatibility: opencode
 
 ## Tasks and directory
 
+- In versions exposing `relay_cli`, use `relay_cli_help` for the installed node CLI
+  reference. `relay_cli` bridges that same native CLI, including task creation and
+  execution requests from a human interactive chat. No parent execution is required.
+  Pass arguments as an array. Task verbs start with `native`, and `{payload}` supplies
+  the optional private JSON payload. Configured `{operator}`, `{worker}`, `{node-config}`
+  and `{session}` references resolve inside the bridge. Never read credentials yourself.
+- `relay_status` inspects runtime status, not chat-wide permissions. Do not infer a
+  read-only chat from a status response. `relay_work_read` inspects assigned executions
+  only; failure there does not forbid interactive task creation or CLI operations.
 - On versions exposing task identity, use `relay_task_resolve` for readable task
   references and imported aliases. Inspect `state` and all matches. Ambiguous
   aliases never select a task automatically. Use the resolved native ID and current

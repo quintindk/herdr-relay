@@ -11,6 +11,7 @@ production package name is `@herdr/relay-opencode`.
 | `tui-setup.mjs` | Testable terminal setup, commands and lifecycle cleanup |
 | `attachment-sidebar.tsx` | Reactive selected-chat attachment status renderer |
 | `rpc.mjs` | Read-only runtime/status RPC and filtered notifications |
+| `cli-bridge.mjs` | Human interactive access to the installed native CLI |
 | `native.mjs` | Exact identity, paginated snapshots, single-send and observation |
 | `owned-runtime.mjs` | Isolated test/owned-runtime launch and verified stop |
 | `human-inbox.mjs` | Keyboard-confirmed human decisions, separate from model tools |
@@ -20,6 +21,12 @@ production package name is `@herdr/relay-opencode`.
 The plugin IDs are `herdr.relay.server` and `herdr.relay.tui`. The read-only runtime
 RPC is `herdr.relay.runtime`. `/relay-status` inspects the selected chat's runtime;
 `/relay-diagnostic-confirm` is a disposable diagnostic, not task approval.
+
+`relay_cli_help` exposes the installed native CLI reference. `relay_cli` calls that
+same executable for tasks, execution requests, schedules, node administration,
+skills and maintenance. Human interactive task hand-offs need no active parent
+execution. See [full CLI bridge coverage](../../docs/node-cli-bridge.md). The bridge
+does not change CLI authority or expose backend-root credentials to a node.
 
 ## Rendering and packaging
 

@@ -12,6 +12,7 @@ import { registerHeadlessPermissionTools } from './headless-shell.mjs';
 import { waitHeadlessSetup } from '../../src/headless-setup-wait.mjs';
 import { digest } from '../../src/protocol.mjs';
 import { readAttachmentStatus } from './attachment-status.mjs';
+import { registerCliBridge } from './cli-bridge.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.server',
@@ -28,10 +29,12 @@ export default Plugin.define({
         options: { codemode: false },
         input: { type: 'object', properties: {}, additionalProperties: false },
         async execute(_input, context) {
-          return { content: JSON.stringify({ version: ctx.app.version, sessionId: context.sessionID, mode: 'read_only' }) };
+          return { content: JSON.stringify({ version: ctx.app.version, sessionId: context.sessionID, statusOnly: true,
+            permissions: 'This status tool does not determine the chat capabilities. Inspect the exposed tools and their results.' }) };
         },
       });
       if (ctx.options.workerContextFile || ctx.options.workerDirectory) {
+        registerCliBridge(editor, ctx);
         registerMcpTools(editor, ctx);
         registerHeadlessPermissionTools(editor, ctx);
         const worker = async (context, action, input) => {

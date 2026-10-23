@@ -44,6 +44,8 @@ jobs:
       - name: Root regression tests (serial)
         run: node --test --test-concurrency=1 test/*.test.mjs
       - run: npm run test:v2
+      - name: Interactive plugin to actual node CLI task hand-off
+        run: node scripts/verify-cli-bridge.mjs
       - name: Native task-independent message smoke
         run: npm --prefix packages/opencode-relay run smoke:messages
       - name: Native reusable headless provisioning and schedule smoke
