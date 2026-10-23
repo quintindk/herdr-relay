@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { buildBoardRows, wrapBoardText, taskBoardColumns } from './task-board-view.mjs';
+import { buildBoardRows, buildAgentRows, wrapBoardText, taskBoardColumns } from './task-board-view.mjs';
 import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
 
 const h = React.createElement;
@@ -367,8 +367,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     .map(routine => ({ id: `cron:${routine.id}`, type: 'routine', routine })), [board.routines, showDone]);
   const inboxRows = useMemo(() => (board.inbox ?? []).filter(item => !filter || decisionText(`${item.title} ${item.summary} ${item.from} ${item.stateLabel}`).toLowerCase().includes(filter.toLowerCase()))
     .map(item => ({ id: item.id, type: 'inbox', item })), [board.inbox, filter]);
-  const agentRows = useMemo(() => board.agents.filter(agent => !filter || clean(`${agent.displayName || agent.name} ${agent.mode} ${agent.nodeName} ${agent.directory} ${agent.availabilityLabel} ${agent.locality ?? 'unknown'}`).toLowerCase().includes(filter.toLowerCase()))
-    .map(agent => ({ id: `agent:${agent.id}`, type: 'agent', agent })), [board.agents, filter]);
+  const agentRows = useMemo(() => buildAgentRows(board, { filter, collapsed }), [board.agents, board.localNode, filter, collapsed]);
   const rows = useMemo(() => native ? view === 'inbox' ? inboxRows : view === 'agents' ? agentRows : view === 'schedules' ? routineRows : taskRows : [
     ...(routineRows.length ? [{ id: 'section:cron', type: 'section', label: `CRON · ${routineRows.length}` }, ...routineRows] : []),
     { id: 'section:tasks', type: 'section', label: `TASKS · ${taskRows.filter(row => row.type === 'task').length}` },
@@ -506,7 +505,10 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     if (key.upArrow || input === 'k') move(-1);
     if (key.downArrow || input === 'j') move(1);
     if (input === ' ' || key.leftArrow || key.rightArrow) {
-      const row = rows[selected];
+      const row = rows[selectedIndex];
+      if (key.leftArrow && row?.type === 'agent' && row.groupId) {
+        setSelectedNativeId(row.groupId); setSelected(rows.findIndex(parent => parent.id === row.groupId)); return;
+      }
       if (row?.expandable) setCollapsed(value => {
         const next = new Set(value);
         if (key.rightArrow) next.delete(row.id);
@@ -544,6 +546,9 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     }
     if (key.return || input === 'd' || key.tab) {
       const row = rows[selectedIndex]; if (!row || row.type === 'group') return;
+      if (row.type === 'machine') {
+        setCollapsed(value => { const next = new Set(value); if (next.has(row.id)) next.delete(row.id); else next.add(row.id); return next; }); return;
+      }
       if (row.type === 'inbox') { void openInbox(row.item); return; }
       if (row.type === 'section') return;
       const requestId = randomUUID();
@@ -558,7 +563,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   });
   const narrowReference = native && view === 'tasks' && Math.max(0, ...board.tasks.map(task => task.reference?.length ?? 0)) > width - 4;
   const taskRowHeight = narrowReference ? Math.ceil(Math.max(0, ...board.tasks.map(task => task.reference?.length ?? 0)) / Math.max(1, width - 4)) + 1 : 1;
-  const visibleHeight = Math.max(1, Math.floor((height - (native ? decisionReceipt ? 9 : 8 : 6)) / (native && ['inbox', 'agents', 'schedules'].includes(view) ? 4 : taskRowHeight))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
+  const visibleHeight = Math.max(1, Math.floor((height - (native ? decisionReceipt ? 9 : 8 : 6)) / (native && ['inbox', 'schedules'].includes(view) ? 4 : taskRowHeight))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
   const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
@@ -582,7 +587,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   if (quitting) return null;
   const summary = taskCounts(board.tasks);
   const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal);
-  const localAgentCount = board.agents.filter(agent => agent.locality === 'local').length;
+  const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
   const nativeCounts = view === 'agents'
     ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
     : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
@@ -619,10 +624,11 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         h(Text, { dimColor: true, wrap: 'truncate-end' }, view === 'tasks' && !showDone ? 'Press h to include completed tasks.' : 'Tab switches views · r refreshes')) : null,
       ...visible.map((row, index) => {
         const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail && !decisionModal;
-        if (row.type === 'agent') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
-          cardTitle(`${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`, active, 'cyan', row.agent.locality === 'local'),
-          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Node: ${clean(row.agent.nodeName || 'Unknown')}${row.agent.locality === 'local' ? ' (local)' : row.agent.locality === 'remote' ? ' (remote)' : ''} · Machine: ${clean(row.agent.machineName || 'Not advertised')} · ${clean(row.agent.directory || 'Workspace not advertised')}`),
-          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Last seen: ${lastSeenLabel(row.agent.lastSeenAt)}`));
+        if (row.type === 'machine') return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
+          cardTitle(`${row.expanded ? '▾' : '▸'} ${row.name}${row.machineName && row.machineName !== row.name ? ` / ${row.machineName}` : ''} · ${row.count}${row.count !== row.total ? `/${row.total}` : ''} ${row.total === 1 ? 'agent' : 'agents'}`, active, row.local ? 'green' : 'cyan', row.local));
+        if (row.type === 'agent') return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
+          h(Text, { inverse: active, dimColor: overlay, color: 'cyan', wrap: 'truncate-end' },
+            `  ${row.last ? '└─' : '├─'} ${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`));
         if (row.type === 'inbox') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
           cardTitle(`${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`, active, row.item.kind === 'review' ? 'magenta' : 'yellow'),
           h(Text, { wrap: 'truncate-end' }, `  ${clean(row.item.summary)}`),

@@ -168,7 +168,8 @@ export function buildBoardRows(value, options = {}) {
     if ((showDone || !done(task)) && (!filter || searchable.includes(filter))) group.assigned.push(id);
   }
   const rows = [];
-  for (const group of groups.values()) {
+  const groupPriority = group => group.kind === 'human' ? group.id === keyOf('group', group.companyId, 'human', 'local-board') ? 0 : 1 : 2;
+  for (const group of [...groups.values()].sort((a, b) => groupPriority(a) - groupPriority(b))) {
     const busy = [group.agent?.availability, group.agent?.nativeState].some(state => /^(busy|working|running|active)$/i.test(state ?? ''));
     const present = group.agent?.availability === 'present';
     if (!group.assigned.length && !present && (filter || (!showIdle && !busy && group.kind !== 'human'))) continue;
@@ -228,6 +229,34 @@ export function buildBoardRows(value, options = {}) {
         expandable, expanded: isExpanded, ...subtree.get(id) });
       if (expandable && !isExpanded) collapsedDepth = depth;
     }
+  }
+  return rows;
+}
+
+/** Agent trees use durable node identity, never hostname/name/path similarity. */
+export function buildAgentRows(value, { filter = '', collapsed = new Set() } = {}) {
+  const groups = new Map(), query = clean(filter).toLocaleLowerCase().trim();
+  for (const agent of value.agents) {
+    const nodeId = agent.nodeId || null, id = keyOf('machine', agent.companyId, nodeId);
+    if (!groups.has(id)) groups.set(id, { id, type: 'machine', nodeId, companyId: agent.companyId,
+      name: clean(nodeId ? agent.nodeName || agent.machineName || 'Unnamed node' : 'Unknown machine'), machineName: nodeId ? clean(agent.machineName) : '',
+      local: Boolean(nodeId && nodeId === value.localNode?.id), agents: [] });
+    groups.get(id).agents.push(agent);
+  }
+  const compare = (a, b) => clean(a).localeCompare(clean(b), 'en', { numeric: true });
+  const ordered = [...groups.values()].sort((a, b) => Number(b.local) - Number(a.local) || Number(!a.nodeId) - Number(!b.nodeId) ||
+    compare(a.name, b.name) || compare(a.id, b.id));
+  const rows = [];
+  for (const group of ordered) {
+    if (group.local) group.name = clean(value.localNode.name || group.name);
+    const agents = group.agents.filter(agent => !query || clean([agent.displayName || agent.name, agent.mode, group.name, group.machineName,
+      agent.directory, agent.availabilityLabel, agent.locality ?? 'unknown'].join(' ')).toLocaleLowerCase().includes(query))
+      .sort((a, b) => compare(a.displayName || a.name || a.id, b.displayName || b.name || b.id) || compare(a.id, b.id));
+    if (!agents.length) continue;
+    const { agents: all, ...parent } = group;
+    rows.push({ ...parent, count: agents.length, total: all.length, expandable: true, expanded: !collapsed.has(group.id) });
+    if (!collapsed.has(group.id)) for (const [index, agent] of agents.entries()) rows.push({ id: keyOf('agent', agent.companyId, agent.id),
+      type: 'agent', agent, groupId: group.id, depth: 1, last: index === agents.length - 1 });
   }
   return rows;
 }

@@ -79,6 +79,12 @@ human remains a separate field, not an agent assignee fabricated from ownership.
 The detail Overview names both. Pending human actions appear in an **Actions**
 section. Selecting one opens the same decision component as Inbox. Results,
 comments and recorded question/review activity remain accessible after resolution.
+
+In the unreleased tree layout, human-owned task groups are pinned before agent and
+unassigned groups, with the explicit human board first when present. Filtering and
+refreshes preserve that ordering. Empty native boards still do not invent a human
+group or assign tasks to a fictitious owner.
+
 `Tab` inside task detail changes sections rather than changing the board view.
 Task descriptions, results and comments use a fixed scrollable viewport with
 arrows or `j/k`, `PgUp/PgDn`, and `Home/End`. Scroll position is retained per section.
@@ -116,6 +122,29 @@ than guessing. This is a display distinction, not dispatch authority or readines
 Agent, task detail and human decision context distinguish the **owning Relay node**
 from its **reported machine**. Several nodes may run on one machine. Hostnames
 are display labels, not unique identities, grants or grounds for reassignment.
+
+### Unreleased machine tree
+
+The Agents view groups agents beneath collapsible node/machine headings. The
+identified local node is first, followed by other named nodes and then agents with
+unknown node ownership. Agent children are sorted by display name and stable ID.
+Nodes with matching hostnames remain separate groups. The green **LOCAL** badge
+appears on the local group and header rather than repeating on every child.
+
+```text
+LOCAL ▾ Surface / surface-host · 2 agents
+        ├─ Mason · interactive · Available (reported)
+        └─ Worker · headless · Unknown or stale
+      ▾ Evo / evo-host · 1 agent
+        └─ Coordinator · interactive · Available (reported)
+```
+
+`Space` or `Enter` folds a machine heading, `→` expands it and `←` collapses it.
+On an agent child, `←` selects its parent and `Enter` opens fresh read-only details,
+including workspace, machine metadata, last-seen time and outstanding tasks.
+Search retains matching agents' machine headings and shows matched/total counts.
+All groups start expanded. Group identities and collapse state survive refreshes.
+This layout is local development work, not a change to the installed RC8 TUI.
 
 Updated nodes advertise optional hostname/platform metadata in their own
 authenticated heartbeat only when `/v1/info` advertises

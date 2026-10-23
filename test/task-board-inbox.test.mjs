@@ -21,22 +21,23 @@ const frame = instance => stripVTControlCharacters(instance.lastFrame());
 async function input(instance, text) { instance.stdin.write(text); await tick(); }
 async function inbox(instance) { await input(instance, '\t'); await input(instance, '\t'); }
 
-test('Agents identifies the local node and its agents in cards, search and fresh detail', async t => {
-  const local = { ...base.agents[0], id: 'local', displayName: 'Local worker', locality: 'local', nodeName: 'Surface', mode: 'headless' };
-  const remote = { ...local, id: 'remote', displayName: 'Remote worker', locality: 'remote', nodeName: 'Evo' };
+test('Agents identifies the local node and its children in the machine tree, search and fresh detail', async t => {
+  const local = { ...base.agents[0], id: 'local', nodeId: 'surface', displayName: 'Local worker', locality: 'local', nodeName: 'Surface', mode: 'headless' };
+  const remote = { ...local, id: 'remote', nodeId: 'evo', displayName: 'Remote worker', locality: 'remote', nodeName: 'Evo' };
   const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, localNode: { id: 'surface', name: 'Surface' }, agents: [local, remote] }),
     detailAgent: async ({ agentId }) => ({ agent: agentId === 'local' ? local : remote, tasks: [] }), interval: 60000, width: 110, height: 26 }));
   t.after(() => instance.unmount()); await tick(); await input(instance, '\t');
   assert.match(frame(instance), /LOCAL\s+Surface · 1 agent/);
-  assert.match(frame(instance), /LOCAL\s+Local worker/); assert.match(frame(instance), /Evo \(remote\)/);
+  assert.match(frame(instance), /└─ Local worker/); assert.match(frame(instance), /▾ Evo · 1 agent/);
+  assert.ok(frame(instance).indexOf('Local worker') < frame(instance).indexOf('Remote worker'));
   assert.doesNotMatch(frame(instance), /LOCAL\s+Remote worker/);
   await input(instance, '/'); await input(instance, 'local'); await input(instance, '\r');
-  assert.match(frame(instance), /LOCAL\s+Local worker/); assert.doesNotMatch(frame(instance), /Remote worker/);
-  await input(instance, '\r'); assert.match(frame(instance), /Surface \(local node\)/);
+  assert.match(frame(instance), /└─ Local worker/); assert.doesNotMatch(frame(instance), /Remote worker/);
+  await input(instance, 'j'); await input(instance, '\r'); assert.match(frame(instance), /Surface \(local node\)/);
 });
 
 test('local badges remain visible and do not overflow a narrow Agents view', async t => {
-  const agent = { ...base.agents[0], displayName: 'A local worker with a very long descriptive name', locality: 'local', nodeName: 'Surface', mode: 'interactive' };
+  const agent = { ...base.agents[0], nodeId: 'surface', displayName: 'A local worker with a very long descriptive name', locality: 'local', nodeName: 'Surface', mode: 'interactive' };
   const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, localNode: { id: 'surface', name: 'Surface' }, agents: [agent] }),
     interval: 60000, width: 54, height: 18 }));
   t.after(() => instance.unmount()); await tick(); await input(instance, '\t');
@@ -45,6 +46,37 @@ test('local badges remain visible and do not overflow a narrow Agents view', asy
   assert.match(output, /LOCAL\s+Surface/);
   assert.ok(output.split('\n').every(line => line.length <= 54));
   assert.ok(output.split('\n').length <= 18);
+});
+
+test('machine groups fold with Space, arrows and Enter without opening agent details or hiding other machines', async t => {
+  const agents = [
+    { ...base.agents[0], id: 'remote', nodeId: 'evo', nodeName: 'Evo', displayName: 'Remote child' },
+    { ...base.agents[0], id: 'local', nodeId: 'surface', nodeName: 'Surface', displayName: 'Local child', locality: 'local' },
+  ];
+  const opened = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, localNode: { id: 'surface', name: 'Surface' }, agents }),
+    detailAgent: async ({ agentId }) => { opened.push(agentId); return { agent: agents.find(agent => agent.id === agentId), tasks: [] }; },
+    interval: 60000, width: 100, height: 24 }));
+  t.after(() => instance.unmount()); await tick(); await input(instance, '\t');
+  await input(instance, ' ');
+  assert.doesNotMatch(frame(instance), /Local child/); assert.match(frame(instance), /Remote child/); assert.match(frame(instance), /▸ Surface/);
+  await input(instance, '\x1b[C'); assert.match(frame(instance), /Local child/);
+  await input(instance, 'j'); await input(instance, '\x1b[D'); // Child returns to its parent.
+  await input(instance, '\r'); assert.doesNotMatch(frame(instance), /Local child/);
+  assert.deepEqual(opened, []);
+  await input(instance, '\r'); await input(instance, 'j'); await input(instance, '\r');
+  assert.deepEqual(opened, ['local']);
+});
+
+test('native Tasks pins the human board ahead of busy agent groups after refresh', async t => {
+  const human = { ...task, id: 'human', title: 'Human task', executionAgentId: null, executionAgentName: null, status: 'todo' };
+  let reversed = false;
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, tasks: reversed ? [human, task] : [task, human] }),
+    interval: 60000, width: 100, height: 24 }));
+  t.after(() => instance.unmount()); await tick();
+  assert.ok(frame(instance).indexOf('Human: owner') < frame(instance).indexOf('Wright'));
+  reversed = true; await input(instance, 'r');
+  assert.ok(frame(instance).indexOf('Human: owner') < frame(instance).indexOf('Wright'));
 });
 
 test('native task columns use actual status width and reserve at least two thirds for titles', () => {
@@ -219,9 +251,9 @@ test('Agents is separate from Tasks and exposes mode, node, machine, freshness a
   assert.doesNotMatch(frame(instance), /Idle worker/);
   await input(instance, '\t');
   assert.match(frame(instance), /Wright · interactive · Available \(reported\)/);
-  assert.match(frame(instance), /Node: Local node.*Machine: desktop/);
+  assert.match(frame(instance), /Local node \/ desktop · 2 agents/);
   assert.match(frame(instance), /Idle worker · headless · Unknown or stale/);
-  await input(instance, '\r');
+  await input(instance, 'j'); await input(instance, 'j'); await input(instance, '\r');
   assert.deepEqual(opened, ['wright']);
   assert.match(frame(instance), /Machine: desktop \(linux\)/); assert.match(frame(instance), /Workspace: \/work\/wright/);
   assert.doesNotMatch(frame(instance), /node-secret-identity/);
