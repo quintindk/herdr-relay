@@ -1,8 +1,8 @@
 # Native task identity, references, labels and search
 
 Status: draft for review before implementation.
-Implementation update: the reference-number subset is implemented locally and
-unreleased. See [native task references](native-task-references.md) for the actual
+Implementation update: the reference-number subset is implemented in RC9.
+See [native task references](native-task-references.md) for the actual
 contract, schema-2 migration and remaining recovery/cutover boundaries. Labels and
 broader search in this draft remain unimplemented. Section 14 is historical context.
 Recorded: 2026-10-23.

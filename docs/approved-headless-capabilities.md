@@ -1,12 +1,12 @@
-# Approved headless capabilities (unreleased)
+# Approved headless capabilities (RC9)
 
 Relay supplies general headless capabilities, not a business-workflow engine.
 The external job contract owns source selection, classification, pagination,
 reminder horizons, cursor meaning and business completion rules. Nothing in these
 APIs recognises a particular job name or hard-codes its artifact layout.
 
-This source change is not part of the installed RC8 release. No release, live
-grant, worker or schedule is created by these examples.
+These capabilities are included in RC9, not RC8. No live grant, worker or schedule
+is created by installing the release or reading these examples.
 
 ## Explicit capability profile
 

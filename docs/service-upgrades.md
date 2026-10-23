@@ -151,9 +151,33 @@ Later manual configuration/CLI changes fence rollback instead of being overwritt
 The previous release directory must remain available. Never remove a release while
 services, plugin entries, CLI links or retained rollback operations reference it.
 
-Only explicit relay/0.2 schema-1 compatibility is currently supported. RC4 is the
-sole metadata-free adoption baseline. Unknown/older/future schemas fail before a
-switch. Schema migrations need their own reviewed upgrade/recovery design.
+RC9 supports explicit relay/0.2 backend schema 1 or 2 and node schema 1 contracts.
+RC4 remains the sole metadata-free adoption baseline. Ordinary upgrades still
+require the candidate and database schema to match. Unknown schemas fail before a switch.
+
+### RC9 task-reference transition
+
+Use the verified RC9 CLI and explicitly add `--migrate-task-references` when
+upgrading a schema-1 backend:
+
+```sh
+herdr-relay upgrade --services both --version 0.2.0-rc.9 --key local-rc9 --migrate-task-references
+herdr-relay upgrade --services both --version 0.2.0-rc.9 --key local-rc9 --migrate-task-references --apply
+```
+
+The plan is read-only against live state. Apply stops the selected services under
+maintenance, repeats safety checks, verifies private backups and acquires the
+backend state lock before atomically backfilling task references and committing
+schema 2. Service arguments, credentials, identities and task IDs remain unchanged.
+The operation retains the migration receipt and its backup/hash. Resume reconciles
+a committed migration even after a lost local result, without allocating again.
+
+**After schema 2 commits, RC8/schema-1 backend rollback is refused.** If health or
+activation fails, the exact candidate and maintenance record are retained for
+`upgrade resume OPERATION_ID --apply`. Recovery is roll-forward, not an automatic
+database restore. Before migration commits, normal compatible rollback remains
+available. Node-only upgrades do not migrate the backend and retain compatible
+code/configuration rollback.
 
 ## Public CLI versus service runtime paths
 

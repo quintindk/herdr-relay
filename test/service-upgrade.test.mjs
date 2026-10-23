@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync, realpathSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BackendStore } from '../src/backend-store.mjs';
 import { NodeJournal } from '../src/node-journal.mjs';
@@ -73,6 +73,62 @@ test('database schema mismatch refuses downgrade or implicit migration before an
   writeFileSync(manifest, JSON.stringify({ ...value, relayCompatibility: { ...compatibility, backendSchema: 1 } }));
   await assert.rejects(f.apply(), { code: 'upgrade_incompatible' });
   assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+});
+
+function legacyBackend(f) {
+  // Disposable fixture only. Represent the actual schema-1 predecessor without
+  // loading a second implementation into this process.
+  for (const row of f.store.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'task_%'").all()) f.store.db.exec(`DROP TRIGGER ${row.name}`);
+  f.store.db.exec('DROP TABLE task_reference_claims; DROP TABLE task_reference_counters; DROP TABLE task_aliases; PRAGMA user_version=1;');
+  const task = { id: 'legacy-task', title: 'Keep original task', revision: 1, createdAt: '2020-01-01', updatedAt: '2020-01-01' };
+  f.store.db.prepare('INSERT INTO entities VALUES (?,?,?,?)').run('task', task.id, task.revision, JSON.stringify(task));
+  const path = join(f.previous, 'package.json'), manifest = JSON.parse(readFileSync(path));
+  writeFileSync(path, JSON.stringify({ ...manifest, relayCompatibility: { ...compatibility, backendSchema: 1 } }));
+}
+
+test('explicit managed schema migration preserves identity/data, backfills references and refuses old-writer rollback', async t => {
+  const f = fixture(t); legacyBackend(f);
+  const plan = await serviceUpgrade({ ...f.input, migrateTaskReferences: true }, f.dependencies);
+  assert.equal(plan.taskReferenceMigration, true); assert.equal(f.store.db.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+  const result = await f.apply({ migrateTaskReferences: true });
+  assert.equal(result.state, 'committed'); assert.equal(f.store.get('task', 'legacy-task').reference, 'REL-1');
+  const record = JSON.parse(readFileSync(join(f.operation(result.operationId), 'operation.json')));
+  assert.equal(record.migration.backfilled, 1); assert.equal(record.migration.instanceId, f.store.instance);
+  assert.ok(existsSync(record.migration.backup));
+  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_incompatible' });
+  assert.ok([...f.states.values()].every(state => state.active));
+});
+
+test('failed health after schema migration retains candidate state for exact roll-forward resume, never schema-1 rollback', async t => {
+  const f = fixture(t); legacyBackend(f); f.failHealth = true;
+  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_recovery_required' });
+  const id = JSON.parse(readFileSync(join(f.root, 'upgrades/operations', readdirSync(join(f.root, 'upgrades/operations'))[0], 'operation.json'))).id;
+  const path = join(f.operation(id), 'operation.json'), record = JSON.parse(readFileSync(path));
+  assert.equal(record.recoveryAction, 'resume'); assert.equal(f.store.get('task', 'legacy-task').reference, 'REL-1');
+  // Emulate a crash between migration commit and saving its result receipt.
+  delete record.migration; writeFileSync(path, JSON.stringify(record));
+  f.failHealth = false;
+  const result = await serviceUpgrade({ resume: id, directory: f.input.directory, apply: true }, f.dependencies);
+  assert.equal(result.state, 'committed'); assert.equal(f.store.all('task').length, 1);
+  assert.equal(f.store.get('task', 'legacy-task').reference, 'REL-1');
+});
+
+test('post-activation migration recovery resumes health checks without stopping newly admitted work', async t => {
+  const f = fixture(t); legacyBackend(f);
+  f.onHealth = (_service, _unit, paused, required) => {
+    if (required && !paused) {
+      f.journal.save({ id: 'post-activation', state: 'observing', execution: { id: 'post-activation', state: 'accepted' } });
+      throw Error('Post-activation health unavailable');
+    }
+  };
+  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_recovery_required' });
+  const id = readdirSync(join(f.root, 'upgrades/operations'))[0], path = join(f.operation(id), 'operation.json');
+  assert.equal(JSON.parse(readFileSync(path)).resumePhase, 'activating');
+  f.onHealth = null; f.calls.length = 0;
+  assert.equal((await serviceUpgrade({ resume: id, directory: f.input.directory, apply: true }, f.dependencies)).state, 'committed');
+  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+  assert.equal(f.journal.work('post-activation').state, 'observing');
 });
 
 test('retained schema-1 rollback is refused after migration without touching current service pointers', async t => {

@@ -80,7 +80,7 @@ The detail Overview names both. Pending human actions appear in an **Actions**
 section. Selecting one opens the same decision component as Inbox. Results,
 comments and recorded question/review activity remain accessible after resolution.
 
-In the unreleased tree layout, human-owned task groups are pinned before agent and
+In the RC9 tree layout, human-owned task groups are pinned before agent and
 unassigned groups, with the explicit human board first when present. Filtering and
 refreshes preserve that ordering. Empty native boards still do not invent a human
 group or assign tasks to a fictitious owner.
@@ -123,7 +123,7 @@ Agent, task detail and human decision context distinguish the **owning Relay nod
 from its **reported machine**. Several nodes may run on one machine. Hostnames
 are display labels, not unique identities, grants or grounds for reassignment.
 
-### Unreleased machine tree
+### RC9 machine tree
 
 The Agents view groups agents beneath collapsible node/machine headings. The
 identified local node is first, followed by other named nodes and then agents with
@@ -144,7 +144,7 @@ On an agent child, `←` selects its parent and `Enter` opens fresh read-only de
 including workspace, machine metadata, last-seen time and outstanding tasks.
 Search retains matching agents' machine headings and shows matched/total counts.
 All groups start expanded. Group identities and collapse state survive refreshes.
-This layout is local development work, not a change to the installed RC8 TUI.
+RC8 retains the earlier flat Agent cards until its plugins are upgraded.
 
 Updated nodes advertise optional hostname/platform metadata in their own
 authenticated heartbeat only when `/v1/info` advertises

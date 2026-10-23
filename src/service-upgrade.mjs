@@ -17,6 +17,7 @@ import { pluginUpgradeFiles } from './upgrade-plugin.mjs';
 import { nativeBackendClient } from './backend-client.mjs';
 import { defaultNodeConfig } from './native-onboarding.mjs';
 import { assertNoOpenCodeDecisions } from './upgrade-native-decisions.mjs';
+import { migrateTaskIdentity } from './task-identity-migration.mjs';
 
 const execute = promisify(execFile);
 export const upgradeDirectory = () => join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-upgrades');
@@ -155,6 +156,7 @@ export async function verifyServiceHealth(service, unit, manager, paused, versio
 }
 
 export async function serviceUpgrade(input, dependencies = {}) {
+  requireValue(input.migrateTaskReferences === undefined || typeof input.migrateTaskReferences === 'boolean', 'invalid_request', 'Explicit migration option must be boolean');
   if (input.resume || input.rollback) requireValue(typeof (input.resume ?? input.rollback) === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(input.resume ?? input.rollback), 'invalid_request', 'Exact operation ID required');
   else requireValue(input.artifact ? typeof input.sha256 === 'string' && /^[a-f0-9]{64}$/.test(input.sha256) :
     typeof input.version === 'string' && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(input.version), 'invalid_request', 'Choose exact version or artifact plus trusted checksum');
@@ -168,6 +170,8 @@ export async function serviceUpgrade(input, dependencies = {}) {
   const save = patch => { record = { ...record, ...patch, updatedAt: new Date().toISOString() }; writePrivateJson(join(operationPath, 'operation.json'), record); };
   const originals = () => record.services.map(service => ({ service,
     unit: parseManagedUnit(readFileSync(join(operationPath, service.unitBackup), 'utf8'), service.role) }));
+  const migrationCommitted = () => record.migrateTaskReferences && originals().some(({ service, unit }) => service.role === 'backend' &&
+    unit.release.compatibility.backendSchema === 1 && serviceIdentity(unit).schema === 2);
   const checkFiles = () => {
     for (const file of record.files) requireValue([file.beforeHash, file.afterHash].includes(fileHash(file.path)),
       'upgrade_configuration_changed', 'Configuration changed after planning. Refuse overwriting later edits');
@@ -263,13 +267,15 @@ export async function serviceUpgrade(input, dependencies = {}) {
       const roles = input.services ?? ['node'];
       requireValue(Array.isArray(roles) && roles.length > 0 && roles.every(r => ['backend', 'node'].includes(r)) && new Set(roles).size === roles.length,
         'invalid_request', 'Choose node, backend or both');
+      requireValue(!input.migrateTaskReferences || roles.includes('backend'), 'invalid_request', 'Task-reference migration requires the backend service');
       const nodeConfig = resolve(input.nodeConfig ?? defaultNodeConfig());
       const key = input.key ?? randomUUID();
       requireValue(typeof key === 'string' && /^[A-Za-z0-9:_-]{1,100}$/.test(key), 'invalid_request', 'Bounded immutable upgrade key required');
       const id = `upgrade_${digest(key).slice(0, 32)}`;
       const requestHash = digest({ roles: [...roles].sort(), version: input.version ?? null, artifact: input.artifact ? resolve(input.artifact) : null,
         sha256: input.sha256 ?? null, nodeConfig, binDirectory: input.binDirectory ? resolve(input.binDirectory) : null,
-        configDirectory: resolve(input.configDirectory ?? configDirectory()), releasesDirectory: input.releasesDirectory ? resolve(input.releasesDirectory) : null });
+        configDirectory: resolve(input.configDirectory ?? configDirectory()), releasesDirectory: input.releasesDirectory ? resolve(input.releasesDirectory) : null,
+        ...(input.migrateTaskReferences ? { migrateTaskReferences: true } : {}) });
       operationPath = join(operations, id);
       if (existsSync(join(operationPath, 'operation.json'))) {
         record = readPrivateJson(join(operationPath, 'operation.json'));
@@ -285,21 +291,24 @@ export async function serviceUpgrade(input, dependencies = {}) {
         requireValue(identity.blockers.length === 0, 'upgrade_busy', `Unsettled ${role} work prevents upgrade. Run ${role} status and retry after settlement`);
         const descriptor = { role, name, unitPath: current.path, active: current.active, previousVersion: unit.release.version,
           previousDirectory: unit.release.directory, previousFingerprint: unit.release.fingerprint, database: identity.database, stateDirectory: identity.stateDirectory,
-          instanceId: identity.instanceId, nodeId: identity.nodeId ?? null, identityFingerprintVersion: 2, identityFingerprint: identityFingerprint(identity), identityFiles: identity.files };
+          instanceId: identity.instanceId, schema: identity.schema, nodeId: identity.nodeId ?? null, identityFingerprintVersion: 2, identityFingerprint: identityFingerprint(identity), identityFiles: identity.files };
         await health(descriptor, unit, manager, false, unit.release.version !== '0.2.0-rc.4');
         services.push(descriptor);
         files.push({ path: current.path, before, kind: 'unit', role, unit });
       }
-      if (input.version && services.every(service => service.previousVersion === input.version)) return { state: 'unchanged', version: input.version, services: roles };
+      if (input.version && services.every(service => service.previousVersion === input.version &&
+        (!input.migrateTaskReferences || service.role !== 'backend' || service.schema === 2))) return { state: 'unchanged', version: input.version, services: roles };
       const candidate = await (dependencies.stageRelease ?? stageRelease)({ version: input.version, artifact: input.artifact, sha256: input.sha256, directory: input.releasesDirectory });
       const validated = releaseInfo(candidate.directory);
       requireValue(candidate.version === validated.version && candidate.auditVerified, 'invalid_release', 'A verified compatible candidate and production audit are required');
       requireValue(!candidate.packageFingerprint || candidate.packageFingerprint === validated.fingerprint, 'release_conflict', 'Candidate package content differs from its verification receipt');
       for (const file of files) {
         const identity = serviceIdentity(file.unit);
-        requireValue(identity.schema === validated.compatibility[file.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
+        const explicitMigration = input.migrateTaskReferences === true && file.role === 'backend' && identity.schema === 1 && validated.compatibility.backendSchema === 2;
+        requireValue(explicitMigration || identity.schema === validated.compatibility[file.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
           'upgrade_incompatible', 'Service database and candidate schema differ. An explicit offline migration is required, never an automatic restore');
       }
+      requireValue(!input.migrateTaskReferences || services.some(service => service.role === 'backend'), 'invalid_request', 'Task-reference migration requires the backend service');
       for (const file of files) file.after = Buffer.from(file.unit.replace(candidate.directory));
       if (roles.includes('node')) files.push(...pluginUpgradeFiles(resolve(input.configDirectory ?? configDirectory()), candidate.directory));
       const decisionCheck = files.some(file => file.kind === 'plugin') ? await nativeDecisions({ nodeConfig, configDirectory: resolve(input.configDirectory ?? configDirectory()) }) : null;
@@ -307,6 +316,7 @@ export async function serviceUpgrade(input, dependencies = {}) {
       const plan = { state: 'upgrade_plan', operationId: id, key, targetVersion: candidate.version,
         services: services.map(s => ({ role: s.role, from: s.previousVersion, to: candidate.version, restart: s.active })),
         pluginConfigurationReload: files.some(f => f.kind === 'plugin'), pendingDecisionCheck: decisionCheck, preservesIdentityAndState: true, databaseRestore: false,
+        taskReferenceMigration: input.migrateTaskReferences === true, rollbackToSchema1AllowedAfterMigration: false,
         instruction: 'Add --apply with the same arguments/key. Release staging is complete; no services or live configuration were changed.' };
       if (!input.apply) return plan;
       mkdirSync(operationPath, { mode: 0o700 });
@@ -318,14 +328,16 @@ export async function serviceUpgrade(input, dependencies = {}) {
       });
       for (const service of services) service.unitBackup = plannedFiles.find(f => f.path === service.unitPath).beforeFile;
       record = { id, key, requestHash, phase: 'prepared', version: candidate.version, candidateDirectory: candidate.directory, candidateFingerprint: validated.fingerprint,
+        migrateTaskReferences: input.migrateTaskReferences === true,
         services, files: plannedFiles, cli, nodeConfig, configDirectory: resolve(input.configDirectory ?? configDirectory()), createdAt: new Date().toISOString() };
       save({});
     }
-    if (record.phase === 'rolling_back' || record.phase === 'recovery_required') {
+    if (record.phase === 'rolling_back' || record.phase === 'recovery_required' && record.recoveryAction !== 'resume') {
       await rollback(); return { state: record.phase, operationId: record.id, databasesRestored: false };
     }
     try {
       requireValue(releaseInfo(record.candidateDirectory).fingerprint === record.candidateFingerprint, 'release_conflict', 'Candidate package content changed. Refuse resuming with modified code');
+      if (record.phase === 'recovery_required' && record.resumePhase === 'activating') save({ phase: 'activating' });
       if (record.phase !== 'activating') {
         checkFiles(); maintenance(true); save({ phase: 'stopping' }); await stop();
         for (const { service, unit } of originals()) {
@@ -337,6 +349,28 @@ export async function serviceUpgrade(input, dependencies = {}) {
           }
         }
         if (record.files.some(file => file.kind === 'plugin')) await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory });
+        if (record.migrateTaskReferences) for (const { service, unit } of originals().filter(({ service }) => service.role === 'backend')) {
+          const unlockState = serviceLock(service.stateDirectory);
+          try {
+            const identity = serviceIdentity(unit);
+            if (identity.schema === 1) {
+              let index = 0, path;
+              do { path = join(operationPath, `backend-task-identity-${++index}.sqlite`); } while (existsSync(path));
+              save({ migrationBackup: path });
+              const receipt = migrateTaskIdentity(service.database, { backup: path });
+              save({ migration: receipt });
+            } else if (unit.release.compatibility.backendSchema === 1) {
+              const db = new DatabaseSync(service.database, { readOnly: true });
+              let receipt;
+              try { receipt = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='task-identity-migration'").get()?.value ?? 'null'); } finally { db.close(); }
+              requireValue(receipt?.backup === record.migrationBackup && receipt.instanceId === service.instanceId,
+                'upgrade_migration_conflict', 'Migrated state must match this exact upgrade and backup');
+              requireValue(existsSync(receipt.backup) && hashBytes(readFileSync(receipt.backup)) === receipt.backupSha256,
+                'upgrade_migration_conflict', 'Retained migration backup must match its original verified hash');
+              save({ migration: receipt });
+            }
+          } finally { unlockState(); }
+        }
         save({ phase: 'switching' }); writeFiles(true); await start(); await checkHealth(true, true);
         activateCli(record.cli, true); save({ phase: 'activating' });
       }
@@ -346,6 +380,13 @@ export async function serviceUpgrade(input, dependencies = {}) {
         services: record.services.map(s => s.role), identitiesPreserved: true, backups: operationPath, databasesRestored: false };
     } catch (error) {
       save({ failureCode: error.code ?? 'upgrade_failed' });
+      if (migrationCommitted()) {
+        // Old writers cannot consume schema 2. Retain the exact candidate and
+        // maintenance record for roll-forward recovery, never database time travel.
+        const resumePhase = record.phase === 'activating' ? 'activating' : 'stopping';
+        maintenance(true); save({ phase: 'recovery_required', recoveryAction: 'resume', resumePhase });
+        throw new RelayError('upgrade_recovery_required', `Upgrade ${record.id} requires roll-forward recovery with upgrade resume --apply. Schema 2 is committed. No database was restored`, 503);
+      }
       try { await rollback(); }
       catch (rollbackError) { save({ phase: 'recovery_required', recoveryAction: 'rollback', rollbackFailureCode: rollbackError.code ?? 'rollback_failed' });
         throw new RelayError('upgrade_recovery_required', `Upgrade ${record.id} needs explicit recovery. No database was restored. Inspect upgrade status`, 503); }

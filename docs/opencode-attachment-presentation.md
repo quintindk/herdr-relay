@@ -1,7 +1,7 @@
-# OpenCode attachment sidebar and Herdr workspace names (unreleased)
+# OpenCode attachment sidebar and Herdr workspace names (RC9)
 
-This is local development work. The installed RC8 plugins and live workspaces are
-unchanged until an explicitly authorised release and deployment.
+These features require the RC9 Relay server and TUI plugins. Updating a source
+checkout alone does not change installed plugins or live workspaces.
 
 ## Right sidebar
 

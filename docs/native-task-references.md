@@ -1,12 +1,12 @@
-# Native task references (unreleased)
+# Native task references (RC9)
 
 Every new native task has an immutable machine `id` and an immutable readable
 `reference`. Relay automatically allocates `REL-1`, `REL-2`, etc. Consumers do not
 have to supply either identity. Existing clients supplying native IDs still work.
 
-This implementation is local development work, not the installed RC8 release.
-Backend schema **2** is required. Node journals remain schema **1**. No version
-bump, publication, deployment or production migration is implied by this document.
+These references are included in RC9, not RC8. Backend schema **2** is required.
+Node journals remain schema **1**. An existing backend requires the explicit
+migration described below. Reading this document never performs a live cutover.
 
 ## Create and retry
 
@@ -161,13 +161,14 @@ reference. Their original hash, mutable fields and audit record remain unchanged
 - Missing claim registries, inconsistent coverage or counters below retained claims
   require recovery. Startup does not reconstruct issued history from live task rows.
 - Normal service upgrades require candidate and database schemas to match. They do
-  not automatically migrate or restore databases. Rollback to a schema-1 backend
+  not silently migrate or restore databases. RC9 explicitly supports the managed
+  `--migrate-task-references` transition described in [service upgrades](service-upgrades.md).
+  Rollback to a schema-1 backend
   after migration is refused before switching service pointers.
-- The cross-schema cutover remains a deliberate offline operator procedure using
-  the verified candidate CLI. Preserve the existing service arguments, port, ingress
-  config, unit backup and state paths when changing its package pointer. Do not use
-  a generic reinstall that overwrites those settings. No live cutover was performed
-  while implementing this feature.
+- The cross-schema cutover is a deliberate operator-approved procedure using the
+  verified candidate CLI. The managed transition retains service arguments, port,
+  ingress config, unit backup and state paths. Do not use a generic reinstall that
+  overwrites those settings. This transition never creates grants or schedules.
 - Never restore an old database and resume numbering without reconciling all issued
   high-water marks. An internally consistent older snapshot cannot prove which
   numbers were issued after that snapshot. This version has no automatic disaster-

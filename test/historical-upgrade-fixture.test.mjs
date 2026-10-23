@@ -29,6 +29,6 @@ test('historical fixture verifies immutable bytes, reports actual advisory count
   assert.equal(result.historicalFixtureOnly, true); assert.equal(result.auditVerified, false);
   assert.equal(result.productionActivationAllowed, false); assert.equal(result.productionAuditFindings, 4);
   assert.ok(calls.some(args => args[0] === 'audit'));
-  await assert.rejects(historicalUpgradeFixture({ version: '0.2.0-rc.8', directory: join(root, 'releases') }, dependencies), { code: 'invalid_fixture_baseline' });
+  await assert.rejects(historicalUpgradeFixture({ version: '0.2.0-rc.99', directory: join(root, 'releases') }, dependencies), { code: 'invalid_fixture_baseline' });
   await assert.rejects(historicalUpgradeFixture({ version, directory: '/private/real-release-store' }, dependencies), { code: 'invalid_fixture_directory' });
 });

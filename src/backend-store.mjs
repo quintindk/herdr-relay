@@ -31,6 +31,7 @@ export class BackendStore {
   constructor(path, { userId = 'owner' } = {}) {
     requireValue(validId(userId), 'invalid_user', 'Explicit user identity required');
     this.db = new DatabaseSync(path);
+    this.db.exec('PRAGMA busy_timeout=5000');
     if (path !== ':memory:') chmodSync(path, 0o600);
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
     if (version !== 0 && version !== backendSchema) {
