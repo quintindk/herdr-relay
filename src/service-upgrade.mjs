@@ -209,12 +209,21 @@ export async function serviceUpgrade(input, dependencies = {}) {
     const startingPhase = record.phase, unchangedFiles = record.files.map(file => fileHash(file.path));
     const beforeSwitch = (record.phase === 'stopping' || record.phase === 'rolling_back' && record.rollbackBeforeSwitch) &&
       record.files.every(file => fileHash(file.path) === file.beforeHash) && realpathSync(record.cli.path) === record.cli.before;
-    for (const { service, unit } of originals()) { releaseInfo(unit.release.directory); identityCheck(service, unit, { allowBusy: beforeSwitch }); }
+    for (const { service, unit } of originals()) {
+      releaseInfo(unit.release.directory);
+      const identity = identityCheck(service, unit, { allowBusy: beforeSwitch });
+      requireValue(identity.schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
+        'upgrade_incompatible', 'Rollback writer does not support the current database schema. No database will be restored');
+    }
     const reloadPlugin = record.files.some(file => file.kind === 'plugin' && fileHash(file.path) !== file.beforeHash);
     if (reloadPlugin) await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory });
     save({ phase: 'rolling_back', rollbackBeforeSwitch: beforeSwitch }); maintenance(true); await stop();
     try {
-      for (const { service, unit } of originals()) identityCheck(service, unit, { allowBusy: beforeSwitch });
+      for (const { service, unit } of originals()) {
+        const identity = identityCheck(service, unit, { allowBusy: beforeSwitch });
+        requireValue(identity.schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
+          'upgrade_incompatible', 'Rollback writer is incompatible with the current database schema');
+      }
       if (reloadPlugin) await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory });
     } catch (error) {
       if (!beforeSwitch && ['upgrade_busy', 'upgrade_pending_decisions'].includes(error.code)) {
@@ -242,6 +251,8 @@ export async function serviceUpgrade(input, dependencies = {}) {
       operationPath = join(operations, id); record = readPrivateJson(join(operationPath, 'operation.json'));
       requireValue(record.id === id, 'invalid_upgrade_record', 'Operation identity mismatch');
       if (input.rollback) {
+        for (const { service, unit } of originals()) requireValue(serviceIdentity(unit).schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
+          'upgrade_incompatible', 'Rollback writer does not support the current database schema. No database will be restored');
         if (!input.apply) return { state: 'rollback_plan', operationId: id, services: record.services.map(s => ({ role: s.role, version: s.previousVersion })), databaseRestore: false };
         if (record.phase !== 'rolled_back') await rollback();
         return { state: 'rolled_back', operationId: id, databasesRestored: false };
@@ -284,6 +295,11 @@ export async function serviceUpgrade(input, dependencies = {}) {
       const validated = releaseInfo(candidate.directory);
       requireValue(candidate.version === validated.version && candidate.auditVerified, 'invalid_release', 'A verified compatible candidate and production audit are required');
       requireValue(!candidate.packageFingerprint || candidate.packageFingerprint === validated.fingerprint, 'release_conflict', 'Candidate package content differs from its verification receipt');
+      for (const file of files) {
+        const identity = serviceIdentity(file.unit);
+        requireValue(identity.schema === validated.compatibility[file.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
+          'upgrade_incompatible', 'Service database and candidate schema differ. An explicit offline migration is required, never an automatic restore');
+      }
       for (const file of files) file.after = Buffer.from(file.unit.replace(candidate.directory));
       if (roles.includes('node')) files.push(...pluginUpgradeFiles(resolve(input.configDirectory ?? configDirectory()), candidate.directory));
       const decisionCheck = files.some(file => file.kind === 'plugin') ? await nativeDecisions({ nodeConfig, configDirectory: resolve(input.configDirectory ?? configDirectory()) }) : null;

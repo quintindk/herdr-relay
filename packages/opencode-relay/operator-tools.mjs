@@ -12,7 +12,7 @@ const taskChanges = { type: 'object', properties: { title: text, description: { 
 
 export const proposedActions = Object.freeze({
   relay_enrol_folder: { action: 'agent.enrol_folder', properties: { id: text, expectedRevision: revision, directory: text }, required: ['id', 'expectedRevision', 'directory'] },
-  relay_task_create: { action: 'task.create', properties: { id: text, ...taskChanges.properties }, required: ['id', 'title'] },
+  relay_task_create: { action: 'task.create', properties: { id: text, reference: text, ...taskChanges.properties }, required: ['title'] },
   relay_task_edit: { action: 'task.update', properties: { id: text, expectedRevision: revision, changes: taskChanges, comment: text }, required: ['id', 'expectedRevision', 'changes'] },
   relay_task_comment: { action: 'comment.create', properties: { id: text, taskId: text, body: text }, required: ['id', 'taskId', 'body'] },
   relay_execution_request: { action: 'execution.request', properties: { id: text, taskId: text, taskRevision: revision,
@@ -48,6 +48,12 @@ export async function registerOperatorTools(ctx) {
         async execute({ id }) {
           return { content: JSON.stringify(await nativeBackendClient(JSON.parse(readFileSync(ctx.options.readContextFile, 'utf8')))
             ('GET', `/v1/tasks/${encodeURIComponent(id)}`)) };
+         } });
+      if (!ctx.options.workerDirectory) editor.add({ name: 'relay_task_resolve', description: 'Resolve a native task ID, primary reference or scoped alias. Returns resolved, ambiguous or not_found. Never select an ambiguous task for mutation.', options: { codemode: false },
+        input: { type: 'object', properties: { value: text, reference: text, scope: text }, additionalProperties: false },
+        async execute(input) {
+          return { content: JSON.stringify(await nativeBackendClient(JSON.parse(readFileSync(ctx.options.readContextFile, 'utf8')))
+            ('GET', `/v1/task-identity?${new URLSearchParams(input)}`)) };
         } });
     }
     for (const [name, definition] of Object.entries(proposedActions).filter(([name]) => !ctx.options.workerDirectory || !name.startsWith('relay_schedule_'))) editor.add({ name,

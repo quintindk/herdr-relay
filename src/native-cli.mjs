@@ -35,6 +35,11 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   task|comment|agent|node|execution|schedule|occurrence list [--limit N] [--cursor TOKEN]
   task|comment|agent|node|execution|schedule|occurrence inspect ID
   task create|edit|comment --file PAYLOAD_JSON --key KEY
+  task resolve VALUE [--scope ALIAS_SCOPE]  [returns resolved, ambiguous or not_found, never guesses]
+  task resolve --reference REL-32  [explicit primary-reference lookup]
+  task migrate-references --state-dir DIR [--apply --backup NEW_SQLITE]  [offline operator, read-only plan by default]
+  task-reference grant|revoke --file PAYLOAD_JSON --key KEY --context OWNER_JSON  [backend-root namespace approval]
+  task-reference list|inspect [ID] --context CONTEXT  [inspect namespace-grant revisions]
   task complete|cancel ID --revision N --key KEY  [human task status only, not native execution settlement]
   execution request --file PAYLOAD_JSON --key KEY
   execution cancel ID --revision N --reason TEXT --key KEY
@@ -56,6 +61,9 @@ Run-now for an existing native cron is not implemented. Use an explicit executio
 Pause must be acknowledged by the owner node. Already admitted work is not interrupted.`;
 
 export async function main(args) {
+  if (args[0] === 'task' && args[1] === 'migrate-references') {
+    execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/migrate-task-references.mjs', import.meta.url)), ...args.slice(2)], { stdio: 'inherit' }); return;
+  }
   if (args[0] === 'headless' || args[0] === 'agent' && args[1] === 'provision') {
     const { headlessCli } = await import('./native-headless.mjs');
     return headlessCli(args[0] === 'agent' ? ['headless', ...args.slice(1)] : args);
@@ -67,7 +75,7 @@ export async function main(args) {
   }
   if (await nativeAdmin(args)) return;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation'].map(k => [k, { type: 'string' }])),
+    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation', 'reference', 'scope'].map(k => [k, { type: 'string' }])),
     help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' },
   } });
   const [group, action, id] = positionals;
@@ -84,10 +92,11 @@ export async function main(args) {
     : group === 'agent' && action === 'launch' ? ['context', 'config', 'directory', 'agent', 'key', 'json', 'service-registration']
     : group === 'schedule' && action === 'preview' ? ['cron', 'timezone']
     : group === 'board' ? ['context', 'json']
+    : group === 'task' && action === 'resolve' ? ['context', 'reference', 'scope']
     : group === 'interactive' && ['grant', 'request', 'dispatch'].includes(action) ? ['context', 'file', 'key']
     : action === 'list' ? ['context', 'limit', 'cursor'] : action === 'inspect' ? ['context']
     : group === 'command' ? ['context', 'file']
-    : ['create', 'edit', 'comment', 'request'].includes(action) ? ['context', 'file', 'key']
+    : ['create', 'edit', 'comment', 'request'].includes(action) || group === 'task-reference' && ['grant', 'revoke'].includes(action) ? ['context', 'file', 'key']
     : ['context', 'revision', 'key', ...(group !== 'task' && action === 'cancel' ? ['reason'] : [])];
   for (const option of Object.keys(values)) requireValue(allowed.includes(option), 'invalid_request', `--${option} is not supported for this native command`);
   if (group === 'board' || group === 'command') requireValue(positionals.length === 1, 'invalid_request', 'Unexpected positional arguments');
@@ -193,7 +202,12 @@ export async function main(args) {
     } finally { journal.close(); }
     return;
   }
-  const collections = { task: 'tasks', comment: 'comments', agent: 'agents', node: 'nodes', execution: 'executions', schedule: 'schedules', occurrence: 'occurrences', interactive: 'provision_requests' };
+  const collections = { task: 'tasks', 'task-reference': 'task_reference_grants', comment: 'comments', agent: 'agents', node: 'nodes', execution: 'executions', schedule: 'schedules', occurrence: 'occurrences', interactive: 'provision_requests' };
+  if (group === 'task' && action === 'resolve') {
+    requireValue(Boolean(id) !== Boolean(values.reference), 'invalid_request', 'Choose VALUE or --reference REF');
+    const query = new URLSearchParams({ ...(id ? { value: id } : { reference: values.reference }), ...(values.scope ? { scope: values.scope } : {}) });
+    output(await api('GET', `/v1/task-identity?${query}`)); return;
+  }
   if (collections[group] && ['list', 'inspect'].includes(action)) {
     requireValue(action === 'list' ? !id : Boolean(id), 'invalid_request', 'Inspect requires an ID. List takes no ID');
     const query = new URLSearchParams();
@@ -207,6 +221,7 @@ export async function main(args) {
   }
   if (group === 'command') { output(await api('POST', '/v1/commands', payload())); return; }
   const fileActions = { 'task:create': 'task.create', 'task:edit': 'task.update', 'task:comment': 'comment.create',
+    'task-reference:grant': 'task.reference_namespace.grant', 'task-reference:revoke': 'task.reference_namespace.revoke',
     'execution:request': 'execution.request', 'schedule:create': 'schedule.install', 'interactive:grant': 'interactive.grant',
     'interactive:request': 'interactive.request', 'interactive:dispatch': 'interactive.dispatch' };
   let nativeAction = fileActions[`${group}:${action}`], data;

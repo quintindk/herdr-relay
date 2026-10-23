@@ -58,7 +58,7 @@ export function applyHeadlessTask(store, actor, scope, p, { probe = false } = {}
   const task = p.operation === 'comment.create' ? store.get('task', result.taskId) : result;
   requireValue(task.responsibleUserId === store.owner, 'headless_task_forbidden', 'Human responsibility must remain unchanged');
   return { id: `headless_operation_${digest([scope.setup.id, source.namespace, source.externalId, p.operation, p.key])}`, revision: 1,
-    state: 'applied', operation: p.operation, source, taskId: task.id, taskRevision: task.revision,
+    state: 'applied', operation: p.operation, source, taskId: task.id, taskReference: task.reference, taskRevision: task.revision,
     executionId: scope.execution.id, runId: scope.execution.runId, result };
 }
 

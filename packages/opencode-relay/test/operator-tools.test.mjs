@@ -12,6 +12,8 @@ test('operator mutation tools register strict proposal schemas and never publish
   try {
     assert.equal(tools.length, Object.keys(proposedActions).length);
     for (const tool of tools) assert.equal(tool.input.additionalProperties, false);
+    assert.deepEqual(tools.find(tool => tool.name === 'relay_task_create').input.required, ['title']);
+    assert.equal(tools.find(tool => tool.name === 'relay_task_create').input.properties.reference.type, 'string');
     const result = await tools.find(tool => tool.name === 'relay_task_create').execute({ id: 'audit', title: 'Audit' }, { sessionID: 'session' });
     assert.equal(JSON.parse(result.content).state, 'proposed');
     assert.equal(proposals[0].value.action, 'task.create');

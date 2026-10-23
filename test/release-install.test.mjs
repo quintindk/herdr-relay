@@ -45,7 +45,7 @@ test('checksum mismatch, audit findings/outage and incompatible schemas fail bef
   assert.equal(existsSync(join(f.input.directory, f.version)), false);
   f.vulnerabilities = 0; f.auditUnavailable = true;
   await assert.rejects(stageRelease(f.input, { run: f.run }), /Registry unavailable/);
-  f.auditUnavailable = false; f.contract = { ...compatibility, backendSchema: 2 };
+  f.auditUnavailable = false; f.contract = { ...compatibility, backendSchema: 3 };
   await assert.rejects(stageRelease(f.input, { run: f.run }), { code: 'upgrade_incompatible' });
 });
 

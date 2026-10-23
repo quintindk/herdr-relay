@@ -28,7 +28,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
       const path = new URL(req.url, 'http://node').pathname;
       const readOnly = ['/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
-        '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/comments', '/agent/relations',
+        '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/task-identity', '/agent/comments', '/agent/relations',
         '/agent/questions', '/agent/messages', '/agent/message', '/agent/headless-status', '/agent/headless-grants', '/agent/headless-access', '/agent/headless-connections'];
       requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
       const currentReceiver = () => {
@@ -217,6 +217,12 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           result = { items: journal.cached(path.endsWith('tasks') ? 'task' : 'agent').slice(0, limit).map(item => ({ ...item.entity, fetchedAt: item.fetchedAt })),
             complete: false, nextCursor: null, stale: true, warnings: ['Backend unavailable. Local event cache is incomplete, bounded and not current.'] };
         }
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
+      if (path === '/agent/task-identity') {
+        requireValue(tasks?.resolveTaskIdentity && body && Object.keys(body).every(key => ['value', 'reference', 'scope'].includes(key)),
+          'unsupported_operation', 'Selected Tasks provider must support exact native task identity lookup');
+        const result = await tasks.resolveTaskIdentity(body);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
       if (['/agent/task', '/agent/comments', '/agent/relations'].includes(path)) {

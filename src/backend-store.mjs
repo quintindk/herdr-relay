@@ -9,6 +9,7 @@ import { applyHeadlessSetup } from './headless-setup-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
 import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
+import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -32,7 +33,15 @@ export class BackendStore {
     this.db = new DatabaseSync(path);
     if (path !== ':memory:') chmodSync(path, 0o600);
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    requireValue(version <= 1, 'unsupported_schema', 'Native backend schema is newer than this build');
+    if (version !== 0 && version !== backendSchema) {
+      this.db.close();
+      requireValue(false, version === 1 ? 'task_identity_migration_required' : 'unsupported_schema', version === 1
+        ? 'Stop the backend and run the explicit task-reference migration with a backup before starting this build'
+        : 'Native backend schema is newer than this build');
+    }
+    if (version === backendSchema) {
+      try { assertTaskIdentityIntegrity(this.db); } catch (error) { this.db.close(); throw error; }
+    }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS credentials (id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
@@ -40,7 +49,8 @@ export class BackendStore {
       CREATE TABLE IF NOT EXISTS receipts (actor TEXT NOT NULL, key TEXT NOT NULL, hash TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(actor,key));
       CREATE TABLE IF NOT EXISTS changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, at TEXT NOT NULL, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS changes_at ON changes(at,seq);
-      PRAGMA user_version=1;`);
+      ${taskIdentitySchema}
+      PRAGMA user_version=${backendSchema};`);
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('owner', userId);
     this.owner = this.db.prepare('SELECT value FROM settings WHERE key=?').get('owner').value;
     requireValue(this.owner === userId, 'backend_identity_mismatch', 'Backend belongs to another user');
@@ -77,6 +87,16 @@ export class BackendStore {
     return row ? JSON.parse(row.data).data : null;
   }
   save(kind, value) {
+    if (kind === 'task') return this.transaction(() => {
+      const previous = this.get('task', value.id, false);
+      if (previous) requireValue(previous.reference === value.reference, 'task_reference_immutable', 'Primary task reference cannot change', 409);
+      else value = { ...value, reference: claimTaskReference(this.db, value.id, value.reference) };
+      this.writeEntity(kind, value); indexTaskAliases(this.db, value);
+      return value;
+    });
+    return this.writeEntity(kind, value);
+  }
+  writeEntity(kind, value) {
     this.db.prepare('INSERT INTO entities VALUES (?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET revision=excluded.revision,data=excluded.data')
       .run(kind, value.id, value.revision, JSON.stringify(value));
     return value;
@@ -155,11 +175,15 @@ export class BackendStore {
       const previous = this.db.prepare('SELECT hash,data FROM receipts WHERE actor=? AND key=?').get(identity, key);
       if (previous) {
         requireValue(previous.hash === hash, 'operation_conflict', 'Idempotency key payload changed', 409);
-        return JSON.parse(previous.data);
+        const receipt = JSON.parse(previous.data);
+        // Enrich historical task receipts without changing their hashes, fields or audit history.
+        const claim = action === 'task.create' && !receipt.reference && this.db.prepare('SELECT reference FROM task_reference_claims WHERE task_id=?').get(receipt.id);
+        return claim ? { ...receipt, reference: claim.reference } : receipt;
       }
+      const reusedSource = action === 'task.create' && payload.externalReference && this.get('reference', this.referenceIdentity(payload.externalReference), false);
       const value = fn();
       const eventType = action.startsWith('agent.schedule_') ? `schedule.${action.slice('agent.schedule_'.length)}` :
-        action === 'task.create' && value.id !== payload.id ? 'task.reference_reused' : action;
+        reusedSource ? 'task.reference_reused' : action;
       this.event(eventType, value, actor, key);
       this.db.prepare('INSERT INTO receipts VALUES (?,?,?,?)').run(identity, key, hash, JSON.stringify(value));
       return value;
@@ -175,11 +199,31 @@ export class BackendStore {
     return this.mutate(actor, key, action, payload, () => this.apply(actor, action, structuredClone(payload)));
   }
   apply(actor, action, p, authority = {}) {
+    if (!this.inTransaction) return this.transaction(() => this.apply(actor, action, p, authority));
     const created = (kind, input) => {
       requireValue(validId(input.id) && !this.get(kind, input.id, false), 'identity_conflict', `Unique ${kind} identity required`, 409);
       return this.save(kind, { ...input, revision: 1, createdAt: now(), updatedAt: now() });
     };
     const changed = (kind, entity, patch) => this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
+    if (action === 'task.reference_namespace.grant' || action === 'task.reference_namespace.revoke') {
+      this.rootOwnerOnly(actor);
+      fields(p, ['principal', 'prefix', ...(action.endsWith('.grant') ? ['maxNumber', 'expectedRevision'] : ['expectedRevision'])], ['principal', 'prefix']);
+      fields(p.principal, ['type', 'id'], ['type', 'id']);
+      requireValue(['node', 'node_operator'].includes(p.principal.type) && validId(p.principal.id) && referencePrefix.test(p.prefix), 'invalid_reference_grant', 'Explicit node principal and canonical prefix required');
+      this.get('node', p.principal.id);
+      const id = namespaceGrantId(p.principal, p.prefix), previous = this.get('task_reference_grant', id, false);
+      if (action.endsWith('.revoke')) {
+        requireValue(previous, 'not_found', 'Namespace grant not found', 404); this.revision(previous, p.expectedRevision);
+        return changed('task_reference_grant', previous, { state: 'revoked' });
+      }
+      requireValue(Number.isSafeInteger(p.maxNumber) && p.maxNumber > 0, 'invalid_reference_grant', 'Explicit positive safe-integer maximum required');
+      if (previous) {
+        this.revision(previous, p.expectedRevision);
+        return changed('task_reference_grant', previous, { state: 'active', maxNumber: p.maxNumber });
+      }
+      requireValue(p.expectedRevision === undefined || p.expectedRevision === 0, 'stale_revision', 'New namespace grants start at revision zero', 409);
+      return created('task_reference_grant', { id, principal: p.principal, prefix: p.prefix, maxNumber: p.maxNumber, state: 'active' });
+    }
     if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed });
     if (action.startsWith('headless.')) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
@@ -500,17 +544,21 @@ export class BackendStore {
     if (action === 'task.create') {
       // Node-originated capture needs an explicit scoped grant, not operator powers.
       if (!authority.interactiveRequest && !authority.headlessSetup && !authority.headlessTask) this.ownerOnly(actor);
-      fields(p, ['id', 'title', 'description', 'status', 'priority', 'parentId', 'dependencies', 'labels', 'externalReference'], ['id', 'title']);
+      fields(p, ['id', 'reference', 'title', 'description', 'status', 'priority', 'parentId', 'dependencies', 'labels', 'externalReference'], ['title']);
+      if (p.reference !== undefined) authoriseTaskReference(this, actor, p.reference);
       if (p.externalReference) {
         const identity = this.referenceIdentity(p.externalReference);
         const previous = this.get('reference', identity, false);
         if (previous) {
           requireValue(same(previous.reference, p.externalReference), 'reference_conflict', 'External reference metadata changed');
-          return this.get('task', previous.taskId);
+          const existing = this.get('task', previous.taskId);
+          requireValue(p.reference === undefined || p.reference === existing.reference, 'task_reference_conflict', 'Source task already has a different primary reference', 409);
+          requireValue(p.id === undefined || !this.get('task', p.id, false) || p.id === existing.id, 'identity_conflict', 'Supplied native ID identifies another task', 409);
+          return existing;
         }
       }
       string(p.title, 'title', 512);
-      const task = { ...p, description: p.description ?? '', status: p.status ?? 'todo', priority: p.priority ?? 'medium',
+      const task = { ...p, id: p.id ?? `task_${randomUUID()}`, description: p.description ?? '', status: p.status ?? 'todo', priority: p.priority ?? 'medium',
         parentId: p.parentId ?? null, dependencies: p.dependencies ?? [], labels: p.labels ?? [], responsibleUserId: this.owner };
       this.validateTask(task);
       const receipt = created('task', task);

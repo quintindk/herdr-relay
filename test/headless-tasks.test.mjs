@@ -33,6 +33,7 @@ function fixture(t, { capabilities = true, readiness = false, directory = '/work
 test('approved headless task capabilities retain human ownership, revisions, source identity and idempotency', t => {
   const f = fixture(t), created = f.mutate('task.create', 'capture', { title: 'An evidenced record' });
   assert.equal(f.store.get('task', created.taskId).responsibleUserId, 'owner'); assert.deepEqual(f.mutate('task.create', 'capture', { title: 'An evidenced record' }), created);
+  assert.equal(created.taskReference, 'REL-2');
   const updated = f.mutate('task.update', 'update', { id: created.taskId, expectedRevision: created.taskRevision, changes: { priority: 'high' } });
   f.mutate('comment.create', 'comment', { taskId: created.taskId, expectedRevision: updated.taskRevision, body: 'Evidence verified' });
   const alias = { ...f.source, externalId: 'alias' }; f.mutate('reference.attach', 'reference', { id: created.taskId, expectedRevision: updated.taskRevision }, { source: alias });
@@ -73,6 +74,8 @@ test('readiness canaries verify only granted actions and roll back every task/co
     const proof = f.command(f.node, 'capability', 'headless.capability_probe', { executionId: f.execution.id, runId: f.execution.runId });
     assert.equal(proof.capabilityProbe.rolledBack, true); assert.deepEqual(proof.capabilityProbe.taskActions, taskActions);
     for (const kind of ['task', 'comment']) assert.deepEqual(f.store.all(kind), before.collections[kind]); assert.equal(f.store.all('reference').length, 0);
+    assert.equal(f.store.db.prepare('SELECT COUNT(*) AS count FROM task_reference_claims').get().count, 1);
+    assert.equal(f.store.db.prepare("SELECT high_water FROM task_reference_counters WHERE prefix='REL'").get().high_water, 1);
   }
 });
 

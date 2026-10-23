@@ -19,6 +19,8 @@ test('explicit delegation scope creates independent children and resumes only af
     let child = cmd(nodes[0], 'execution.delegate', { id: 'child-run', parentExecutionId: parent.id, expectedRevision: parent.revision,
       taskId: 'child', title: 'Child', instructions: 'Build', targetAgentId: 'worker' });
     assert.equal(store.get('task', 'child').parentId, 'root');
+    assert.equal(store.get('task', 'root').reference, 'REL-1');
+    assert.equal(store.get('task', 'child').reference, 'REL-2');
     assert.equal(child.allowDelegation, false);
     parent = cmd(nodes[0], 'execution.wait_children', { id: parent.id, expectedRevision: parent.revision, childExecutionIds: [child.id] });
     assert.throws(() => cmd(nodes[0], 'execution.check_children', { id: parent.id, expectedRevision: parent.revision }), { code: 'children_pending' });

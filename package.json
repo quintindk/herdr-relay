@@ -26,6 +26,7 @@
     "scripts/install-native-backend.mjs",
     "scripts/verify-backend-ingress.mjs",
     "scripts/migrate-paperclip-tasks.mjs",
+    "scripts/migrate-task-references.mjs",
     "herdr-plugin.toml",
     "docs/*.md"
   ],
@@ -34,7 +35,7 @@
   },
   "relayCompatibility": {
     "protocol": "relay/0.2",
-    "backendSchema": 1,
+    "backendSchema": 2,
     "nodeSchema": 1
   },
   "scripts": {

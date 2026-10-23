@@ -36,6 +36,7 @@ test('scheduled clarification materialises one task, waits durably and resumes i
     await journal.flush(api);
     const question = store.all('question')[0];
     assert.equal(store.all('task').length, 1);
+    assert.equal(store.all('task')[0].reference, 'REL-1');
     assert.equal(question.status, 'open');
     cmd(owner, 'answer', 'question.answer', { id: question.id, expectedRevision: question.revision, body: 'South Africa North' });
     journal.consume(store.events());

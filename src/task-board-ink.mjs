@@ -214,7 +214,8 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
       Actions: [task.attentionLabel || 'Needs your attention', '', ...actions.flatMap((item, i) => [
         `${i === actionIndex ? '›' : ' '} ${item.kind === 'question' ? 'Answer question' : item.kind === 'review' ? 'Review result' : 'Acknowledge reminder'}`,
         ...wrapLines(item.summary), ''])],
-      Overview: ['Title', ...wrapLines(task.title), '', ...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
+      Overview: [...(task.reference ? [`Reference: ${task.reference}`, ...(task.source?.metadata?.identifier ? [`Imported alias: ${task.source.metadata.identifier}`] : []), ''] : []),
+        'Title', ...wrapLines(task.title), '', ...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
         ...(task.attentionLabel ? [task.attentionLabel, `Responsible: ${task.responsibleName || task.responsibleUserId || 'Not set'}`, `Worker: ${task.executionAgentName || 'None'}`, ''] : []),
         ...(task.executionNodeName ? [`Node: ${task.executionNodeName}`, `Machine: ${task.executionMachineName || 'Not advertised'}`, ''] : []),
         'Summary', '', ...wrapLines(task.description || 'No description.'), ...(technical ? ['', `Task identity: ${task.id}`] : [])],
@@ -555,7 +556,9 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         .catch(error => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
     }
   });
-  const visibleHeight = Math.max(1, Math.floor((height - (native ? decisionReceipt ? 9 : 8 : 6)) / (native && ['inbox', 'agents', 'schedules'].includes(view) ? 4 : 1))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
+  const narrowReference = native && view === 'tasks' && Math.max(0, ...board.tasks.map(task => task.reference?.length ?? 0)) > width - 4;
+  const taskRowHeight = narrowReference ? Math.ceil(Math.max(0, ...board.tasks.map(task => task.reference?.length ?? 0)) / Math.max(1, width - 4)) + 1 : 1;
+  const visibleHeight = Math.max(1, Math.floor((height - (native ? decisionReceipt ? 9 : 8 : 6)) / (native && ['inbox', 'agents', 'schedules'].includes(view) ? 4 : taskRowHeight))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
   const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
@@ -568,6 +571,12 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     const context = row.context ? ` [via ${row.owner}]` : '';
     const anomaly = row.anomaly ? ` [${row.anomaly}]` : '';
     const subtree = row.descendants ? ` [+${row.descendants}/${row.counts.open} open]` : '';
+    if (native && row.task.reference) {
+      const prefix = `${guides}${branch}${fold} ${row.task.reference}  `;
+      // Reference identity takes precedence over optional tree guides and status.
+      const safePrefix = prefix.length + 8 <= width - 4 ? prefix : `${row.task.reference}  `;
+      return `${safePrefix}${clean(row.task.title)}${anomaly}${subtree}`;
+    }
     return `${guides}${branch}${fold} ${native ? '' : `${row.task.identifier || row.task.id}${context}  `}${clean(row.task.title)}${anomaly}${subtree}`;
   };
   if (quitting) return null;
@@ -589,6 +598,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const statusLabel = task => native && task.attentionLabel
     ? `${labels[task.status] ?? task.status} · ${decisionText(task.attentionLabel)}` : `[${labels[task.status] ?? task.status}]`;
   const taskColumns = taskBoardColumns(width, visible.filter(row => row.type === 'task').map(row => statusLabel(row.task)));
+  const referenceWidth = Math.max(0, ...visible.filter(row => row.type === 'task' && row.task.reference).map(row => rowText(row).indexOf(row.task.reference) + row.task.reference.length + 2));
+  if (native && referenceWidth > taskColumns.title) { taskColumns.status = 0; taskColumns.gap = 0; }
   const background = h(Box, { width, height, flexDirection: 'column' },
     h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: overlay }, native ? `RELAY / ${view === 'schedules' ? 'SCHEDULE' : view.toUpperCase()}` : 'RELAY / TASKS'),
       h(Text, { dimColor: true }, native ? offline ? 'Inbox unavailable: showing cached state' : !loaded ? 'Loading inbox…' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`)),
@@ -623,10 +634,13 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         const taskStyle = row.type === 'task' ? taskRowStyle(row.task, Boolean(modal || assignment || reviewModal || detail), row.context) : null;
         const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : ['routine', 'inbox'].includes(row.type) ? 'magenta' : taskStyle.color;
         const dimmed = taskStyle?.dimColor ?? Boolean(modal || assignment || reviewModal || detail);
+        if (narrowReference && row.type === 'task' && row.task.reference) return h(Box, { key: row.id, height: taskRowHeight, flexDirection: 'column' },
+          h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'wrap' }, row.task.reference),
+          h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, clean(row.task.title)));
         return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
           h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, h(Text, { wrap: 'truncate-end', inverse: active,
             bold: row.type === 'section' || native && row.type === 'group', dimColor: dimmed || native && row.type === 'group' && !active, color: tone }, rowText(row))),
-          row.type === 'task' ? h(Box, { width: native ? taskColumns.status : 13, marginLeft: native ? taskColumns.gap : 0,
+          row.type === 'task' && (!native || taskColumns.status) ? h(Box, { width: native ? taskColumns.status : 13, marginLeft: native ? taskColumns.gap : 0,
             flexShrink: 0, justifyContent: 'flex-end' },
             h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, statusLabel(row.task))) : null);
       })),

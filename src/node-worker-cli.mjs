@@ -11,7 +11,7 @@ export async function main(args = process.argv.slice(2)) {
     context: { type: 'string' }, execution: { type: 'string' }, run: { type: 'string' }, key: { type: 'string' }, file: { type: 'string' },
   } });
   const action = positionals[0];
-  const agentAction = ['questions', 'answer', 'forward', 'tasks', 'task', 'comments', 'relations', 'agents', 'status', 'schedules',
+  const agentAction = ['questions', 'answer', 'forward', 'tasks', 'task', 'task-identity', 'comments', 'relations', 'agents', 'status', 'schedules',
     'schedule-install', 'schedule-pause', 'schedule-resume', 'schedule-cancel', 'interactive-context', 'interactive-grants', 'interactive-status',
     'interactive-prepare', 'interactive-dispatch', 'interactive-cancel', 'message-send', 'messages', 'message'].includes(action);
   requireValue((agentAction || ['read', 'ask', 'submit', 'delegate', 'wait-children', 'delay', 'review-child', 'children'].includes(action) && values.execution && values.run) && values.context,

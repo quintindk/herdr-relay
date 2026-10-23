@@ -10,6 +10,7 @@ export function nativeTasksProvider(api) {
     describeCapabilities: () => nativeCapabilities,
     listTasks: query => api('GET', `/v1/tasks?${new URLSearchParams(query ?? {})}`),
     getTask: id => api('GET', `/v1/tasks/${encodeURIComponent(id)}`),
+    resolveTaskIdentity: query => api('GET', `/v1/task-identity?${new URLSearchParams(query)}`),
     createTask: (task, { key }) => command('task.create', { ...task, id: task.id ?? `task_${digest(key)}` }, key),
     updateTask: (id, changes, { key, expectedRevision }) => command('task.update', { id, expectedRevision, changes }, key),
     listComments: (taskId, query = {}) => api('GET', `/v1/comments?${new URLSearchParams({ ...query, taskId })}`),

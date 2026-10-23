@@ -163,7 +163,7 @@ export function buildBoardRows(value, options = {}) {
         task.assigneeUserId === 'local-board' ? 'Human: Board (local-board)' : `Human: ${task.assigneeUserId}`);
     } else group = ensureGroup(task.companyId, 'unassigned', '', 'Unassigned');
     owners.set(id, group);
-    const searchable = [task.identifier, task.title, task.descriptionPreview, task.status,
+    const searchable = [task.reference, task.identifier, task.source?.metadata?.identifier, task.title, task.descriptionPreview, task.status,
       task.attentionLabel, task.responsibleUserId, projects.get(keyOf(task.companyId, task.projectId))?.name, group.name, group.companyName].map(clean).join(' ').toLocaleLowerCase();
     if ((showDone || !done(task)) && (!filter || searchable.includes(filter))) group.assigned.push(id);
   }

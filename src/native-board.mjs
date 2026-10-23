@@ -29,7 +29,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     return items;
   };
   const scoped = task => ({ ...task, companyId: 'native',
-    identifier: task.identifier || task.source?.metadata?.identifier ||
+    identifier: task.reference || task.identifier || task.source?.metadata?.identifier ||
       (task.id.length > 24 ? `${task.id.slice(0,12)}…${task.id.slice(-8)}` : task.id),
     assigneeUserId: task.responsibleUserId, assigneeAgentId: null });
   const publicationItems = () => (decisionJournal?.pending() ?? []).map(p => ({

@@ -2,35 +2,34 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { digest, requireValue } from './protocol.mjs';
+import { assertTaskIdentityIntegrity } from './task-identity.mjs';
+
+export function backendMaintenanceBlockers(db) {
+  const blockers = [];
+  for (const [kind, settled] of [
+    ['execution', ['requested', 'waiting', 'waiting_children', 'waiting_time', 'in_review', 'monitor_review', 'monitor_blocked', 'completed', 'cancelled', 'failed', 'rejected']],
+    ['message', ['queued', 'delivered', 'blocked']], ['provision_request', ['ready', 'blocked', 'cancelled']], ['headless_setup', ['ready', 'blocked']],
+  ]) for (const row of db.prepare('SELECT data FROM entities WHERE kind=?').all(kind)) {
+    const entity = JSON.parse(row.data);
+    if (!settled.includes(entity.state)) blockers.push({ kind: kind === 'provision_request' ? 'preparation' : kind, id: entity.id, state: entity.state });
+  }
+  return blockers;
+}
 
 export function inspectDatabase(path, role) {
   requireValue(existsSync(path), 'upgrade_state_missing', 'Existing service database is required. Upgrade never initialises a new identity');
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    requireValue(db.prepare('PRAGMA user_version').get().user_version === 1, 'upgrade_incompatible', 'Only existing schema-1 state is supported');
+    const schema = db.prepare('PRAGMA user_version').get().user_version;
+    requireValue((role === 'backend' ? [1, 2] : [1]).includes(schema), 'upgrade_incompatible', 'Unsupported service database schema');
     requireValue(db.prepare('PRAGMA quick_check').get().quick_check === 'ok', 'upgrade_state_invalid', 'Database integrity check failed');
     const blockers = [];
     if (role === 'backend') {
+      if (schema === 2) assertTaskIdentityIntegrity(db);
       const instanceId = db.prepare("SELECT value FROM settings WHERE key='instance'").get()?.value;
       requireValue(instanceId, 'upgrade_state_invalid', 'Existing backend instance identity is missing');
-      for (const row of db.prepare("SELECT data FROM entities WHERE kind='execution'").all()) {
-        const e = JSON.parse(row.data);
-        if (!['requested', 'waiting', 'waiting_children', 'waiting_time', 'in_review', 'monitor_review', 'monitor_blocked',
-          'completed', 'cancelled', 'failed', 'rejected'].includes(e.state)) blockers.push({ kind: 'execution', id: e.id, state: e.state });
-      }
-      for (const row of db.prepare("SELECT data FROM entities WHERE kind='message'").all()) {
-        const m = JSON.parse(row.data);
-        if (!['queued', 'delivered', 'blocked'].includes(m.state)) blockers.push({ kind: 'message', id: m.id, state: m.state });
-      }
-      for (const row of db.prepare("SELECT data FROM entities WHERE kind='provision_request'").all()) {
-        const p = JSON.parse(row.data);
-        if (!['ready', 'blocked', 'cancelled'].includes(p.state)) blockers.push({ kind: 'preparation', id: p.id, state: p.state });
-      }
-      for (const row of db.prepare("SELECT data FROM entities WHERE kind='headless_setup'").all()) {
-        const setup = JSON.parse(row.data);
-        if (!['ready', 'blocked'].includes(setup.state)) blockers.push({ kind: 'headless_setup', id: setup.id, state: setup.state });
-      }
-      return { instanceId, blockers };
+      blockers.push(...backendMaintenanceBlockers(db));
+      return { instanceId, schema, blockers };
     }
     const identity = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='identity'").get()?.value ?? 'null');
     requireValue(identity?.nodeId && identity.instanceId, 'upgrade_state_invalid', 'Existing node/backend identity is missing');
@@ -51,7 +50,7 @@ export function inspectDatabase(path, role) {
     for (const row of db.prepare('SELECT id,state FROM occurrences').all()) {
       if (!['pending', 'completed', 'failed', 'cancelled', 'in_review', 'waiting_question'].includes(row.state)) blockers.push({ kind: 'occurrence', ...row });
     }
-    return { ...identity, blockers };
+    return { ...identity, schema, blockers };
   } finally { db.close(); }
 }
 

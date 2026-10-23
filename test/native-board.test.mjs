@@ -73,6 +73,19 @@ test('native board displays readable identifiers without changing task identity'
   assert.equal((await board.detailTask({ taskId: opaque })).task.id, opaque);
 });
 
+test('primary references take precedence in rows and details while imported aliases remain filterable', async () => {
+  const task = { id: 'opaque', reference: 'REL-32', title: 'Review', status: 'todo', responsibleUserId: 'owner', source: { metadata: { identifier: 'DEF-32' } } };
+  const board = nativeBoard(async (method, path) => {
+    if (path === '/v1/info') return { instanceId: 'backend', userId: 'owner' };
+    if (path === '/v1/tasks/opaque') return task;
+    return { items: path.startsWith('/v1/tasks?') ? [task] : [] };
+  });
+  const snapshot = await board.read();
+  assert.equal(snapshot.tasks[0].identifier, 'REL-32');
+  assert.equal((await board.detailTask({ taskId: 'opaque' })).task.reference, 'REL-32');
+  for (const filter of ['REL-32', 'DEF-32']) assert.equal(buildBoardRows(snapshot, { filter }).filter(row => row.type === 'task').length, 1);
+});
+
 test('native board displays paused schedules and completed taskless occurrences without inventing local admission', async () => {
   const backend = await startBackend({ database: ':memory:' });
   try {

@@ -123,6 +123,9 @@ export default Plugin.define({
           if (connection.sessionId !== context.sessionID) throw new Error('Agent tool belongs to another exact conversation');
           return { content: JSON.stringify(await call(connection, 'POST', `/agent/${action}`, input)) };
         };
+        editor.add({ name: 'relay_task_resolve', description: 'Resolve a native task ID, primary reference such as REL-32, or scoped imported alias such as DEF-32. Inspect state and matches. Ambiguous aliases never select a task automatically. Use the resolved native ID and inspected revision for subsequent operations.', options: { codemode: false },
+          input: { type: 'object', properties: { value: { type: 'string', minLength: 1, maxLength: 512 }, reference: { type: 'string', minLength: 1, maxLength: 64 }, scope: { type: 'string', minLength: 1, maxLength: 512 } }, additionalProperties: false },
+          execute: (input, context) => agent(context, 'task-identity', input) });
         for (const [name, action, description] of [
           ['relay_headless_connections', 'headless-connections', 'Inspect non-secret references to existing model connections and connected MCP servers. Discovery is not permission to reuse them.'],
           ['relay_headless_grants', 'headless-grants', 'Discover explicit revocable grants for headless setup using existing authenticated integrations.'],

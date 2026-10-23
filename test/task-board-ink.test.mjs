@@ -9,7 +9,17 @@ const h = React.createElement;
 const tick = () => new Promise(resolve => setTimeout(resolve, 40));
 const board = { companies: [{ id: 'company', name: 'Acme' }], agents: [], projects: [], routines: [], warnings: [], fetchedAt: new Date().toISOString(),
   tasks: [{ id: 'task', companyId: 'company', identifier: 'DEF-1', title: 'Review costs', status: 'todo', priority: 'medium',
-    assigneeUserId: 'local-board', assigneeAgentId: null, parentId: null, projectId: null }] };
+     assigneeUserId: 'local-board', assigneeAgentId: null, parentId: null, projectId: null }] };
+
+for (const width of [100, 60, 40, 24]) test(`native Ink rows retain complete primary references at width ${width}`, async t => {
+  const reference = 'ABCDEFGHIJKLMNOP-9007199254740991';
+  const task = { ...board.tasks[0], reference, identifier: reference, title: 'Numbered task', attentionLabel: 'Long attention text that must not hide identity' };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [], tasks: [task] }), interval: 60000, width, height: 26 }));
+  t.after(() => instance.unmount()); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  assert.ok(frame.replace(/[\s│]/g, '').includes(reference), frame);
+  assert.doesNotMatch(frame, /DEF-1/);
+});
 
 test('Ink board permanently deletes a blocked agent-owned occurrence after explicit confirmation', async t => {
   const task = { ...board.tasks[0], status: 'blocked', assigneeUserId: null, assigneeAgentId: 'sweep-agent' };

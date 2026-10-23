@@ -23,7 +23,8 @@ function fixture(t) {
     writeFileSync(join(directory, 'packages/opencode-relay/package.json'), JSON.stringify({ name: '@herdr/relay-opencode-v2-spike', version }));
     return directory;
   };
-  const previous = makePackage('0.2.0-rc.4', null), candidate = makePackage('0.2.0-rc.5');
+  // Synthetic compatible packages, not claims that historical RC4 supported schema 2.
+  const previous = makePackage('0.2.0-rc.4'), candidate = makePackage('0.2.0-rc.5');
   symlinkSync(join(previous, 'src/cli.mjs'), join(bin, 'herdr-relay'));
   const store = new BackendStore(join(backend, 'backend.sqlite'));
   const ownerToken = store.bootstrap().token, owner = store.authenticate(ownerToken);
@@ -66,6 +67,23 @@ function fixture(t) {
   t.after(() => { journal.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
   return f;
 }
+
+test('database schema mismatch refuses downgrade or implicit migration before any service stop', async t => {
+  const f = fixture(t), manifest = join(f.candidate, 'package.json'), value = JSON.parse(readFileSync(manifest, 'utf8'));
+  writeFileSync(manifest, JSON.stringify({ ...value, relayCompatibility: { ...compatibility, backendSchema: 1 } }));
+  await assert.rejects(f.apply(), { code: 'upgrade_incompatible' });
+  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+});
+
+test('retained schema-1 rollback is refused after migration without touching current service pointers', async t => {
+  const f = fixture(t), manifest = join(f.previous, 'package.json'), value = JSON.parse(readFileSync(manifest, 'utf8'));
+  writeFileSync(manifest, JSON.stringify({ ...value, relayCompatibility: { ...compatibility, backendSchema: 1 } }));
+  const result = await f.apply();
+  f.calls.length = 0;
+  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_incompatible' });
+  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
+});
 
 test('managed service parsing preserves quoted paths, port, runtime executable and state while changing release only', t => {
   const f = fixture(t), service = f.states.get('herdr-relay-backend.service');

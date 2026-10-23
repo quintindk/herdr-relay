@@ -22,6 +22,11 @@ compatibility: opencode
 
 ## Tasks and directory
 
+- On versions exposing task identity, use `relay_task_resolve` for readable task
+  references and imported aliases. Inspect `state` and all matches. Ambiguous
+  aliases never select a task automatically. Use the resolved native ID and current
+  revision for writes. References are immutable identity, not labels or authority.
+
 - `relay_task_list`, `relay_task_inspect`, `relay_task_comments` and
   `relay_task_relations` inspect native tasks. Follow pagination and check traversal
   completeness/provider limitations. Do not mistake a preview for full text.

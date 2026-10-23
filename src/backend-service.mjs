@@ -9,6 +9,7 @@ import { bootstrapNode } from './node-bootstrap.mjs';
 import { messageParticipant, queryMessages } from './agent-messages.mjs';
 import { existsSync } from 'node:fs';
 import { releaseVersion, compatibility } from './release-info.mjs';
+import { resolveTaskIdentity } from './task-identity.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
@@ -32,12 +33,17 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true } };
+        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && /^\/v1\/headless_setups\/[^/]+\/authority$/.test(url.pathname)) result = headlessAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && url.pathname === '/v1/snapshot') result = store.snapshot();
+      else if (req.method === 'GET' && url.pathname === '/v1/task-identity') {
+        requireValue([...url.searchParams.keys()].every(key => ['value', 'reference', 'scope'].includes(key)) &&
+          [...url.searchParams.keys()].every(key => url.searchParams.getAll(key).length === 1), 'invalid_task_lookup', 'Unsupported or repeated task identity lookup fields');
+        result = resolveTaskIdentity(store, Object.fromEntries(url.searchParams));
+      }
       else if (req.method === 'GET' && /^\/v1\/messages(?:\/[^/]+)?$/.test(url.pathname)) {
         requireValue([...url.searchParams.keys()].every(k => ['agentId', 'direction', 'limit', 'cursor'].includes(k)), 'invalid_query', 'Unsupported message filter');
         const id = url.pathname.split('/')[3];
@@ -57,7 +63,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       }
       else if (req.method === 'GET' && url.pathname === '/v1/events') result = store.events({ cursor: url.searchParams.get('cursor') ?? undefined,
         limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined });
-      else if (req.method === 'GET' && /^\/v1\/(task|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact|provision_grant|provision_request|headless_grant|headless_setup)s(?:\/[^/]+)?$/.test(url.pathname)) {
+      else if (req.method === 'GET' && /^\/v1\/(task|task_reference_grant|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact|provision_grant|provision_request|headless_grant|headless_setup)s(?:\/[^/]+)?$/.test(url.pathname)) {
         const [, plural, id] = url.pathname.split('/').slice(1);
         const kind = plural.slice(0, -1);
         requireValue([...url.searchParams.keys()].every(key => ['cursor', 'taskId', 'status', 'limit'].includes(key)),
