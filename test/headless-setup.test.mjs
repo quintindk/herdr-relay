@@ -26,7 +26,7 @@ function fixture(t) {
   return { store, owner, node, command, grant, request };
 }
 
-test('headless setup requires an explicit owner grant and exact coordinator, reuses stable workspace/name and cannot replace Mason', t => {
+test('headless setup requires an explicit grant and exact coordinator, reuses stable workspace/name and cannot replace Mason', t => {
   const f = fixture(t), { command: c, owner, node, grant, request } = f;
   assert.throws(() => c(node, 'self-grant', 'headless.grant', grant), { code: 'forbidden' });
   c(owner, 'grant', 'headless.grant', grant);

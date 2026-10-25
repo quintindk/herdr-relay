@@ -3,16 +3,22 @@ import { digest, requireValue } from './protocol.mjs';
 
 // A human credential is separate from both the backend-root credential and the
 // node daemon credential. It may manage this node's enrolments and the same
-// human's task/inbox decisions, but cannot bootstrap nodes or issue grants.
+// human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
 export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'task.create', 'task.update', 'comment.create', 'reference.attach',
   'execution.request', 'execution.cancel', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
-  'occurrence.review', 'notification.acknowledge', 'review.grant', 'review.revoke']);
+  'occurrence.review', 'notification.acknowledge', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 
 export function authoriseOperator(store, actor, action, payload) {
   if (!actor.scope) return;
   const scope = actor.scope;
   requireValue(actor.type === 'user' && actor.id === store.owner && scope.kind === 'node_operator' && nodeOperatorActions.includes(action),
     'forbidden', 'This node operator credential cannot perform backend administration', 403);
+  if (action === 'headless.grant' || action === 'headless.revoke') {
+    const grant = action === 'headless.grant' ? payload : store.get('headless_grant', payload.id);
+    requireValue(grant.nodeId === scope.nodeId && canonicalDirectory(grant.directory) &&
+      (scope.mode === 'localUser' || withinRoots(grant.directory, scope.roots)),
+    'operator_scope_mismatch', 'Grant must stay within this node operator workspace scope', 403);
+  }
   if (action === 'agent.enrol' || action === 'agent.attach') {
     const nodeId = action === 'agent.enrol' ? payload.nodeId : store.get('agent', payload.id).nodeId;
     requireValue(nodeId === scope.nodeId && canonicalDirectory(payload.directory) &&

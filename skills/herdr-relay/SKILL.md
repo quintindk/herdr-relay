@@ -82,9 +82,18 @@ compatibility: opencode
   separately restarts the safely settled node and installs/activates the schedule
   using authorised backend administration. No root credential belongs on the node.
 - `relay_headless_connections` discovers non-secret existing model/MCP
-  connection references, not authority. A human backend operator must explicitly
-  grant the exact coordinator, workspace, job contract, model connection, MCP
-  and shell allow/deny capabilities and schedule. Do not self-issue that grant or borrow owner credentials.
+  connection references, not authority. An enrolled interactive coordinator can use
+  `relay_headless_grant` to create its own node/workspace grant with explicit job
+  contract, model connection, MCP/shell permissions and schedule. No backend-owner
+  context, parent execution or manual transfer to the backend host is needed.
+  Requester, node and workspace are inferred; supplied values must match. Use a
+  stable key and reconcile existing grants before creating another operation.
+  `relay_headless_revoke` revokes only this coordinator's own grant at its inspected
+  revision. Headless workers cannot issue grants through these methods.
+- The matching `headless grant|revoke --file JSON --key KEY` CLI uses the enrolled
+  agent connection in a chat, or the joined node's scoped operator outside a chat.
+  Do not read or copy credential files. Node operators remain limited to their own
+  node/workspace scope. Grant creation alone does not provision or activate work.
 - With that grant, use `relay_headless_setup` once and inspect `relay_headless_status`.
   It creates/reuses a dedicated headless session in the existing authenticated
   OpenCode service. No credential store is copied and no second login is needed.

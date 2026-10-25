@@ -226,7 +226,7 @@ export class BackendStore {
       return created('task_reference_grant', { id, principal: p.principal, prefix: p.prefix, maxNumber: p.maxNumber, state: 'active' });
     }
     if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed });
-    if (action.startsWith('headless.')) return applyHeadlessSetup(this, actor, action, p, { created, changed });
+    if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     const taskDisposition = (taskId, status, causation) => {
       const task = this.get('task', taskId);

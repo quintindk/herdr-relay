@@ -6,7 +6,7 @@ import { nativeNodeConfig } from './native-enrol.mjs';
 import { createPrivateJson, readPrivateJson, writePrivateJson } from './private-files.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { serviceLock } from './service-lock.mjs';
-import { contextClient } from './native-onboarding.mjs';
+import { contextClient, defaultOperatorContext } from './native-onboarding.mjs';
 import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
 import { call } from './client.mjs';
 import { waitHeadlessSetup } from './headless-setup-wait.mjs';
@@ -19,7 +19,9 @@ herdr-relay headless inspect --file MANIFEST_JSON [--config NODE_JSON]
   Inspect configuration only. Node readiness and schedule acknowledgement must be checked separately.
 Also available as herdr-relay native agent provision with the same provisioning options.
 herdr-relay headless connections|grants [--config NODE_JSON]  [enrolled coordinator; no secrets]
-herdr-relay headless grant|revoke --file PAYLOAD_JSON --key KEY --context ROOT_OWNER_JSON
+herdr-relay headless grant|revoke --file PAYLOAD_JSON --key KEY [--config NODE_JSON] [--context OPERATOR_JSON]
+  Enrolled chats use their existing agent identity. Outside a chat, the joined node operator is used by default.
+  No backend-owner context is required. Agents manage only their own node/workspace grants.
   Grants require permissions:{mcp:BOOLEAN,shell:BOOLEAN}. Shell allowed is full OS-user access, not an artifact-path sandbox.
 herdr-relay headless setup --grant-id ID --key KEY [--config NODE_JSON]  [readiness then activation]
 herdr-relay headless status --id SETUP_ID [--config NODE_JSON]`;
@@ -123,18 +125,26 @@ export async function headlessCli(args) {
   } });
   if (['grant', 'revoke', 'setup', 'status', 'grants', 'connections'].includes(positionals[1])) {
     const action = positionals[1];
-    const permitted = ['grant', 'revoke'].includes(action) ? ['file', 'context', 'key'] : ['config', ...(action === 'setup' ? ['key', 'grant-id', 'retry'] : action === 'status' ? ['id'] : [])];
+    const permitted = ['grant', 'revoke'].includes(action) ? ['file', 'context', 'key', 'config'] : ['config', ...(action === 'setup' ? ['key', 'grant-id', 'retry'] : action === 'status' ? ['id'] : [])];
     requireValue(Object.keys(values).every(k => permitted.includes(k)), 'invalid_request', 'Unsupported setup/grant option');
     requireValue(positionals.length === 2 && !values.apply && !values['schedule-output'], 'invalid_request', 'Setup/grant commands do not accept provisioning options');
     let result;
     if (['grant', 'revoke'].includes(action)) {
-      requireValue(values.file && values.context && values.key, 'invalid_request', 'Explicit payload, root context and stable key required');
-      const api = contextClient(readPrivateJson(values.context)), payload = readPrivateJson(values.file);
-      if (action === 'grant' && payload.permissions) requireValue((await api('GET', '/v1/info')).features?.headlessToolPermissions,
-        'backend_upgrade_required', 'Backend must support general headless tool permissions');
-      if (action === 'grant' && payload.capabilities) requireValue((await api('GET', '/v1/info')).features?.headlessCapabilities,
-        'backend_upgrade_required', 'Backend must support approved headless task/artifact capabilities');
-      result = await api('POST', '/v1/commands', { key: values.key, action: `headless.${action}`, payload });
+      requireValue(values.file && values.key, 'invalid_request', 'Explicit payload and stable key required');
+      const payload = readPrivateJson(values.file), sessionId = process.env.OPENCODE_SESSION_ID;
+      if (!values.context && sessionId) {
+        const connection = workerConnection({ workerDirectory: dirname(resolve(values.config ?? nativeNodeConfig())) }, sessionId);
+        result = await call(connection, 'POST', `/agent/headless-${action}`, { key: values.key, payload });
+      } else {
+        const context = readPrivateJson(values.context ?? defaultOperatorContext(values.config ?? nativeNodeConfig()));
+        const api = contextClient(context), info = await api('GET', '/v1/info');
+        if (context.scope) requireValue(info.features?.nodeHeadlessGrants, 'backend_upgrade_required', 'Backend must support node-local headless grants');
+        if (action === 'grant' && payload.permissions) requireValue(info.features?.headlessToolPermissions,
+          'backend_upgrade_required', 'Backend must support general headless tool permissions');
+        if (action === 'grant' && payload.capabilities) requireValue(info.features?.headlessCapabilities,
+          'backend_upgrade_required', 'Backend must support approved headless task/artifact capabilities');
+        result = await api('POST', '/v1/commands', { key: values.key, action: `headless.${action}`, payload });
+      }
     } else {
       const sessionId = process.env.OPENCODE_SESSION_ID;
       requireValue(sessionId, 'human_coordinator_required', 'Use an enrolled coordinator chat; this command does not borrow operator credentials');

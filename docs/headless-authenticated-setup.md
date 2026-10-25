@@ -1,14 +1,16 @@
 # General headless setup with existing authenticated integrations
 
-RC10 introduces the general MCP permission model. It creates a
+Headless setup uses the general MCP permission model. It creates a
 dedicated worker session in the existing authenticated OpenCode service. It does
 not create another private HOME, copy credential stores or reuse the coordinator's
 conversation. Isolation is per session, not an operating-system sandbox.
 
 ## Grant model
 
-The backend owner issues one explicit grant for the coordinator, node, worker,
-contract, model connection, capability permissions and schedule:
+An enrolled interactive coordinator can issue its own grant on its own node and
+workspace. No backend-owner context or manual transfer to the backend host is
+required. The explicit grant records the coordinator, node, worker, contract,
+model connection, capability permissions and schedule:
 
 ```json
 {
@@ -58,13 +60,30 @@ extension boundary.
 
 ```bash
 herdr-relay headless grant --file /private/approved-job-grant.json \
-  --key approved-job-authorise-v1 --context /private/owner.json
+  --key approved-job-authorise-v1
 ```
 
-Run this on the backend host with its existing root-owner context. A coordinator
-can prepare a non-secret proposal, but cannot issue its own grant or obtain the
-owner credential. Creating the grant does not create a worker or start a schedule.
-No connector-specific grant fields or compatibility bridges are accepted.
+Run this on the destination machine. In an enrolled chat, the CLI uses the existing
+agent connection. In a normal terminal, it defaults to the joined node's existing
+scoped operator context. `--config NODE_JSON` selects a non-default joined node.
+An explicit `--context` remains available for local operator or global backend
+administration, but is not required for normal grant creation.
+
+The direct plugin methods are `relay_headless_grant({key,payload})` and
+`relay_headless_revoke({key,payload:{id,expectedRevision}})`. Grant payloads use the
+job specification above. `requesterAgentId`, `nodeId` and `directory` can be omitted:
+the backend derives them from the enrolled coordinator. Supplied values must
+match that identity, node and workspace. An agent cannot issue/revoke another
+agent's grants, and headless agent credentials cannot issue grants.
+
+Node operators can administer grants within their existing node/workspace scope,
+not another node's grants. The backend records the issuing agent or node operator.
+Current receiver checks, revisions and immutable operation keys still apply.
+Creating a grant does not create a worker or start a schedule. No connector-specific
+grant fields or compatibility bridges are accepted. Existing grants remain valid.
+Backend, node and plugin must expose the `nodeHeadlessGrants` capability for the
+agent route; an older component reports an upgrade requirement, not an owner-context
+workaround.
 
 `relay_headless_connections` lists non-secret model connection references and
 currently connected MCP server/tool names. Discovery grants no permission. Model
@@ -134,7 +153,7 @@ where available and preserve uncertain effects according to the job contract.
 
 ```bash
 herdr-relay headless revoke --file /private/revoke.json \
-  --key approved-job-revoke-v1 --context /private/owner.json
+  --key approved-job-revoke-v1
 # revoke.json: {"id":"approved-job","expectedRevision":1}
 ```
 

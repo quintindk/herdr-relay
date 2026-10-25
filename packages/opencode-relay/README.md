@@ -12,6 +12,7 @@ production package name is `@herdr/relay-opencode`.
 | `attachment-sidebar.tsx` | Reactive selected-chat attachment status renderer |
 | `rpc.mjs` | Read-only runtime/status RPC and filtered notifications |
 | `cli-bridge.mjs` | Human interactive access to the installed native CLI |
+| `headless-grant-tools.mjs` | Own-node coordinator grant creation/revocation without an owner context |
 | `native.mjs` | Exact identity, paginated snapshots, single-send and observation |
 | `owned-runtime.mjs` | Isolated test/owned-runtime launch and verified stop |
 | `human-inbox.mjs` | Keyboard-confirmed human decisions, separate from model tools |

@@ -13,6 +13,7 @@ import { waitHeadlessSetup } from '../../src/headless-setup-wait.mjs';
 import { digest } from '../../src/protocol.mjs';
 import { readAttachmentStatus } from './attachment-status.mjs';
 import { registerCliBridge } from './cli-bridge.mjs';
+import { registerHeadlessGrantTools } from './headless-grant-tools.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.server',
@@ -35,6 +36,7 @@ export default Plugin.define({
       });
       if (ctx.options.workerContextFile || ctx.options.workerDirectory) {
         registerCliBridge(editor, ctx);
+        registerHeadlessGrantTools(editor, ctx);
         registerMcpTools(editor, ctx);
         registerHeadlessPermissionTools(editor, ctx);
         const worker = async (context, action, input) => {

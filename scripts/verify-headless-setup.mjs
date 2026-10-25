@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startBackend } from '../src/backend-service.mjs';
 import { nativeBackendClient } from '../src/backend-client.mjs';
@@ -18,13 +19,15 @@ import { waitHeadlessSetup } from '../src/headless-setup-wait.mjs';
 
 process.umask(0o077);
 const capabilityMode = process.argv.includes('--capabilities');
+const agentGrantMode = process.argv.includes('--agent-grant');
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
+const packageDirectory = resolve(process.env.RELAY_PACKAGE_DIRECTORY ?? '.');
 const shellOutput = join(root, 'outside-workspace-shell.txt');
 mkdirSync(workspace); mkdirSync(state); mkdirSync(join(workspace, '.opencode/skills/approved-job'), { recursive: true });
 writeFileSync(join(workspace, '.opencode/skills/approved-job/SKILL.md'), 'Inspect the approved fixture only. Submit a native result.');
-let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden = false;
+let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden = false, grantProposal;
 const mcpSessions = [];
 const mcp = createServer(async (req, res) => {
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
@@ -49,16 +52,19 @@ const model = createServer(async (req, res) => {
   const input = JSON.parse(body), last = input.messages.findLastIndex(m => m.role === 'user');
   const called = input.messages.slice(last + 1).filter(m => m.role === 'tool').length;
   const probe = JSON.stringify(input.messages[last]?.content).includes('Bounded platform readiness');
-  if (shellMode && !shellAllowed) {
+  const grantTurn = JSON.stringify(input.messages[last]?.content).includes('Create the node-local fixture grant only');
+  if (agentGrantMode && !grantTurn) assert.equal(Boolean(input.tools?.some(t => ['relay_headless_grant', 'relay_headless_revoke'].includes(t.function.name))), false,
+    'Headless workers must not acquire coordinator grant-management tools');
+  if (!grantTurn && shellMode && !shellAllowed) {
     assert.equal(input.tools?.some(t => ['shell', 'relay_shell_call'].includes(t.function.name)), false, 'Denied shell must not be advertised');
     shellDeniedHidden = true;
   }
-  const steps = probe ? ['relay_headless_permissions', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
+  const steps = grantTurn ? ['relay_headless_grant'] : probe ? ['relay_headless_permissions', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
     ['relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), ...(shellAllowed ? ['relay_shell_call'] : []), 'relay_work_submit'];
   const name = steps[called];
   const tool = name && input.tools?.find(t => t.function.name.endsWith(name));
   if (name && !tool) console.error(JSON.stringify({ missingTool: name, advertised: input.tools?.map(t => t.function.name) }));
-  const args = name === 'relay_mcp_call' ? { tool: called === 1 ? 'records_read' : 'actions_send', arguments: called === 1 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
+  const args = name === 'relay_headless_grant' ? { key: 'grant-once', payload: grantProposal } : name === 'relay_mcp_call' ? { tool: called === 1 ? 'records_read' : 'actions_send', arguments: called === 1 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
     ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : name === 'relay_shell_call' ? { command: `printf '%s' 'shell-fixture' > '${shellOutput}'` } : ['relay_headless_capabilities', 'relay_headless_permissions', 'relay_mcp_tools'].includes(name) ? {} :
     { key: probe ? 'ready' : 'job', candidate: probe ? 'headless-readiness' : 'fixture-job', summary: 'Native capability and result submission verified.' };
   const delta = tool ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${called}`, type: 'function', function: { name: tool.function.name, arguments: JSON.stringify(args) } }] }
@@ -78,7 +84,7 @@ const wait = async (label, check) => {
   throw Error(`Timed out: ${label}. Fixture ${root}. Node log: ${log}`);
 };
 const startNode = async configFile => {
-  log = ''; daemon = spawn(process.execPath, [resolve('src/node-cli.mjs'), '--config', configFile], { stdio: ['ignore', 'pipe', 'pipe'] });
+  log = ''; daemon = spawn(process.execPath, [join(packageDirectory, 'src/node-cli.mjs'), '--config', configFile], { stdio: ['ignore', 'pipe', 'pipe'] });
   for (const stream of [daemon.stdout, daemon.stderr]) stream.on('data', data => { log = (log + data).slice(-5000); });
   await wait('node startup', () => log.includes('"state":"running"'));
 };
@@ -87,7 +93,8 @@ const stopNode = async () => {
 };
 try {
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve)); await new Promise(resolve => mcp.listen(0, '127.0.0.1', resolve));
-  backend = await startBackend({ database: join(root, 'backend.sqlite') });
+  const launchBackend = process.env.RELAY_PACKAGE_DIRECTORY ? (await import(pathToFileURL(join(packageDirectory, 'src/backend-service.mjs')))).startBackend : startBackend;
+  backend = await launchBackend({ database: join(root, 'backend.sqlite') });
   const owner = nativeBackendClient({ url: backend.origin, token: backend.store.bootstrap().token });
   const command = (key, action, payload) => owner('POST', '/v1/commands', { key, action, payload });
   const bundleFile = join(root, 'node.bundle.json');
@@ -95,7 +102,7 @@ try {
   const joined = await joinNode({ bundleFile, configFile: join(state, 'node.json') });
   runtime = await launchOwnedV2({ directory: join(root, 'runtime'), workspace,
     executable: process.env.RELAY_V2_BINARY ?? resolve('packages/opencode-relay/node_modules/.bin/opencode2'),
-    config: { plugins: [{ package: resolve('packages/opencode-relay'), options: { workerDirectory: state } }],
+    config: { plugins: [{ package: join(packageDirectory, 'packages/opencode-relay'), options: { workerDirectory: state } }],
       model: 'openai/fixture', compaction: { auto: false }, providers: { openai: { package: '@ai-sdk/openai-compatible',
         settings: { baseURL: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'fixture-only' }, models: { fixture: { name: 'Fixture', limit: { context: 8192, output: 512 } } } } },
       mcp: { servers: { records: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false } } } } });
@@ -124,14 +131,29 @@ try {
   // Discovery may be injected by the fixture node through its standard registration file.
   writeFileSync(registration, JSON.stringify({ url: runtime.descriptor.origin, password, version: (await client.server.info()).version, pid: runtime.descriptor.pid }));
   config.headless = { serviceRegistration: registration }; writeFileSync(joined.configFile, JSON.stringify(config));
-  await command('grant', 'headless.grant', { id: 'approved-job-grant', requesterAgentId: coordinator.agentId, nodeId: joined.nodeId, name: 'approved-worker', directory: workspace,
+  grantProposal = { id: 'approved-job-grant', requesterAgentId: coordinator.agentId, nodeId: joined.nodeId, name: 'approved-worker', directory: workspace,
     model: { providerID: 'openai', id: 'fixture', integrationID: provider.integrationID, connectionId },
     permissions: { mcp: !mcpDenied, shell: shellAllowed }, contract: '.opencode/skills/approved-job/SKILL.md',
     schedule: { id: 'approved-job-weekdays', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' },
     ...(capabilityMode ? { capabilities: { sourceNamespaces: ['external:record'], taskActions: ['task.create', 'task.update', 'comment.create', 'reference.attach'],
-      artifacts: { receipts: 'artifacts/receipts', state: 'artifacts/state.json', history: 'artifacts/history', runs: 'artifacts/runs', summaries: 'artifacts/summaries' } } } : {}) });
+      artifacts: { receipts: 'artifacts/receipts', state: 'artifacts/state.json', history: 'artifacts/history', runs: 'artifacts/runs', summaries: 'artifacts/summaries' } } } : {}) };
+  if (!agentGrantMode) await command('grant', 'headless.grant', grantProposal);
   await startNode(joined.configFile);
   const worker = workerConnection({ workerDirectory: state }, session.id);
+  if (agentGrantMode) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await client.session.prompt({ sessionID: session.id, text: 'Create the node-local fixture grant only. Do not provision a worker, activate a schedule or run a job.' });
+      await client.session.wait({ sessionID: session.id });
+    }
+    const grant = await owner('GET', '/v1/headless_grants/approved-job-grant');
+    assert.equal(grant.state, 'active'); assert.equal(grant.revision, 1);
+    assert.equal(grant.issuedBy.type, 'agent'); assert.equal(grant.issuedBy.agentId, coordinator.agentId);
+    assert.equal(grant.issuedBy.nodeId, joined.nodeId);
+    const snapshot = await owner('GET', '/v1/snapshot');
+    assert.equal(snapshot.collections.headless_grant.length, 1);
+    assert.equal(snapshot.collections.headless_setup.length, 0); assert.equal(snapshot.collections.schedule.length, 0);
+    assert.equal(snapshot.collections.execution.length, 0); assert.equal(snapshot.collections.agent.length, 1);
+  }
   const receipt = await call(worker, 'POST', '/agent/headless-setup', { key: 'setup-once', grantId: 'approved-job-grant' });
   assert.equal(receipt.state, 'recorded'); const id = receipt.receipt.id;
   const result = await waitHeadlessSetup(worker, receipt);
@@ -177,12 +199,16 @@ try {
   const retry = await call(worker, 'POST', '/agent/headless-setup', { key: 'setup-once', grantId: 'approved-job-grant' });
   assert.equal(retry.receipt.id, id);
   assert.equal((await client.server.info()).pid, runtime.descriptor.pid);
-  await command('revoke', 'headless.revoke', { id: 'approved-job-grant', expectedRevision: 1 });
+  if (agentGrantMode) {
+    const revoked = await call(worker, 'POST', '/agent/headless-revoke', { key: 'revoke-once', payload: { id: 'approved-job-grant', expectedRevision: 1 } });
+    assert.equal(revoked.state, 'recorded'); assert.equal(revoked.receipt.state, 'revoked');
+  } else await command('revoke', 'headless.revoke', { id: 'approved-job-grant', expectedRevision: 1 });
   assert.equal((await owner('GET', '/v1/schedules/approved-job-weekdays')).definition.enabled, false);
-  console.log(JSON.stringify({ passed: true, singleCoordinatorSetup: true, existingAuthenticatedServiceReused: true, mcpAllowed: !mcpDenied,
+  console.log(JSON.stringify({ passed: true, runtimeVersion: (await client.server.info()).version, singleCoordinatorSetup: true, existingAuthenticatedServiceReused: true, mcpAllowed: !mcpDenied,
     readCalls: reads, writeCalls: writes, shellAllowed, shellAttempted: shellAllowed, shellDeniedHidden, outsideWorkspaceShellWrite: existsSync(shellOutput), readinessHadNoExternalEffects: true, toolsAddedAfterSetupCovered: true,
     nativeResultSubmission: true, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
-    scopedTaskAndFileCanaries: capabilityMode, credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
+    scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
+    credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {
   await stopNode();
   if (runtime) await runtime.stop(); if (backend) await backend.close();

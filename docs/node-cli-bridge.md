@@ -29,8 +29,9 @@ fallback for native work.
 
 This is method coverage, not an assertion that every operation is authorised on
 every node. Existing CLI actor scopes, revisions, immutable keys, maintenance and
-readiness checks still apply. A Surface node operator cannot issue backend-root
-grants merely because the bridge exposes the command.
+readiness checks still apply. Headless grants can be issued through the enrolled
+agent connection or local node operator without a backend-owner context. Global
+node bootstrap and other backend-root administration remain separate.
 
 ## Call shape
 

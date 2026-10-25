@@ -61,6 +61,10 @@ jobs:
             assert.equal(test.passed && test.realModelToolTurn && test.pluginInvokedActualCli && test.humanTaskCreated && test.existingPeerExecutionRequested, true);
             assert.equal(test.activeParentRequired, false);
           }
+          assert.deepEqual(report.installedAgentGrantVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2']);
+          for (const test of report.installedAgentGrantVerifications) {
+            assert.equal(test.passed && test.grantIssuedByCoordinatorWithoutOwner && test.agentGrantRetryIdempotent && test.revocationPausedSchedule && test.readinessHadNoExternalEffects, true);
+          }
           NODE
           sha256sum -c SHA256SUMS
       - name: Publish without replacing an existing release or assets

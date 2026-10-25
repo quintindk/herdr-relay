@@ -58,6 +58,19 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const result = await getHeadlessConnections(worker);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
+      if (path === '/agent/headless-grant' || path === '/agent/headless-revoke') {
+        currentReceiver();
+        requireValue(!worker.headlessSetupId, 'headless_requester_scope', 'A headless worker cannot issue or revoke grants', 403);
+        requireValue(api && (await getBackendFeatures?.())?.nodeHeadlessGrants, 'backend_upgrade_required', 'Backend must support node-local headless grants');
+        requireValue(Object.keys(body).every(k => ['key', 'payload'].includes(k)) && typeof body.key === 'string' &&
+          body.key.trim() && body.key.length <= 100 && body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload),
+        'invalid_request', 'Stable key and exact grant payload required');
+        const operation = path.endsWith('grant') ? 'grant' : 'revoke';
+        const command = { key: `agent-headless:${worker.agentId}:${operation}:${body.key}`, action: `agent.headless_${operation}`,
+          payload: { agentId: worker.agentId, conversationId: worker.sessionId, bindingRevision: worker.bindingRevision, payload: body.payload } };
+        journal.queue(command); await journal.flush(api);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(journal.receipt(command.key))); return;
+      }
       if (['/agent/headless-setup', '/agent/headless-status', '/agent/headless-grants'].includes(path)) {
         currentReceiver(); requireValue(api, 'backend_unavailable', 'Native backend required');
         requireValue((await getBackendFeatures?.())?.headlessSetup, 'backend_upgrade_required', 'Backend must support authenticated headless setup');

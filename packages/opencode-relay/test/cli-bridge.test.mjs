@@ -95,6 +95,7 @@ test('bridge runs actual CLI task creation and peer execution request with the e
   assert.equal(execution.targetAgentId, 'target'); assert.equal(execution.originConversation, 'ses_source'); assert.equal(execution.parentExecutionId, undefined);
   assert.equal(execution.targetNodeId, 'peer-node');
   assert.equal((await owner('GET', '/v1/tasks')).items.length, 1); assert.equal((await owner('GET', '/v1/executions')).items.length, 1);
-  const refused = await run({ args: ['headless', 'grant', '--context', '{operator}', '--key', 'no-root', '--file', '{payload}'], payload: {} });
+  const refused = await run({ args: ['native', 'command', '--context', '{operator}', '--file', '{payload}'],
+    payload: { key: 'no-root', action: 'node.enrol', payload: { id: 'not-authorised', name: 'No root access' } } });
   assert.notEqual(refused.exitCode, 0); assert.match(refused.stderr, /forbidden|Backend-root/);
 });

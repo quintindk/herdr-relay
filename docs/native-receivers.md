@@ -37,10 +37,11 @@ open but does not attach it, including through a delayed automatic-attachment ev
   disposal invalidate unconfirmed decisions. They do not rewrite a previously
   confirmed operation.
 
-The standing grant permits replacement attachment and scoped management of that
-agent's persistent schedules. It does not grant owner tools, new native
-permissions, cross-workspace access, cancellation of old turns or inherited
-task-scoped review grants. It is not authentication against hostile processes
+The standing enrolment permits replacement attachment, scoped management of that
+agent's persistent schedules and its own headless grant records. It does not grant
+backend-root tools or silently expand the current session's native permissions.
+It does not allow cross-workspace access, cancellation of old turns or inheritance
+of task-scoped review grants. It is not authentication against hostile processes
 running as the same Unix user.
 
 ## Automatic attachment

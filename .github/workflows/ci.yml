@@ -52,6 +52,8 @@ jobs:
         run: node scripts/verify-headless.mjs
       - name: Authenticated coordinator headless setup and revocation smoke
         run: node scripts/verify-headless-setup.mjs
+      - name: Coordinator-issued grant without owner context, idempotent retry and revocation
+        run: node scripts/verify-headless-setup.mjs --agent-grant --capabilities --shell
       - name: Approved headless task and artifact capability canaries
         run: node scripts/verify-headless-setup.mjs --capabilities
       - name: Headless MCP denied without connector permissions

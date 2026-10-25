@@ -1,5 +1,5 @@
 import { digest, requireValue } from './protocol.mjs';
-import { canonicalDirectory } from './interactive-contract.mjs';
+import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { validateHeadlessCapabilities } from './headless-capabilities.mjs';
 import { validateHeadlessPermissions } from './headless-permissions.mjs';
@@ -8,6 +8,19 @@ const fields = (p, keys, required = keys) => requireValue(p && typeof p === 'obj
 const text = (s, max = 256) => requireValue(typeof s === 'string' && s.trim() && s.length <= max && !/[\x00-\x1f]/.test(s), 'invalid_headless_setup', 'Bounded text required');
 export const setupTerminal = ['ready', 'blocked'];
 export const headlessProbeId = setup => `probe_${setup.id}_${setup.attempt ?? 1}`;
+
+function grantActor(store, actor, grant, requester) {
+  if (requester) {
+    store.nodeOnly(actor, requester.nodeId);
+    requireValue(grant.nodeId === requester.nodeId && grant.requesterAgentId === requester.id,
+      'headless_requester_scope', 'Agents manage only their own grants on their own node', 403);
+    return;
+  }
+  store.ownerOnly(actor);
+  if (actor.scope) requireValue(actor.scope.kind === 'node_operator' && actor.scope.nodeId === grant.nodeId &&
+    (actor.scope.mode === 'localUser' || withinRoots(grant.directory, actor.scope.roots)),
+  'operator_scope_mismatch', 'Grant must stay within this node operator workspace scope', 403);
+}
 export function headlessAuthority(store, actor, id) {
   const setup = store.get('headless_setup', id), grant = store.get('headless_grant', setup.grantId);
   if (actor.type === 'user') store.ownerOnly(actor); else store.nodeOnly(actor, setup.nodeId);
@@ -31,31 +44,57 @@ export function headlessRunAuthority(store, actor, p) {
   return { execution, agent, setup, grant };
 }
 
-export function applyHeadlessSetup(store, actor, action, p, { created, changed }) {
+export function applyHeadlessSetup(store, actor, action, p, { created, changed, requester: source }) {
+  if (action === 'agent.headless_grant' || action === 'agent.headless_revoke') {
+    fields(p, ['agentId', 'conversationId', 'bindingRevision', 'payload']);
+    const requester = store.agent(actor, p.agentId);
+    store.nodeOnly(actor, requester.nodeId);
+    requireValue(requester.mode === 'interactive' && requester.standingGrant && !requester.headlessSetupId &&
+      requester.conversationId === p.conversationId && requester.bindingRevision === p.bindingRevision,
+    'headless_requester_scope', 'Current enrolled interactive coordinator required', 403);
+    let payload = p.payload;
+    if (action === 'agent.headless_grant') {
+      requireValue(payload && (payload.requesterAgentId === undefined || payload.requesterAgentId === requester.id) &&
+        (payload.nodeId === undefined || payload.nodeId === requester.nodeId) &&
+        (payload.directory === undefined || payload.directory === requester.directory),
+      'headless_requester_scope', 'Agent grants stay with this coordinator, node and enrolled workspace', 403);
+      payload = { ...payload, requesterAgentId: requester.id, nodeId: requester.nodeId, directory: requester.directory };
+    }
+    const operation = action === 'agent.headless_grant' ? 'headless.grant' : 'headless.revoke';
+    const result = applyHeadlessSetup(store, actor, operation, payload, { created, changed, requester });
+    store.event(operation, result, actor, result.id);
+    return result;
+  }
   if (action === 'headless.grant') {
-    store.rootOwnerOnly(actor);
     fields(p, ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'permissions', 'contract', 'schedule', 'expiresAt', 'capabilities'], ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'permissions', 'contract', 'schedule']);
+    requireValue(canonicalDirectory(p.directory), 'invalid_headless_setup', 'Canonical workspace required');
+    grantActor(store, actor, p, source);
     p.permissions = validateHeadlessPermissions(p.permissions);
     if (p.capabilities !== undefined) validateHeadlessCapabilities(p.capabilities);
     for (const key of ['id', 'name', 'requesterAgentId', 'nodeId']) text(p[key]);
     const requester = store.get('agent', p.requesterAgentId); store.get('node', p.nodeId);
     requireValue(requester.nodeId === p.nodeId && requester.mode === 'interactive' && requester.standingGrant, 'headless_requester_scope', 'An enrolled coordinator on the destination node is required');
-    requireValue(canonicalDirectory(p.directory), 'invalid_headless_setup', 'Canonical workspace required');
     fields(p.model, ['providerID', 'id', 'integrationID', 'connectionId']); for (const v of Object.values(p.model)) text(v);
     requireValue(typeof p.contract === 'string' && /^\.opencode\/skills\/[A-Za-z0-9_-]+\/SKILL\.md$/.test(p.contract), 'invalid_headless_setup', 'Workspace skill contract required');
     fields(p.schedule, ['id', 'cron', 'timezone', 'reviewPolicy']); text(p.schedule.id);
     requireValue(p.schedule.reviewPolicy === 'none', 'invalid_headless_setup', 'This headless setup flow supports explicit none review only');
     previewCron(p.schedule.cron, p.schedule.timezone);
     if (p.expiresAt) requireValue(Date.parse(p.expiresAt) > Date.now(), 'invalid_expiry', 'Future grant expiry required');
-    return created('headless_grant', { ...p, state: 'active', userId: actor.id });
+    return created('headless_grant', { ...p, state: 'active', userId: store.owner,
+      issuedBy: source ? { type: 'agent', agentId: source.id, nodeId: source.nodeId, conversationId: source.conversationId, bindingRevision: source.bindingRevision }
+        : actor.scope ? { type: 'node_operator', nodeId: actor.scope.nodeId } : { type: 'user', userId: actor.id } });
   }
   if (action === 'headless.revoke') {
-    store.rootOwnerOnly(actor); fields(p, ['id', 'expectedRevision']);
-    const grant = store.get('headless_grant', p.id); store.revision(grant, p.expectedRevision);
+    fields(p, ['id', 'expectedRevision']);
+    const grant = store.get('headless_grant', p.id); grantActor(store, actor, grant, source); store.revision(grant, p.expectedRevision);
     for (const setup of store.all('headless_setup').filter(s => s.grantId === grant.id)) {
       const schedule = store.get('schedule', setup.scheduleId, false);
       if (schedule?.definition.enabled && !schedule.cancelled) {
-        const paused = store.apply(actor, 'schedule.pause', { id: schedule.id, expectedRevision: schedule.revision }); store.event('schedule.pause', paused, actor, p.id);
+        requireValue(setup.nodeId === grant.nodeId && schedule.definition.nodeId === grant.nodeId && schedule.definition.targetAgentId === setup.agentId,
+          'headless_scope_mismatch', 'Grant revocation cannot change an unrelated schedule', 403);
+        const paused = store.apply(actor, 'schedule.pause', { id: schedule.id, expectedRevision: schedule.revision },
+          { scheduleAgent: store.get('agent', setup.agentId) });
+        store.event('schedule.pause', paused, actor, p.id);
       }
     }
     return changed('headless_grant', grant, { state: 'revoked' });

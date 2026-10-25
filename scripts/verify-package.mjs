@@ -38,7 +38,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
-  'src/native-cli-surface.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+  'src/native-cli-surface.mjs', 'packages/opencode-relay/headless-grant-tools.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
@@ -49,7 +49,7 @@ mkdirSync(consumer);
 execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-scripts', '--no-fund', '--no-audit',
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
 const installed = join(consumer, 'node_modules/herdr-relay');
-const installedTuiVerifications = [], installedCliBridgeVerifications = [];
+const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [];
 for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0']]) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
@@ -66,10 +66,19 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   installedCliBridgeVerifications.push({ runtime: bridge.runtime, passed: bridge.passed, realModelToolTurn: bridge.realModelToolTurn,
     pluginInvokedActualCli: bridge.pluginInvokedActualCli, humanTaskCreated: bridge.humanTaskCreated,
     existingPeerExecutionRequested: bridge.existingPeerExecutionRequested, activeParentRequired: bridge.activeParentRequired });
+  const grantOutput = execFileSync(process.execPath, ['scripts/verify-headless-setup.mjs', '--agent-grant', '--capabilities', '--shell'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+      env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
+  process.stdout.write(grantOutput);
+  const grant = JSON.parse(grantOutput);
+  assert.equal(grant.runtimeVersion, version); assert.equal(grant.passed, true); assert.equal(grant.grantIssuedByCoordinatorWithoutOwner, true);
+  installedAgentGrantVerifications.push({ runtime: grant.runtimeVersion, passed: grant.passed,
+    grantIssuedByCoordinatorWithoutOwner: grant.grantIssuedByCoordinatorWithoutOwner, agentGrantRetryIdempotent: grant.agentGrantRetryIdempotent,
+    revocationPausedSchedule: grant.revocationPausedSchedule, readinessHadNoExternalEffects: grant.readinessHadNoExternalEffects });
 }
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
 assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
-assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, '4.1.8', 'Keep the legacy tool validation contract pinned');
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, '4.6.6', 'Keep the patched Zod 4 validation contract pinned');
 assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--version'], { encoding: 'utf8' }).trim(), packed.version);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
@@ -117,7 +126,7 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
   const {startBackend}=await import('./src/backend-service.mjs');
   const backend=await startBackend({database:':memory:'});
   try { const token=backend.store.bootstrap().token; const response=await fetch(backend.origin+'/v1/info',{headers:{authorization:'Bearer '+token}});
-    const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessToolPermissions,true); }
+    const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessToolPermissions,true); assert.equal(info.features.nodeHeadlessGrants,true); }
   finally { await backend.close(); }
 `], { cwd: installed, stdio: 'pipe' });
 const sourceMethods = [], taskId = '00000000-0000-4000-8000-000000000001';
@@ -220,7 +229,7 @@ try {
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, installedCliBridgeVerifications, nativeBackendStarted: true,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications, nativeBackendStarted: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
   auditVerified: Boolean(audit), vulnerabilities: audit?.metadata.vulnerabilities ?? null, published: false, gitTagCreated: false };
