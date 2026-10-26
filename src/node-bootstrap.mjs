@@ -11,6 +11,11 @@ export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach',
 export function authoriseOperator(store, actor, action, payload) {
   if (!actor.scope) return;
   const scope = actor.scope;
+  if (scope.kind === 'grant_approval') {
+    requireValue(actor.type === 'user' && actor.id === store.owner && ['grant.request_decide', 'grant.create', 'grant.revoke'].includes(action),
+      'forbidden', 'Human Grants sessions cannot perform unrelated administration', 403);
+    return;
+  }
   requireValue(actor.type === 'user' && actor.id === store.owner && scope.kind === 'node_operator' && nodeOperatorActions.includes(action),
     'forbidden', 'This node operator credential cannot perform backend administration', 403);
   if (action === 'headless.grant' || action === 'headless.revoke') {

@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { canonical, requireValue } from './protocol.mjs';
+import { canonical, digest, requireValue } from './protocol.mjs';
 
 // Human keyboard decisions only. Persist the exact authorised command before
 // sending it. A lost reply must never create a new decision or operation key.
@@ -26,9 +26,9 @@ export class NativeDecisionJournal {
       if (previous.state === 'recorded') return JSON.parse(previous.receipt);
       requireValue(previous.state === 'pending', 'decision_conflict', 'Decision requires inspection. It will not be reapplied automatically');
     } else {
-      const entity = `${command.action}:${command.payload.id}`;
+      const entity = `${command.action}:${command.payload.kind ? `${command.payload.kind}:` : ''}${command.payload.id}`;
       requireValue(!this.db.prepare("SELECT key FROM decisions WHERE entity=? AND state IN ('pending','conflict')").get(entity),
-        'decision_pending', 'A confirmed decision for this item is already pending. Reconcile it from Inbox');
+        'decision_pending', `A confirmed decision for this item is already pending. Reconcile it from ${command.action.startsWith('grant.') ? 'Grants' : 'Inbox'}`);
       this.db.prepare('INSERT INTO decisions(key,entity,instance,command,state) VALUES (?,?,?,?,?)')
         .run(command.key, entity, instanceId, canonical(command), 'pending');
     }
@@ -37,7 +37,11 @@ export class NativeDecisionJournal {
       requireValue(info.instanceId === instanceId, 'backend_identity_changed', 'Backend identity changed. The confirmed decision remains pending for inspection');
       const receipt = await api('POST', '/v1/commands', command);
       const p = command.payload;
-      const valid = receipt?.id === p.id && (command.action === 'question.answer'
+      const valid = receipt?.id === p.id && (command.action === 'grant.request_decide' ?
+        receipt.state === (p.decision === 'reject' ? 'rejected' : 'approved') && receipt.decision?.decision === p.decision && receipt.decision?.requestHash === p.requestHash :
+        command.action === 'grant.revoke' ? receipt.state === 'revoked' && receipt.grantKind === p.kind :
+        command.action === 'grant.create' ? receipt.state === 'active' && receipt.grantKind === 'interactive' && receipt.scopeHash === digest(p.scope) :
+        command.action === 'question.answer'
         ? receipt.status === 'answered' && receipt.answer?.body === p.body && receipt.answer.author?.type === 'user'
         : command.action === 'notification.acknowledge' ? receipt.state === 'acknowledged'
           : command.action === 'execution.monitor_review' ? receipt.state === (p.decision === 'accept' ? 'waiting_time' : 'monitor_blocked')

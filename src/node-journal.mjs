@@ -55,6 +55,8 @@ export class NodeJournal {
       entityId: schedule.id, revision: schedule.revision, data: schedule });
     for (const request of snapshot.collections.provision_request ?? []) events.push({ id: `snapshot:provision:${request.id}:${request.revision}`,
       type: 'interactive.request', entityId: request.id, revision: request.revision, data: request });
+    for (const request of snapshot.collections.grant_request ?? []) if (request.state === 'rejected') events.push({
+      id: `snapshot:grant-request:${request.id}:${request.revision}`, type: 'grant.request_decide', entityId: request.id, revision: request.revision, data: request });
     for (const setup of snapshot.collections.headless_setup ?? []) events.push({ id: `snapshot:headless:${setup.id}:${setup.revision}`,
       type: 'headless.request', entityId: setup.id, revision: setup.revision, data: setup });
     for (const message of snapshot.collections.message ?? []) events.push({ id: `snapshot:message:${message.id}:${message.revision}`,
@@ -79,11 +81,19 @@ export class NodeJournal {
           if (!old || JSON.parse(old.value).revision < event.revision) this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
             .run(key, JSON.stringify(event.data));
         }
-        if (['interactive.request', 'interactive.progress', 'interactive.cancel'].includes(event.type) && event.data.nodeId === this.nodeId) {
+        if (['interactive.request', 'interactive.progress', 'interactive.cancel'].includes(event.type) && !event.data.permissionRequest && event.data.nodeId === this.nodeId) {
           const key = `interactive-request:${event.entityId}`;
           const old = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
           if (!old || JSON.parse(old.value).revision < event.revision) this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-            .run(key, JSON.stringify(event.data));
+              .run(key, JSON.stringify(event.data));
+        }
+        const permissionOutcome = event.type === 'grant.request_decide' && event.data.state === 'rejected' ||
+          ['interactive.progress', 'interactive.request'].includes(event.type) && event.data.approvalRequestId && ['ready', 'blocked', 'cancelled'].includes(event.data.state);
+        if (permissionOutcome && event.data.requesterNodeId === this.nodeId) {
+          const requestId = event.data.approvalRequestId ?? event.data.id;
+          const notice = { id: `permission:${requestId}:${event.data.state}`, kind: 'permission', permissionRequestId: requestId,
+            agentId: event.data.requesterAgentId, state: 'pending' };
+          this.db.prepare('INSERT OR IGNORE INTO notices VALUES (?,?,?)').run(notice.id, notice.state, JSON.stringify(notice));
         }
         const cacheKind = event.type.startsWith('task.') ? 'task' : event.type.startsWith('comment.') ? 'comment' :
           event.type.startsWith('agent.') ? 'agent' : event.type.startsWith('node.') ? 'node' :

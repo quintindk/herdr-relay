@@ -10,6 +10,7 @@ import { messageParticipant, queryMessages } from './agent-messages.mjs';
 import { existsSync } from 'node:fs';
 import { releaseVersion, compatibility } from './release-info.mjs';
 import { resolveTaskIdentity } from './task-identity.mjs';
+import { issueGrantApprovalSession, nodeGrantPolicy } from './grants.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
@@ -24,6 +25,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         'unauthorised', 'Valid ingress key required', 401);
       const actor = store.authenticate(req.headers.authorization?.replace(/^Bearer /, '') ?? '');
       const url = new URL(req.url, 'http://relay');
+      if (actor.scope?.kind === 'grant_approval') requireValue(req.method === 'GET' && url.pathname === '/v1/info' || req.method === 'POST' && url.pathname === '/v1/commands',
+        'forbidden', 'Human Grants sessions are limited to grant decisions', 403);
       const maintenance = Boolean(maintenanceFile && existsSync(maintenanceFile));
       requireValue(req.method === 'GET' || !maintenance, 'maintenance', 'Backend upgrade maintenance is active. Retry the same immutable operation after it completes', 503);
       requireValue(req.url?.startsWith('/') && !req.url.startsWith('//'), 'invalid_request', 'Relative API path required');
@@ -33,9 +36,10 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
+        features: { nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
+      else if (req.method === 'GET' && /^\/v1\/nodes\/[^/]+\/provisioning-policy$/.test(url.pathname)) result = nodeGrantPolicy(store, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && /^\/v1\/headless_setups\/[^/]+\/authority$/.test(url.pathname)) result = headlessAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && url.pathname === '/v1/snapshot') result = store.snapshot();
@@ -63,7 +67,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       }
       else if (req.method === 'GET' && url.pathname === '/v1/events') result = store.events({ cursor: url.searchParams.get('cursor') ?? undefined,
         limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined });
-      else if (req.method === 'GET' && /^\/v1\/(task|task_reference_grant|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact|provision_grant|provision_request|headless_grant|headless_setup)s(?:\/[^/]+)?$/.test(url.pathname)) {
+      else if (req.method === 'GET' && /^\/v1\/(task|task_reference_grant|review_grant|grant_request|grant_decision|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact|provision_grant|provision_request|headless_grant|headless_setup)s(?:\/[^/]+)?$/.test(url.pathname)) {
         const [, plural, id] = url.pathname.split('/').slice(1);
         const kind = plural.slice(0, -1);
         requireValue([...url.searchParams.keys()].every(key => ['cursor', 'taskId', 'status', 'limit'].includes(key)),
@@ -72,7 +76,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
           cursor: url.searchParams.get('cursor') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });
-      } else if (req.method === 'POST' && ['/v1/commands', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read'].includes(url.pathname)) {
+      } else if (req.method === 'POST' && ['/v1/commands', '/v1/grants/ui-session', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read'].includes(url.pathname)) {
         let size = 0;
         const chunks = [];
         for await (const chunk of req) {
@@ -83,7 +87,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString()); }
         catch { throw new RelayError('invalid_json', 'JSON body required', 400); }
-        if (url.pathname === '/v1/headless/read') {
+        if (url.pathname === '/v1/grants/ui-session') result = issueGrantApprovalSession(store, actor, body);
+        else if (url.pathname === '/v1/headless/read') {
           requireValue(body && ['access', 'references', 'permissions'].includes(body.operation), 'invalid_headless_request', 'Exact headless read operation required');
           const { operation, ...payload } = body;
           if (operation === 'permissions') {

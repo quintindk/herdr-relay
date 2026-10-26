@@ -49,10 +49,11 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   schedule pause|resume ID --revision N --key KEY
   schedule cancel ID --revision N --reason TEXT --key KEY
   work read|submit|ask|... --context WORKER_JSON --execution ID --run ID [--key KEY] [--file PAYLOAD_JSON]
-  board [--context OWNER_JSON] [--json]  [Tasks, Agents, Inbox, Schedules]
+  board [--context OWNER_JSON] [--json]  [Tasks, Agents, Inbox, Grants, Schedules]
   command --file COMMAND_JSON  [advanced native {key,action,payload}]
 Backend commands require --context or RELAY_NATIVE_CONTEXT. Node operators cannot perform backend administration.
 Board prefers the joined node's scoped operator.json, otherwise the local backend owner.json.
+Grants manages security requests, standing permissions and revocation. Inbox manages work decisions.
 Worker commands use scoped worker credentials, never an owner context.
 Payload files contain native backend fields, not legacy companyId/routine envelopes.
 Task-independent messaging: work message-send|messages|message uses --context PRIVATE_WORKER_JSON,
@@ -204,7 +205,8 @@ export async function main(args) {
         const { watchTaskBoardInk } = await import('./task-board-ink.mjs');
         await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask, detailRoutine: board.detailRoutine,
           detailAgent: board.detailAgent, statusTask: board.statusTask, reviewTask: board.reviewTask, detailInbox: board.detailInbox,
-          decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions });
+          decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions,
+          detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions });
       }
     } finally { journal.close(); }
     return;

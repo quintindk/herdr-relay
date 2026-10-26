@@ -24,10 +24,51 @@ Provisioning, enrolment, attachment and work assignment are separate facts.
 An existing agent ID must belong to the destination node and the same enrolled
 canonical directory. Display names, recency and matching paths are not identity.
 
-## Two independent authorisations
+## Grants approval
 
-The destination operator configures its local policy. This does not issue a
-backend grant or widen filesystem access for another node.
+The **Grants** tab in `herdr-relay tui` owns security decisions. Inbox contains
+work decisions only. No owner credential file or manual JSON transfer is needed
+for the normal permission-request flow:
+
+1. An enrolled interactive agent calls `relay_interactive_prepare` with a stable
+   key, request ID, destination node and exact agent/folder intent. `grantId` is
+   optional. A matching standing grant is reused automatically.
+2. Without permission, the backend saves `awaiting_approval`. It creates no
+   provisioning work, folders, sessions, tasks or executions. Pending approval
+   does not block maintenance.
+3. In **Grants → Pending**, inspect the requester, machine, folders, actions,
+   profiles, node-wide limit and expiry. Choose **Approve once**, **Allow this
+   scope** or **Reject**, then confirm.
+4. Approval atomically creates permission and resumes the saved preparation.
+   Approve once is bound to that exact operation. Allow this scope can cover
+   future matching preparations. A rejection never starts the operation.
+5. **Active** lists interactive, headless, task-reference and child-review grants
+   and supports revocation. **History** records decisions and their provenance.
+   `n` creates an interactive standing permission without opening an agent itself.
+
+Approval scope cannot exceed the destination's joined-node workspace policy and
+node-wide enrolment ceiling. UI-managed grants supply the provisioning permissions
+directly. They do not require a second `config.interactive` permission policy.
+Folder restrictions are application checks, not an OS sandbox.
+
+The driver uses an explicit configured Herdr socket, or a verified local driver
+reported by an enrolled TUI. Ambiguous or offline drivers leave the request in
+`waiting_driver` without creating resources. Once preparation starts, the driver
+identity is pinned for recovery. An approval does not dispatch work. That remains
+a separate operation requiring explicit `allowDispatch` permission.
+
+The TUI holds a one-hour grant-only approval credential in memory, derived from
+its existing operator context. It cannot perform unrelated administration and
+stops working when the parent credential is revoked. Agent/model command routes
+cannot approve their own requests. This retains the trusted single-OS-user
+boundary, not protection against another process with unrestricted OS-user access.
+Unconfirmed decisions retain their original keys under Grants, never Inbox.
+
+## Legacy explicit grants and driver configuration
+
+Existing explicit grants and destination policies remain supported. For these
+legacy grants, the destination operator configures its independent local policy.
+This does not issue a backend grant or widen access for another node.
 
 ```json
 {
@@ -84,17 +125,18 @@ herdr-relay native interactive revoke access-launch-grant --revision 1 --key rev
 Grants can expire through `expiresAt`. The model cannot issue its own grant.
 Ordinary enrolment's auto-attachment/schedule grant does not confer provisioning.
 The source connector pins the actual calling agent, session and binding generation.
-Scheduled and delegated worker turns cannot recursively provision through the
-human-chat route. A future execution-specific provisioning capability would need
-its own explicit grant rather than reusing this interface.
+Headless jobs cannot use interactive provisioning. An enrolled interactive agent
+can request permission without an active parent execution. Active work does not
+prevent it from recording a preparation request. Dispatch remains separate.
 
 ## Scoped agent tools
 
 1. `relay_interactive_grants`: discover grants belonging to the initiating agent.
 2. `relay_interactive_prepare`: submit `{key,payload}`. Payload contains an exact
-   request `id`, `grantId`, `nodeId` and either an existing `agentId`, or a new
+   request `id`, `nodeId` and either an existing `agentId`, or a new
    `name` and absolute `directory`. Optional fields are `instance`, `profile`,
-   `createDirectory` and `topic`.
+   `createDirectory`, `topic`, `grantId` and `permissionScope`. Without a grant ID,
+   matching standing permission is reused or a Grants approval request is saved.
 3. `relay_interactive_status({id})`: inspect durable progress, blockers and the
    eventual exact ready receipt. Do not repeat prepare to drive the operation.
 4. `relay_interactive_dispatch`: separately submit `{key,payload:{id,taskId,
@@ -147,7 +189,8 @@ stranding the local receiver while granting no permission for additional work.
 Revocation does not undo resources already created. Dirty folders and human
 conversations are never automatically removed or interrupted.
 
-The default server policy remains **off** until configured. Offline destinations
+Without a legacy explicit grant or human-approved managed grant, provisioning
+does not start. Offline destinations
 leave requests queued in the backend. Destination provisioning itself requires a
 live backend to recheck authority. A dated ready receipt is not a perpetual lease
 or a claim that the instance is still available later.

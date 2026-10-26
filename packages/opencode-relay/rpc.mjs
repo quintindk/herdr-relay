@@ -3,11 +3,12 @@ import { Rpc } from '@opencode/plugin/rpc';
 const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const string = { type: 'string', minLength: 1, maxLength: 1024 };
 
-// Read-only status and diagnostic transport. A client-supplied session/client ID is NOT proof of
-// pane identity or human authority. This transport exposes no backend mutations.
+// Status/diagnostic transport and verified local driver discovery. A supplied
+// session/client ID is not human authority. This transport never grants permission.
 export const RelayRuntime = Rpc.define({
   id: 'herdr.relay.runtime',
   methods: {
+    interactiveDriver: { input: object({ sessionId: string, herdrSocketPath: string }), output: object({ state: string }) },
     attachment: {
       input: object({ sessionId: string }),
       output: object({ sessionId: string, state: { enum: ['attached', 'not_attached', 'pending', 'unavailable'] },

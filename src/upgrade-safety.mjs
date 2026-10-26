@@ -8,7 +8,7 @@ export function backendMaintenanceBlockers(db) {
   const blockers = [];
   for (const [kind, settled] of [
     ['execution', ['requested', 'waiting', 'waiting_children', 'waiting_time', 'in_review', 'monitor_review', 'monitor_blocked', 'completed', 'cancelled', 'failed', 'rejected']],
-    ['message', ['queued', 'delivered', 'blocked']], ['provision_request', ['ready', 'blocked', 'cancelled']], ['headless_setup', ['ready', 'blocked']],
+    ['message', ['queued', 'delivered', 'blocked']], ['provision_request', ['requested', 'waiting_driver', 'ready', 'blocked', 'cancelled']], ['headless_setup', ['ready', 'blocked']],
   ]) for (const row of db.prepare('SELECT data FROM entities WHERE kind=?').all(kind)) {
     const entity = JSON.parse(row.data);
     if (!settled.includes(entity.state)) blockers.push({ kind: kind === 'provision_request' ? 'preparation' : kind, id: entity.id, state: entity.state });

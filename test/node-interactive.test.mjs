@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BackendStore } from '../src/backend-store.mjs';
 import { NodeJournal } from '../src/node-journal.mjs';
@@ -9,29 +9,42 @@ import { tickInteractive } from '../src/node-interactive.mjs';
 import { interactiveAuthority } from '../src/interactive-contract.mjs';
 import { startNodeService } from '../src/node-service.mjs';
 import { call } from '../src/client.mjs';
+import { bootstrapNode } from '../src/node-bootstrap.mjs';
+import { issueGrantApprovalSession } from '../src/grants.mjs';
+import { createServer } from 'node:net';
+import { tickAgentNotices } from '../src/node-notices.mjs';
 
-function fixture(t) {
+function fixture(t, { managed = false } = {}) {
   const root = mkdtempSync('/tmp/opencode/native-interactive-');
   const store = new BackendStore(':memory:');
   const owner = store.authenticate(store.bootstrap().token);
   const command = (actor, key, action, payload) => store.command(actor, { key, action, payload });
-  for (const id of ['source', 'destination']) command(owner, id, 'node.enrol', { id, name: id });
-  const actors = Object.fromEntries(['source', 'destination'].map(id => [id, store.authenticate(store.enrolCredential(owner, id, id).token)]));
+  const actors = {}, operators = {};
+  for (const id of ['source', 'destination']) {
+    const bundle = bootstrapNode(store, owner, { key: id, id, name: id, mode: 'roots', roots: [root], maxAgents: 25 });
+    actors[id] = store.authenticate(bundle.nodeToken); operators[id] = store.authenticate(bundle.operatorToken);
+  }
   command(owner, 'source-agent', 'agent.enrol', { id: 'initiator', nodeId: 'source', name: 'Initiator', directory: root });
   command(owner, 'source-attach', 'agent.attach', { id: 'initiator', expectedBindingRevision: 0, conversationId: 'ses_source', directory: root, bindingId: 'source-binding' });
   const grant = { id: 'grant', requesterAgentId: 'initiator', nodeId: 'destination', mode: 'roots', roots: [root],
     allowNewEnrolments: true, allowCreateDirectories: true, allowReplacement: true, allowDispatch: true, reviewPolicy: 'human', maxAgents: 10 };
-  command(owner, 'grant', 'interactive.grant', grant);
-  const request = command(actors.source, 'request', 'interactive.request', { id: 'preparation', grantId: 'grant', nodeId: 'destination',
+  if (!managed) command(owner, 'grant', 'interactive.grant', grant);
+  const request = command(actors.source, 'request', 'interactive.request', { id: 'preparation', ...(!managed ? { grantId: 'grant' } : {}), nodeId: 'destination',
     requesterAgentId: 'initiator', sourceConversationId: 'ses_source', sourceBindingRevision: 1,
-    directory: join(root, 'discussion'), name: 'Discussion', createDirectory: true, topic: 'Discuss only the supplied topic.' });
+    directory: join(root, 'discussion'), name: 'Discussion', createDirectory: true, topic: 'Discuss only the supplied topic.',
+    ...(managed ? { permissionScope: { allowDispatch: true }, model: { id: 'inherited', providerID: 'fixture' } } : {}) });
   const journal = new NodeJournal(':memory:', { nodeId: 'destination', instanceId: store.instance });
   const receivers = new NativeReceivers(journal);
-  receivers.put(`interactive-request:${request.id}`, request);
+  if (!managed) receivers.put(`interactive-request:${request.id}`, request);
   const config = { nodeId: 'destination', stateDirectory: root, interactive: { mode: 'roots', roots: [root], herdrSocketPath: join(root, 'herdr.sock'),
     allowNewEnrolments: true, allowCreateDirectories: true, allowReplacement: true, model: { id: 'configured', providerID: 'fixture' } } };
   const f = { root, store, owner, actors, command, grant, request, journal, receivers, config, workspaceCreates: 0, starts: 0, nativeCreates: 0,
     view: { protocol: 22, workspaces: [], tabs: [], panes: [], agents: [] }, sessions: new Map() };
+  f.approve = decision => {
+    const ui = store.authenticate(issueGrantApprovalSession(store, operators.source, { terminalId: 'human' }).token);
+    return command(ui, 'approve-managed', 'grant.request_decide', { id: request.id, expectedRevision: request.revision,
+      requestHash: request.requestHash, decision });
+  };
   f.apiFor = actor => async (method, path, body) => {
     if (method === 'POST') return store.command(actor, body);
     const url = new URL(path, 'http://test'), [, plural, id, suffix] = url.pathname.slice(1).split('/');
@@ -81,7 +94,7 @@ function fixture(t) {
   f.tick = async () => {
     for (const r of store.all('provision_request')) receivers.put(`interactive-request:${r.id}`, r);
     await tickInteractive(journal, f.api, config, f.resolve, { rpc: f.rpc, native: f.native });
-    return store.get('provision_request', request.id);
+    return store.get('provision_request', request.id, false) ?? store.get('grant_request', request.id);
   };
   f.ready = async () => { for (let i = 0; i < 20; i++) { const r = await f.tick(); if (['ready', 'blocked'].includes(r.state)) return r; } throw Error(JSON.stringify(receivers.get(`interactive-op:${request.id}`))); };
   t.after(() => { journal.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
@@ -99,6 +112,92 @@ test('addressed interactive preparation opens an empty native chat, enrols/attac
   assert.equal(f.receivers.get(`interactive-context:${ready.receipt.bindingId}`).authority, 'discussion_context_only');
   await f.tick(); assert.equal(f.starts, 1);
   assert.equal(JSON.stringify(ready).includes('disposable'), false);
+});
+
+test('human approval resumes the saved operation through Herdr, enrolment, attachment and separate permitted dispatch', async t => {
+  const f = fixture(t, { managed: true });
+  delete f.config.interactive;
+  f.config.herdr = { socketPath: join(f.root, 'herdr.sock') };
+  assert.equal((await f.tick()).state, 'awaiting_approval');
+  assert.equal(existsSync(f.request.directory), false); assert.equal(f.workspaceCreates, 0); assert.equal(f.nativeCreates, 0);
+  f.approve('approve_once');
+  const ready = await f.ready();
+  assert.equal(ready.state, 'ready'); assert.equal(f.workspaceCreates, 1); assert.equal(f.nativeCreates, 1); assert.equal(f.starts, 1);
+  assert.equal(f.store.get('agent', ready.agentId).bindingId, ready.receipt.bindingId);
+  assert.deepEqual(ready.receipt.model, { id: 'inherited', providerID: 'fixture' });
+  assert.equal(f.store.all('execution').length, 0);
+  const sourceJournal = new NodeJournal(':memory:', { nodeId: 'source', instanceId: f.store.instance });
+  t.after(() => sourceJournal.close());
+  sourceJournal.reconcileSnapshot(f.store.snapshot());
+  const prompts = [], binding = { id: 'source-binding', conversationId: 'ses_source',
+    native: { snapshot: async () => ({ idle: true, messages: [], inbox: [] }), send: async invocation => prompts.push(invocation.prompt) },
+    observe: () => ({ state: 'finished', outcome: 'succeeded' }) };
+  await tickAgentNotices(sourceJournal, f.apiFor(f.actors.source), async () => binding);
+  assert.equal(prompts.length, 1); assert.match(prompts[0], /not a new human instruction/);
+  const payload = { id: ready.id, requesterAgentId: 'initiator', sourceConversationId: 'ses_source', sourceBindingRevision: 1,
+    taskId: 'bounded', executionId: 'bounded', title: 'Approved handover', instructions: 'Only the original authorised check.' };
+  const execution = f.command(f.actors.source, 'managed-dispatch', 'interactive.dispatch', payload);
+  assert.equal(execution.targetAgentId, ready.agentId); assert.equal(execution.reviewPolicy, 'human');
+  await f.tick(); assert.deepEqual(f.command(f.actors.source, 'managed-dispatch', 'interactive.dispatch', payload), execution);
+  assert.equal(f.store.all('execution').length, 1); assert.equal(f.starts, 1);
+  sourceJournal.reconcileSnapshot(f.store.snapshot());
+  await tickAgentNotices(sourceJournal, f.apiFor(f.actors.source), async () => binding);
+  assert.equal(prompts.length, 1, 'Dispatch and snapshot recovery do not wake the requester twice');
+});
+
+test('managed permission waits without filesystem effects when no driver is known or its observation is offline', async t => {
+  const f = fixture(t, { managed: true }); delete f.config.interactive;
+  f.approve('allow_scope');
+  assert.equal((await f.tick()).state, 'waiting_driver');
+  assert.equal(existsSync(f.request.directory), false); assert.equal(f.starts, 0);
+  f.config.herdr = { socketPath: join(f.root, 'herdr.sock') };
+  const rpc = f.rpc; f.rpc = async () => { throw Error('Driver offline'); };
+  assert.equal((await f.tick()).state, 'waiting_driver'); assert.equal(existsSync(f.request.directory), false);
+  f.rpc = rpc;
+  assert.equal((await f.ready()).state, 'ready');
+});
+
+test('verified enrolled TUI driver registration supplies managed provisioning without a legacy policy', async t => {
+  const f = fixture(t, { managed: true }); delete f.config.interactive;
+  const socket = join(f.root, 'verified.sock');
+  let session = 'wrong-session';
+  const server = createServer(connection => connection.on('data', data => {
+    const request = JSON.parse(String(data));
+    connection.end(`${JSON.stringify({ id: request.id, result: { snapshot: { protocol: 22,
+      agents: [{ agent: 'opencode', agent_session: { kind: 'id', value: session } }] } } })}\n`);
+  }));
+  await new Promise(resolve => server.listen(socket, resolve));
+  const worker = { agentId: 'local-driver', sessionId: 'ses_driver', bindingId: 'driver-binding', bindingRevision: 1, token: 'driver-token' };
+  f.receivers.put('receiver:local-driver', { state: 'active', bindingId: worker.bindingId, generation: 1 });
+  const nodeSocket = join(f.root, 'driver-node.sock');
+  const service = await startNodeService({ journal: f.journal, socketPath: nodeSocket, workers: [worker], api: f.api });
+  t.after(async () => { await service.close(); await new Promise(resolve => server.close(resolve)); });
+  const connection = { socketPath: nodeSocket, token: worker.token };
+  await assert.rejects(call(connection, 'POST', '/agent/interactive-driver', { herdrSocketPath: socket }), { code: 'native_placement_mismatch' });
+  assert.equal(f.receivers.list('interactive-driver').length, 0);
+  session = worker.sessionId;
+  assert.equal((await call(connection, 'POST', '/agent/interactive-driver', { herdrSocketPath: socket })).state, 'registered');
+  f.approve('approve_once');
+  assert.equal((await f.ready()).state, 'ready');
+  assert.equal(f.receivers.get(`interactive-op:${f.request.id}`).driverSocket, socket);
+});
+
+test('ambiguous discovered drivers wait until explicitly selected, then remain pinned for recovery', async t => {
+  const f = fixture(t, { managed: true }); delete f.config.interactive;
+  for (const id of ['one', 'two']) {
+    const socket = join(f.root, `${id}.sock`), server = createServer(connection => connection.end());
+    await new Promise(resolve => server.listen(socket, resolve));
+    t.after(() => new Promise(resolve => server.close(resolve)));
+    f.receivers.put(`interactive-driver:${id}`, { agentId: id, herdrSocketPath: socket });
+  }
+  f.approve('allow_scope');
+  assert.equal((await f.tick()).state, 'waiting_driver'); assert.equal(existsSync(f.request.directory), false);
+  f.config.herdr = { socketPath: join(f.root, 'two.sock') };
+  await f.tick();
+  assert.equal(f.receivers.get(`interactive-op:${f.request.id}`).driverSocket, f.config.herdr.socketPath);
+  f.config.herdr.socketPath = join(f.root, 'one.sock');
+  assert.equal((await f.ready()).state, 'ready');
+  assert.equal(f.receivers.get(`interactive-op:${f.request.id}`).driverSocket, join(f.root, 'two.sock'));
 });
 
 test('provisioned workspace naming failure does not undo or duplicate the active attachment', async t => {
@@ -232,5 +331,9 @@ test('node-local scoped tools forward through the backend even when the source a
   assert.equal((await call(connection, 'POST', '/agent/interactive-status', { id: f.request.id })).state, 'requested');
   await assert.rejects(call(connection, 'POST', '/agent/interactive-prepare', { key: 'spoof', payload: { id: 'spoof', requesterAgentId: 'foreign' } }), { code: 'invalid_request' });
   sourceJournal.save({ id: 'job', bindingId: worker.bindingId, nativeConversationId: worker.sessionId, state: 'observing', execution: { state: 'accepted', targetAgentId: worker.agentId } });
-  await assert.rejects(call(connection, 'POST', '/agent/interactive-prepare', { key: 'recursive', payload: { id: 'recursive', grantId: 'grant', nodeId: 'destination' } }), { code: 'interactive_human_context_required' });
+  const preparation = await call(connection, 'POST', '/agent/interactive-prepare', { key: 'during-work', payload: {
+    id: 'during-work', grantId: 'grant', nodeId: 'destination', directory: join(f.root, 'during-work'), name: 'During work' } });
+  assert.equal(preparation.state, 'recorded');
+  assert.equal(preparation.receipt.state, 'requested');
+  assert.equal(f.store.all('execution').length, 0, 'Preparation does not dispatch another execution');
 });

@@ -158,12 +158,17 @@ board with the local owner context by default. `--context` and
 `RELAY_NATIVE_CONTEXT` override it. No other native mutation gets an implicit
 owner context, and the legacy Paperclip `board` command is unchanged.
 
-The [native task board and Inbox](native-task-inbox.md) has Tasks, Agents, Inbox and
-Schedule views. Human questions, candidate reviews and reminders can be handled
+The [native task board and Inbox](native-task-inbox.md) has Tasks, Agents, Inbox,
+Grants and Schedule views. Human questions, candidate reviews and reminders can be handled
 directly in the board with explicit previews/confirmations. Native task detail
 links to those same actions. Confirmed board decisions use a private durable local
 journal for uncertain publication and restart reconciliation. The OpenCode slash
 commands below remain available, but are not required for the board workflow.
+
+[Grants](native-interactive-provisioning.md#grants-approval) is the separate
+security-management surface. Pending requests offer Approve once, Allow this scope
+and Reject. Active permissions can be revoked. History records security decisions.
+Confirmed but unacknowledged security decisions recover under Grants, not Inbox.
 
 ### Human questions and reviews in OpenCode
 

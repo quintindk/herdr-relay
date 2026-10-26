@@ -148,15 +148,15 @@ export default Plugin.define({
         for (const operation of ['prepare', 'dispatch', 'cancel']) {
           const string = { type: 'string', minLength: 1, maxLength: 256 };
           const properties = operation === 'prepare' ? { id: { ...string, maxLength: 96 }, grantId: string, nodeId: string, directory: { ...string, maxLength: 4096 },
-            agentId: string, name: string, createDirectory: { type: 'boolean' }, instance: { enum: ['ensure', 'replace'] }, profile: string, topic: { type: 'string', maxLength: 4000 } } :
+            agentId: string, name: string, createDirectory: { type: 'boolean' }, instance: { enum: ['ensure', 'replace'] }, profile: string, topic: { type: 'string', maxLength: 4000 }, permissionScope: { type: 'object', additionalProperties: true } } :
             operation === 'dispatch' ? { id: string, taskId: string, executionId: string, title: string, instructions: { ...string, maxLength: 16000 } } :
               { id: string, expectedRevision: { type: 'integer', minimum: 1 }, reason: { ...string, maxLength: 2000 } };
           editor.add({ name: `relay_interactive_${operation}`, options: { codemode: false },
-            description: operation === 'prepare' ? 'Request an interactive Herdr agent on an explicitly granted node. Requires human instruction. Preparation never assigns work or runs a model.' :
+            description: operation === 'prepare' ? 'Request an interactive Herdr agent. Matching standing permissions are reused automatically. Without permission, records an awaiting_approval request in Grants; no owner context or grant ID is needed. Approval resumes the saved preparation. Preparation alone never assigns work or runs a model.' :
               operation === 'dispatch' ? 'Assign one bounded task separately to an exact ready interactive preparation. Requires an active grant explicitly allowing dispatch and human instruction.' :
                 'Cancel an outstanding interactive preparation. Does not kill processes or delete already created workspaces.',
             input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 100 }, payload: { type: 'object', properties,
-              required: operation === 'prepare' ? ['id', 'grantId', 'nodeId'] : operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'title', 'instructions'] : ['id', 'expectedRevision', 'reason'],
+              required: operation === 'prepare' ? ['id', 'nodeId'] : operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'title', 'instructions'] : ['id', 'expectedRevision', 'reason'],
               additionalProperties: false } }, required: ['key', 'payload'], additionalProperties: false }, execute: (input, context) => agent(context, `interactive-${operation}`, input) });
         }
         for (const operation of ['install', 'pause', 'resume', 'cancel']) editor.add({
@@ -240,6 +240,10 @@ export default Plugin.define({
     try {
       headlessAccess = await ctx.rpc.register(HeadlessAccess, { check: refs => checkHeadlessAccess(ctx, refs), inspect: () => inspectHeadlessConnections(ctx) });
       rpc = await ctx.rpc.register(RelayRuntime, {
+        interactiveDriver: async input => {
+          const worker = workerConnection(ctx.options, input.sessionId);
+          return call(worker, 'POST', '/agent/interactive-driver', { herdrSocketPath: input.herdrSocketPath });
+        },
         attachment: input => readAttachmentStatus(ctx, input),
         inspect: async () => ({
           version: ctx.app.version, directory: ctx.location.directory, generation,

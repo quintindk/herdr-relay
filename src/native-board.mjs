@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { digest, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { nativeAgentLabel, nativeAttention } from './native-board-attention.mjs';
+import { buildGrantsView } from './grants-view.mjs';
 
 export function boardLocalIdentity(context) {
   return context?.scope?.kind === 'node_operator' && context.nodeId === context.scope.nodeId && context.instanceId
@@ -10,6 +11,16 @@ export function boardLocalIdentity(context) {
 
 export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId } = {}) {
   const terminalId = `terminal:${randomUUID()}`;
+  let approvalSession, approvalApi;
+  const grantApi = async (method, path, body) => {
+    if (!approvalSession || Date.parse(approvalSession.credential.scope.expiresAt) < Date.now() + 30000) {
+      requireValue(api.withToken, 'human_grant_transport_required', 'Human Grants transport is unavailable');
+      approvalSession = await api('POST', '/v1/grants/ui-session', { terminalId });
+      approvalApi = api.withToken(approvalSession.token);
+    }
+    try { return await approvalApi(method, path, body); }
+    catch (error) { if (error.status === 401) approvalSession = null; throw error; }
+  };
   const all = async collection => {
     const items = [];
     const cursors = new Set(), ids = new Set();
@@ -32,8 +43,8 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     identifier: task.reference || task.identifier || task.source?.metadata?.identifier ||
       (task.id.length > 24 ? `${task.id.slice(0,12)}…${task.id.slice(-8)}` : task.id),
     assigneeUserId: task.responsibleUserId, assigneeAgentId: null });
-  const publicationItems = () => (decisionJournal?.pending() ?? []).map(p => ({
-    id: `publication:${p.key}`, kind: 'publication', entityId: p.command.payload.id, key: p.key,
+  const publicationItems = (security = false) => (decisionJournal?.pending() ?? []).filter(p => p.command.action.startsWith('grant.') === security).map(p => ({
+    id: `publication:${p.key}`, kind: 'publication', entityId: p.command.payload.id, key: p.key, section: 'pending',
     title: p.state === 'conflict' ? 'Decision refused: inspect before trying again' : 'Confirmed decision awaiting acknowledgement',
     summary: `${p.command.action}: ${p.command.payload.body ?? p.command.payload.reason ?? 'acknowledgement'}`,
     context: p.state === 'conflict' ? `Refused (${p.error}). Dismiss this refused operation, then reopen the current item for a fresh decision.`
@@ -46,8 +57,22 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     const [info, ...values] = await Promise.all([api('GET', '/v1/info'), ...collections.map(all)]);
     requireValue(info.userId && info.instanceId, 'invalid_backend_response', 'Native board requires backend and human identity');
     const data = Object.fromEntries(collections.map((name, i) => [name, values[i]]));
+    let grants = { pending: [], active: [], history: [] }, nodePolicies = {};
+    if (info.features?.grantsManagement) {
+      const names = ['provision_grants', 'headless_grants', 'task_reference_grants', 'review_grants', 'grant_requests', 'grant_decisions', 'provision_requests'];
+      const records = Object.fromEntries(await Promise.all(names.map(async name => [name, await all(name)])));
+      grants = buildGrantsView({ requests: records.grant_requests, decisions: records.grant_decisions,
+        grants: { interactive: records.provision_grants, headless: records.headless_grants, reference: records.task_reference_grants, review: records.review_grants },
+        agents: data.agents, nodes: data.nodes, preparations: records.provision_requests, userId: info.userId });
+      const publications = publicationItems(true), locked = new Set(publications.map(p => p.entityId));
+      grants.pending = [...publications, ...grants.pending.filter(item => !locked.has(item.entityId))];
+      nodePolicies = Object.fromEntries(await Promise.all(data.nodes.map(async node => {
+        try { return [node.id, await api('GET', `/v1/nodes/${encodeURIComponent(node.id)}/provisioning-policy`)]; }
+        catch { return [node.id, null]; }
+      })));
+    }
     const { inbox, attention } = nativeAttention({ ...data, monitorResults: data.monitor_results, userId: info.userId });
-    return { ...data, info, attention, inbox: [...publicationItems(), ...inbox].map(item => ({ ...item, instanceId: item.instanceId ?? info.instanceId })) };
+    return { ...data, info, attention, grants, nodePolicies, inbox: [...publicationItems(), ...inbox].map(item => ({ ...item, instanceId: item.instanceId ?? info.instanceId })) };
   };
   const localNode = (nodes, info) => localNodeId && localInstanceId === info.instanceId ? nodes.find(n => n.id === localNodeId) : null;
   const presentAgent = (agent, nodes, info) => {
@@ -84,9 +109,10 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
   };
   return {
     async read() {
-      const { tasks, agents, nodes, schedules, inbox, attention, info } = await load();
-      return { companies: [{ id: 'native', name: 'Relay' }], projects: [], routines: schedules.map(s => routine(s, agents)),
-        inbox, tasks: tasks.map(t => ({ ...scoped(t), ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
+      const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies } = await load();
+      return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents)),
+        inbox, grants, grantsAvailable: !!info.features?.grantsManagement, nodePolicies,
+        tasks: tasks.map(t => ({ ...scoped(t), ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
         localNode: localNode(nodes, info) ? { id: localNodeId, name: localNode(nodes, info).name ?? localNodeId } : null,
         agents: agents.map(agent => presentAgent(agent, nodes, info)), fetchedAt: new Date().toISOString(), warnings: ['Native task view. Assignment is separate from execution.',
@@ -103,6 +129,32 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
           !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => ({ id: e.id, state: e.state, conversationId: e.targetConversationId })) };
     },
     pendingDecisions: publicationItems,
+    pendingGrantDecisions: () => publicationItems(true),
+    async detailGrant({ id }) {
+      const data = await load();
+      const item = [...data.grants.pending, ...data.grants.active, ...data.grants.history].find(item => item.id === id);
+      requireValue(item, 'grant_unavailable', 'Security item changed. Refresh Grants');
+      return { ...item, instanceId: data.info.instanceId };
+    },
+    async decideGrant({ item, key, decision, reason, scope }) {
+      requireValue(decisionJournal && item && key, 'decision_storage_required', 'Durable Grants decision storage required');
+      if (item.kind === 'publication') {
+        if (item.action === 'dismiss') decisionJournal.dismiss(item.key); else await decisionJournal.retry(grantApi, item.key);
+        return { state: 'recorded', message: item.action === 'dismiss' ? 'Refused security decision dismissed.' : 'Original security decision reconciled.' };
+      }
+      const pending = item.section === 'pending';
+      const command = pending ? { key, action: 'grant.request_decide', payload: { id: item.entityId, expectedRevision: item.revision,
+        requestHash: item.requestHash, decision, reason: reason ?? '', ...(decision === 'allow_scope' ? { scope: scope ?? item.scope } : {}) } } :
+        { key, action: 'grant.revoke', payload: { id: item.entityId, kind: item.kind, expectedRevision: item.revision, reason: reason ?? '' } };
+      await decisionJournal.submit(grantApi, command, item.instanceId);
+      return { state: 'recorded', message: pending ? decision === 'reject' ? 'Permission rejected. No operation started.' : 'Permission recorded. The saved preparation resumes automatically.' : 'Permission revoked. Existing processes were not terminated.' };
+    },
+    async createGrant({ key, payload }) {
+      requireValue(decisionJournal, 'decision_storage_required', 'Durable Grants decision storage required');
+      const info = await api('GET', '/v1/info');
+      await decisionJournal.submit(grantApi, { key, action: 'grant.create', payload }, info.instanceId);
+      return { state: 'recorded', message: 'Standing permission created. Matching waiting requests resume automatically.' };
+    },
     async detailInbox({ id }) {
       const local = publicationItems().find(item => item.id === id);
       if (local) return local;

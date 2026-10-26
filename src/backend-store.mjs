@@ -9,6 +9,7 @@ import { applyHeadlessSetup } from './headless-setup-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
 import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
+import { applyGrantAction } from './grants.mjs';
 import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
 
 export const backendProtocol = 'relay/0.2';
@@ -77,7 +78,7 @@ export class BackendStore {
   snapshot() {
     return this.transaction(() => ({ instanceId: this.instance, protocol: backendProtocol,
       collections: Object.fromEntries(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
-        .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'message']).map(kind => [kind, this.all(kind)])),
+        .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision', 'message']).map(kind => [kind, this.all(kind)])),
       cursor: Buffer.from(JSON.stringify({ instance: this.instance,
         after: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq) })).toString('base64url'), fetchedAt: now() }));
   }
@@ -157,6 +158,11 @@ export class BackendStore {
     requireValue(row && timingSafeEqual(Buffer.from(hash), Buffer.from(row.hash)), 'unauthorised', 'Valid node or user credential required', 401);
     const actor = JSON.parse(row.data);
     requireValue(!actor.revoked, 'unauthorised', 'Credential revoked', 401);
+    if (actor.scope?.kind === 'grant_approval') {
+      const parent = this.db.prepare('SELECT data FROM credentials WHERE id=?').get(actor.scope.parentCredentialId);
+      requireValue(Date.parse(actor.scope.expiresAt) > Date.now() && parent && !JSON.parse(parent.data).revoked,
+        'unauthorised', 'Human Grants session expired or its operator was revoked', 401);
+    }
     return { ...actor, credentialId: actor.id, id: actor.actorId ?? actor.id };
   }
   ownerOnly(actor) { if (actor.type !== 'user' || actor.id !== this.owner) forbidden('Human owner credential required'); }
@@ -183,7 +189,9 @@ export class BackendStore {
       }
       const reusedSource = action === 'task.create' && payload.externalReference && this.get('reference', this.referenceIdentity(payload.externalReference), false);
       const value = fn();
-      const eventType = action.startsWith('agent.schedule_') ? `schedule.${action.slice('agent.schedule_'.length)}` :
+      const eventType = value?.permissionRequest && action === 'interactive.request' ? 'grant.requested' :
+        value?.permissionRequest && action === 'interactive.cancel' ? 'grant.request_cancelled' :
+        action.startsWith('agent.schedule_') ? `schedule.${action.slice('agent.schedule_'.length)}` :
         reusedSource ? 'task.reference_reused' : action;
       this.event(eventType, value, actor, key);
       this.db.prepare('INSERT INTO receipts VALUES (?,?,?,?)').run(identity, key, hash, JSON.stringify(value));
@@ -207,7 +215,7 @@ export class BackendStore {
     };
     const changed = (kind, entity, patch) => this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
     if (action === 'task.reference_namespace.grant' || action === 'task.reference_namespace.revoke') {
-      this.rootOwnerOnly(actor);
+      if (authority.grantDecision) this.ownerOnly(actor); else this.rootOwnerOnly(actor);
       fields(p, ['principal', 'prefix', ...(action.endsWith('.grant') ? ['maxNumber', 'expectedRevision'] : ['expectedRevision'])], ['principal', 'prefix']);
       fields(p.principal, ['type', 'id'], ['type', 'id']);
       requireValue(['node', 'node_operator'].includes(p.principal.type) && validId(p.principal.id) && referencePrefix.test(p.prefix), 'invalid_reference_grant', 'Explicit node principal and canonical prefix required');
@@ -225,7 +233,8 @@ export class BackendStore {
       requireValue(p.expectedRevision === undefined || p.expectedRevision === 0, 'stale_revision', 'New namespace grants start at revision zero', 409);
       return created('task_reference_grant', { id, principal: p.principal, prefix: p.prefix, maxNumber: p.maxNumber, state: 'active' });
     }
-    if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed });
+    if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed, grantResume: authority.grantResume });
+    if (action.startsWith('grant.')) return applyGrantAction(this, actor, action, p, { created, changed });
     if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     const taskDisposition = (taskId, status, causation) => {
@@ -1066,7 +1075,7 @@ export class BackendStore {
   }
 
   query(kind, { cursor, limit = 100, taskId, status } = {}) {
-    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'monitor_result', 'artifact', 'provision_grant', 'provision_request', 'headless_grant', 'headless_setup'].includes(kind), 'invalid_query', 'Unknown collection');
+    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'monitor_result', 'artifact', 'provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision'].includes(kind), 'invalid_query', 'Unknown collection');
     requireValue(Number.isSafeInteger(limit) && limit > 0 && limit <= 500 &&
       (!taskId || validId(taskId)) && (!status || typeof status === 'string' && status.length <= 100), 'invalid_query', 'Invalid collection scope');
     const scope = digest({ kind, limit, taskId: taskId ?? null, status: status ?? null });

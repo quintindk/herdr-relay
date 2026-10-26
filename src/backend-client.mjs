@@ -16,7 +16,7 @@ export function nativeBackendClient({ url, token, ingressKey, cloudflareAccess, 
   requireValue(typeof token === 'string' && token.length > 0 && (!cloudflareAccess ||
     typeof cloudflareAccess.clientId === 'string' && cloudflareAccess.clientId &&
     typeof cloudflareAccess.clientSecret === 'string' && cloudflareAccess.clientSecret), 'invalid_credentials', 'Explicit actor and optional complete Access credentials required');
-  return async (method, path, body) => {
+  const client = async (method, path, body) => {
     requireValue(typeof path === 'string' && path.startsWith('/v1/') && !path.includes('\\'), 'invalid_request', 'Native backend route required');
     const target = new URL(path, origin);
     requireValue(target.origin === origin.origin && target.pathname.startsWith('/v1/') && !target.hash,
@@ -35,4 +35,6 @@ export function nativeBackendClient({ url, token, ingressKey, cloudflareAccess, 
     if (!response.ok) throw new RelayError(result.code ?? 'backend_error', result.message ?? 'Native backend request failed', response.status);
     return result;
   };
+  client.withToken = value => nativeBackendClient({ url, token: value, ingressKey, cloudflareAccess, trustedHttpProxyOrigin, fetch: request });
+  return client;
 }

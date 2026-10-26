@@ -1,10 +1,11 @@
 import { createServer } from 'node:http';
-import { chmodSync, existsSync, unlinkSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, unlinkSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { join, isAbsolute } from 'node:path';
 import { headlessArtifactOperation, recordHeadlessObservation, probeHeadlessArtifacts } from './headless-artifacts.mjs';
 import { headlessProbeId } from './headless-setup-contract.mjs';
 import { digest, requireValue, RelayError, canonical } from './protocol.mjs';
 import { nativeTasksProvider } from './tasks-provider.mjs';
+import { herdrInventory } from './node-discovery.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
@@ -123,22 +124,49 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         } while (cursor);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ items, complete: true })); return;
       }
+      if (path === '/agent/interactive-driver') {
+        currentReceiver();
+        requireValue(Object.keys(body).every(k => k === 'herdrSocketPath') && isAbsolute(body.herdrSocketPath ?? ''), 'invalid_request', 'Local Herdr socket required');
+        requireValue(!worker.headlessSetupId, 'interactive_human_context_required', 'Interactive caller required', 403);
+        const socket = realpathSync(body.herdrSocketPath), stat = statSync(socket);
+        requireValue(stat.isSocket() && (!process.getuid || stat.uid === process.getuid()), 'invalid_herdr_config', 'Herdr socket must belong to this OS user');
+        const snapshot = await herdrInventory(socket);
+        requireValue(snapshot.protocol === 22 && snapshot.agents.some(agent => agent.agent === 'opencode' && agent.agent_session?.kind === 'id' && agent.agent_session.value === worker.sessionId),
+          'native_placement_mismatch', 'Herdr must report the exact calling OpenCode session');
+        journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+          .run(`interactive-driver:${worker.agentId}`, JSON.stringify({ agentId: worker.agentId, herdrSocketPath: socket, verifiedAt: new Date().toISOString() }));
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ state: 'registered' })); return;
+      }
       if (path === '/agent/interactive-status') {
         requireValue(api && Object.keys(body).length === 1 && typeof body.id === 'string', 'invalid_request', 'Exact preparation ID required');
+        if ((await getBackendFeatures?.())?.grantsManagement) {
+          let permission;
+          try { permission = await api('GET', `/v1/grant_requests/${encodeURIComponent(body.id)}`); }
+          catch (error) { if (error.status !== 404) throw error; }
+          if (permission) {
+            requireValue(permission.requesterAgentId === worker.agentId, 'forbidden', 'Permission request belongs to another agent', 403);
+            if (permission.state !== 'approved') {
+              res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(permission)); return;
+            }
+          }
+        }
         const request = await api('GET', `/v1/provision_requests/${encodeURIComponent(body.id)}`);
         requireValue(request.requesterAgentId === worker.agentId, 'forbidden', 'Only the initiating agent may inspect this request', 403);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(request)); return;
       }
       if (['/agent/interactive-prepare', '/agent/interactive-dispatch', '/agent/interactive-cancel'].includes(path)) {
         currentReceiver();
+        requireValue(!worker.headlessSetupId, 'interactive_human_context_required', 'Headless jobs cannot use interactive provisioning', 403);
         requireValue(api && Object.keys(body).every(k => ['key', 'payload'].includes(k)) && typeof body.key === 'string' &&
-          body.key.trim() && body.key.length <= 100 && body.payload, 'invalid_request', 'Immutable key and bounded provisioning payload required');
-        requireValue(!journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
+          body.key.trim() && body.key.length <= 100 && body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload), 'invalid_request', 'Immutable key and bounded provisioning payload required');
+        requireValue(path === '/agent/interactive-prepare' || !journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
           'interactive_human_context_required', 'Scheduled and delegated executions cannot create agents through the human-chat route', 403);
         const operation = path.slice('/agent/interactive-'.length);
-        const allowed = operation === 'prepare' ? ['id', 'grantId', 'nodeId', 'directory', 'agentId', 'name', 'createDirectory', 'instance', 'profile', 'topic'] :
+        const allowed = operation === 'prepare' ? ['id', 'grantId', 'nodeId', 'directory', 'agentId', 'name', 'createDirectory', 'instance', 'profile', 'topic', 'permissionScope'] :
           operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'title', 'instructions'] : ['id', 'expectedRevision', 'reason'];
         requireValue(Object.keys(body.payload).every(k => allowed.includes(k)), 'invalid_request', 'Caller cannot override its provisioning identity');
+        if (operation === 'prepare' && !body.payload.grantId) requireValue((await getBackendFeatures?.())?.grantsManagement,
+          'backend_upgrade_required', 'Backend must support Grants approval requests');
         const key = `interactive-source:${worker.agentId}:${body.key}`;
         const previous = journal.receipt(key);
         const inheritedModel = operation === 'prepare' ? previous ? previous.command.payload.model : await getNativeModel?.(worker) : undefined;

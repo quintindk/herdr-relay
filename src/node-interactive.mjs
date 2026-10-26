@@ -57,7 +57,8 @@ const exactPlacement = (snapshot, op, ready = false) => {
 // have their own durable intent; absent observations never permit replay.
 export async function tickInteractive(journal, api, config, resolveBinding, dependencies = {}) {
   const records = new NativeReceivers(journal);
-  const rpc = dependencies.rpc ?? ((method, params) => herdrRpc(config.interactive?.herdrSocketPath, method, params));
+  let driverSocket = config.interactive?.herdrSocketPath;
+  const rpc = dependencies.rpc ?? ((method, params) => herdrRpc(driverSocket, method, params));
   const native = dependencies.native ?? (() => nativeConnection({ serviceRegistration: config.interactive?.serviceRegistration }));
   const snapshot = async () => {
     const value = (await rpc('session.snapshot', {})).snapshot;
@@ -95,10 +96,24 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
     };
     try {
       const { grant } = await authority();
-      const policy = config.interactive;
+      let policy = config.interactive;
+      if (grant.managed) {
+        const reported = records.list('interactive-driver').filter(driver => existsSync(driver.herdrSocketPath));
+        const own = reported.find(driver => driver.agentId === request.requesterAgentId);
+        const sockets = [...new Set(reported.map(driver => driver.herdrSocketPath))];
+        const socket = op.driverSocket ?? policy?.herdrSocketPath ?? config.herdr?.socketPath ?? own?.herdrSocketPath ?? (sockets.length === 1 ? sockets[0] : undefined);
+        if (!socket && op.phase === 'initial' && !op.directoryIntent) {
+          await progress('waiting_driver', { reason: sockets.length > 1 ? 'Select the destination Herdr driver; multiple instances are available.' : 'Waiting for a verified Herdr connection from an enrolled TUI.' });
+          continue;
+        }
+        policy = { ...policy, mode: grant.mode, roots: grant.roots, profiles: grant.profiles, maxAgents: grant.maxAgents,
+          allowNewEnrolments: grant.allowNewEnrolments, allowCreateDirectories: grant.allowCreateDirectories,
+          allowReplacement: grant.allowReplacement, herdrSocketPath: socket };
+      }
       requireValue(policy && ['roots', 'localUser'].includes(policy.mode) && isAbsolute(policy.herdrSocketPath ?? ''),
         'interactive_not_configured', 'Destination node has no interactive provisioning policy');
-      requireValue(canonicalDirectory(request.directory) && (policy.mode === 'localUser' || Array.isArray(policy.roots) && withinRoots(request.directory, policy.roots.map(p => realpathSync(p)))) &&
+      driverSocket = policy.herdrSocketPath;
+      requireValue(canonicalDirectory(request.directory) && (policy.mode === 'localUser' || Array.isArray(policy.roots) && withinRoots(request.directory, policy.roots.map(p => grant.managed && !existsSync(p) ? p : realpathSync(p)))) &&
         (grant.mode === 'localUser' || withinRoots(request.directory, grant.roots)), 'provisioning_directory_forbidden', 'Destination policy refuses this workspace');
       requireValue((policy.profiles ?? ['build']).includes(request.profile), 'profile_forbidden', 'Native profile is not allowed by this node');
       const guard = async () => {
@@ -110,9 +125,15 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
           receiver?.key === `interactive-${digest(request.id)}`, 'stale_binding', 'Receiving chat changed during preparation');
       };
       if (op.phase === 'initial') {
+        if (grant.managed) {
+          try { await snapshot(); }
+          catch { await progress('waiting_driver', { reason: 'Waiting for the destination Herdr driver to become available.' }); continue; }
+          if (!op.driverSocket) save({ driverSocket });
+        }
         await progress('accepted'); await guard();
         if (!existsSync(op.directory)) {
           requireValue(request.createDirectory && policy.allowCreateDirectories && grant.allowCreateDirectories, 'directory_creation_forbidden', 'Directory does not exist and creation is not authorised');
+          requireValue(existsSync(dirname(op.directory)), 'directory_parent_missing', 'The new agent folder needs an existing parent directory');
           const parent = realpathSync(dirname(op.directory));
           requireValue(join(parent, basename(op.directory)) === op.directory, 'provisioning_directory_forbidden', 'New directory escaped its canonical parent');
           save({ directoryIntent: true });
@@ -271,7 +292,7 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
       save({ blocker: reason });
       if (error.code === 'herdr_uncertain' || op.workspaceIntent && !op.placement || op.startIntent && op.phase === 'workspace') {
         try { await progress('uncertain', { reason }); } catch {}
-      } else if (error.status && error.status < 500 || ['interactive_not_configured', 'profile_forbidden', 'agent_limit', 'directory_creation_forbidden',
+      } else if (error.status && error.status < 500 || ['interactive_not_configured', 'profile_forbidden', 'agent_limit', 'directory_creation_forbidden', 'directory_parent_missing',
         'provisioning_directory_forbidden', 'directory_identity_changed', 'directory_creation_uncertain', 'ambiguous_placement', 'placement_changed',
         'native_placement_mismatch', 'pane_occupied', 'enrolment_missing', 'enrolment_exists', 'native_identity_mismatch', 'native_model_unavailable', 'native_model_changed'].includes(error.code)) {
         try { await progress('blocked', { reason }); save({ phase: 'blocked' }); } catch {}

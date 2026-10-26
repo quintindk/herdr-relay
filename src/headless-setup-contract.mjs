@@ -17,6 +17,7 @@ function grantActor(store, actor, grant, requester) {
     return;
   }
   store.ownerOnly(actor);
+  if (actor.scope?.kind === 'grant_approval') return;
   if (actor.scope) requireValue(actor.scope.kind === 'node_operator' && actor.scope.nodeId === grant.nodeId &&
     (actor.scope.mode === 'localUser' || withinRoots(grant.directory, actor.scope.roots)),
   'operator_scope_mismatch', 'Grant must stay within this node operator workspace scope', 403);

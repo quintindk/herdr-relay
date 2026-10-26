@@ -3,6 +3,7 @@ import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { buildBoardRows, buildAgentRows, wrapBoardText, taskBoardColumns } from './task-board-view.mjs';
 import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
+import { GrantsPanel, nativeBoardTabs, nativeBoardViews } from './grants-panel.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
@@ -316,11 +317,11 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
 }
 
 export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
-  assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+  detailGrant, decideGrant, createGrant, pendingGrantDecisions, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
   const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
-    ...(pendingDecisions ? { inbox: pendingDecisions() } : {}), fetchedAt: null, warnings: [] }));
+    ...(pendingDecisions ? { inbox: pendingDecisions() } : {}), grants: { pending: [], active: [], history: [] }, nodes: [], fetchedAt: null, warnings: [] }));
   const native = Array.isArray(board.inbox);
   const [view, setView] = useState('tasks');
   const [selectedNativeId, setSelectedNativeId] = useState(null);
@@ -351,12 +352,14 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       catch (error) { if (!disposed) {
         setOffline(clean(error.message || error.code || 'offline'));
         if (pendingDecisions) setBoard(value => ({ ...value, inbox: [...pendingDecisions(), ...(value.inbox ?? []).filter(i => i.kind !== 'publication')] }));
+        if (pendingGrantDecisions) setBoard(value => ({ ...value, grants: { ...value.grants,
+          pending: [...pendingGrantDecisions(), ...(value.grants?.pending ?? []).filter(i => i.kind !== 'publication')] } }));
       } }
       if (!disposed) timer = setTimeout(refresh, interval);
     };
     void refresh();
     return () => { disposed = true; clearTimeout(timer); active?.abort(); };
-  }, [read, interval, refreshGeneration, pendingDecisions]);
+  }, [read, interval, refreshGeneration, pendingDecisions, pendingGrantDecisions]);
   const taskRows = useMemo(() => {
     const all = buildBoardRows(board, { showDone, showIdle, filter });
     const expanded = new Set(all.filter(row => row.expandable && !collapsed.has(row.id)).map(row => row.id));
@@ -476,6 +479,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     } catch (error) { setReviewModal({ ...current, busy: false, error: clean(error.message || error.code || 'review failed') }); }
   };
   useInput((input, key) => {
+    if (native && view === 'grants') return;
     if (modal || assignment || reviewModal || detail || decisionModal) return;
     if (searching) {
       if (key.escape) { setSearching(false); setFilter(''); }
@@ -491,8 +495,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     if (input === '/') { setSearching(true); return; }
     if (input === 'r') { setRefreshGeneration(value => value + 1); return; }
     if (native && key.tab) {
-      const views = ['tasks', 'agents', 'inbox', 'schedules'];
-      setView(value => views[(views.indexOf(value) + (key.shift ? 3 : 1)) % 4]);
+      const views = nativeBoardViews;
+      setView(value => views[(views.indexOf(value) + (key.shift ? views.length - 1 : 1)) % views.length]);
       setSelected(0); setSelectedNativeId(null); return;
     }
     const move = delta => setSelected(() => {
@@ -585,6 +589,11 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     return `${guides}${branch}${fold} ${native ? '' : `${row.task.identifier || row.task.id}${context}  `}${clean(row.task.title)}${anomaly}${subtree}`;
   };
   if (quitting) return null;
+  if (native && view === 'grants') return h(GrantsPanel, { board, offline, loaded, width, height, detailGrant, decideGrant, createGrant, pendingGrantDecisions,
+    refresh: publications => { if (publications) setBoard(value => ({ ...value, grants: { ...value.grants,
+      pending: [...publications, ...(value.grants?.pending ?? []).filter(i => i.kind !== 'publication')] } })); setRefreshGeneration(value => value + 1); },
+    onView: delta => { setView(value => nativeBoardViews[(nativeBoardViews.indexOf(value) + delta + nativeBoardViews.length) % nativeBoardViews.length]); setSelected(0); setSelectedNativeId(null); },
+    onQuit: () => { setQuitting(true); (onQuit ?? exit)(); } });
   const summary = taskCounts(board.tasks);
   const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal);
   const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
@@ -608,7 +617,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const background = h(Box, { width, height, flexDirection: 'column' },
     h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: overlay }, native ? `RELAY / ${view === 'schedules' ? 'SCHEDULE' : view.toUpperCase()}` : 'RELAY / TASKS'),
       h(Text, { dimColor: true }, native ? offline ? 'Inbox unavailable: showing cached state' : !loaded ? 'Loading inbox…' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`)),
-    native ? h(Box, { gap: 2 }, ...[['tasks', 'Tasks'], ['agents', 'Agents'], ['inbox', `Inbox (${offline ? '?' : !loaded ? '…' : board.inbox.length})`], ['schedules', 'Schedule']].map(([id, title]) =>
+    native ? h(Box, { gap: 2 }, ...nativeBoardTabs(board, offline, loaded).map(([id, title]) =>
       h(Text, { key: id, inverse: view === id, bold: view === id, color: view === id ? 'cyan' : undefined, dimColor: view !== id || overlay }, ` ${title} `))) : null,
     native ? h(Box, { justifyContent: 'space-between', height: 1, overflow: 'hidden' },
       view === 'agents' && board.localNode ? h(Box, { flexShrink: 1, overflow: 'hidden' },

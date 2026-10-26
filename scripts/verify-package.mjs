@@ -38,7 +38,9 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
-  'src/native-cli-surface.mjs', 'packages/opencode-relay/headless-grant-tools.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+  'src/native-cli-surface.mjs', 'packages/opencode-relay/headless-grant-tools.mjs',
+  'src/grants.mjs', 'src/grants-view.mjs', 'src/grants-panel.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+assert.ok(!packed.files.some(file => ['paperclip-final.json', 'paperclip-final-plan.json'].includes(file.path)), 'Private migration exports must never ship');
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
@@ -124,10 +126,31 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
   await import('./packages/opencode-relay/headless-mcp.mjs');
   await import('@opencode/client/service');
   const {startBackend}=await import('./src/backend-service.mjs');
+  const {bootstrapNode}=await import('./src/node-bootstrap.mjs');
+  const {nativeBackendClient}=await import('./src/backend-client.mjs');
+  const {nativeBoard}=await import('./src/native-board.mjs');
+  const {NativeDecisionJournal}=await import('./src/native-decision-journal.mjs');
+  await import('./src/grants-panel.mjs');
   const backend=await startBackend({database:':memory:'});
+  const journal=new NativeDecisionJournal();
   try { const token=backend.store.bootstrap().token; const response=await fetch(backend.origin+'/v1/info',{headers:{authorization:'Bearer '+token}});
-    const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessToolPermissions,true); assert.equal(info.features.nodeHeadlessGrants,true); }
-  finally { await backend.close(); }
+    const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessToolPermissions,true); assert.equal(info.features.nodeHeadlessGrants,true);
+    assert.equal(info.features.grantsManagement,true);
+    const store=backend.store, owner=store.authenticate(token);
+    const joined=bootstrapNode(store,owner,{key:'join',id:'node',name:'Node',mode:'roots',roots:['/work']});
+    const operator=store.authenticate(joined.operatorToken), node=store.authenticate(joined.nodeToken);
+    const command=(actor,key,action,payload)=>store.command(actor,{key,action,payload});
+    command(operator,'enrol','agent.enrol',{id:'requester',name:'Requester',nodeId:'node',directory:'/work/project'});
+    command(operator,'attach','agent.attach',{id:'requester',expectedBindingRevision:0,conversationId:'ses_fixture',directory:'/work/project',bindingId:'binding'});
+    command(node,'prepare','interactive.request',{id:'discussion',nodeId:'node',requesterAgentId:'requester',sourceConversationId:'ses_fixture',sourceBindingRevision:1,directory:'/work/discussion',name:'Discussion'});
+    const board=nativeBoard(nativeBackendClient({url:backend.origin,token:joined.operatorToken}),{decisionJournal:journal});
+    const pending=await board.read(); assert.equal(pending.inbox.length,0); assert.equal(pending.grants.pending.length,1);
+    const item=await board.detailGrant({id:pending.grants.pending[0].id});
+    await board.decideGrant({item,key:'approve',decision:'approve_once'});
+    assert.equal(store.get('provision_request','discussion').state,'requested');
+    assert.equal(journal.pending().length,0);
+  }
+  finally { journal.close(); await backend.close(); }
 `], { cwd: installed, stdio: 'pipe' });
 const sourceMethods = [], taskId = '00000000-0000-4000-8000-000000000001';
 const sourceTask = { id: taskId, companyId: 'company', title: 'Surface migration fixture', description: 'Preserved task content', priority: 'high', status: 'in_progress' };
@@ -230,6 +253,7 @@ const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['aud
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
   cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications, nativeBackendStarted: true,
+  installedGrantsApprovalResumed: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
   auditVerified: Boolean(audit), vulnerabilities: audit?.metadata.vulnerabilities ?? null, published: false, gitTagCreated: false };

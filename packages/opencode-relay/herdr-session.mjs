@@ -1,5 +1,6 @@
 import { connect } from 'node:net';
 import { isAbsolute } from 'node:path';
+import { RelayRuntime } from './rpc.mjs';
 
 let sequence = Date.now();
 export const requestHerdr = (environment, method, params) => new Promise((resolve, reject) => {
@@ -49,13 +50,14 @@ export async function renameHerdrWorkspace(ctx, receipt, { environment = process
 // driver must never manufacture this evidence from its desired launch arguments.
 export function registerHerdrSession(ctx, { selectedSession, record = () => {}, environment = process.env, interval = setInterval, clear = clearInterval }) {
   if (environment.HERDR_ENV !== '1' || !isAbsolute(environment.HERDR_SOCKET_PATH ?? '') || !environment.HERDR_PANE_ID || !ctx.data?.session?.status) return () => {};
-  let closed = false, busy = false, reported, nextRetry = 0;
+  let closed = false, busy = false, reported, driverReported = false, nextRetry = 0;
   const report = (method, params) => requestHerdr(environment, method, params);
   const tick = async () => {
     if (closed || busy || Date.now() < nextRetry) return;
     const selected = selectedSession();
     const fingerprint = selected;
-    if (fingerprint === reported) return;
+    if (fingerprint === reported && driverReported) return;
+    if (fingerprint !== reported) driverReported = false;
     busy = true;
     try {
       const snapshot = (await report('session.snapshot', {})).snapshot;
@@ -73,6 +75,9 @@ export function registerHerdrSession(ctx, { selectedSession, record = () => {}, 
         agent_session_id: selected, session_start_source: 'select' });
       if (!closed && selectedSession() === selected) reported = fingerprint;
       record({ type: 'herdr_session_reported', sessionId: selected, paneId: pane.pane_id });
+      if (selected && ctx.client?.rpc) await ctx.client.rpc(RelayRuntime).interactiveDriver({ sessionId: selected, herdrSocketPath: environment.HERDR_SOCKET_PATH },
+        { location: ctx.location ?? ctx.data.location.default() });
+      if (!closed && selectedSession() === selected) driverReported = true;
     } catch { nextRetry = Date.now() + 5000; record({ type: 'herdr_session_report_failed', sessionId: selected }); }
     finally { busy = false; }
   };
