@@ -43,6 +43,7 @@ export default Plugin.define({
           const connection = workerConnection(ctx.options, context.sessionID);
           if (connection.sessionId !== context.sessionID) throw new Error('Worker tool belongs to another exact conversation');
           const current = await call(connection, 'POST', '/work/current', { sessionId: context.sessionID });
+          if (action !== 'read' && current.blocked) throw new Error(`Execution blocked: ${current.observation?.reason ?? current.localState}. Inspect relay_work_read; no mutation was attempted`);
           const payload = action === 'ask' ? { prompt: input.prompt, humanRequired: input.humanRequired ?? false } :
             action === 'submit' ? { candidate: input.candidate, summary: input.summary } : input.payload;
           const result = action === 'read' ? current : await call(connection, 'POST', `/work/${action}`, {

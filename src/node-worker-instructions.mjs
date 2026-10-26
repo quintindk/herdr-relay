@@ -25,6 +25,8 @@ export async function configureV2WorkerSession(binding, permissions) {
 export function v2WorkerInstructions(execution) {
   return `Use the actual Relay function tools, not shell commands or printed tool-call markup.
 Call relay_work_read to inspect your exact execution and cancellation state.
+If it reports a local conflict, inspect the returned reason and stop effects. Attachment is not proof the run is usable.
+For an interactive execution with a task ID, relay_cli supports ordinary reads and comments/updates on that exact assigned task using worker scope, not human operator credentials. Scheduled runs can be taskless: use their result/question tools instead of inventing a task or borrowing operator authority.
 ${execution.allowDelegation ? 'Bounded delegation is granted: use relay_delegate and relay_wait_children, then finish the turn.\n' : ''}${execution.childExecutionIds?.length ? 'Use relay_children to refresh direct child results. Only relay_review_child grants permit child review. Final root review remains human.\n' : ''}To ask asynchronously, call relay_work_ask with {key,prompt,humanRequired}, then finish the turn.
 Otherwise call relay_work_submit with {key,candidate,summary}. Derive a unique key and candidate from the current execution ID. After successful submission, finish the turn immediately.
 Do not claim a submission succeeded unless the tool returned success. Do not read credentials.

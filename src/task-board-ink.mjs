@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { buildBoardRows, buildAgentRows, wrapBoardText, taskBoardColumns } from './task-board-view.mjs';
 import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
 import { GrantsPanel, nativeBoardTabs, nativeBoardViews } from './grants-panel.mjs';
+import { NativeDispatchModal } from './task-board-dispatch.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
@@ -317,7 +318,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
 }
 
 export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
-  detailGrant, decideGrant, createGrant, pendingGrantDecisions, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+  detailGrant, decideGrant, createGrant, pendingGrantDecisions, dispatchTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
   const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
@@ -445,6 +446,12 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const submitAssignment = async current => {
     const agent = current.agents[current.index]; setAssignment({ ...current, busy: true, error: '' });
     try {
+      if (current.native) {
+        const result = await dispatchTask({ taskId: current.task.id, expectedRevision: current.task.revision, instanceId: current.task.instanceId, key: current.key,
+          payload: { targetAgentId: agent.id, instructions: current.text } });
+        if (result.state !== 'recorded' || result.execution?.targetAgentId !== agent.id || result.execution?.taskId !== current.task.id) throw Error('Execution request is not confirmed');
+        setNotice(result.message); setAssignment(null); setRefreshGeneration(value => value + 1); return;
+      }
       const snapshot = await inspectTask({ companyId: current.task.companyId, taskId: current.task.id });
       if (snapshot.task?.id !== current.task.id || snapshot.task.companyId !== current.task.companyId || !snapshot.revision) throw Error('Assignment preview identity is not confirmed');
       const result = await assignTask({ companyId: current.task.companyId, taskId: current.task.id,
@@ -453,7 +460,13 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       setBoard(value => ({ ...value, tasks: value.tasks.map(task => task.id === current.task.id && task.companyId === current.task.companyId
         ? { ...task, assigneeAgentId: agent.id, assigneeUserId: null } : task) }));
       setNotice(`Assigned ${current.task.identifier || current.task.id} to ${agent.name || agent.id}`); setAssignment(null);
-    } catch (error) { setAssignment({ ...current, busy: false, error: clean(error.message || error.code || 'assignment failed') }); }
+    } catch (error) {
+      const publications = current.native ? pendingDecisions?.() : null;
+      const retained = current.native && (publications ? publications.some(item => item.key === current.key) : true);
+      setAssignment({ ...current, busy: false, locked: retained, error: clean(error.message || error.code || 'assignment failed') });
+      if (publications) setBoard(value => ({ ...value, inbox: [...publications, ...(value.inbox ?? []).filter(item => item.kind !== 'publication')] }));
+      if (current.native) setRefreshGeneration(value => value + 1);
+    }
   };
   const prepareReview = key => {
     const nativeReview = detail?.data?.actions?.find(item => item.kind === 'review');
@@ -539,13 +552,15 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       }).catch(error => setNotice(`Status unavailable: ${clean(error.message)}`));
     }
     if (input === 'a') {
-      if (native && !assignTask) { setNotice('Sending work requires an explicit execution request, not a responsibility change'); return; }
+      if (native && !dispatchTask) { setNotice('Native execution handover is unavailable'); return; }
       const row = rows[selectedIndex];
       if (row?.type !== 'task') { setNotice('Select a task'); return; }
-      const agents = board.agents.filter(agent => agent.companyId === row.companyId && agent.availability === 'present')
+      const agents = board.agents.filter(agent => agent.companyId === row.companyId && (native
+        ? !agent.capabilities?.includes('observation_only') : agent.availability === 'present'))
         .sort((left, right) => clean(left.name || left.id).localeCompare(clean(right.name || right.id)) || left.id.localeCompare(right.id));
       if (!agents.length) { setNotice('Assignment unavailable: no present agents in this company'); return; }
-      setAssignment({ task: row.task, agents, index: Math.max(0, agents.findIndex(agent => agent.id === row.task.assigneeAgentId)), busy: false, error: '' });
+      setAssignment({ task: row.task, agents, index: Math.max(0, agents.findIndex(agent => agent.id === row.task.assigneeAgentId)), busy: false, error: '',
+        ...(native ? { native: true, stage: 'select', text: '', key: `human-dispatch:${randomUUID()}` } : {}) });
       setNotice(''); return;
     }
     if (key.return || input === 'd' || key.tab) {
@@ -689,7 +704,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   };
   return h(Box, { width, height }, background,
     modal ? h(StatusModal, { modal, setModal, submit, width, height }) : null,
-    assignment ? h(AssignmentModal, { modal: assignment, setModal: setAssignment, submit: submitAssignment, width, height }) : null,
+    assignment ? h(assignment.native ? NativeDispatchModal : AssignmentModal, { modal: assignment, setModal: setAssignment, submit: submitAssignment, width, height }) : null,
     reviewModal ? h(ReviewModal, { modal: reviewModal, setModal: value => {
       if (typeof value === 'function') setReviewModal(current => { const next = value(current); if (next?.reason !== undefined) setReviewFeedback(next.reason); return next; });
       else { if (value?.reason !== undefined) setReviewFeedback(value.reason); setReviewModal(value); }

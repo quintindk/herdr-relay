@@ -4,9 +4,11 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireValue } from '../../src/protocol.mjs';
-import { nativeCliInvocation } from '../../src/native-cli-surface.mjs';
+import { nativeCliInvocation, executionCliInvocation } from '../../src/native-cli-surface.mjs';
 import { humanSource } from './human-proposals.mjs';
 import { workerConnection, workerContextPath } from './worker-context.mjs';
+import { supportingInput } from './native-input.mjs';
+import { call } from '../../src/client.mjs';
 
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL('../../src/cli.mjs', import.meta.url));
@@ -25,11 +27,13 @@ export function cliBridgeOutput(text) {
 
 // Invoke the installed CLI itself. There is deliberately no second command or
 // mutation implementation, and no per-operation bridge allowlist to drift.
-export async function runRelayCli({ args, directory, sessionId, operatorContextFile, workerContextFile, nodeConfigFile, payload, timeout = 120000, signal }, { run = execute } = {}) {
+export async function runRelayCli({ args, directory, sessionId, operatorContextFile, workerContextFile, nodeConfigFile, executionSource, payload, timeout = 120000, signal }, { run = execute } = {}) {
   requireValue(Array.isArray(args) && args.length > 0 && args.every(arg => typeof arg === 'string' && !arg.includes('\0')),
     'invalid_request', 'CLI arguments must be an array of strings, not a shell command');
   requireValue(nativeCliInvocation(args),
     'legacy_cli_not_supported', 'Use the native CLI: task/execution commands start with native. Retired Paperclip commands are not a fallback');
+  requireValue(!executionSource || executionCliInvocation(args), 'execution_cli_scope',
+    'Assigned work has execution scope, not human operator authority. Use ordinary reads or comment/edit on the assigned task; lifecycle, new task creation and dispatch need separate authority', 403);
   let scratch;
   const substitutions = { '{operator}': operatorContextFile, '{worker}': workerContextFile, '{node-config}': nodeConfigFile, '{session}': sessionId };
   if (payload !== undefined) {
@@ -61,7 +65,8 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
     // Inside the packaged OpenCode host, process.execPath is opencode.exe, not
     // node. Match the Relay executable's /usr/bin/env node interpreter instead.
     result = await run('node', [cli, ...argv], { cwd: directory, timeout, signal, maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, RELAY_CONTEXT: '', RELAY_NATIVE_CONTEXT: operatorContextFile ?? '', OPENCODE_SESSION_ID: sessionId ?? '' } });
+      env: { ...process.env, RELAY_CONTEXT: '', RELAY_NATIVE_CONTEXT: executionSource ? workerContextFile : operatorContextFile ?? '', OPENCODE_SESSION_ID: sessionId ?? '',
+        RELAY_CLI_EXECUTION_ID: executionSource?.executionId ?? '', RELAY_CLI_RUN_ID: executionSource?.runId ?? '', RELAY_CLI_SOURCE_ID: executionSource?.id ?? '' } });
     if (scratch) rmSync(scratch, { recursive: true, force: true });
     return { exitCode: 0, stdout: cliBridgeOutput(result.stdout ?? ''), stderr: cliBridgeOutput(result.stderr ?? ''), effectsUncertain: false };
   } catch (error) {
@@ -73,7 +78,7 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
   }
 }
 
-export async function interactiveCliSource(ctx, context, connection = workerConnection) {
+export async function interactiveCliSource(ctx, context, connection = workerConnection, request = call) {
   const worker = connection(ctx.options, context.sessionID);
   requireValue(!worker.headlessSetupId, 'interactive_cli_required', 'Headless jobs retain their own granted tools');
   const session = await ctx.session.get({ sessionID: context.sessionID });
@@ -82,8 +87,21 @@ export async function interactiveCliSource(ctx, context, connection = workerConn
   const messages = await ctx.session.context({ sessionID: context.sessionID });
   const callIndex = messages.findIndex(message => message.id === context.messageID);
   requireValue(callIndex >= 0, 'human_source_required', 'Native tool message must belong to this chat');
-  const triggers = messages.filter(message => ['user', 'synthetic', 'shell'].includes(message.type));
-  const source = humanSource(triggers.at(-1));
+  let sourceIndex = -1;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (!['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type)) continue;
+    if (supportingInput(message, messages.slice(sourceIndex + 1, index))) continue;
+    sourceIndex = index;
+  }
+  const trigger = messages[sourceIndex];
+  let source;
+  if (trigger?.type === 'user' && trigger.metadata?.herdrRelayInvocation === trigger.id) {
+    const current = await request(worker, 'POST', '/work/current', { sessionId: context.sessionID });
+    requireValue(!current.blocked && current.execution?.state === 'accepted' && !current.execution.cancellationRequested && current.sourceMessageId === trigger.id,
+      'execution_source_required', 'This Relay input has no matching active execution. Peer notices cannot acquire operator authority', 403);
+    source = { id: trigger.id, text: trigger.text, createdAt: trigger.time?.created, authority: 'execution', executionId: current.execution.id, runId: current.execution.runId };
+  } else source = humanSource(trigger);
   requireValue(messages.findIndex(message => message.id === source.id) <= callIndex,
     'human_source_changed', 'A newer input arrived after this tool invocation');
   return source;
@@ -97,18 +115,19 @@ export function registerCliBridge(editor, ctx, dependencies = {}) {
       const sections = await Promise.all([['native', '--help'], ['upgrade', '--help'], ['headless', '--help']].map(args => run({ args, directory: ctx.location.directory })));
       return { content: JSON.stringify({ sections, transport: 'installed_cli_argv', terminalCommands: 'TTY-only commands retain their CLI terminal requirement. Use documented JSON/dry-run modes for tool calls.' }) };
     } });
-  editor.add({ name: 'relay_cli', description: 'Run any supported native Relay CLI command using the configured local operator and the same CLI implementation/permissions. Interactive human requests need no active execution. Supply argv, not shell text. Task commands start with native, e.g. ["native","task","create","--key","KEY","--file","{payload}"]. Optional payload supplies that private JSON file. Tokens {operator}, {worker}, {node-config}, {session} resolve internally. Lifecycle/upgrade/provisioning actions still require the human request. Headless jobs cannot use this bridge. Inspect non-zero/uncertain results and reconcile the original key rather than retrying effects blindly.', options: { codemode: false },
+  editor.add({ name: 'relay_cli', description: 'Run the same native Relay CLI, supplying argv rather than shell text. Human interactive requests use the configured operator and need no active execution. An accepted interactive execution instead uses its exact worker scope for ordinary reads and its assigned task comments/updates, never operator credentials. Use the default context in that case, not {operator}. Task verbs start with native. {payload} supplies the optional private JSON payload. {operator}, {worker}, {node-config} and {session} resolve internally where authorised. New task creation, dispatch and lifecycle administration require separate authority. Headless jobs use their own granted tools. Reconcile original keys after uncertain effects.', options: { codemode: false },
     input: { type: 'object', properties: { args: { type: 'array', minItems: 1, items: { type: 'string' } }, payload: { type: 'object', additionalProperties: true }, timeout: { type: 'integer', minimum: 0 } }, required: ['args'], additionalProperties: false },
     async execute(input, context) {
-      const source = await interactiveCliSource(ctx, context, dependencies.connection);
+      const source = await interactiveCliSource(ctx, context, dependencies.connection, dependencies.request);
       await ctx.permission.assert({ sessionID: context.sessionID, agent: context.agent, action: 'relay_cli', resources: [input.args.join(' ')],
         source: { type: 'tool', messageID: context.messageID, id: context.id } });
-      const current = await interactiveCliSource(ctx, context, dependencies.connection);
+      const current = await interactiveCliSource(ctx, context, dependencies.connection, dependencies.request);
       requireValue(JSON.stringify(current) === JSON.stringify(source), 'human_source_changed', 'Human input changed during permission evaluation');
       const directory = ctx.options.workerDirectory ? resolve(ctx.options.workerDirectory) : ctx.options.workerContextFile ? dirname(resolve(ctx.options.workerContextFile)) : undefined;
       requireValue(directory, 'cli_context_unavailable', 'Joined node directory is required');
       const result = await run({ ...input, signal: context.signal, directory: ctx.location.directory, sessionId: context.sessionID,
-        operatorContextFile: join(directory, 'operator.json'), nodeConfigFile: join(directory, 'node.json'),
+        operatorContextFile: source.authority === 'execution' ? undefined : join(directory, 'operator.json'),
+        executionSource: source.authority === 'execution' ? source : undefined, nodeConfigFile: join(directory, 'node.json'),
         workerContextFile: dependencies.workerContextPath?.(ctx.options, context.sessionID) ?? workerContextPath(ctx.options, context.sessionID) });
       return { content: JSON.stringify(result) };
     } });

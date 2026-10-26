@@ -14,6 +14,7 @@ function fixture() {
   f.ctx = { options: { workerDirectory: '/node' }, location: { directory: '/workspace' },
     session: { get: async () => f.session, context: async () => f.messages }, permission: { assert: async () => { await f.onPermission?.(); } } };
   registerCliBridge({ add: tool => f.tools.push(tool) }, f.ctx, { connection: () => f.worker, workerContextPath: () => '/node/worker.json',
+    request: async (...args) => { assert.ok(f.current, 'No accepted execution was supplied'); return f.current; },
     runCli: async input => { f.calls.push(input); return { exitCode: 0, stdout: '{}', stderr: '', effectsUncertain: false }; } });
   f.invoke = input => f.tools.find(tool => tool.name === 'relay_cli').execute(input, { sessionID: 'session', messageID: 'assistant', agent: 'build', id: 'tool' });
   return f;
@@ -26,6 +27,38 @@ test('interactive CLI bridge needs a human request, not an active Relay executio
   const exact = fixture(); exact.ctx.options = { workerContextFile: '/node/worker.json' };
   await exact.invoke({ args: ['native', 'task', 'list'] });
   assert.equal(exact.calls[0].operatorContextFile, '/node/operator.json');
+});
+
+test('instruction loads and exact shell completions preserve human CLI provenance without granting authority to notifications', async () => {
+  const f = fixture();
+  f.messages.splice(1, 0, { id: 'instructions', type: 'synthetic', metadata: { instruction: { paths: ['/workspace/AGENTS.md'] } } });
+  await f.invoke({ args: ['native', 'task', 'list'] }); assert.equal(f.calls.length, 1);
+  f.messages.splice(-1, 0, { id: 'tool-turn', type: 'assistant', content: [{ type: 'tool', name: 'shell',
+    state: { status: 'completed', content: [{ type: 'text', text: 'Command moved to background (shell ID: sh_owned)' }] } }] },
+    { id: 'completion', type: 'synthetic', metadata: { source: 'shell', shellID: 'sh_owned', state: 'completed' } });
+  await f.invoke({ args: ['native', 'task', 'list'] }); assert.equal(f.calls.length, 2);
+  f.messages.splice(-1, 0, { id: 'unrelated', type: 'synthetic', metadata: { source: 'shell', shellID: 'sh_foreign', state: 'completed' } });
+  await assert.rejects(f.invoke({ args: ['native', 'task', 'list'] }), /human-source/); assert.equal(f.calls.length, 2);
+});
+
+test('an accepted Relay prompt never inherits an earlier human operator context through instruction loads', async () => {
+  const f = fixture();
+  f.messages.splice(-1, 0, { id: 'relay-run', type: 'user', text: 'Assigned task', metadata: { herdrRelayInvocation: 'relay-run' } },
+    { id: 'instruction', type: 'synthetic', metadata: { instruction: { paths: ['/workspace/AGENTS.md'] } } });
+  await assert.rejects(f.invoke({ args: ['native', 'task', 'create'] }), /No accepted execution|human-source/); assert.equal(f.calls.length, 0);
+});
+
+test('a matching accepted execution uses worker CLI context and cannot become an operator or lifecycle request', async () => {
+  const f = fixture();
+  f.messages[0] = { id: 'assigned', type: 'user', text: 'Comment on the assigned task', time: { created: 1 }, metadata: { herdrRelayInvocation: 'assigned' } };
+  f.current = { execution: { id: 'execution', runId: 'run', state: 'accepted', cancellationRequested: false }, sourceMessageId: 'assigned' };
+  await f.invoke({ args: ['native', 'task', 'comment', '--key', 'comment', '--file', '{payload}'], payload: { taskId: 'task', body: 'Progress' } });
+  assert.equal(f.calls[0].operatorContextFile, undefined); assert.equal(f.calls[0].executionSource.executionId, 'execution');
+  assert.equal(f.calls[0].workerContextFile, '/node/worker.json');
+  await assert.rejects(runRelayCli({ args: ['backend', 'install'], directory: '/workspace', executionSource: f.calls[0].executionSource },
+    { run: () => assert.fail('Lifecycle commands must never execute') }), { code: 'execution_cli_scope' });
+  f.current.sourceMessageId = 'other';
+  await assert.rejects(f.invoke({ args: ['native', 'task', 'list'] }), { code: 'execution_source_required' });
 });
 
 test('headless, peer/scheduled input and stale human input cannot use the interactive operator bridge', async () => {

@@ -8,6 +8,7 @@ export async function headlessToolScope(ctx, context, { connection = workerConne
   const worker = connection(ctx.options, context.sessionID);
   requireValue(worker.headlessSetupId && worker.sessionId === context.sessionID, 'headless_tool_scope_required', 'Exact headless worker required', 403);
   const current = await request(worker, 'POST', '/work/current', { sessionId: context.sessionID });
+  requireValue(!current.blocked, 'headless_execution_blocked', 'Native observation conflict blocks headless effects', 409);
   const run = { executionId: current.execution.id, runId: current.execution.runId };
   const scope = await request(worker, 'POST', '/work/headless-access', run);
   requireValue(scope.id === worker.headlessSetupId && scope.sessionId === context.sessionID, 'headless_scope_mismatch', 'Exact headless execution scope required', 403);

@@ -17,6 +17,18 @@ This is a native backend context, not a legacy Relay admin token. Workers use
 their own exact-session credential and local node socket instead. Keep credentials
 outside the checkout. Enrolment never prints a token.
 
+The `relay_cli` tool uses this same CLI implementation, with authority appropriate
+to its source. A current human request uses the joined node's existing operator
+context. Verified instruction loads and correlated shell/subagent completions do
+not replace that request. Unrelated notifications do not inherit older authority.
+
+An accepted interactive execution uses its exact worker connector, never the
+human operator credential. Ordinary native reads, comments/updates on its assigned
+task and its own execution progress are supported through the same parser and
+backend commands. New task creation, dispatch and lifecycle administration require
+separate authority. These worker calls are bound to the originating invocation,
+execution and run. Headless jobs retain their granted tools rather than this CLI.
+
 ## Existing conversation enrolment
 
 For dedicated recurring automation without an interactive conversation, use the

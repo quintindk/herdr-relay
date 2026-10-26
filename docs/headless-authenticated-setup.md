@@ -7,6 +7,30 @@ conversation. Isolation is per session, not an operating-system sandbox.
 
 ## Grant model
 
+### Scheduled execution admission
+
+Headless cron runs require a backend execution record before the native context
+hook or any granted tool runs. The owning node admits the deterministic occurrence
+and run under the current acknowledged schedule, grant, binding and native session.
+Lost admission replies reconcile with the original key before any prompt intent.
+These runs are taskless unless an asynchronous question needs a human work item.
+
+Unlike installed interactive automation, a new headless run waits while fresh
+backend authority is unavailable. Readiness success does not prove this scheduled
+path or the business job succeeded. Native failures retain a safe stage/code and
+exact terminal reference without publishing provider responses or credentials.
+
+Run the isolated real-host cron gate with:
+
+```sh
+node scripts/verify-headless-setup.mjs --cron --capabilities --shell
+```
+
+It uses a disposable local model and MCP fixture. It never runs a mailbox sweep or
+modifies user services. Existing failed occurrences remain historical evidence.
+
+### Permission scope
+
 An enrolled interactive coordinator can issue its own grant on its own node and
 workspace. No backend-owner context or manual transfer to the backend host is
 required. The explicit grant records the coordinator, node, worker, contract,

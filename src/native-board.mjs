@@ -112,7 +112,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies } = await load();
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents)),
         inbox, grants, grantsAvailable: !!info.features?.grantsManagement, nodePolicies,
-        tasks: tasks.map(t => ({ ...scoped(t), ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
+        tasks: tasks.map(t => ({ ...scoped(t), instanceId: info.instanceId, ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
         localNode: localNode(nodes, info) ? { id: localNodeId, name: localNode(nodes, info).name ?? localNodeId } : null,
         agents: agents.map(agent => presentAgent(agent, nodes, info)), fetchedAt: new Date().toISOString(), warnings: ['Native task view. Assignment is separate from execution.',
@@ -129,6 +129,32 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
           !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => ({ id: e.id, state: e.state, conversationId: e.targetConversationId })) };
     },
     pendingDecisions: publicationItems,
+    async dispatchTask({ taskId, expectedRevision, instanceId, key, payload }) {
+      requireValue(decisionJournal && key && payload?.targetAgentId && typeof payload.instructions === 'string' &&
+        payload.instructions.trim() && payload.instructions.length <= 4000, 'invalid_handover', 'Select an agent and provide a bounded handover');
+      const previous = decisionJournal.inspect(key);
+      if (previous) {
+        const command = previous.command;
+        const marker = '\nHuman handover:\n';
+        requireValue(command.action === 'execution.request' && command.payload.taskId === taskId && command.payload.taskRevision === expectedRevision &&
+          command.payload.targetAgentId === payload.targetAgentId && command.payload.instructions.includes(marker) &&
+          command.payload.instructions.slice(command.payload.instructions.indexOf(marker) + marker.length) === payload.instructions.trim(),
+        'decision_conflict', 'Confirmed handover payload changed');
+        const execution = await decisionJournal.submit(api, command, previous.instance);
+        return { state: 'recorded', execution, message: 'Original execution request reconciled. No additional work was sent.' };
+      }
+      requireValue(!(decisionJournal.pending().some(item => item.command.action === 'execution.request' && item.command.payload.taskId === taskId)),
+        'decision_pending', 'This task has an unconfirmed execution request. Reconcile its original key from Inbox');
+      const task = await api('GET', `/v1/tasks/${encodeURIComponent(taskId)}`);
+      requireValue(task.revision === expectedRevision, 'stale_revision', 'Task changed. Refresh and inspect the handover again', 409);
+      const info = await api('GET', '/v1/info');
+      requireValue(!instanceId || info.instanceId === instanceId, 'backend_identity_changed', 'Backend identity changed since the task preview. No work was requested');
+      const command = { key, action: 'execution.request', payload: { id: `execution_${digest([taskId, key])}`, taskId, taskRevision: expectedRevision,
+        targetAgentId: payload.targetAgentId, reviewPolicy: 'none', instructions:
+          `Read task ${task.reference ?? task.id} (${task.id}), its description and comments before acting.\nHuman handover:\n${payload.instructions.trim()}` } };
+      const execution = await decisionJournal.submit(api, command, info.instanceId);
+      return { state: 'recorded', execution, message: 'Execution requested. Delivery waits for the designated receiver and available capacity.' };
+    },
     pendingGrantDecisions: () => publicationItems(true),
     async detailGrant({ id }) {
       const data = await load();
@@ -199,7 +225,8 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       return { ...routine(schedule, agents), runs: occurrences.filter(o => o.scheduleId === scheduleId)
         .sort((a, b) => b.intendedAt.localeCompare(a.intendedAt)).slice(0, 50).map(o => {
           const execution = executions.find(e => e.id === o.id && e.localOccurrence && e.targetNodeId === o.nodeId);
-          return { id: o.id, status: o.state, triggeredAt: o.intendedAt, summary: o.summary ?? o.reason ?? '', nativeOccurrence: true,
+          return { id: o.id, status: o.state, triggeredAt: o.intendedAt,
+            summary: o.summary ?? (o.failure ? `${o.failure.message} (${o.failure.stage}/${o.failure.code})` : o.reason ?? ''), failure: o.failure ?? null, nativeOccurrence: true,
             linkedIssueId: execution?.taskId ?? null, nativeTaskId: execution?.taskId ?? null };
         }) };
     },

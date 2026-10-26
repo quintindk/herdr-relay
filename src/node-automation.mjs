@@ -1,5 +1,6 @@
 import { digest, now } from './protocol.mjs';
 import { installLocalSchedule, tickLocalSchedules } from './node-schedules.mjs';
+import { reconcileObservationConflict } from './native-observation-recovery.mjs';
 
 export function reconcileScheduleDefinitions(journal, clock = Date.now()) {
   for (const row of journal.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'schedule-pending:%'").all()) {
@@ -84,6 +85,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
     if (!work && occurrence.definition.targetConversationId && occurrence.definition.targetConversationId !== exactConversation) {
       saveOccurrence('pending', { admission: { state: 'blocked', reason: 'target_conversation_replaced' } }); continue;
     }
+    if (work) work = await reconcileObservationConflict(journal, binding, work);
     if (work?.state === 'conflict') continue;
     if (work?.bindingId && work.bindingId !== binding.id) {
       journal.save({ ...work, state: 'conflict', error: 'binding_replaced' }); continue;
@@ -149,6 +151,53 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
         staged: null, state: 'pending', continuationCommandKey: null });
       saveOccurrence('pending');
     }
+    if (binding.headlessSetupId && (!work || work.admissionCommandKey && !work.invocation)) {
+      if (!api) { saveOccurrence(occurrence.state, { admission: { state: 'waiting_backend', reason: 'Fresh backend headless admission is required' } }); continue; }
+      if (!work) {
+        let info;
+        try { info = await api('GET', '/v1/info'); }
+        catch { saveOccurrence('pending', { admission: { state: 'waiting_backend', reason: 'Backend unavailable before headless admission' } }); continue; }
+        if (!info.features?.scheduledHeadlessAdmission) {
+          saveOccurrence('pending', { admission: { state: 'blocked', reason: 'Backend upgrade required for headless cron admission' } }); continue;
+        }
+        if (!capacityAvailable()) continue;
+        const command = { key: `schedule-admit:${occurrence.id}`, action: 'schedule.admit', payload: {
+          id: occurrence.id, scheduleId: occurrence.scheduleId, definitionRevision: occurrence.definition.revision, intendedAt: occurrence.intendedAt,
+          targetAgentId: occurrence.definition.targetAgentId, bindingId: binding.id, conversationId: exactConversation, runId: `run_${digest(occurrence.id)}`,
+        } };
+        journal.transaction(() => {
+          journal.assertReceiver(binding);
+          journal.queue(command);
+          work = journal.save({ id: occurrence.id, bindingId: binding.id, nativeConversationId: exactConversation,
+            state: 'admitting', admissionCommandKey: command.key, execution: { id: occurrence.id, targetAgentId: occurrence.definition.targetAgentId,
+              targetNodeId: journal.nodeId, localOccurrence: true, state: 'requested', runId: command.payload.runId } });
+          saveOccurrence('admitted', { bindingId: binding.id, admission: { state: 'pending' } });
+        });
+      }
+      try { await journal.flush(api); } catch {}
+      const receipt = journal.receipt(work.admissionCommandKey);
+      if (receipt?.state === 'conflict') {
+        // This is a definitive transaction refusal before any prompt intent.
+        // Preserve the refusal, but do not turn it into a maintenance blocker.
+        journal.transaction(() => {
+          journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify({ ...receipt,
+            state: 'superseded', outcome: 'refused', applied: false }), work.admissionCommandKey);
+          journal.save({ ...work, state: 'settled', error: receipt.error, execution: { ...work.execution, state: 'failed' } });
+          saveOccurrence('failed', { admission: { state: 'refused', reason: receipt.error } });
+          journal.queue({ key: `occurrence-admission-failed:${occurrence.id}`, action: 'schedule.fail', payload: {
+            id: occurrence.id, scheduleId: occurrence.scheduleId, definitionRevision: occurrence.definition.revision,
+            intendedAt: occurrence.intendedAt, reason: 'headless_admission_refused', evidence: 'Backend refused headless admission before native prompt intent.',
+            failure: { stage: 'admission', code: 'headless_admission_refused', message: 'Headless run was not admitted. Inspect the retained admission refusal.' },
+          } });
+        });
+        continue;
+      }
+      if (receipt?.state !== 'recorded') {
+        saveOccurrence('admitted', { admission: { state: 'waiting_backend', reason: 'Headless admission awaits its original receipt' } }); continue;
+      }
+      work = journal.save({ ...work, execution: receipt.receipt, state: 'pending', admissionCommandKey: null, admittedKey: receipt.command.key });
+      saveOccurrence('admitted', { admission: { state: 'recorded' } });
+    }
     if (work && !work.invocation) {
       // Continuation has a fresh run identity but retains its pinned binding.
       if (work.bindingId !== binding.id) continue;
@@ -160,12 +209,29 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
       }
       work = journal.save({ ...work, execution: fresh });
       if (fresh.state !== 'accepted' || fresh.cancellationRequested) continue;
+      if (binding.headlessSetupId) {
+        try { await api('POST', '/v1/headless/read', { operation: 'permissions', executionId: work.id, runId: fresh.runId }); }
+        catch (error) {
+          if (!error.status || error.status >= 500 || [401, 408, 429].includes(error.status)) {
+            saveOccurrence('admitted', { admission: { state: 'waiting_backend', reason: 'Fresh headless authority is unavailable before prompt intent' } }); continue;
+          }
+          journal.transaction(() => {
+            const failure = { stage: 'admission', code: 'headless_authority_refused', message: 'Current grant or execution authority refused this run before native prompt intent.' };
+            journal.save({ ...work, state: 'settled', error: failure.code, execution: { ...fresh, state: 'failed' } });
+            saveOccurrence('failed', { failure });
+            journal.queue({ key: `occurrence-authority-failed:${work.id}`, action: 'schedule.fail', payload: {
+              id: work.id, scheduleId: occurrence.scheduleId, definitionRevision: occurrence.definition.revision,
+              intendedAt: occurrence.intendedAt, reason: failure.code, failure, evidence: 'Fresh headless authority refused before any native prompt intent.' } });
+          });
+          continue;
+        }
+      }
       if (!capacityAvailable()) continue;
       const snapshot = await binding.native.snapshot();
       if (!snapshot.idle || snapshot.inbox?.length) continue;
       const invocation = { runId: work.execution.runId, messageId: `msg_${digest([occurrence.id, work.execution.runId])}`, priorMessageIds: snapshot.messages.map(message => message.id),
         ...(binding.prepareInvocation?.(snapshot) ?? {}), createdAt: now(), prompt:
-          `Relay scheduled continuation ${occurrence.id}.\n${occurrence.definition.instructions}\nAnswer: ${work.answer.body}\n${binding.workerInstructions?.(work.execution) ?? ''}` };
+          `Relay ${work.answer ? 'scheduled continuation' : 'local occurrence'} ${occurrence.id}.\n${occurrence.definition.instructions}\n${work.answer ? `Answer: ${work.answer.body}\n` : ''}${binding.workerInstructions?.(work.execution) ?? ''}` };
       work = journal.save({ ...work, invocation, state: 'intent' }); saveOccurrence('admitted');
       try { await binding.native.send(invocation); }
       catch (error) { journal.save({ ...journal.work(work.id), state: 'uncertain', error: error.code ?? 'native_delivery_uncertain' }); saveOccurrence('uncertain'); continue; }
@@ -202,7 +268,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
     const fail = reason => journal.transaction(() => {
       journal.queue({ key: `occurrence-failed:${occurrence.id}:${work.execution.runId}`, action: 'schedule.fail', payload: {
         id: occurrence.id, scheduleId: occurrence.scheduleId, definitionRevision: occurrence.definition.revision,
-        intendedAt: occurrence.intendedAt, reason,
+        intendedAt: occurrence.intendedAt, reason, ...(observation.failure ? { failure: observation.failure } : {}),
         evidence: `Native terminal ${observation.messageId}, run ${work.execution.runId}, outcome ${observation.outcome}`,
       } });
       saveOccurrence('failed', { observation, reason });

@@ -32,6 +32,22 @@ test('foreign input fences a turn but later input cannot erase its original term
   assert.equal(observeV2({ ...snapshot([user, terminal]), idle: false }, invocation).state, 'observed');
 });
 
+test('automatic instruction loading and correlated completions do not falsely conflict a native run', () => {
+  const instruction = { id: 'instruction', type: 'synthetic', metadata: { instruction: { paths: ['/work/nested/AGENTS.md'] } } };
+  const tool = { id: 'tool', type: 'assistant', content: [{ type: 'tool', name: 'shell', state: { status: 'completed', content: 'shell ID sh_exact' } }] };
+  const completion = { id: 'completion', type: 'synthetic', metadata: { source: 'shell', shellID: 'sh_exact', state: 'completed' } };
+  assert.equal(observeV2(snapshot([user, instruction, tool, completion, terminal]), invocation).state, 'finished');
+  assert.equal(observeV2(snapshot([user, instruction, { ...completion, metadata: { ...completion.metadata, shellID: 'other' } }, terminal]), invocation).state, 'conflict');
+  assert.equal(observeV2(snapshot([user, { id: 'peer', type: 'synthetic', text: 'Instructions from /work/AGENTS.md' }, terminal]), invocation).state, 'conflict');
+});
+
+test('native failure diagnostics retain useful stage/code without exposing provider bodies or credentials', () => {
+  const missing = observeV2(snapshot([user, { ...terminal, outcome: 'failed', error: { type: 'unknown', message: 'Unknown execution' } }]), invocation);
+  assert.equal(missing.failure.code, 'scheduled_execution_missing'); assert.equal(missing.failure.stage, 'context');
+  const provider = observeV2(snapshot([user, { ...terminal, outcome: 'failed', error: { type: 'provider', message: 'secret-token and private response' } }]), invocation);
+  assert.equal(provider.failure.code, 'provider'); assert.doesNotMatch(JSON.stringify(provider), /secret-token|private response/);
+});
+
 test('versioned snapshot traverses native pages and rejects changed identity', async () => {
   let pages = 0;
   const session = { id: 'session', projectID: 'project', location: { directory: '/workspace' }, time: { created: 1 } };

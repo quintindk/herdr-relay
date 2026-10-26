@@ -1,10 +1,10 @@
 # Native task board and human inbox
 
-The native work pane has four views: **Tasks**, **Agents**, **Inbox**, and **Schedule**.
+The native work pane has five views: **Tasks**, **Agents**, **Inbox**, **Grants**, and **Schedule**.
 From the checkout run `npm run board`, or `node src/cli.mjs tui`. An installed build
 provides `herdr-relay tui`. `herdr-relay native board` remains available too.
-Board entry points use `--context`, then `RELAY_NATIVE_CONTEXT`, then
-`$XDG_STATE_HOME/herdr-relay-backend/owner.json` (defaulting to `~/.local/state`).
+Board entry points use `--context`, then `RELAY_NATIVE_CONTEXT`, then the joined
+node's scoped operator context, falling back to the local backend owner context.
 Only opening the native board gets this local default. Other native commands still
 require an explicit context. Legacy `herdr-relay board` remains Paperclip-backed
 and is not silently redirected. Reopening the native Herdr work pane loads the
@@ -12,7 +12,30 @@ same new interface. No OpenCode restart is required. The OpenCode
 `/relay-questions` and `/relay-reviews` commands remain available as alternative
 interfaces. No model tool or controller is required to relay board decisions.
 
-## Inbox
+## Sending a task to an agent
+
+Select a task and press `a`. Select the enrolled agent, press Enter, type the
+handover and press Enter to send. This creates a native execution request, not a
+responsibility change. Human responsibility stays unchanged. The default result
+policy is `none`, so a successful submitted result completes the task without
+formal human review. An offline/busy receiver can receive the queued request when
+its designated chat and capacity become available.
+
+The exact task revision and handover are retained. A stale task preview is refused
+rather than silently updated. A lost acknowledgement locks that request and keeps
+its original-key retry under Inbox. Do not create a new handover to work around an
+uncertain request. Request acknowledgement is not proof of native delivery.
+
+No introductory model prompt is required. Enrolment and attachment must establish
+the connector before work arrives, and the first model prompt can be the task.
+
+Self-directed task capture in an existing interactive chat is different: record
+the task and continue that chat's authorised work. Do not create a self-execution
+request merely to attach the task to the agent. Capture alone never queues a
+prompt, reserves capacity or creates an execution. Explicit separate runs and
+peer handovers still use execution requests.
+
+## Inbox decisions
 
 ```text
 RELAY / TASKS                              3 agents · 2 need attention

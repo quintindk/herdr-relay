@@ -46,6 +46,10 @@ jobs:
       - run: npm run test:v2
       - name: Interactive plugin to actual node CLI task hand-off
         run: node scripts/verify-cli-bridge.mjs
+      - name: Interactive self-capture records a todo without self-dispatch
+        run: node scripts/verify-cli-bridge.mjs --self-capture
+      - name: Never-prompted receiving chat, instruction load and execution-scoped CLI
+        run: node packages/opencode-relay/smoke-receivers.mjs --first-message
       - name: Native task-independent message smoke
         run: npm --prefix packages/opencode-relay run smoke:messages
       - name: Native reusable headless provisioning and schedule smoke
@@ -56,6 +60,8 @@ jobs:
         run: node scripts/verify-headless-setup.mjs --agent-grant --capabilities --shell
       - name: Approved headless task and artifact capability canaries
         run: node scripts/verify-headless-setup.mjs --capabilities
+      - name: Actual headless cron admission, granted effects and result publication
+        run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell
       - name: Headless MCP denied without connector permissions
         run: node scripts/verify-headless-setup.mjs --mcp-denied
       - name: Headless shell allowed with harmless outside-workspace write

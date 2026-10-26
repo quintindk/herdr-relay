@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path';
+import { supportingInput } from './native-input.mjs';
 
 function check(condition, code) {
   if (!condition) throw Object.assign(new Error(code), { code });
@@ -79,10 +80,11 @@ export function observeV2(snapshot, invocation) {
   // turn through its first idle receipt and refuse any intervening foreign input.
   const terminalOffset = snapshot.messages.slice(index + 1).findIndex(message => message.type === 'idle');
   const end = terminalOffset < 0 ? snapshot.messages.length : index + 1 + terminalOffset;
-  const foreign = snapshot.messages.slice(0, end).some(message =>
+  const foreign = snapshot.messages.slice(0, end).find((message, offset) =>
     ['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type) &&
-    message.id !== invocation.messageId && !invocation.priorMessageIds.includes(message.id));
-  if (foreign) return { state: 'conflict', reason: 'concurrent_native_input' };
+    message.id !== invocation.messageId && !invocation.priorMessageIds.includes(message.id) &&
+    !supportingInput(message, snapshot.messages.slice(index + 1, offset)));
+  if (foreign) return { state: 'conflict', reason: 'concurrent_native_input', inputId: foreign.id, inputType: foreign.type };
   if (terminalOffset < 0 || !snapshot.idle || snapshot.inbox.length) return { state: 'observed', reason: 'awaiting_terminal_response' };
   const terminal = snapshot.messages[end];
   if (!['succeeded', 'failed', 'interrupted'].includes(terminal.outcome)) return { state: 'uncertain', reason: 'invalid_terminal_outcome' };
@@ -90,5 +92,8 @@ export function observeV2(snapshot, invocation) {
     message.type === 'assistant' && message.content.some(part => part.type === 'tool' && ['running', 'streaming'].includes(part.state.status)));
   if (activeTool) return { state: 'observed', reason: 'awaiting_tool_settlement' };
   return { state: 'finished', messageId: terminal.id, outcome: terminal.outcome,
-    ...(terminal.error ? { error: terminal.error.type } : {}) };
+    ...(terminal.error ? { error: terminal.error.type, failure: terminal.error.message === 'Unknown execution'
+      ? { stage: 'context', code: 'scheduled_execution_missing', message: 'Backend execution admission was missing before native context preparation.' }
+      : { stage: 'native', code: /^[a-z][a-z0-9_]{0,95}$/.test(terminal.error.type ?? '') ? terminal.error.type : 'native_error',
+        message: 'Native execution failed. Inspect the exact terminal receipt on the destination.' } } : {}) };
 }

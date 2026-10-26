@@ -20,6 +20,7 @@ import { waitHeadlessSetup } from '../src/headless-setup-wait.mjs';
 process.umask(0o077);
 const capabilityMode = process.argv.includes('--capabilities');
 const agentGrantMode = process.argv.includes('--agent-grant');
+const cronMode = process.argv.includes('--cron');
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
@@ -105,7 +106,8 @@ try {
     config: { plugins: [{ package: join(packageDirectory, 'packages/opencode-relay'), options: { workerDirectory: state } }],
       model: 'openai/fixture', compaction: { auto: false }, providers: { openai: { package: '@ai-sdk/openai-compatible',
         settings: { baseURL: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'fixture-only' }, models: { fixture: { name: 'Fixture', limit: { context: 8192, output: 512 } } } } },
-      mcp: { servers: { records: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false } } } } });
+      mcp: { servers: { records: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false },
+        ...(cronMode ? { actions: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false } } : {}) } } } });
   const client = runtime.client;
   const integrations = (await client.integration.list({ location: { directory: workspace } })).data;
   const modelIntegration = integrations.find(i => i.id === 'openai');
@@ -134,7 +136,7 @@ try {
   grantProposal = { id: 'approved-job-grant', requesterAgentId: coordinator.agentId, nodeId: joined.nodeId, name: 'approved-worker', directory: workspace,
     model: { providerID: 'openai', id: 'fixture', integrationID: provider.integrationID, connectionId },
     permissions: { mcp: !mcpDenied, shell: shellAllowed }, contract: '.opencode/skills/approved-job/SKILL.md',
-    schedule: { id: 'approved-job-weekdays', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' },
+    schedule: { id: 'approved-job-weekdays', cron: cronMode ? '* * * * *' : '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' },
     ...(capabilityMode ? { capabilities: { sourceNamespaces: ['external:record'], taskActions: ['task.create', 'task.update', 'comment.create', 'reference.attach'],
       artifacts: { receipts: 'artifacts/receipts', state: 'artifacts/state.json', history: 'artifacts/history', runs: 'artifacts/runs', summaries: 'artifacts/summaries' } } } : {}) };
   if (!agentGrantMode) await command('grant', 'headless.grant', grantProposal);
@@ -173,12 +175,26 @@ try {
   }
   // A second server is configured after approval/setup. The boolean MCP grant
   // covers newly available tools without any per-server/tool grant amendment.
+  if (!cronMode) {
   const nativeConfigPath = join(root, 'runtime/home/.config/opencode/opencode.json');
   const nativeConfig = JSON.parse(readFileSync(nativeConfigPath));
   nativeConfig.mcp.servers.actions = { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false };
   writeFileSync(nativeConfigPath, JSON.stringify(nativeConfig));
   await client.location.reload({ location: { directory: workspace } });
+  }
   await wait('new MCP connection', async () => (await client.mcp.list({ location: { directory: workspace } })).data.some(server => server.name === 'actions' && server.status.status === 'connected'));
+  if (cronMode) {
+    const occurrence = await wait('actual headless cron completion', async () => {
+      const items = (await owner('GET', '/v1/occurrences')).items.filter(item => item.scheduleId === result.scheduleId);
+      if (items.some(item => item.state === 'failed')) throw Error(`Headless cron failed: ${JSON.stringify(items)}`);
+      return items.find(item => item.state === 'completed');
+    });
+    const execution = await owner('GET', `/v1/executions/${occurrence.id}`);
+    assert.equal(execution.headlessScheduled, true); assert.equal(execution.taskId, null);
+    assert.equal(execution.state, 'completed'); assert.equal(execution.targetConversationId, approvedSetup.sessionId);
+    await command('pause-after-cron', 'schedule.pause', { id: result.scheduleId, expectedRevision: 1 });
+    await wait('cron pause acknowledged', async () => (await owner('GET', `/v1/schedules/${result.scheduleId}`)).appliedRevision === 2);
+  } else {
   const job = await command('job-task', 'task.create', { id: 'fixture-job-task', title: 'Exercise generic MCP permission' });
   await command('job-execution', 'execution.request', { id: 'fixture-job', taskId: job.id, taskRevision: job.revision, targetAgentId: result.agentId, instructions: 'Exercise the fixture job and submit its result.' });
   await wait('generic MCP job completion', async () => {
@@ -186,6 +202,7 @@ try {
     if (['failed', 'cancelled', 'rejected'].includes(execution.state)) throw Error(`Fixture job failed: ${JSON.stringify(execution)}`);
     return execution.state === 'completed';
   });
+  }
   assert.equal(reads, mcpDenied ? 0 : 1); assert.equal(writes, mcpDenied ? 0 : 1);
   assert.equal(existsSync(shellOutput), shellAllowed);
   if (shellMode && !shellAllowed) assert.equal(shellDeniedHidden, true);
@@ -195,7 +212,7 @@ try {
   assert.equal(unchangedGrant.revision, 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
   await stopNode(); await startNode(joined.configFile);
   const restored = await call(worker, 'POST', '/agent/headless-status', { id });
-  assert.equal(restored.agentId, result.agentId); assert.equal(restored.scheduleId, result.scheduleId); assert.equal(restored.appliedRevision, result.appliedRevision);
+  assert.equal(restored.agentId, result.agentId); assert.equal(restored.scheduleId, result.scheduleId); assert.equal(restored.appliedRevision, cronMode ? 2 : result.appliedRevision);
   const retry = await call(worker, 'POST', '/agent/headless-setup', { key: 'setup-once', grantId: 'approved-job-grant' });
   assert.equal(retry.receipt.id, id);
   assert.equal((await client.server.info()).pid, runtime.descriptor.pid);
@@ -205,8 +222,8 @@ try {
   } else await command('revoke', 'headless.revoke', { id: 'approved-job-grant', expectedRevision: 1 });
   assert.equal((await owner('GET', '/v1/schedules/approved-job-weekdays')).definition.enabled, false);
   console.log(JSON.stringify({ passed: true, runtimeVersion: (await client.server.info()).version, singleCoordinatorSetup: true, existingAuthenticatedServiceReused: true, mcpAllowed: !mcpDenied,
-    readCalls: reads, writeCalls: writes, shellAllowed, shellAttempted: shellAllowed, shellDeniedHidden, outsideWorkspaceShellWrite: existsSync(shellOutput), readinessHadNoExternalEffects: true, toolsAddedAfterSetupCovered: true,
-    nativeResultSubmission: true, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
+    readCalls: reads, writeCalls: writes, shellAllowed, shellAttempted: shellAllowed, shellDeniedHidden, outsideWorkspaceShellWrite: existsSync(shellOutput), readinessHadNoExternalEffects: true, toolsAddedAfterSetupCovered: !cronMode,
+    nativeResultSubmission: true, actualCronFiringVerified: cronMode, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
     credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {

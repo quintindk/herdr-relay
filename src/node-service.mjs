@@ -185,8 +185,8 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ agentId: worker.agentId, agentName: enrolment ? JSON.parse(enrolment.value).name : null, sessionId: worker.sessionId, receiver,
           receivingHere: receiver?.state === 'active' && receiver.bindingId === worker.bindingId,
-          obligations: works.map(w => ({ id: w.id, state: w.execution.state, conversationId: w.nativeConversationId,
-            recovery: w.recovery ?? null })) })); return;
+          obligations: works.map(w => ({ id: w.id, state: w.execution.state, localState: w.state, conversationId: w.nativeConversationId,
+            observation: w.observation ?? null, recovery: w.recovery ?? null })) })); return;
       }
       if (path === '/agent/message-send') {
         currentReceiver();
@@ -280,11 +280,16 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       if (path === '/work/current') {
         requireValue(typeof worker.sessionId === 'string' && body.sessionId === worker.sessionId && Object.keys(body).length === 1,
           'forbidden', 'Exact enrolled native session required', 403);
-        const candidates = journal.works().filter(work => ownsWork(work) &&
+        const matching = journal.works().filter(work => ownsWork(work) && work.execution.state === 'accepted');
+        const candidates = matching.filter(work =>
           ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && work.execution.state === 'accepted');
-        requireValue(candidates.length === 1, 'work_ambiguous', 'One active worker execution required', 409);
+        const conflicts = matching.filter(work => work.state === 'conflict');
+        const current = candidates.length === 1 ? candidates[0] : candidates.length === 0 && conflicts.length === 1 ? conflicts[0] : null;
+        requireValue(current, 'work_ambiguous', matching.length ? 'Multiple or non-running execution records require inspection' :
+          'No active execution in this chat. Enrolment and schedule ownership do not themselves start a worker run', 409);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ execution: candidates[0].execution, answer: candidates[0].answer ?? null })); return;
+        res.end(JSON.stringify({ execution: current.execution, answer: current.answer ?? null, localState: current.state, sourceMessageId: current.invocation?.messageId ?? null,
+          blocked: current.state === 'conflict', observation: current.observation ?? null, recovery: current.recovery ?? null })); return;
       }
       if (path === '/work/children') {
         const parent = journal.work(body.executionId);
@@ -333,7 +338,44 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       requireValue(ownsWork(work) && work.execution.runId === body.runId,
         'forbidden', 'Exact current worker execution required', 403);
       let result;
-      if (path === '/work/read') result = { execution: work.execution, localState: work.state,
+      if (path === '/work/native-api') {
+        requireValue(api && !worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
+          ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && body.sourceMessageId === work.invocation?.messageId &&
+          Object.keys(body).every(key => ['executionId', 'runId', 'sourceMessageId', 'request'].includes(key)),
+        'execution_source_required', 'Native CLI requires this exact active interactive execution, not a human operator context', 403);
+        const request = body.request;
+        requireValue(request && Object.keys(request).every(key => ['method', 'path', 'body'].includes(key)) &&
+          typeof request.path === 'string' && request.path.startsWith('/v1/'), 'invalid_request', 'Bounded native API request required');
+        const target = new URL(request.path, 'http://relay');
+        requireValue(target.origin === 'http://relay' && !target.hash && !request.path.includes('\\'), 'invalid_request', 'Native API path required');
+        if (request.method === 'GET') {
+          requireValue(/^\/v1\/(info|tasks|agents|nodes|comments|executions|questions|schedules|occurrences|task-identity)(\/[^/]+)?$/.test(target.pathname) && request.body === undefined,
+            'forbidden', 'Execution CLI supports ordinary native reads, not credential or administrative routes', 403);
+          result = await api('GET', request.path);
+        } else {
+          requireValue(request.method === 'POST' && request.path === '/v1/commands' && request.body &&
+            Object.keys(request.body).every(key => ['key', 'action', 'payload'].includes(key)), 'forbidden', 'Native execution mutation required', 403);
+          const command = request.body, p = command.payload;
+          requireValue(typeof command.key === 'string' && command.key.trim() && command.key.length <= 128 && p &&
+            (command.action === 'comment.create' && p.taskId === work.execution.taskId ||
+              command.action === 'task.update' && p.id === work.execution.taskId || command.action === 'execution.progress' && p.id === work.id),
+          'execution_cli_scope', 'Execution CLI may comment/update only its assigned task or report its own progress. Task creation, dispatch and administration require separate authority', 403);
+          const key = `execution-cli:${digest([work.id, body.runId, command.key])}`;
+          journal.queue({ ...command, key });
+          try { await journal.flush(api); } catch (error) {
+            const receipt = journal.receipt(key);
+            if (receipt?.state === 'conflict') {
+              journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify({ ...receipt,
+                state: 'superseded', outcome: 'refused', applied: false }), key);
+            }
+            throw error;
+          }
+          const receipt = journal.receipt(key);
+          requireValue(receipt?.state === 'recorded', 'publication_pending', 'Reconcile the original execution CLI key', 503);
+          result = receipt.receipt;
+        }
+      }
+      else if (path === '/work/read') result = { execution: work.execution, localState: work.state,
         answer: work.answer ?? null, cancellationRequested: work.execution.cancellationRequested };
       else if (path === '/work/headless-access') {
         requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested &&

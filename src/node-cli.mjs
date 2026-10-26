@@ -158,7 +158,7 @@ try {
       workers.push(worker);
       contextFiles.set(entry.id, contextFile);
       const cli = `herdr-relay native work --context ${quote(contextFile)}`;
-      const configured = { ...binding, agentId: entry.agentId, ...(entry.receiverGeneration ? { receiverGeneration: entry.receiverGeneration } : {}),
+      const configured = { ...binding, agentId: entry.agentId, ...(entry.headlessSetupId ? { headlessSetupId: entry.headlessSetupId } : {}), ...(entry.receiverGeneration ? { receiverGeneration: entry.receiverGeneration } : {}),
         ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () => nodeAgentInstructions({ directTools: directWorkerTools, cli }),
       workerInstructions: execution => directWorkerTools ? v2WorkerInstructions(execution) :
         `Read and check cancellation: ${cli} read --execution ${quote(execution.id)} --run ${quote(execution.runId)}\n` +

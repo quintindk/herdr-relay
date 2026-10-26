@@ -187,4 +187,11 @@ test('replacement chats manage the same persistent cron with scoped credentials,
   await assert.rejects(call(connection(0), 'POST', '/work/current', { sessionId: 'ses_first' }), { code: 'work_ambiguous' });
   assert.equal((await call(connection(1), 'POST', '/agent/status', {})).receivingHere, true);
   assert.equal((await call(connection(0), 'POST', '/agent/status', {})).receivingHere, false);
+  const work = f.journal.work('execution');
+  f.journal.save({ ...work, state: 'conflict', observation: { state: 'conflict', reason: 'concurrent_native_input', inputId: 'foreign' } });
+  const current = await call(connection(1), 'POST', '/work/current', { sessionId: 'ses_second' });
+  assert.equal(current.execution.state, 'accepted'); assert.equal(current.localState, 'conflict'); assert.equal(current.blocked, true);
+  assert.equal(current.observation.inputId, 'foreign');
+  await assert.rejects(call(connection(1), 'POST', '/work/submit', { executionId: 'execution', runId: 'run', key: 'blocked',
+    payload: { candidate: 'not-authorised', summary: 'Not accepted' } }), { code: 'execution_inactive' });
 });

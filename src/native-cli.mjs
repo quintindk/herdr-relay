@@ -17,6 +17,8 @@ import { boardContext } from './native-onboarding.mjs';
 import { readPrivateJson } from './private-files.mjs';
 import { maintenanceCli } from './upgrade-cli.mjs';
 import { renameHerdrWorkspace } from '../packages/opencode-relay/herdr-session.mjs';
+import { nativeWorkerApi } from './native-worker-api.mjs';
+import { executionCliInvocation } from './native-cli-surface.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
   headless provision|inspect --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
@@ -63,6 +65,8 @@ Run-now for an existing native cron is not implemented. Use an explicit executio
 Pause must be acknowledged by the owner node. Already admitted work is not interrupted.`;
 
 export async function main(args) {
+  requireValue(!process.env.RELAY_CLI_EXECUTION_ID || executionCliInvocation(['native', ...args]),
+    'execution_cli_scope', 'Execution-scoped CLI cannot perform local lifecycle or operator administration', 403);
   if (args[0] === 'task' && args[1] === 'migrate-references') {
     execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/migrate-task-references.mjs', import.meta.url)), ...args.slice(2)], { stdio: 'inherit' }); return;
   }
@@ -155,7 +159,8 @@ export async function main(args) {
   const context = readPrivateJson(path);
   const backend = { url: context.url ?? 'http://127.0.0.1:3210', ...(context.cloudflareAccess ? { cloudflareAccess: context.cloudflareAccess } : {}),
     ...(context.trustedHttpProxyOrigin ? { trustedHttpProxyOrigin: context.trustedHttpProxyOrigin } : {}) };
-  const api = nativeBackendClient({ ...backend, token: context.token });
+  const api = context.socketPath ? nativeWorkerApi(context, { executionId: process.env.RELAY_CLI_EXECUTION_ID,
+    runId: process.env.RELAY_CLI_RUN_ID, sourceMessageId: process.env.RELAY_CLI_SOURCE_ID }) : nativeBackendClient({ ...backend, token: context.token });
   const payload = () => {
     requireValue(values.file, 'invalid_request', '--file is required');
     const data = JSON.parse(readFileSync(values.file, 'utf8'));
@@ -205,7 +210,7 @@ export async function main(args) {
         const { watchTaskBoardInk } = await import('./task-board-ink.mjs');
         await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask, detailRoutine: board.detailRoutine,
           detailAgent: board.detailAgent, statusTask: board.statusTask, reviewTask: board.reviewTask, detailInbox: board.detailInbox,
-          decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions,
+          decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
           detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions });
       }
     } finally { journal.close(); }

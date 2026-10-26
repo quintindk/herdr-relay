@@ -10,6 +10,7 @@ import { nativeBackendClient } from '../src/backend-client.mjs';
 import { createNodeBundle, joinNode } from '../src/native-onboarding.mjs';
 
 process.umask(0o077);
+const selfCapture = process.argv.includes('--self-capture');
 const root = mkdtempSync('/tmp/opencode/relay-cli-bridge-'), workspace = join(root, 'workspace'), state = join(root, 'node');
 const packageDirectory = resolve(process.env.RELAY_PACKAGE_DIRECTORY ?? '.');
 mkdirSync(workspace); mkdirSync(state);
@@ -19,17 +20,19 @@ const model = createServer(async (req, res) => {
   const input = JSON.parse(body), last = input.messages.findLastIndex(message => message.role === 'user');
   const step = input.messages.slice(last + 1).filter(message => message.role === 'tool').length;
   const tool = input.tools?.find(tool => tool.function.name === 'relay_cli');
-  const payload = step === 0 ? { id: 'task', title: 'Interactive bridge hand-off' } : {
+  const payload = step === 0 ? { id: 'task', title: selfCapture ? 'Todo for the current interactive agent' : 'Interactive bridge hand-off',
+    ...(selfCapture ? { description: 'Planned implementer: source, already working in the current interactive chat. Capture only, no new model turn.' } : {}) } : {
     id: 'execution', taskId: 'task', taskRevision: 1, originAgentId: 'source', originConversation: originSessionId,
     targetAgentId: 'target', instructions: 'Perform the human-requested task.', reviewPolicy: 'human' };
   const args = step === 0 ? ['native', 'task', 'create', '--key', 'create-once', '--file', '{payload}'] :
     ['native', 'execution', 'request', '--key', 'send-once', '--file', '{payload}'];
-  const delta = step < 2 && tool ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${step}`, type: 'function',
+  const calling = step < (selfCapture ? 1 : 2) && tool;
+  const delta = calling ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${step}`, type: 'function',
     function: { name: tool.function.name, arguments: JSON.stringify({ args, payload }) } }] } : { role: 'assistant', content: 'Bridge fixture finished.' };
   const base = { id: 'bridge-fixture', created: 1, model: 'fixture', object: 'chat.completion.chunk' };
   res.setHeader('content-type', 'text/event-stream');
   res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
-  res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: step < 2 && tool ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: calling ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
 });
 try {
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
@@ -55,22 +58,31 @@ try {
   writeFileSync(join(state, 'worker-index.json'), JSON.stringify({ sessions: { [source.id]: workerFile } }));
   for (const [id, sessionId] of [['source', source.id], ['target', target.id]]) await owner('POST', '/v1/commands', { key: `attach-${id}`, action: 'agent.attach',
     payload: { id, expectedBindingRevision: 0, conversationId: sessionId, directory: workspace, bindingId: `${id}-binding` } });
-  await runtime.client.session.prompt({ sessionID: source.id, text: 'Create a task, then send it to the existing target agent using the CLI bridge. No parent execution exists.' });
+  await runtime.client.session.prompt({ sessionID: source.id, text: selfCapture ?
+    'Capture a todo for yourself and continue this interactive conversation. Do not send it back to yourself or create an execution. No new model turn is needed.' :
+    'Create a task, then send it to the existing target agent using the CLI bridge. No parent execution exists.' });
   await runtime.client.session.wait({ sessionID: source.id });
   const tasks = (await owner('GET', '/v1/tasks')).items, executions = (await owner('GET', '/v1/executions')).items;
-  if (tasks.length !== 1 || executions.length !== 1) {
+  if (tasks.length !== 1 || executions.length !== (selfCapture ? 0 : 1)) {
     const messages = await runtime.client.session.context({ sessionID: source.id });
     console.error(JSON.stringify(messages.filter(message => message.type === 'assistant').flatMap(message => message.content.filter(content => content.type === 'tool')), null, 2));
   }
-  assert.equal(tasks.length, 1); assert.equal(executions.length, 1);
+  assert.equal(tasks.length, 1); assert.equal(executions.length, selfCapture ? 0 : 1);
+  if (selfCapture) {
+    assert.equal(tasks[0].status, 'todo'); assert.equal(tasks[0].responsibleUserId, 'owner');
+    const messages = (await runtime.client.message.list({ sessionID: source.id, order: 'asc', limit: 100 })).data;
+    assert.equal(messages.filter(message => message.type === 'user').length, 1, 'Self-capture must not enqueue a redundant assignment prompt');
+    assert.equal((await runtime.client.message.list({ sessionID: target.id, order: 'asc', limit: 100 })).data.length, 0);
+  } else {
   assert.equal(executions[0].targetAgentId, 'target'); assert.equal(executions[0].parentExecutionId, undefined);
   assert.equal(executions[0].originConversation, source.id);
   assert.equal(executions[0].targetNodeId, 'peer-node');
   assert.equal(executions[0].state, 'requested');
+  }
   const info = await runtime.client.server.info();
   console.log(JSON.stringify({ passed: true, runtime: info.version, realModelToolTurn: true, pluginInvokedActualCli: true,
-    humanTaskCreated: true, existingPeerExecutionRequested: true, activeParentRequired: false, taskCount: tasks.length,
-    executionCount: executions.length, differentTargetNode: true, workerStarted: false, userServicesTouched: false, fixture: root }, null, 2));
+    humanTaskCreated: true, existingPeerExecutionRequested: !selfCapture, selfCaptureWithoutDispatch: selfCapture, activeParentRequired: false, taskCount: tasks.length,
+    executionCount: executions.length, differentTargetNode: !selfCapture, workerStarted: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {
   await runtime?.stop(); await backend?.close(); model.closeAllConnections();
   await new Promise(resolve => model.close(resolve));

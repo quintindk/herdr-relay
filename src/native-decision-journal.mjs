@@ -17,6 +17,10 @@ export class NativeDecisionJournal {
   }
   pending() { return this.db.prepare("SELECT * FROM decisions WHERE state IN ('pending','conflict') ORDER BY rowid").all()
     .map(row => ({ ...row, command: JSON.parse(row.command) })); }
+  inspect(key) {
+    const row = this.db.prepare('SELECT * FROM decisions WHERE key=?').get(key);
+    return row ? { ...row, command: JSON.parse(row.command) } : null;
+  }
   async submit(api, command, instanceId) {
     requireValue(instanceId, 'invalid_backend_response', 'Preview backend instance identity required');
     const previous = this.db.prepare('SELECT * FROM decisions WHERE key=?').get(command.key);
@@ -41,6 +45,8 @@ export class NativeDecisionJournal {
         receipt.state === (p.decision === 'reject' ? 'rejected' : 'approved') && receipt.decision?.decision === p.decision && receipt.decision?.requestHash === p.requestHash :
         command.action === 'grant.revoke' ? receipt.state === 'revoked' && receipt.grantKind === p.kind :
         command.action === 'grant.create' ? receipt.state === 'active' && receipt.grantKind === 'interactive' && receipt.scopeHash === digest(p.scope) :
+        command.action === 'execution.request' ? receipt.taskId === p.taskId && receipt.taskRevision === p.taskRevision &&
+          receipt.targetAgentId === p.targetAgentId && receipt.instructions === p.instructions && receipt.state === 'requested' :
         command.action === 'question.answer'
         ? receipt.status === 'answered' && receipt.answer?.body === p.body && receipt.answer.author?.type === 'user'
         : command.action === 'notification.acknowledge' ? receipt.state === 'acknowledged'

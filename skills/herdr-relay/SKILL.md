@@ -28,6 +28,18 @@ compatibility: opencode
   Pass arguments as an array. Task verbs start with `native`, and `{payload}` supplies
   the optional private JSON payload. Configured `{operator}`, `{worker}`, `{node-config}`
   and `{session}` references resolve inside the bridge. Never read credentials yourself.
+  An accepted interactive execution can also use this CLI through its exact worker
+  scope for ordinary reads and its assigned task's comments/updates. It does not
+  borrow operator authority or permit new task creation, dispatch or lifecycle
+  administration. Instruction loads and owned completion notices are supporting
+  context, not new human permission. An unrelated notice cannot reuse an old
+  human request.
+- Creating a task is capture, not dispatch. When recording a todo or current work
+  for yourself in an interactive chat, create/update the task and continue the
+  current authorised turn. Do not request an execution back to the same agent just
+  to make the task appear assigned. Record the intended implementer in its context
+  if needed. A separately requested run, peer handover or cron is an explicit,
+  separate action. This does not expand an accepted execution's task-creation scope.
 - `relay_status` inspects runtime status, not chat-wide permissions. Do not infer a
   read-only chat from a status response. `relay_work_read` inspects assigned executions
   only; failure there does not forbid interactive task creation or CLI operations.

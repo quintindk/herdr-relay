@@ -1,4 +1,5 @@
 import { digest, now, requireValue } from './protocol.mjs';
+import { reconcileObservationConflict } from './native-observation-recovery.mjs';
 
 // A bounded node tick. Native bindings are injected by the local runtime host.
 // Persist admission and prompt intent before crossing either external boundary.
@@ -76,6 +77,7 @@ export async function tickNode(journal, api, resolveBinding) {
     if (['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(execution.state) || work.state === 'settled') continue;
     const binding = await resolveBinding(execution.targetAgentId, work.bindingId ? work : undefined);
     if (!binding) continue;
+    work = await reconcileObservationConflict(journal, binding, work);
     const exactConversation = binding.identity?.sessionId ?? binding.conversationId ?? null;
     if (work.nativeConversationId && work.nativeConversationId !== exactConversation) {
       journal.save({ ...work, state: 'conflict', error: 'native_conversation_replaced' }); continue;

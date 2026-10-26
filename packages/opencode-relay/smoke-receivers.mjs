@@ -15,13 +15,21 @@ import { enrolInteractive, launchInteractive } from '../../src/native-enrol.mjs'
 import { NodeJournal } from '../../src/node-journal.mjs';
 import { workerConnection } from './worker-context.mjs';
 import { call } from '../../src/client.mjs';
+import { nativeBoard } from '../../src/native-board.mjs';
+import { NativeDecisionJournal } from '../../src/native-decision-journal.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = mkdtempSync('/tmp/opencode/relay-receivers-smoke-');
 const workspace = join(root, 'workspace'), state = join(root, 'node');
 mkdirSync(workspace); mkdirSync(state);
 const binary = process.env.RELAY_V2_BINARY ?? join(here, 'node_modules/.bin/opencode2');
-const tuiOnly = process.argv.includes('--tui-only');
+const firstMessage = process.argv.includes('--first-message');
+const tuiOnly = process.argv.includes('--tui-only') || firstMessage;
+if (firstMessage) {
+  mkdirSync(join(workspace, 'nested'));
+  writeFileSync(join(workspace, 'nested/AGENTS.md'), 'Fixture instruction load only. Do not expand the assigned task.');
+  writeFileSync(join(workspace, 'nested/probe.txt'), 'Disposable first-message fixture.');
+}
 const landing = process.argv.includes('--landing');
 let runtime, backend, daemon, journal, log = '', requests = 0;
 const wait = async (label, check, timeout = 100000) => {
@@ -38,11 +46,18 @@ const model = createServer(async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
   const input = JSON.parse(body);
-  const last = input.messages.findLastIndex(m => m.role === 'user');
+  const last = input.messages.findLastIndex(m => m.role === 'user' && (!firstMessage || /Relay (execution|local occurrence) /.test(JSON.stringify(m.content))));
   const tools = input.messages.slice(last + 1).filter(m => m.role === 'tool');
-  const name = tools.length === 0 ? 'relay_work_read' : tools.length === 1 ? 'relay_work_submit' : null;
-  const tool = name && input.tools?.find(t => t.function?.name.endsWith(name));
-  const args = name === 'relay_work_submit' ? { key: 'submit', candidate: 'receiver-fixture', summary: 'Persistent receiver native-tool smoke passed.' } : {};
+  const source = JSON.stringify(input.messages[last]?.content) ?? '';
+  const taskId = /Read task [^\n]+ \(([^)]+)\),/.exec(source.replaceAll('\\n', '\n'))?.[1];
+  const steps = firstMessage && taskId ? ['relay_work_read', 'read', 'relay_work_read', 'relay_cli', 'relay_work_submit'] : ['relay_work_read', 'relay_work_submit'];
+  const name = steps[tools.length];
+  const tool = name && input.tools?.find(t => t.function?.name.endsWith(name) && (name !== 'read' || !t.function.name.includes('relay_')));
+  assert.ok(!name || tool, `Missing actual native fixture tool: ${name}`);
+  const args = name === 'relay_cli' ? { args: ['native', 'task', 'comment', '--key', 'first-comment', '--file', '{payload}'],
+    payload: { id: `comment-${taskId}`, taskId, body: 'Execution-scoped CLI comment after automatic instruction loading.' } } :
+    name === 'relay_work_submit' ? { key: 'submit', candidate: 'receiver-fixture', summary: 'Persistent receiver native-tool smoke passed.' } :
+    name === 'read' ? { path: join(workspace, 'nested/probe.txt') } : {};
   requests++;
   const delta = tool ? { role: 'assistant', tool_calls: [{ index: 0, id: `call_${requests}`, type: 'function', function: {
     name: tool.function.name, arguments: JSON.stringify(args),
@@ -83,6 +98,40 @@ try {
     await wait('node ready', () => log.includes('"state":"running"'));
   };
   await startDaemon();
+  const deliverFirstTask = async (agentId, sessionId, suffix) => {
+    const before = (await runtime.client.message.list({ sessionID: sessionId, order: 'asc', limit: 100 })).data;
+    assert.equal(before.filter(message => message.type === 'user').length, 0, 'No introductory or priming prompt is permitted');
+    const requestsBefore = requests;
+    const decisions = new NativeDecisionJournal();
+    try {
+      const task = await owner('POST', '/v1/commands', { key: `first-task-${suffix}`, action: 'task.create', payload: {
+        id: `first-task-${suffix}`, title: 'First prompt must be the assigned task', description: 'Disposable fixture only.' } });
+      const board = nativeBoard(owner, { decisionJournal: decisions });
+      const input = { taskId: task.id, expectedRevision: task.revision, key: `first-handover-${suffix}`,
+        payload: { targetAgentId: agentId, instructions: 'Call relay_work_read and relay_work_submit. This task is your first prompt.' } };
+      const sent = await board.dispatchTask(input);
+      await wait('fresh never-prompted receiver task completion', async () => {
+        const execution = await owner('GET', `/v1/executions/${sent.execution.id}`);
+        assert.ok(!['failed', 'cancelled', 'rejected'].includes(execution.state), JSON.stringify(execution));
+        return execution.state === 'completed';
+      });
+      await board.dispatchTask(input);
+      const messages = (await runtime.client.message.list({ sessionID: sessionId, order: 'asc', limit: 100 })).data;
+      const prompts = messages.filter(message => message.type === 'user');
+      assert.equal(prompts.length, 1); assert.ok(prompts[0].metadata?.herdrRelayInvocation);
+      assert.match(prompts[0].text, /first prompt/);
+      assert.ok(messages.some(message => message.type === 'synthetic' && message.metadata?.instruction?.paths?.includes(join(workspace, 'nested/AGENTS.md'))),
+        'The actual native file tool must load nested AGENTS instructions during the owned execution');
+      assert.equal((await owner('GET', '/v1/executions')).items.filter(execution => execution.taskId === task.id).length, 1);
+      const comments = (await owner('GET', `/v1/comments?taskId=${task.id}`)).items;
+      assert.equal(comments.length, 1); assert.equal(comments[0].author.type, 'node', 'Assigned runs must not borrow human operator identity');
+      assert.ok(requests > requestsBefore, 'The assigned task, not enrolment, starts model execution');
+    } finally { decisions.close(); }
+  };
+  if (firstMessage) {
+    assert.equal(requests, 0, 'Creating, enrolling and attaching an empty session must not run a model');
+    await deliverFirstTask(first.agentId, first.sessionId, 'initial');
+  }
   await owner('POST', '/v1/commands', { key: 'persistent-cron', action: 'schedule.install', payload: { id: 'persistent-cron', definition: {
     nodeId: first.nodeId, targetAgentId: first.agentId, instructions: 'Call relay_work_read then relay_work_submit. Finish immediately after submission.',
     cron: '* * * * *', enabled: !tuiOnly, reviewPolicy: 'none', timezone: 'Africa/Johannesburg',
@@ -101,6 +150,7 @@ try {
   const second = await launchInteractive({ ...input, agentId: first.agentId, key: 'fresh-chat' }, dependencies);
   assert.equal(second.agentId, first.agentId); assert.equal(second.nodeId, first.nodeId); assert.equal(second.generation, 2);
   await wait('hot receiver update', async () => (await owner('GET', `/v1/agents/${first.agentId}`)).availability === 'available');
+  if (firstMessage) await deliverFirstTask(first.agentId, second.sessionId, 'replacement');
   if (!tuiOnly) {
     const next = await occurrence(2);
     const replacementOccurrence = next.find(o => o.id !== initial[0].id);
@@ -122,7 +172,7 @@ try {
   await wait('restarted receiver', async () => (await call(connection, 'POST', '/agent/status', {})).receivingHere);
   if (!tuiOnly) assert.equal((await owner('GET', '/v1/occurrences')).items.length, 2);
   let keyboardCommands = false;
-  if (process.argv.includes('--tui') || tuiOnly) {
+  if (process.argv.includes('--tui') || tuiOnly && !firstMessage) {
     const ownerFile = join(root, 'owner.json');
     const scopedOperator = process.argv.includes('--scoped-operator');
     const tuiToken = scopedOperator ? backend.store.issueCredential({ type: 'user', id: backend.store.owner,
@@ -202,6 +252,8 @@ try {
     model: 'deterministic fixture', physicalMachines: 1, actualHuman: false, stableAgentId: first.agentId, stableNodeId: first.nodeId,
     conversations: [first.sessionId, second.sessionId], cronFirings: tuiOnly ? 0 : 2, realMinuteTicks: !tuiOnly, nodeHotAttachment: true,
     replacementChatScheduleManagement: true, staleCredentialRefused: true, restartPreservedReceiver: true,
+    neverPromptedAssignmentVerified: firstMessage, firstTaskDeliveryExactlyOnce: firstMessage, instructionLoadDuringExecutionVerified: firstMessage,
+    executionScopedCliCommentVerified: firstMessage,
     keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands,
     landingScreenCommands: keyboardCommands && landing, scopedHumanOperator: keyboardCommands && process.argv.includes('--scoped-operator'), state: root }, null, 2));
 } finally {

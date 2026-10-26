@@ -5,7 +5,7 @@ import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { isAbsolute, normalize } from 'node:path';
 import { applyInteractive } from './interactive-contract.mjs';
-import { applyHeadlessSetup } from './headless-setup-contract.mjs';
+import { applyHeadlessSetup, headlessAuthority } from './headless-setup-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
 import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
@@ -238,6 +238,7 @@ export class BackendStore {
     if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     const taskDisposition = (taskId, status, causation) => {
+      if (!taskId) return;
       const task = this.get('task', taskId);
       if (terminal(task)) return task;
       const updated = changed('task', task, { status });
@@ -475,11 +476,53 @@ export class BackendStore {
       const schedule = this.get('schedule', p.id); this.nodeOnly(actor, schedule.definition.nodeId); this.revision(schedule, p.expectedRevision);
       return this.save('schedule', { ...schedule, appliedRevision: schedule.revision, appliedAt: now() });
     }
+    if (action === 'schedule.admit') {
+      fields(p, ['id', 'scheduleId', 'definitionRevision', 'intendedAt', 'targetAgentId', 'bindingId', 'conversationId', 'runId'],
+        ['id', 'scheduleId', 'definitionRevision', 'intendedAt', 'targetAgentId', 'bindingId', 'conversationId', 'runId']);
+      const schedule = this.get('schedule', p.scheduleId);
+      this.nodeOnly(actor, schedule.definition.nodeId); this.revision(schedule, p.definitionRevision);
+      requireValue(schedule.definition.enabled && !schedule.cancelled && schedule.appliedRevision === schedule.revision &&
+        (!schedule.transfer || schedule.transfer.state === 'completed') &&
+        (!schedule.definition.expiresAt || Date.parse(schedule.definition.expiresAt) > Date.now()),
+      'schedule_inactive', 'Only the current acknowledged active schedule can admit a headless run', 409);
+      requireValue(Number.isFinite(Date.parse(p.intendedAt)) && p.id === `occurrence_${digest([p.scheduleId, p.intendedAt])}` &&
+        p.runId === `run_${digest(p.id)}` && validId(p.bindingId) && validId(p.conversationId),
+      'invalid_occurrence', 'Exact deterministic scheduled occurrence and run required');
+      const agent = this.get('agent', p.targetAgentId);
+      requireValue(typeof agent.headlessSetupId === 'string', 'headless_scope_mismatch', 'Scheduled headless admission requires a registered headless setup', 403);
+      const { setup, grant } = headlessAuthority(this, actor, agent.headlessSetupId);
+      requireValue(agent.nodeId === actor.id && agent.headlessSetupId && schedule.definition.targetAgentId === agent.id &&
+        grant.schedule.id === schedule.id && setup.state === 'ready' && setup.agentId === agent.id &&
+        setup.bindingId === p.bindingId && setup.sessionId === p.conversationId && agent.conversationId === p.conversationId,
+      'headless_scope_mismatch', 'Schedule, grant, worker, binding and native session must match', 403);
+      requireValue(!this.get('occurrence', p.id, false), 'occurrence_terminal', 'An already published occurrence cannot be restarted', 409);
+      const previous = this.get('execution', p.id, false);
+      if (previous) {
+        requireValue(previous.headlessScheduled && previous.scheduleId === p.scheduleId && previous.definitionRevision === p.definitionRevision &&
+          previous.runId === p.runId && previous.bindingId === p.bindingId && previous.targetAgentId === p.targetAgentId &&
+          previous.targetConversationId === p.conversationId && previous.state === 'accepted' && !previous.cancellationRequested,
+        'occurrence_identity_changed', 'Existing scheduled execution cannot change or restart', 409);
+        return previous;
+      }
+      const execution = created('execution', { id: p.id, taskId: null, scheduleId: schedule.id, definitionRevision: schedule.revision,
+        intendedAt: p.intendedAt, targetAgentId: agent.id, targetNodeId: actor.id, targetConversationId: p.conversationId,
+        bindingId: p.bindingId, runId: p.runId, instructions: schedule.definition.instructions, reviewPolicy: schedule.definition.reviewPolicy ?? 'none',
+        responsibleUserId: this.owner, originAgentId: grant.requesterAgentId, originNodeId: actor.id, state: 'accepted',
+        localOccurrence: true, headlessScheduled: true, grantRevision: grant.revision, cancellationRequested: false });
+      this.event('execution.schedule_admitted', execution, actor, p.id);
+      return execution;
+    }
     if (['schedule.publish', 'schedule.fail'].includes(action)) {
       const failed = action === 'schedule.fail';
       const required = ['id', 'scheduleId', 'definitionRevision', 'intendedAt', 'evidence',
         ...(failed ? ['reason'] : ['candidate', 'summary'])];
-      fields(p, required, required);
+      fields(p, [...required, ...(failed ? ['failure'] : [])], required);
+      if (p.failure !== undefined) {
+        fields(p.failure, ['stage', 'code', 'message']);
+        requireValue(['context', 'native', 'admission'].includes(p.failure.stage) && typeof p.failure.code === 'string' &&
+          /^[a-z][a-z0-9_]{0,95}$/.test(p.failure.code), 'invalid_failure', 'Safe structured failure required');
+        string(p.failure.message, 'failure.message', 512);
+      }
       const schedule = this.get('schedule', p.scheduleId);
       requireValue(p.definitionRevision <= schedule.revision && p.definitionRevision > 0 && Number.isFinite(Date.parse(p.intendedAt)),
         'invalid_occurrence', 'Recorded schedule revision and instant required');
@@ -497,7 +540,7 @@ export class BackendStore {
         requireValue(execution.localOccurrence && execution.targetNodeId === actor.id && execution.state === 'accepted' && !execution.cancellationRequested,
           'occurrence_ineligible', 'Materialised scheduled work is no longer active');
         const settled = changed('execution', execution, { state: occurrence.state,
-          ...(failed ? { failure: { reason: p.reason, evidence: p.evidence } } : {
+          ...(failed ? { failure: { reason: p.reason, evidence: p.evidence, ...(p.failure ? { diagnostic: p.failure } : {}) } } : {
             result: { candidate: p.candidate, summary: p.summary, evidence: p.evidence, digest: digest({ candidate: p.candidate, summary: p.summary }),
               sequence: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0)+1 AS seq FROM changes').get().seq) } }) });
         this.event(failed ? 'execution.scheduled_failure' : 'execution.scheduled_result', settled, actor, occurrence.id);
@@ -543,6 +586,12 @@ export class BackendStore {
           bindingId: p.bindingId, runId: p.runId, state: 'accepted', localOccurrence: true,
           reviewPolicy: installation.definition.reviewPolicy ?? 'none', responsibleUserId: this.owner, cancellationRequested: false });
         this.event('execution.schedule_materialised', execution, actor, p.occurrenceId);
+      }
+      if (!execution.taskId) {
+        const task = created('task', { id: `task_${p.occurrenceId}`, title: `Scheduled: ${p.scheduleId}`, description: installation.definition.instructions,
+          status: 'in_progress', priority: 'medium', labels: [], dependencies: [], parentId: null, responsibleUserId: this.owner });
+        this.event('task.create', task, actor, p.occurrenceId);
+        execution = changed('execution', execution, { taskId: task.id });
       }
       requireValue(execution.runId === p.runId && execution.bindingId === p.bindingId && execution.targetAgentId === selectedAgentId,
         'occurrence_identity_changed', 'Scheduled run identity changed');
