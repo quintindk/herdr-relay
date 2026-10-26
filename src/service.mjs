@@ -205,11 +205,18 @@ async function startLockedService({ directory, paperclipUrl, api, backendContext
           bridgeRequest(store, bridge.id, 'poll', input, id => runTokens.has(id));
           requireValue(!input.source || !isNotificationSource(store, bridge, input.source.id),
             'invalid_answer_source', 'A Relay notification is not human authorisation', 409);
-          const key = `harness-answer:${bridge.identity.bindingId}`;
-          requireValue(!publications.has(key), 'operation_busy', 'Harness question operation in progress', 409);
-          const pending = (['reviews', 'review'].includes(action) ? harnessReview : harnessQuestion)(store, store.operation(bridge.id), action, input, operatorApi);
-          publications.set(key, pending);
-          try { result = await pending; } finally { publications.delete(key); }
+          const operation = () => (['reviews', 'review'].includes(action) ? harnessReview : harnessQuestion)(store, store.operation(bridge.id), action, input, operatorApi);
+          if (['questions', 'reviews'].includes(action)) {
+            // Read-only discovery revalidates scope across its awaits. It must
+            // not reserve the mutation lock and randomly block a human decision.
+            result = await operation();
+          } else {
+            const key = `harness-answer:${bridge.identity.bindingId}`;
+            requireValue(!publications.has(key), 'operation_busy', 'Harness question operation in progress', 409);
+            const pending = operation();
+            publications.set(key, pending);
+            try { result = await pending; } finally { publications.delete(key); }
+          }
         } else result = bridgeRequest(store, bridge.id, action, input, id => runTokens.has(id));
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }

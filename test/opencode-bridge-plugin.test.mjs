@@ -781,7 +781,7 @@ test(`discovery delegates native requests, announces UI-only results and accepts
   const prior = { PATH: process.env.PATH, HERDR_ENV: process.env.HERDR_ENV, HERDR_PANE_ID: process.env.HERDR_PANE_ID };
   Object.assign(process.env, { PATH: `${bin}:${prior.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: 'pane' });
   const requests = [];
-  let reviewItem, reviewIssue;
+  let reviewItem, reviewIssue, pauseNextRead;
   const backend = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : undefined;
@@ -792,6 +792,9 @@ test(`discovery delegates native requests, announces UI-only results and accepts
     else if (req.method === 'POST' && req.url === '/api/companies/company/issues') {
       res.end(JSON.stringify({ ...body, id: 'task', identifier: 'TEST-1', companyId: 'company' }));
     } else if (req.method === 'GET' && req.url === '/api/issues/task') {
+      const paused = pauseNextRead;
+      pauseNextRead = null;
+      if (paused) { paused.started(); await paused.wait; }
       res.end(JSON.stringify(reviewIssue));
     } else if (req.method === 'GET' && req.url === '/api/issues/task/interactions') {
       res.end(JSON.stringify([reviewItem]));
@@ -1113,11 +1116,21 @@ test(`discovery delegates native requests, announces UI-only results and accepts
     }
     assert.equal(approvals.length, approvalsBeforeRetry, 'Nonmatching retries must fail before requesting permission');
     // An accepted status on a different candidate is not confirmation of this intent.
+    let releaseRead, readStarted = false, listing;
     try {
       reviewItem.payload.target.revisionId = 'different-revision';
+      pauseNextRead = { wait: new Promise(resolve => { releaseRead = resolve; }), started: () => { readStarted = true; } };
+      listing = tools.relay_reviews.execute({}, reviewContext);
+      // Observe failures here at the final await, not as unhandled rejections
+      // while the deliberately held backend read is in flight.
+      listing.catch(() => {});
+      await until(() => readStarted, 'Read-only review discovery did not enter the controlled backend barrier');
       await assert.rejects(tools.relay_review.execute({ decision: 'accept' }, reviewContext), { code: 'review_not_found' });
       assert.deepEqual(store.operation(intent.id), intent, 'Reconciliation requires the exact backend candidate');
     } finally {
+      pauseNextRead = null;
+      releaseRead?.();
+      if (listing) await listing;
       reviewItem.payload.target.revisionId = 'review-revision';
     }
     assert.deepEqual(reviewWrites(), [{ method: 'POST', path: '/api/issues/task/interactions/review/accept', body: {} }]);

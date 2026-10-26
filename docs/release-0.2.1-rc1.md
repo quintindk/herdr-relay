@@ -30,6 +30,9 @@
   requests. Delivery still waits for the designated receiving chat and capacity.
 - Exact task revisions and handovers are retained. Lost acknowledgements reconcile
   through Inbox using the original key rather than sending another execution.
+- Legacy bridge question/review discovery no longer takes the decision mutation
+  lock. Concurrent read-only polling cannot block a human review with a spurious
+  `operation_busy`; candidate and source checks remain in force.
 - Automatic instruction loads and correlated shell/subagent completion notices no
   longer replace the originating human request or falsely conflict an owned run.
   Genuine competing input remains protected. Unrelated notifications cannot reuse
