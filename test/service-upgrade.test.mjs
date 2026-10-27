@@ -158,7 +158,7 @@ test('generated worker index key reordering during service restart does not bloc
   f.onHealth = service => { if (service.role === 'node') writeFileSync(index, '{"sessions":{"ses_b":"b","ses_a":"a"},"nodeId":"test-node"}'); };
   const result = await f.apply(); assert.equal(result.state, 'committed');
   const record = JSON.parse(readFileSync(join(f.operation(result.operationId), 'operation.json'), 'utf8'));
-  assert.ok(record.services.every(s => s.identityFingerprintVersion === 2));
+  assert.ok(record.services.every(s => s.identityFingerprintVersion === 3));
   const rollback = await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
   assert.equal(rollback.state, 'rolled_back');
 });
@@ -255,34 +255,45 @@ test('an unfinished operation fences CLI-only activation too', async t => {
   assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
 });
 
-test('pending native forms/permissions block plugin upgrade before any stop, including a decision appearing during the stop window', async t => {
+test('pending forms defer only the plugin reload while compatible services upgrade; saved reload resumes without service restarts', async t => {
   const f = fixture(t), before = readFileSync(f.serverConfig, 'utf8');
   const blocked = () => { const error = Error('pending decision'); error.code = 'upgrade_pending_decisions'; throw error; };
   f.dependencies.nativeDecisions = blocked;
-  await assert.rejects(f.apply(), { code: 'upgrade_pending_decisions' }); assert.equal(f.calls.length, 0);
+  const result = await f.apply(); assert.equal(result.state, 'committed'); assert.equal(result.pluginReloadDeferred.reason, 'upgrade_pending_decisions');
+  assert.equal(readFileSync(f.serverConfig, 'utf8'), before);
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
+  f.dependencies.nativeDecisions = async () => ({ pendingForms: 0, pendingPermissions: 0 }); f.calls.length = 0;
+  const resumed = await serviceUpgrade({ resume: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
+  assert.equal(resumed.pluginReloadDeferred, null); assert.equal(resumed.servicesRestarted, false); assert.equal(f.calls.length, 0);
+  assert.notEqual(readFileSync(f.serverConfig, 'utf8'), before);
+});
+
+test('a permission arriving in the stop window also defers the plugin rather than rolling back compatible code', async t => {
+  const f = fixture(t), before = readFileSync(f.serverConfig, 'utf8');
   let checks = 0;
-  f.dependencies.nativeDecisions = async () => { if (++checks === 2) blocked(); return { pendingForms: 0, pendingPermissions: 0 }; };
-  await assert.rejects(f.apply(), { code: 'upgrade_rolled_back' });
+  f.dependencies.nativeDecisions = async () => { if (++checks === 2) throw Object.assign(Error('pending'), { code: 'upgrade_pending_decisions' }); return { pendingForms: 0, pendingPermissions: 0 }; };
+  const result = await f.apply(); assert.equal(result.state, 'committed'); assert.ok(result.pluginReloadDeferred);
   assert.equal(readFileSync(f.serverConfig, 'utf8'), before); assert.ok([...f.states.values()].every(s => s.active));
 });
 
-test('active and uncertain native turns, pending publications and active backend executions refuse upgrade before stopping anything', async t => {
+test('compatible code upgrades preserve active/conflicted turns, pending publications and accepted backend work without requiring settlement', async t => {
   for (const state of ['observing', 'uncertain', 'conflict', 'admitted']) {
     const f = fixture(t); f.journal.save({ id: 'work', state, execution: { id: 'work', state: 'accepted' } });
-    await assert.rejects(f.apply(), { code: 'upgrade_busy' }); assert.equal(f.calls.length, 0);
+    const before = f.journal.work('work'), result = await f.apply();
+    assert.equal(result.state, 'committed'); assert.equal(result.maintenancePolicy, 'compatible_code_switch'); assert.deepEqual(f.journal.work('work'), before);
   }
   const f = fixture(t); f.journal.queue({ key: 'pending', action: 'task.create', payload: { id: 'task', title: 'Keep' } });
-  await assert.rejects(f.apply(), { code: 'upgrade_busy' }); assert.equal(f.calls.length, 0);
+  const before = f.journal.db.prepare('SELECT * FROM outbox').get(); await f.apply(); assert.deepEqual(f.journal.db.prepare('SELECT * FROM outbox').get(), before);
   const backend = fixture(t); backend.store.save('execution', { id: 'active', revision: 1, state: 'accepted' });
-  await assert.rejects(backend.apply(), { code: 'upgrade_busy' }); assert.equal(backend.calls.length, 0);
+  await backend.apply(); assert.equal(backend.store.get('execution', 'active').state, 'accepted');
 });
 
-test('a turn admitted by old code immediately before stop resumes under the original supervisor instead of being discarded', async t => {
+test('a turn admitted by old code just before stop is preserved through compatible code switching', async t => {
   const f = fixture(t);
   f.onStop = () => f.journal.save({ id: 'race', state: 'observing', execution: { id: 'race', state: 'accepted' } });
-  await assert.rejects(f.apply(), { code: 'upgrade_rolled_back' });
+  assert.equal((await f.apply()).state, 'committed');
   assert.ok([...f.states.values()].every(s => s.active)); assert.equal(f.journal.work('race').state, 'observing');
-  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
 });
 
 test('failed candidate health rolls back service/plugin/CLI pointers without restoring any database', async t => {
@@ -294,7 +305,7 @@ test('failed candidate health rolls back service/plugin/CLI pointers without res
   assert.equal(f.store.instance, JSON.parse(readFileSync(join(f.node, 'backend-instance.json'))).instanceId);
 });
 
-test('work that starts after activation fences rollback without interrupting it, then recorded recovery resumes after settlement', async t => {
+test('compatible rollback retains work that started after activation rather than demanding cancellation', async t => {
   const f = fixture(t); let injected = false;
   f.onHealth = (_service, _unit, paused, required) => {
     if (required && !paused) {
@@ -302,17 +313,15 @@ test('work that starts after activation fences rollback without interrupting it,
       throw Error('late health failure');
     }
   };
-  await assert.rejects(f.apply(), { code: 'upgrade_recovery_required' });
+  await assert.rejects(f.apply(), { code: 'upgrade_rolled_back' });
   assert.ok([...f.states.values()].every(s => s.active));
   assert.equal(f.journal.work('new-turn').state, 'observing');
-  assert.equal(f.calls.filter(c => c[0] === 'stop').length, 2);
+  assert.equal(f.calls.filter(c => c[0] === 'stop').length, 4);
   const operations = join(f.input.directory, 'operations');
   const id = (await import('node:fs')).readdirSync(operations)[0];
   const record = JSON.parse(readFileSync(join(operations, id, 'operation.json')));
-  assert.equal(record.phase, 'recovery_required'); assert.equal(record.recoveryAction, 'rollback');
-  f.journal.save({ id: 'new-turn', state: 'native_finished', execution: { id: 'new-turn', state: 'completed' }, observation: { state: 'finished', outcome: 'succeeded' } });
-  const resumed = await serviceUpgrade({ resume: id, directory: f.input.directory, apply: true }, f.dependencies);
-  assert.equal(resumed.state, 'rolled_back'); assert.equal(f.journal.work('new-turn').execution.state, 'completed');
+  assert.equal(record.phase, 'rolled_back');
+  assert.equal(f.journal.work('new-turn').state, 'observing');
 });
 
 test('explicit compatible rollback retains task edits made after upgrade and never restores an old snapshot', async t => {
@@ -324,14 +333,49 @@ test('explicit compatible rollback retains task edits made after upgrade and nev
   assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
 });
 
-test('a turn racing explicit rollback resumes under the unchanged current supervisors instead of remaining frozen', async t => {
+test('a turn racing explicit compatible rollback is retained without blocking the code change', async t => {
   const f = fixture(t), result = await f.apply();
   f.onStop = () => f.journal.save({ id: 'rollback-race', state: 'observing', execution: { id: 'rollback-race', state: 'accepted' } });
-  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_busy' });
+  assert.equal((await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies)).state, 'rolled_back');
   assert.ok([...f.states.values()].every(s => s.active));
   assert.equal(f.journal.work('rollback-race').state, 'observing');
   assert.equal(existsSync(join(f.node, 'maintenance.json')), false);
-  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
+});
+
+test('database migrations still reject active work and pending native decisions before stopping', async t => {
+  const f = fixture(t); legacyBackend(f);
+  f.journal.save({ id: 'active', state: 'observing', execution: { state: 'accepted' } });
+  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_busy' }); assert.equal(f.calls.length, 0);
+  f.journal.save({ ...f.journal.work('active'), state: 'settled', execution: { state: 'cancelled' } });
+  f.dependencies.nativeDecisions = async () => { throw Object.assign(Error('pending'), { code: 'upgrade_pending_decisions' }); };
+  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_pending_decisions' }); assert.equal(f.calls.length, 0);
+});
+
+test('process-only stop policy is loaded before stopping the old node, preserving independent native children', async t => {
+  const f = fixture(t), node = f.states.get('herdr-relay-node-test-node.service');
+  f.onStop = () => { assert.match(readFileSync(node.path, 'utf8'), /KillMode=process/); };
+  await f.apply(); assert.match(readFileSync(node.path, 'utf8'), /KillMode=process/);
+});
+
+test('compatible upgrades permit concurrent enrolment/index growth but retain checks on existing credentials', async t => {
+  const f = fixture(t); writeFileSync(join(f.node, 'worker-index.json'), '{"sessions":{}}');
+  f.onStop = () => { writeFileSync(join(f.node, 'worker-new.json'), '{"token":"new legitimate worker"}'); writeFileSync(join(f.node, 'worker-index.json'), '{"sessions":{"new":"worker-new.json"}}'); };
+  assert.equal((await f.apply()).state, 'committed');
+  assert.match(readFileSync(join(f.node, 'worker-index.json'), 'utf8'), /worker-new/);
+  const changed = fixture(t); changed.onStop = () => writeFileSync(join(changed.node, 'operator.json'), '{"token":"unexpected replacement"}');
+  await assert.rejects(changed.apply(), error => ['upgrade_recovery_required', 'upgrade_rolled_back'].includes(error.code));
+});
+
+test('unavailable decision inspection defers only UI code, and a later CLI activation fences stale deferred reloads', async t => {
+  const f = fixture(t), before = readFileSync(f.serverConfig, 'utf8');
+  f.dependencies.nativeDecisions = async () => { throw Object.assign(Error('Unavailable'), { code: 'upgrade_plugin_state_unavailable' }); };
+  const result = await f.apply(); assert.equal(result.state, 'committed'); assert.equal(result.pluginReloadDeferred.reason, 'upgrade_plugin_state_unavailable');
+  assert.equal(readFileSync(f.serverConfig, 'utf8'), before);
+  assert.ok((await f.apply()).pluginReloadDeferred, 'Original operation retry must disclose deferred UI work');
+  rmSync(join(f.bin, 'herdr-relay')); symlinkSync(join(f.previous, 'src/cli.mjs'), join(f.bin, 'herdr-relay'));
+  await assert.rejects(serviceUpgrade({ resume: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_superseded' });
+  assert.equal(readFileSync(f.serverConfig, 'utf8'), before);
 });
 
 test('later user configuration edits fence rollback rather than being overwritten', async t => {

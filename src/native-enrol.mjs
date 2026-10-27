@@ -147,7 +147,7 @@ export async function listEnrolments({ configFile = nativeNodeConfig(), director
       const binding = receiver && receivers.get(`native-binding:${receiver.bindingId}`);
       const schedules = journal.db.prepare('SELECT data FROM schedules').all().map(row => JSON.parse(row.data))
         .filter(s => s.definition.targetAgentId === e.id);
-      const obligations = journal.works().filter(w => w.execution.targetAgentId === e.id &&
+      const obligations = journal.works().filter(w => w.state !== 'administratively_abandoned' && w.execution.targetAgentId === e.id &&
         !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state));
       return { ...e, nodeId: config.nodeId, receiver: receiver ? { ...receiver, conversationId: binding?.identity.sessionId } : null,
         installedSchedules: schedules.length, obligations: obligations.map(w => ({ id: w.id, state: w.execution.state,

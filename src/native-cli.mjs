@@ -46,6 +46,8 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   task complete|cancel ID --revision N --key KEY  [human task status only, not native execution settlement]
   execution request --file PAYLOAD_JSON --key KEY
   execution cancel ID --revision N --reason TEXT --key KEY
+  execution handback ID --revision N --reason TEXT --key KEY  [human withdrawal, no native completion/termination claim]
+  node recover list|work|publication ...  [audited local abandonment; node recover --help]
   schedule preview --cron EXPR [--timezone Africa/Johannesburg]
   schedule create --file PAYLOAD_JSON --key KEY  [payload: {id,definition}, enabled must be explicit]
   schedule pause|resume ID --revision N --key KEY
@@ -75,6 +77,9 @@ export async function main(args) {
   if (args[0] === 'headless' || args[0] === 'agent' && args[1] === 'provision') {
     const { headlessCli } = await import('./native-headless.mjs');
     return headlessCli(args[0] === 'agent' ? ['headless', ...args.slice(1)] : args);
+  }
+  if (args[0] === 'node' && args[1] === 'recover') {
+    const { nodeRecoveryCli } = await import('./node-recovery-cli.mjs'); return nodeRecoveryCli(args);
   }
   if (args[1] === 'upgrade' || args[0] === 'upgrade') { if (await maintenanceCli(args)) return; }
   if (args[0] === 'work') {
@@ -111,7 +116,7 @@ export async function main(args) {
     : action === 'list' ? ['context', 'limit', 'cursor'] : action === 'inspect' ? ['context']
     : group === 'command' ? ['context', 'file']
     : ['create', 'edit', 'comment', 'request'].includes(action) || group === 'task-reference' && ['grant', 'revoke'].includes(action) ? ['context', 'file', 'key']
-    : ['context', 'revision', 'key', ...(group !== 'task' && action === 'cancel' ? ['reason'] : [])];
+    : ['context', 'revision', 'key', ...(group !== 'task' && ['cancel', 'handback'].includes(action) ? ['reason'] : [])];
   for (const option of Object.keys(values)) requireValue(allowed.includes(option), 'invalid_request', `--${option} is not supported for this native command`);
   if (group === 'board' || group === 'command') requireValue(positionals.length === 1, 'invalid_request', 'Unexpected positional arguments');
   if (group === 'node' && ['install', 'run'].includes(action)) {
@@ -243,13 +248,15 @@ export async function main(args) {
   let nativeAction = fileActions[`${group}:${action}`], data;
   if (nativeAction) { requireValue(!id, 'invalid_request', 'The payload file supplies the entity ID'); data = payload(); }
   else if ((group === 'task' && ['complete', 'cancel'].includes(action)) || (group === 'schedule' && ['pause', 'resume', 'cancel'].includes(action)) ||
-    (group === 'execution' && action === 'cancel') || (group === 'interactive' && ['revoke', 'cancel'].includes(action))) {
+    (group === 'execution' && ['cancel', 'handback'].includes(action)) || (group === 'interactive' && ['revoke', 'cancel'].includes(action))) {
     requireValue(id && values.revision && /^[1-9]\d*$/.test(values.revision) && Number.isSafeInteger(Number(values.revision)), 'invalid_request', 'Exact ID and --revision positive integer are required');
     data = { id, expectedRevision: Number(values.revision) };
     nativeAction = group === 'task' ? 'task.update' : `${group}.${action}`;
     if (group === 'task') data.changes = { status: action === 'complete' ? 'done' : 'cancelled' };
-    else if (action === 'cancel') { requireValue(values.reason?.trim(), 'invalid_request', 'Cancellation requires --reason'); data.reason = values.reason; }
+    else if (['cancel', 'handback'].includes(action)) { requireValue(values.reason?.trim(), 'invalid_request', 'Cancellation/handback requires --reason'); data.reason = values.reason; }
   }
   requireValue(nativeAction && values.key?.trim(), 'invalid_request', 'Known mutation and explicit --key required. Use native --help');
+  if (nativeAction === 'execution.handback') requireValue((await api('GET', '/v1/info')).features?.administrativeHandback,
+    'backend_upgrade_required', 'Backend must support audited administrative handback; do not edit execution rows manually');
   output(await api('POST', '/v1/commands', { key: values.key, action: nativeAction, payload: data }));
 }

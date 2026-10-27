@@ -58,7 +58,7 @@ export async function tickHeadlessContractUpdates(journal, api, resolveBinding) 
       const receipt = journal.receipt(key);
       if (receipt?.state === 'recorded') continue;
       if (receipt?.state === 'pending') { await journal.flush(api); continue; }
-      const active = journal.works().filter(w => w.execution.targetAgentId === setup.agentId);
+      const active = journal.works().filter(w => w.state !== 'administratively_abandoned' && w.execution.targetAgentId === setup.agentId);
       if (active.some(w => !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state) || ['conflict', 'uncertain', 'intent', 'observing'].includes(w.state))) continue;
       const ids = new Set(active.map(w => w.id));
       if (journal.db.prepare("SELECT data FROM outbox WHERE state IN ('pending','conflict')").all().some(r => {

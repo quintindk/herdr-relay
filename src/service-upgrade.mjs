@@ -30,6 +30,11 @@ const atomicWrite = (path, bytes) => {
 };
 const safeName = name => requireValue(typeof name === 'string' && /^[A-Za-z0-9_-]+\.service$/.test(name), 'invalid_service', 'Exact managed service name required');
 
+export function preserveNativeProcesses(unit) {
+  requireValue(/^\[Service\]\s*$/m.test(unit), 'unmanaged_service', 'Managed Service section required');
+  return /^KillMode=/m.test(unit) ? unit.replace(/^KillMode=.*$/m, 'KillMode=process') : unit.replace(/^\[Service\]\s*$/m, '[Service]\nKillMode=process');
+}
+
 export function systemdManager() {
   const command = async (...args) => execute('systemctl', ['--user', ...args], { timeout: 60000, maxBuffer: 1024 * 1024 });
   return {
@@ -60,7 +65,8 @@ export async function installationStatus({ services = ['backend', 'node'], nodeC
       const [{ name }] = serviceNames([role], nodeConfig), service = await manager.inspect(name);
       const unit = parseManagedUnit(readFileSync(service.path, 'utf8'), role), identity = serviceIdentity(unit);
       items.push({ role, service: name, active: service.active, pid: service.pid, version: unit.release.version, versionSource: 'managed_unit',
-        installation: unit.release.directory, instanceId: identity.instanceId, ...(identity.nodeId ? { nodeId: identity.nodeId } : {}), blockers: identity.blockers,
+        installation: unit.release.directory, instanceId: identity.instanceId, ...(identity.nodeId ? { nodeId: identity.nodeId } : {}), blockers: [],
+        unsettledWork: identity.blockers, databaseMigrationBlockers: identity.blockers, activityBlocksCompatibleUpgrade: false,
         ...(identity.refusedPublications?.length ? { refusedPublications: identity.refusedPublications } : {}) });
     } catch (error) { items.push({ role, installed: false, code: error.code ?? 'service_unavailable' }); }
   }
@@ -133,7 +139,7 @@ export async function installCliRelease(input, dependencies = {}) {
 function identityCheck(service, originalUnit, { allowBusy = false } = {}) {
   requireValue(originalUnit.release.fingerprint === service.previousFingerprint, 'release_conflict', 'The retained previous release changed. Refuse using modified rollback code');
   const identity = serviceIdentity(originalUnit);
-  requireValue(identityFingerprint(identity, service.identityFingerprintVersion ?? 1) === service.identityFingerprint, 'upgrade_identity_changed', 'Service identity/credentials/configuration changed. Refuse recreating or substituting them');
+  requireValue(identityFingerprint(identity, service.identityFingerprintVersion ?? 1, service.identityFiles) === service.identityFingerprint, 'upgrade_identity_changed', 'Service identity/credentials/configuration changed. Refuse recreating or substituting them');
   requireValue(allowBusy || identity.blockers.length === 0, 'upgrade_busy', `Unsettled ${service.role} work prevents upgrade/rollback. Inspect status and retry after settlement`);
   return identity;
 }
@@ -171,15 +177,28 @@ export async function serviceUpgrade(input, dependencies = {}) {
   const save = patch => { record = { ...record, ...patch, updatedAt: new Date().toISOString() }; writePrivateJson(join(operationPath, 'operation.json'), record); };
   const originals = () => record.services.map(service => ({ service,
     unit: parseManagedUnit(readFileSync(join(operationPath, service.unitBackup), 'utf8'), service.role) }));
+  const compatibleSwitch = () => record.maintenancePolicy === 'compatible_code_switch' || !record.maintenancePolicy &&
+    record.services.every(service => service.schema === releaseInfo(record.candidateDirectory).compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema']);
+  const pluginGate = async direction => {
+    const target = direction === 'forward' ? 'afterHash' : 'beforeHash';
+    if (!record.files.some(file => file.kind === 'plugin' && fileHash(file.path) !== file[target])) { save({ deferredPluginReload: null }); return null; }
+    try { const result = await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory }); save({ deferredPluginReload: null }); return result; }
+    catch (error) {
+      if (!compatibleSwitch()) throw error;
+      const deferred = { direction, reason: error.code ?? 'native_decision_inspection_unavailable' };
+      save({ deferredPluginReload: deferred }); return deferred;
+    }
+  };
   const migrationCommitted = () => record.migrateTaskReferences && originals().some(({ service, unit }) => service.role === 'backend' &&
     unit.release.compatibility.backendSchema === 1 && serviceIdentity(unit).schema === 2);
   const checkFiles = () => {
-    for (const file of record.files) requireValue([file.beforeHash, file.afterHash].includes(fileHash(file.path)),
+    for (const file of record.files) requireValue([file.beforeHash, file.afterHash, file.beforeStopHash].includes(fileHash(file.path)),
       'upgrade_configuration_changed', 'Configuration changed after planning. Refuse overwriting later edits');
   };
   const writeFiles = forward => {
     checkFiles();
     for (const file of record.files) {
+      if (file.kind === 'plugin' && record.deferredPluginReload?.direction === (forward ? 'forward' : 'rollback') && record.deferredPluginReload.status !== 'applying') continue;
       const expected = forward ? file.afterHash : file.beforeHash;
       if (fileHash(file.path) !== expected) atomicWrite(file.path, readFileSync(join(operationPath, forward ? file.afterFile : file.beforeFile)));
     }
@@ -192,7 +211,17 @@ export async function serviceUpgrade(input, dependencies = {}) {
       else if (existsSync(path)) unlinkSync(path);
     }
   };
-  const stop = async () => { for (const role of ['node', 'backend']) for (const s of record.services.filter(s => s.role === role)) await manager.stop(s.name); };
+  const stop = async () => {
+    // systemd otherwise kills detached owned OpenCode children with the node's
+    // cgroup. Install the recorded process-only stop policy before stopping the
+    // old supervisor, without changing its executable or starting model work.
+    for (const file of record.files.filter(file => file.role === 'node' && file.beforeStopFile)) {
+      const current = fileHash(file.path);
+      if (current === file.beforeHash) atomicWrite(file.path, readFileSync(join(operationPath, file.beforeStopFile)));
+    }
+    if (record.files.some(file => file.beforeStopFile)) await manager.reload();
+    for (const role of ['node', 'backend']) for (const s of record.services.filter(s => s.role === role)) await manager.stop(s.name);
+  };
   const start = async () => { await manager.reload(); for (const role of ['backend', 'node']) for (const s of record.services.filter(s => s.role === role && s.active)) await manager.start(s.name); };
   const checkHealth = async (forward, paused) => {
     for (const service of record.services) {
@@ -206,30 +235,31 @@ export async function serviceUpgrade(input, dependencies = {}) {
       if (last) throw new RelayError('upgrade_health_failed', `${service.role} health verification failed; original state is retained`, 503);
       const original = originals().find(item => item.service.role === service.role).unit;
       const identity = serviceIdentity(original);
-      requireValue(identityFingerprint(identity, service.identityFingerprintVersion ?? 1) === service.identityFingerprint, 'upgrade_identity_changed', 'Upgrade changed identity, credentials or node configuration');
+      requireValue(identityFingerprint(identity, service.identityFingerprintVersion ?? 1, service.identityFiles) === service.identityFingerprint, 'upgrade_identity_changed', 'Upgrade changed identity, credentials or node configuration');
     }
   };
   const rollback = async () => {
     checkFiles();
     const startingPhase = record.phase, unchangedFiles = record.files.map(file => fileHash(file.path));
     const beforeSwitch = (record.phase === 'stopping' || record.phase === 'rolling_back' && record.rollbackBeforeSwitch) &&
-      record.files.every(file => fileHash(file.path) === file.beforeHash) && realpathSync(record.cli.path) === record.cli.before;
+      record.files.every(file => [file.beforeHash, file.beforeStopHash].includes(fileHash(file.path))) && realpathSync(record.cli.path) === record.cli.before;
     for (const { service, unit } of originals()) {
       releaseInfo(unit.release.directory);
-      const identity = identityCheck(service, unit, { allowBusy: beforeSwitch });
+      const identity = identityCheck(service, unit, { allowBusy: beforeSwitch || compatibleSwitch() });
       requireValue(identity.schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
         'upgrade_incompatible', 'Rollback writer does not support the current database schema. No database will be restored');
     }
     const reloadPlugin = record.files.some(file => file.kind === 'plugin' && fileHash(file.path) !== file.beforeHash);
-    if (reloadPlugin) await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory });
+    if (reloadPlugin) await pluginGate('rollback');
+    else save({ deferredPluginReload: null });
     save({ phase: 'rolling_back', rollbackBeforeSwitch: beforeSwitch }); maintenance(true); await stop();
     try {
       for (const { service, unit } of originals()) {
-        const identity = identityCheck(service, unit, { allowBusy: beforeSwitch });
+        const identity = identityCheck(service, unit, { allowBusy: beforeSwitch || compatibleSwitch() });
         requireValue(identity.schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
           'upgrade_incompatible', 'Rollback writer is incompatible with the current database schema');
       }
-      if (reloadPlugin) await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory });
+      if (reloadPlugin) await pluginGate('rollback');
     } catch (error) {
       if (!beforeSwitch && ['upgrade_busy', 'upgrade_pending_decisions'].includes(error.code)) {
         requireValue(record.files.every((file, i) => fileHash(file.path) === unchangedFiles[i]), 'upgrade_configuration_changed', 'Rollback configuration changed while stopping');
@@ -260,9 +290,24 @@ export async function serviceUpgrade(input, dependencies = {}) {
           'upgrade_incompatible', 'Rollback writer does not support the current database schema. No database will be restored');
         if (!input.apply) return { state: 'rollback_plan', operationId: id, services: record.services.map(s => ({ role: s.role, version: s.previousVersion })), databaseRestore: false };
         if (record.phase !== 'rolled_back') await rollback();
-        return { state: 'rolled_back', operationId: id, databasesRestored: false };
+        return { state: 'rolled_back', operationId: id, databasesRestored: false, pluginReloadDeferred: record.deferredPluginReload ?? null };
       }
-      if (complete.includes(record.phase)) return { state: record.phase, operationId: id, replayed: true };
+      if (complete.includes(record.phase)) {
+        if (record.deferredPluginReload) {
+          requireValue(input.apply, 'invalid_request', 'Use upgrade resume OPERATION --apply to finish the saved plugin update');
+          const direction = record.deferredPluginReload.direction;
+          requireValue(realpathSync(record.cli.path) === (direction === 'forward' ? record.cli.after : record.cli.before),
+            'upgrade_superseded', 'A later CLI/release change superseded this deferred plugin update');
+          checkFiles();
+          try { await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory }); }
+          catch (error) { save({ deferredPluginReload: { direction, reason: error.code ?? 'native_decision_inspection_unavailable' } });
+            return { state: record.phase, operationId: id, pluginReloadDeferred: record.deferredPluginReload, servicesRestarted: false }; }
+          save({ deferredPluginReload: { direction, status: 'applying' } });
+          writeFiles(direction === 'forward'); save({ deferredPluginReload: null });
+          return { state: record.phase, operationId: id, pluginReloadDeferred: record.deferredPluginReload ?? null, servicesRestarted: false };
+        }
+        return { state: record.phase, operationId: id, replayed: true };
+      }
       requireValue(input.apply, 'invalid_request', 'Resuming a stopped/switched operation requires --apply');
     } else {
       const roles = input.services ?? ['node'];
@@ -281,7 +326,10 @@ export async function serviceUpgrade(input, dependencies = {}) {
       if (existsSync(join(operationPath, 'operation.json'))) {
         record = readPrivateJson(join(operationPath, 'operation.json'));
         requireValue(record.requestHash === requestHash, 'operation_conflict', 'Upgrade key belongs to another request');
-        return { state: record.phase, operationId: id, replayed: true, instruction: complete.includes(record.phase) ? 'No change performed' : 'Use upgrade resume OPERATION --apply to reconcile this exact operation' };
+        return { state: record.phase, operationId: id, replayed: true, maintenancePolicy: record.maintenancePolicy ?? 'legacy',
+          pluginReloadDeferred: record.deferredPluginReload ?? null,
+          instruction: record.deferredPluginReload ? 'Service code is committed. Use upgrade resume OPERATION --apply to finish the saved plugin reload.' :
+            complete.includes(record.phase) ? 'No change performed' : 'Use upgrade resume OPERATION --apply to reconcile this exact operation' };
       }
       const pending = readdirSync(operations).filter(name => existsSync(join(operations, name, 'operation.json')))
         .map(name => readPrivateJson(join(operations, name, 'operation.json'))).find(item => !complete.includes(item.phase));
@@ -289,10 +337,10 @@ export async function serviceUpgrade(input, dependencies = {}) {
       const services = [], files = [];
       for (const { role, name } of serviceNames(roles, nodeConfig)) {
         const current = await manager.inspect(name), before = readFileSync(current.path), unit = parseManagedUnit(before.toString(), role), identity = serviceIdentity(unit);
-        requireValue(identity.blockers.length === 0, 'upgrade_busy', `Unsettled ${role} work prevents upgrade. Run ${role} status and retry after settlement`);
         const descriptor = { role, name, unitPath: current.path, active: current.active, previousVersion: unit.release.version,
           previousDirectory: unit.release.directory, previousFingerprint: unit.release.fingerprint, database: identity.database, stateDirectory: identity.stateDirectory,
-          instanceId: identity.instanceId, schema: identity.schema, nodeId: identity.nodeId ?? null, identityFingerprintVersion: 2, identityFingerprint: identityFingerprint(identity), identityFiles: identity.files };
+          instanceId: identity.instanceId, schema: identity.schema, nodeId: identity.nodeId ?? null, activitySnapshot: identity.blockers,
+          identityFingerprintVersion: 2, identityFingerprint: identityFingerprint(identity), identityFiles: identity.files };
         await health(descriptor, unit, manager, false, unit.release.version !== '0.2.0-rc.4');
         services.push(descriptor);
         files.push({ path: current.path, before, kind: 'unit', role, unit });
@@ -301,6 +349,7 @@ export async function serviceUpgrade(input, dependencies = {}) {
         (!input.migrateTaskReferences || service.role !== 'backend' || service.schema === 2))) return { state: 'unchanged', version: input.version, services: roles };
       const candidate = await (dependencies.stageRelease ?? stageRelease)({ version: input.version, artifact: input.artifact, sha256: input.sha256, directory: input.releasesDirectory });
       const validated = releaseInfo(candidate.directory);
+      const migrationRequired = services.some(service => service.schema !== validated.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema']);
       requireValue(candidate.version === validated.version && candidate.auditVerified, 'invalid_release', 'A verified compatible candidate and production audit are required');
       requireValue(!candidate.packageFingerprint || candidate.packageFingerprint === validated.fingerprint, 'release_conflict', 'Candidate package content differs from its verification receipt');
       for (const file of files) {
@@ -308,15 +357,32 @@ export async function serviceUpgrade(input, dependencies = {}) {
         const explicitMigration = input.migrateTaskReferences === true && file.role === 'backend' && identity.schema === 1 && validated.compatibility.backendSchema === 2;
         requireValue(explicitMigration || identity.schema === validated.compatibility[file.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
           'upgrade_incompatible', 'Service database and candidate schema differ. An explicit offline migration is required, never an automatic restore');
+        requireValue(!migrationRequired || identity.blockers.length === 0, 'upgrade_busy', `Unsettled ${file.role} work prevents a database migration. A schema-compatible code upgrade does not require work settlement`);
+      }
+      if (!migrationRequired) for (const service of services) {
+        const identity = serviceIdentity(files.find(file => file.role === service.role).unit);
+        service.identityFingerprintVersion = 3;
+        service.identityFingerprint = identityFingerprint(identity, 3, service.identityFiles);
       }
       requireValue(!input.migrateTaskReferences || services.some(service => service.role === 'backend'), 'invalid_request', 'Task-reference migration requires the backend service');
-      for (const file of files) file.after = Buffer.from(file.unit.replace(candidate.directory));
+      for (const file of files) {
+        file.after = Buffer.from(file.role === 'node' ? preserveNativeProcesses(file.unit.replace(candidate.directory)) : file.unit.replace(candidate.directory));
+        if (file.role === 'node') file.beforeStop = Buffer.from(preserveNativeProcesses(file.before.toString()));
+      }
       if (roles.includes('node')) files.push(...pluginUpgradeFiles(resolve(input.configDirectory ?? configDirectory()), candidate.directory));
-      const decisionCheck = files.some(file => file.kind === 'plugin') ? await nativeDecisions({ nodeConfig, configDirectory: resolve(input.configDirectory ?? configDirectory()) }) : null;
+      let decisionCheck = null, deferredPluginReload = null;
+      if (files.some(file => file.kind === 'plugin')) try { decisionCheck = await nativeDecisions({ nodeConfig, configDirectory: resolve(input.configDirectory ?? configDirectory()) }); }
+      catch (error) {
+        if (migrationRequired) throw error;
+        deferredPluginReload = { direction: 'forward', reason: error.code ?? 'native_decision_inspection_unavailable' };
+      }
       const cli = cliChange(candidate, input.binDirectory);
       const plan = { state: 'upgrade_plan', operationId: id, key, targetVersion: candidate.version,
         services: services.map(s => ({ role: s.role, from: s.previousVersion, to: candidate.version, restart: s.active })),
-        pluginConfigurationReload: files.some(f => f.kind === 'plugin'), pendingDecisionCheck: decisionCheck, preservesIdentityAndState: true, databaseRestore: false,
+        maintenancePolicy: migrationRequired ? 'database_migration' : 'compatible_code_switch', nativeProcessesPreserved: true,
+        unsettledWorkPreserved: services.flatMap(service => service.activitySnapshot),
+        pluginConfigurationReload: files.some(f => f.kind === 'plugin') && !deferredPluginReload, pluginReloadDeferred: deferredPluginReload,
+        pendingDecisionCheck: decisionCheck, preservesIdentityAndState: true, databaseRestore: false,
         taskReferenceMigration: input.migrateTaskReferences === true, rollbackToSchema1AllowedAfterMigration: false,
         instruction: 'Add --apply with the same arguments/key. Release staging is complete; no services or live configuration were changed.' };
       if (!input.apply) return plan;
@@ -325,11 +391,13 @@ export async function serviceUpgrade(input, dependencies = {}) {
         const beforeFile = `${index}-before`, afterFile = `${index}-after`;
         writeFileSync(join(operationPath, beforeFile), file.before, { flag: 'wx', mode: 0o600, flush: true });
         writeFileSync(join(operationPath, afterFile), file.after, { flag: 'wx', mode: 0o600, flush: true });
-        return { path: file.path, kind: file.kind, role: file.role, beforeFile, afterFile, beforeHash: hashBytes(file.before), afterHash: hashBytes(file.after) };
+        const transition = file.beforeStop ? { beforeStopFile: `${index}-before-stop`, beforeStopHash: hashBytes(file.beforeStop) } : {};
+        if (file.beforeStop) writeFileSync(join(operationPath, transition.beforeStopFile), file.beforeStop, { flag: 'wx', mode: 0o600, flush: true });
+        return { path: file.path, kind: file.kind, role: file.role, beforeFile, afterFile, beforeHash: hashBytes(file.before), afterHash: hashBytes(file.after), ...transition };
       });
       for (const service of services) service.unitBackup = plannedFiles.find(f => f.path === service.unitPath).beforeFile;
       record = { id, key, requestHash, phase: 'prepared', version: candidate.version, candidateDirectory: candidate.directory, candidateFingerprint: validated.fingerprint,
-        migrateTaskReferences: input.migrateTaskReferences === true,
+        migrateTaskReferences: input.migrateTaskReferences === true, maintenancePolicy: plan.maintenancePolicy, deferredPluginReload,
         services, files: plannedFiles, cli, nodeConfig, configDirectory: resolve(input.configDirectory ?? configDirectory()), createdAt: new Date().toISOString() };
       save({});
     }
@@ -342,14 +410,14 @@ export async function serviceUpgrade(input, dependencies = {}) {
       if (record.phase !== 'activating') {
         checkFiles(); maintenance(true); save({ phase: 'stopping' }); await stop();
         for (const { service, unit } of originals()) {
-          identityCheck(service, unit);
+          identityCheck(service, unit, { allowBusy: compatibleSwitch() });
           await databaseBackup(service.database, join(operationPath, `${service.role}-before-upgrade.sqlite`));
           for (const [index, path] of service.identityFiles.entries()) {
             const target = join(operationPath, `${service.role}-identity-${index}`);
             if (!existsSync(target)) writeFileSync(target, readFileSync(path), { flag: 'wx', mode: 0o600, flush: true });
           }
         }
-        if (record.files.some(file => file.kind === 'plugin')) await nativeDecisions({ nodeConfig: record.nodeConfig, configDirectory: record.configDirectory });
+        if (record.files.some(file => file.kind === 'plugin')) await pluginGate('forward');
         if (record.migrateTaskReferences) for (const { service, unit } of originals().filter(({ service }) => service.role === 'backend')) {
           const unlockState = serviceLock(service.stateDirectory);
           try {
@@ -378,7 +446,8 @@ export async function serviceUpgrade(input, dependencies = {}) {
       maintenance(false); await checkHealth(true, false);
       save({ phase: 'committed', databasesRestored: false });
       return { state: 'committed', operationId: record.id, version: record.version,
-        services: record.services.map(s => s.role), identitiesPreserved: true, backups: operationPath, databasesRestored: false };
+        services: record.services.map(s => s.role), identitiesPreserved: true, backups: operationPath, databasesRestored: false,
+        maintenancePolicy: record.maintenancePolicy ?? 'legacy', pluginReloadDeferred: record.deferredPluginReload ?? null };
     } catch (error) {
       save({ failureCode: error.code ?? 'upgrade_failed' });
       if (migrationCommitted()) {

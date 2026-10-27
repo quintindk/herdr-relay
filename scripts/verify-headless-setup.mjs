@@ -18,6 +18,7 @@ import { call } from '../src/client.mjs';
 import { waitHeadlessSetup } from '../src/headless-setup-wait.mjs';
 import { nativeBoard } from '../src/native-board.mjs';
 import { NativeDecisionJournal } from '../src/native-decision-journal.mjs';
+import { digest } from '../src/protocol.mjs';
 
 process.umask(0o077);
 const capabilityMode = process.argv.includes('--capabilities');
@@ -69,11 +70,17 @@ const model = createServer(async (req, res) => {
     shellDeniedHidden = true;
   }
   const steps = contractTurn ? ['relay_headless_contract', 'relay_headless_contract'] : grantTurn ? ['relay_headless_grant'] : probe ? ['relay_headless_permissions', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
-    ['relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), ...(shellAllowed ? ['relay_shell_call'] : []), 'relay_work_submit'];
+    ['relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), ...(shellAllowed ? ['relay_shell_call'] : []),
+      ...(capabilityMode ? ['relay_headless_task', 'relay_headless_task', 'relay_headless_task'] : []), 'relay_work_submit'];
   const name = steps[called];
   const tool = name && input.tools?.find(t => t.function.name.endsWith(name));
   if (name && !tool) console.error(JSON.stringify({ missingTool: name, advertised: input.tools?.map(t => t.function.name) }));
-  const args = name === 'relay_headless_contract' ? { ...contractProposal, operation: called === 0 ? 'preview' : 'request', ...(called === 1 ? { key: 'contract-once', previewHash: contractPreviewHash } : {}) } :
+  const taskStep = steps.slice(0, called).filter(step => step === 'relay_headless_task').length;
+  const args = name === 'relay_headless_task' ? { key: taskStep === 0 ? 'schema-create' : 'schema-comment', operation: taskStep === 0 ? 'task.create' : 'comment.create',
+    source: { namespace: 'external:record', externalId: 'native-schema-fixture' },
+    payload: taskStep === 0 ? { title: 'Native operation-specific schema fixture' } : { taskId: `task_headless_${digest(['owner', 'external:record', 'native-schema-fixture'])}`,
+      expectedRevision: 1, body: 'Only the valid comment may persist', ...(taskStep === 1 ? { reason: 'Unsupported field must fail before enqueue' } : {}) } } :
+    name === 'relay_headless_contract' ? { ...contractProposal, operation: called === 0 ? 'preview' : 'request', ...(called === 1 ? { key: 'contract-once', previewHash: contractPreviewHash } : {}) } :
     name === 'relay_headless_grant' ? { key: 'grant-once', payload: grantProposal } : name === 'relay_mcp_call' ? { tool: called === 1 ? 'records_read' : 'actions_send', arguments: called === 1 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
     ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : name === 'relay_shell_call' ? { command: `printf '%s' 'shell-fixture' > '${shellOutput}'` } : ['relay_headless_capabilities', 'relay_headless_permissions', 'relay_mcp_tools'].includes(name) ? {} :
     { key: probe ? 'ready' : 'job', candidate: probe ? 'headless-readiness' : 'fixture-job', summary: 'Native capability and result submission verified.' };
@@ -244,6 +251,13 @@ try {
   if (shellMode && !shellAllowed) assert.equal(shellDeniedHidden, true);
   if (shellAllowed) assert.equal(readFileSync(shellOutput, 'utf8'), 'shell-fixture');
   assert.ok(mcpSessions.every(sessionId => sessionId === approvedSetup.sessionId), 'MCP calls must retain the dedicated worker session context');
+  if (capabilityMode) {
+    const taskId = `task_headless_${digest(['owner', 'external:record', 'native-schema-fixture'])}`;
+    assert.equal((await owner('GET', `/v1/comments?taskId=${taskId}`)).items.length, 1, 'Invalid comment must not persist');
+    const transcript = await client.session.context({ sessionID: approvedSetup.sessionId });
+    const rejected = transcript.filter(m => m.type === 'assistant').flatMap(m => m.content.filter(p => p.type === 'tool' && p.name === 'relay_headless_task' && p.state.input?.payload?.reason));
+    assert.equal(rejected.length, 1); assert.equal(rejected[0].state.status, 'error');
+  }
   const unchangedGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
   assert.equal(unchangedGrant.revision, 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
   if (contractMode) assert.equal(revisedContextSeen, true);
@@ -263,6 +277,7 @@ try {
     nativeResultSubmission: true, actualCronFiringVerified: cronMode, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
     exactContractApprovalAndActivation: contractMode, revisedInstructionsInNativeModelContext: revisedContextSeen,
+    operationSpecificHeadlessSchemasVerified: capabilityMode,
     credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {
   await stopNode();

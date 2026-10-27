@@ -25,6 +25,7 @@ Description=Herdr Relay native node ${config.nodeId}
 After=network.target
 
 [Service]
+KillMode=process
 Type=simple
 ExecStart=${[process.execPath, fileURLToPath(new URL('../src/node-cli.mjs', import.meta.url)), '--config', configPath].map(quote).join(' ')}
 Restart=on-failure

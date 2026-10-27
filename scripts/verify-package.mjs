@@ -42,7 +42,8 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/grants.mjs', 'src/grants-view.mjs', 'src/grants-panel.mjs', 'src/task-board-dispatch.mjs',
   'src/native-worker-api.mjs', 'src/native-observation-recovery.mjs', 'src/interactive-dispatch-reconciliation.mjs',
    'packages/opencode-relay/native-input.mjs', 'src/native-interaction.mjs', 'src/headless-contract.mjs',
-   'src/node-headless-contract.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+   'src/node-headless-contract.mjs', 'src/headless-task-schema.mjs', 'src/publication-outcomes.mjs',
+   'src/node-recovery.mjs', 'src/node-recovery-cli.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 assert.ok(!packed.files.some(file => ['paperclip-final.json', 'paperclip-final-plan.json'].includes(file.path)), 'Private migration exports must never ship');
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -89,6 +90,7 @@ assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upg
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
 assert.match(help, /interactive grant\|request\|dispatch/);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['headless', '--help'], { encoding: 'utf8' }), /headless provision/);
+assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['node', 'recover', '--help'], { encoding: 'utf8' }), /preview-hash/);
 const skillConfig = join(root, 'installed-skills'); mkdirSync(skillConfig);
 const installedCli = join(consumer, 'node_modules/.bin/herdr-relay');
 const installedSkills = JSON.parse(execFileSync(installedCli, ['skills', 'install', '--config-dir', skillConfig], { encoding: 'utf8' }));
@@ -121,6 +123,27 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
   assert.equal(applied.runtimeStarted,false); assert.equal(applied.scheduleInstalled,false);
   assert.equal(JSON.parse(readFileSync(schedule)).definition.enabled,false);
   assert.equal(JSON.parse(execFileSync(process.execPath,[...args,'--apply'])).agentId,applied.agentId);
+`], { cwd: installed, stdio: 'pipe' });
+execFileSync(process.execPath, ['--input-type=module', '-e', `
+  import assert from 'node:assert/strict';
+  import {mkdirSync,writeFileSync,existsSync} from 'node:fs';
+  import {join} from 'node:path';
+  import {execFileSync} from 'node:child_process';
+  import {NodeJournal} from './src/node-journal.mjs';
+  const root=${JSON.stringify(join(root, 'installed-recovery'))}; mkdirSync(root);
+  const config=join(root,'node.json');
+  writeFileSync(config,JSON.stringify({identityVersion:2,nodeId:'fixture',stateDirectory:root,backend:{url:'http://127.0.0.1:1',token:'fixture'}}));
+  const journal=new NodeJournal(join(root,'node.sqlite'),{nodeId:'fixture',instanceId:'fixture-instance'});
+  try {
+    journal.queue({key:'rejected-comment',action:'headless.task',payload:{operation:'comment.create',payload:{reason:'unsupported'}}});
+    await assert.rejects(journal.flush(async()=>{throw Object.assign(Error('Unsupported field: payload.reason'),{code:'invalid_headless_request',status:400});}));
+    const args=[join(process.cwd(),'src/cli.mjs'),'node','recover','publication','rejected-comment','--config',config,'--reason','Discard rejected fixture comment','--key','package-recovery'];
+    const run=extra=>JSON.parse(execFileSync(process.execPath,[...args,...extra],{env:{...process.env,XDG_STATE_HOME:join(root,'state'),RELAY_CLI_EXECUTION_ID:'',RELAY_CLI_READ_ONLY:''}}));
+    const preview=run([]), applied=run(['--preview-hash',preview.previewHash,'--apply']);
+    assert.equal(applied.state,'administratively_abandoned'); assert.equal(applied.applied,false); assert.ok(existsSync(applied.backup));
+    assert.equal(run(['--preview-hash',preview.previewHash,'--apply']).replayed,true);
+    await journal.flush(()=>assert.fail('Abandoned publication must not replay'));
+  } finally {journal.close();}
 `], { cwd: installed, stdio: 'pipe' });
 execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';

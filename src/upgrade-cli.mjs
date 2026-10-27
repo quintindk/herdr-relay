@@ -20,6 +20,10 @@ export const upgradeHelp = `Relay service maintenance (node means Relay node, no
   upgrade resume OPERATION_ID --apply
   upgrade rollback OPERATION_ID [--apply]
 Without --apply, upgrade stages/audits the release and shows a plan only.
+Schema-compatible code upgrades preserve active/conflicted work and pending publications.
+Only database migrations require activity settlement. Identity/integrity/provenance checks remain mandatory.
+Pending UI decisions defer plugin reload; upgrade resume OPERATION_ID --apply finishes it without restarting services.
+Local recovery: node recover list|work|publication ... (node recover --help).
 Upgrades preserve state and enrolments. Rollback switches compatible code/configuration,
 never silently restores a database. No SSH, nodejs upgrade, reset or OpenCode restart.`;
 
@@ -58,6 +62,7 @@ export async function maintenanceCli(args) {
     const names = id ? [id] : existsSync(root) ? readdirSync(root).filter(name => /^[A-Za-z0-9_-]+$/.test(name) && existsSync(join(root, name, 'operation.json'))) : [];
     output({ operations: names.map(name => { const record = readPrivateJson(join(root, name, 'operation.json'));
       return { id: record.id, phase: record.phase, version: record.version, services: record.services.map(s => s.role),
+        maintenancePolicy: record.maintenancePolicy ?? 'legacy', pluginReloadDeferred: record.deferredPluginReload ?? null,
         failureCode: record.failureCode, rollbackFailureCode: record.rollbackFailureCode, recoveryAction: record.recoveryAction, updatedAt: record.updatedAt }; }) });
     return true;
   }

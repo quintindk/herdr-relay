@@ -10,6 +10,8 @@ import { nativeReadApi } from './native-worker-api.mjs';
 import { reconcileDispatchIdentity, refusedDispatchErrors, dispatchReceipt } from './interactive-dispatch-reconciliation.mjs';
 import { reconcileInteractiveWork, previewInteractiveRecovery, applyInteractiveRecovery } from './native-interaction.mjs';
 import { inspectContract, previewContractUpdate } from './node-headless-contract.mjs';
+import { validateHeadlessTaskPayload } from './headless-task-schema.mjs';
+import { abandonedWork } from './node-journal.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
@@ -70,7 +72,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         if (request) {
           requireValue(typeof body.key === 'string' && /^[A-Za-z0-9:_.-]{1,100}$/.test(body.key) && body.previewHash === preview.previewHash,
             'stale_contract_preview', 'Stable key and exact preview hash required');
-          requireValue(!journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state)),
+          requireValue(!journal.works().some(w => !abandonedWork(w) && ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state)),
             'headless_human_context_required', 'Assigned executions cannot authorise instruction updates', 403);
           journal.queue({ key, action: 'headless.contract_request', payload: { id: `contract_${digest([worker.agentId, body.key])}`,
             setupId: setup.id, expectedRevision: setup.revision, grantRevision: grant.revision, fromDigest: preview.fromDigest,
@@ -159,7 +161,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         } else if (path.endsWith('setup')) {
           requireValue(Object.keys(body).every(k => ['key', 'grantId', 'retry'].includes(k)) && typeof body.key === 'string' && body.key.trim() && body.key.length <= 100 && typeof body.grantId === 'string' && (body.retry === undefined || typeof body.retry === 'boolean'),
             'invalid_request', 'Stable key and authorised grant ID required');
-          requireValue(!journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
+          requireValue(!journal.works().some(w => !abandonedWork(w) && ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
             'headless_human_context_required', 'Scheduled/delegated work cannot reuse human-chat setup authority', 403);
           requireValue(!journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
             .some(row => { const notice = JSON.parse(row.data); return notice.kind === 'message' && notice.bindingId === worker.bindingId; }),
@@ -237,7 +239,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         requireValue(!worker.headlessSetupId, 'interactive_human_context_required', 'Headless jobs cannot use interactive provisioning', 403);
         requireValue(api && Object.keys(body).every(k => ['key', 'payload'].includes(k)) && typeof body.key === 'string' &&
           body.key.trim() && body.key.length <= 100 && body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload), 'invalid_request', 'Immutable key and bounded provisioning payload required');
-        requireValue(path === '/agent/interactive-prepare' || !journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
+        requireValue(path === '/agent/interactive-prepare' || !journal.works().some(w => !abandonedWork(w) && ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
           'interactive_human_context_required', 'Scheduled and delegated executions cannot create agents through the human-chat route', 403);
         const operation = path.slice('/agent/interactive-'.length);
         const allowed = operation === 'prepare' ? ['id', 'grantId', 'nodeId', 'directory', 'agentId', 'name', 'createDirectory', 'instance', 'profile', 'topic', 'permissionScope'] :
@@ -267,7 +269,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${worker.agentId}`);
         const receiver = row ? JSON.parse(row.value) : null;
         const enrolment = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`enrolment:${worker.agentId}`);
-        const works = journal.works().filter(w => w.execution.targetAgentId === worker.agentId &&
+        const works = journal.works().filter(w => !abandonedWork(w) && w.execution.targetAgentId === worker.agentId &&
           !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ agentId: worker.agentId, agentName: enrolment ? JSON.parse(enrolment.value).name : null, sessionId: worker.sessionId, receiver,
@@ -367,11 +369,11 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       if (path === '/work/current') {
         requireValue(typeof worker.sessionId === 'string' && body.sessionId === worker.sessionId && Object.keys(body).length === 1,
           'forbidden', 'Exact enrolled native session required', 403);
-        if (resolveBinding) for (const work of journal.works().filter(work => ownsWork(work) && work.execution.state === 'accepted')) {
+        if (resolveBinding) for (const work of journal.works().filter(work => !abandonedWork(work) && ownsWork(work) && work.execution.state === 'accepted')) {
           const binding = await resolveBinding(worker.agentId, work);
           if (binding) await reconcileInteractiveWork(journal, binding, work);
         }
-        const matching = journal.works().filter(work => ownsWork(work) && work.execution.state === 'accepted');
+        const matching = journal.works().filter(work => !abandonedWork(work) && ownsWork(work) && work.execution.state === 'accepted');
         const candidates = matching.filter(work =>
           ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && work.execution.state === 'accepted');
         const conflicts = matching.filter(work => work.state === 'conflict');
@@ -429,11 +431,13 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       let work = journal.work(body.executionId);
       requireValue(ownsWork(work) && work.execution.runId === body.runId,
         'forbidden', 'Exact current worker execution required', 403);
+      requireValue(!abandonedWork(work) || path === '/work/read', 'work_abandoned', 'This invocation was administratively abandoned; it cannot dispatch effects or submit a result');
       if (resolveBinding) {
         const binding = await resolveBinding(worker.agentId, work);
         if (binding) work = await reconcileInteractiveWork(journal, binding, work);
       }
-      if (work.interaction && path !== '/work/read') requireValue(body.inputRevision === work.interaction.revision,
+      if (work.interaction && path !== '/work/read') requireValue(body.inputRevision === work.interaction.revision ||
+        body.inputRevision === undefined && work.interaction.inputIds.length === 0,
         'stale_input_revision', 'Human input changed. Read the current execution before acting', 409);
       let result;
       if (path === '/work/native-api') {
@@ -502,6 +506,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           result = { sourceNamespaces: scope.profile.sourceNamespaces, taskActions: scope.profile.taskActions, artifacts: scope.profile.artifacts ?? null };
         } else if (path === '/work/headless-task') {
           requireValue(typeof body.key === 'string' && body.key === body.payload.key, 'invalid_headless_request', 'Exact stable mutation key required');
+          validateHeadlessTaskPayload(body.payload.operation, body.payload.payload);
           const command = { key: `headless-transport:${digest([work.id, body.runId, body.payload.source, body.payload.operation, body.key])}`, action: 'headless.task',
             payload: { executionId: work.id, runId: body.runId, ...body.payload } };
           requireValue(!Object.hasOwn(body.payload, 'executionId') && !Object.hasOwn(body.payload, 'runId'), 'invalid_headless_request', 'Worker cannot override execution scope');
@@ -511,11 +516,18 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           try { await journal.flush(api); }
           catch (error) {
             const refused = journal.receipt(command.key);
+            if (refused?.state === 'refused' && refused.applied === false) {
+              res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(refused)); return;
+            }
+            if (refused?.state === 'conflict' && refused.inspectionRequired === true) {
+              res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ...refused,
+                message: 'Revision conflict requires inspection. This command did not apply; its original key and payload are retained.' })); return;
+            }
             const definitive = ['stale_revision', 'headless_task_busy', 'headless_task_forbidden', 'headless_operation_forbidden', 'reference_conflict', 'task_blocked', 'execution_unsettled', 'acceptance_required'];
             if (refused?.state !== 'conflict' || !definitive.includes(refused.error)) throw error;
             // These transaction refusals prove no mutation committed. Retain the
             // command/error as a refusal, not an unresolved or applied operation.
-            const retained = { ...refused, state: 'superseded', outcome: 'refused', applied: false };
+            const retained = { ...refused, state: 'superseded', outcome: 'refused', applied: false, effectsUncertain: false, refusalKind: 'transactional_policy' };
             journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify(retained), command.key);
           }
           result = journal.receipt(command.key);

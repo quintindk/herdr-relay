@@ -178,6 +178,25 @@ compatibility: opencode
 
 ## Installation and recovery
 
+- Schema-compatible code upgrades preserve active/conflicted work and pending
+  publications. Activity status is not a reason to block them or cancel work.
+  Actual database migrations still require quiescence. Identity, integrity,
+  configuration and verified-release checks remain mandatory.
+- Pending UI decisions defer only the plugin reload. A committed operation with
+  `pluginReloadDeferred` is not a completed UI update. Resolve the original
+  decision normally, then `upgrade resume OPERATION --apply` finishes the saved
+  reload without restarting services. Never restart OpenCode to reload skills.
+- Human takeover uses `native execution handback ID --revision N --reason TEXT
+  --key KEY`, not forged node settlement. It withdraws the assignment without
+  claiming native completion or process termination. Submitted results and
+  active child assignments require their own decisions.
+- Local cleanup uses `node recover list`, then `node recover work ID` or
+  `node recover publication ORIGINAL_KEY` with reason/key. Preview first, then
+  apply the exact hash. The CLI backs up state and records a distinct
+  administrative abandonment, preserving invocation/observation/command/error.
+  Proven validation refusals or inspected backend revision fences can be
+  retired; unresolved uncertainty cannot. No journal SQL edits are needed.
+
 - Ordinary human corrections in a verified interactive chat steer its current
   assignment, including after a native idle boundary. Do not routinely cancel or
   redispatch it. A native successful turn is not a submitted Relay result.

@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { digest, requireValue } from './protocol.mjs';
 import { assertTaskIdentityIntegrity } from './task-identity.mjs';
 import { definitiveDispatchRefusal } from './interactive-dispatch-reconciliation.mjs';
+import { definitivePublicationRefusal } from './publication-outcomes.mjs';
 
 export function backendMaintenanceBlockers(db) {
   const blockers = [];
@@ -36,6 +37,9 @@ export function inspectDatabase(path, role) {
     requireValue(identity?.nodeId && identity.instanceId, 'upgrade_state_invalid', 'Existing node/backend identity is missing');
     for (const row of db.prepare('SELECT data FROM work').all()) {
       const w = JSON.parse(row.data);
+      if (w.state === 'administratively_abandoned' && w.administrativeDisposition?.kind === 'abandonment' &&
+        w.administrativeDisposition.promptReplayAllowed === false && w.administrativeDisposition.nativeSettlementClaimed === false &&
+        digest(w.invocation ?? null) === w.administrativeDisposition.invocationDigest && digest(w.observation ?? null) === w.administrativeDisposition.observationDigest) continue;
       if (!['pending', 'native_finished', 'settled', 'settled_waiting'].includes(w.state) || w.state === 'pending' &&
         (w.invocation || !['requested', 'completed', 'cancelled', 'failed', 'rejected'].includes(w.execution?.state)) ||
         ['native_finished', 'settled_waiting'].includes(w.state) && w.observation?.state !== 'finished') blockers.push({ kind: 'native_work', id: w.id, state: w.state });
@@ -45,7 +49,10 @@ export function inspectDatabase(path, role) {
     }
     const refusedPublications = [];
     for (const row of db.prepare("SELECT key,hash,state,data FROM outbox WHERE state NOT IN ('recorded','superseded')").all()) {
-      const refusal = definitiveDispatchRefusal(row);
+      const item = JSON.parse(row.data);
+      if (row.state === 'administratively_abandoned' && item.administrativeDisposition?.kind === 'abandonment' &&
+        item.applied === false && item.effectsUncertain === false && item.administrativeDisposition.commandHash === row.hash && digest(item.command) === row.hash) continue;
+      const refusal = definitiveDispatchRefusal(row) ?? definitivePublicationRefusal(row);
       if (refusal) refusedPublications.push(refusal);
       else blockers.push({ kind: 'publication', id: row.key, state: row.state });
     }
@@ -53,8 +60,9 @@ export function inspectDatabase(path, role) {
       const setup = JSON.parse(row.value);
       if (!['ready', 'blocked'].includes(setup.state)) blockers.push({ kind: 'headless_setup', id: setup.id, state: setup.state });
     }
-    for (const row of db.prepare('SELECT id,state FROM occurrences').all()) {
-      if (!['pending', 'completed', 'failed', 'cancelled', 'in_review', 'waiting_question'].includes(row.state)) blockers.push({ kind: 'occurrence', ...row });
+    for (const row of db.prepare('SELECT id,state,data FROM occurrences').all()) {
+      if (row.state === 'administratively_abandoned' && JSON.parse(row.data).administrativeDisposition?.kind === 'abandonment') continue;
+      if (!['pending', 'completed', 'failed', 'cancelled', 'in_review', 'waiting_question'].includes(row.state)) blockers.push({ kind: 'occurrence', id: row.id, state: row.state });
     }
     return { ...identity, schema, blockers, ...(refusedPublications.length ? { refusedPublications } : {}) };
   } finally { db.close(); }
@@ -77,9 +85,9 @@ export function serviceIdentity(unit) {
     files: [...new Set([unit.statePath, pin, ...privateFiles])].filter(existsSync).sort(), ...result };
 }
 
-export function identityFingerprint(identity, version = 2) {
-  requireValue([1, 2].includes(version), 'upgrade_incompatible', 'Unknown identity fingerprint version');
+export function identityFingerprint(identity, version = 2, baselineFiles = identity.files) {
+  requireValue([1, 2, 3].includes(version), 'upgrade_incompatible', 'Unknown identity fingerprint version');
   return digest({ instanceId: identity.instanceId, nodeId: identity.nodeId ?? null,
-    files: identity.files.map(path => [path, version === 2 && identity.nodeId && basename(path) === 'worker-index.json'
+    files: (version === 3 ? baselineFiles.filter(path => basename(path) !== 'worker-index.json') : identity.files).map(path => [path, version === 2 && identity.nodeId && basename(path) === 'worker-index.json'
       ? digest(JSON.parse(readFileSync(path, 'utf8'))) : digest(readFileSync(path).toString('base64'))]) });
 }

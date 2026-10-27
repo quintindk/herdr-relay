@@ -1,6 +1,7 @@
 import { digest, now } from './protocol.mjs';
 import { installLocalSchedule, tickLocalSchedules } from './node-schedules.mjs';
 import { reconcileObservationConflict } from './native-observation-recovery.mjs';
+import { abandonedWork } from './node-journal.mjs';
 
 export function reconcileScheduleDefinitions(journal, clock = Date.now()) {
   for (const row of journal.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'schedule-pending:%'").all()) {
@@ -49,6 +50,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
     try {
     let occurrence = JSON.parse(row.data);
     let work = journal.work(occurrence.id);
+    if (abandonedWork(work)) continue;
     if (occurrence.definition.intent === 'reminder') {
       journal.transaction(() => {
         const notification = { id: occurrence.id, scheduleId: occurrence.scheduleId, intendedAt: occurrence.intendedAt,
@@ -61,10 +63,12 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
       });
       continue;
     }
-    const saveOccurrence = (state, extra = {}) => {
+    const saveOccurrence = (state, extra = {}) => journal.transaction(() => {
+      const current = journal.db.prepare('SELECT data FROM occurrences WHERE id=?').get(occurrence.id);
+      if (current && JSON.parse(current.data).state === 'administratively_abandoned') { occurrence = JSON.parse(current.data); return; }
       occurrence = { ...occurrence, ...extra, state };
       journal.db.prepare('UPDATE occurrences SET state=?,data=? WHERE id=?').run(state, JSON.stringify(occurrence), occurrence.id);
-    };
+    });
     if (!work) {
       if (occurrence.definition.expiresAt && clock >= Date.parse(occurrence.definition.expiresAt)) {
         saveOccurrence('expired', { reason: 'Admission deadline elapsed before native intent' }); continue;
@@ -239,6 +243,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
         ...(binding.prepareInvocation?.(snapshot) ?? {}), createdAt: now(), prompt:
           `Relay ${work.answer ? 'scheduled continuation' : 'local occurrence'} ${occurrence.id}.\n${occurrence.definition.instructions}\n${work.answer ? `Answer: ${work.answer.body}\n` : ''}${binding.workerInstructions?.(work.execution) ?? ''}` };
       work = journal.save({ ...work, invocation, state: 'intent' }); saveOccurrence('admitted');
+      if (abandonedWork(journal.work(work.id))) continue;
       try { await binding.native.send(invocation); }
       catch (error) { journal.save({ ...journal.work(work.id), state: 'uncertain', error: error.code ?? 'native_delivery_uncertain' }); saveOccurrence('uncertain'); continue; }
     }
@@ -258,6 +263,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
         work = journal.save({ id: occurrence.id, bindingId: binding.id, nativeConversationId: exactConversation, execution, invocation, state: 'intent' });
         saveOccurrence('admitted', { bindingId: binding.id });
       });
+      if (abandonedWork(journal.work(work.id))) continue;
       try { await binding.native.send(invocation); }
       catch (error) {
         journal.save({ ...journal.work(work.id), state: 'uncertain', error: error.code ?? 'native_delivery_uncertain' });
@@ -268,6 +274,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
     if (work.state === 'conflict') continue;
     const observation = binding.observe(await binding.native.snapshot(), work.invocation);
     work = journal.work(work.id);
+    if (abandonedWork(work)) continue;
     if (observation.state === 'conflict') { journal.save({ ...work, observation, state: 'conflict' }); continue; }
     if (observation.state !== 'finished') continue;
     journal.save({ ...work, observation, state: 'native_finished' });

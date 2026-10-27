@@ -900,6 +900,24 @@ export class BackendStore {
       return changed('execution', e, { cancellationRequested: true, cancellationReason: p.reason,
         ...(e.state === 'requested' ? { state: 'cancelled' } : {}) });
     }
+    if (action === 'execution.handback') {
+      this.ownerOnly(actor);
+      fields(p, ['id', 'expectedRevision', 'reason'], ['id', 'expectedRevision', 'reason']);
+      const e = this.get('execution', p.id); this.revision(e, p.expectedRevision); string(p.reason, 'reason', 2000);
+      requireValue(!['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(e.state) && !e.result,
+        'execution_terminal', 'Review or terminal outcomes are not discarded by administrative handback');
+      requireValue(!this.all('execution').some(child => child.parentExecutionId === e.id && !['completed', 'cancelled', 'failed', 'rejected'].includes(child.state)),
+        'child_work_pending', 'Inspect and withdraw outstanding child assignments separately');
+      for (const q of this.all('question').filter(q => q.executionId === e.id && q.status === 'open')) {
+        const closed = changed('question', q, { status: 'superseded', closedByUserId: actor.id, closeReason: p.reason });
+        this.event('question.close', closed, actor, e.id);
+      }
+      taskDisposition(e.taskId, 'todo', e.id);
+      return changed('execution', e, { state: 'cancelled', cancellationRequested: true, cancellationReason: p.reason,
+        administrativeDisposition: { kind: 'owner_handback', reason: p.reason, userId: actor.id, at: now(),
+          previousState: e.state, assignmentWithdrawn: true, promptReplayAllowed: false,
+          nativeSettlementClaimed: false, successfulCompletionClaimed: false, nativeProcessTerminationClaimed: false } });
+    }
     if (action === 'execution.progress') {
       fields(p, ['id', 'expectedRevision', 'summary'], ['id', 'expectedRevision', 'summary']);
       const e = this.get('execution', p.id); this.nodeOnly(actor, e.targetNodeId); this.revision(e, p.expectedRevision);

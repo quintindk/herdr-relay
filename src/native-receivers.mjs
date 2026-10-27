@@ -48,7 +48,7 @@ export class NativeReceivers {
         digest(currentBinding.identity) === digest(identity)) {
         return this.put(`attachment:${key}`, { key, digest: digest(request), expectedGeneration, state: 'existing', binding: currentBinding });
       }
-      requireValue(!this.journal.works().some(work => work.nativeConversationId === identity.sessionId &&
+      requireValue(!this.journal.works().some(work => work.state !== 'administratively_abandoned' && work.nativeConversationId === identity.sessionId &&
         !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(work.execution.state)),
         'native_session_reserved', 'This historical chat still has pinned work. Resume it without claiming a new binding', 409);
       const generation = expectedGeneration + 1;

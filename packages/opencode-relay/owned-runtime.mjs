@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
@@ -8,6 +8,53 @@ import { OpenCode } from '@opencode/client';
 import { processGroupMembers } from '../../src/runtimes.mjs';
 import { requireValue, canonical } from '../../src/protocol.mjs';
 import { checkV2Version } from './native.mjs';
+import { releaseInfo } from '../../src/release-info.mjs';
+
+const configuration = config => ({ ...config, $schema: 'https://opencode.ai/config.json', update: 'disable', share: 'disabled' });
+function relayPluginOnly(before, after) {
+  const a = before.config.plugins?.at(-1), b = after.config.plugins?.at(-1);
+  if (!a?.package || !b?.package || !a.options?.workerContextFile || canonical(a.options) !== canonical(b.options)) return false;
+  try {
+    for (const entry of [a, b]) requireValue(['@herdr/relay-opencode', '@herdr/relay-opencode-v2-spike'].includes(JSON.parse(readFileSync(join(entry.package, 'package.json'))).name), 'runtime_conflict', 'Only the managed Relay plugin may change');
+    const old = releaseInfo(resolve(a.package, '../..')), next = releaseInfo(resolve(b.package, '../..'));
+    if (old.compatibility.protocol !== next.compatibility.protocol || old.compatibility.nodeSchema !== next.compatibility.nodeSchema) return false;
+    const changed = structuredClone(before); changed.config.plugins.at(-1).package = b.package;
+    return canonical(changed) === canonical(after);
+  } catch { return false; }
+}
+
+function reuseOwnedRuntime(descriptorPath, existing, request) {
+  const handle = ownedV2Handle(descriptorPath, existing), configPath = join(descriptorPath, '../home/.config/opencode/opencode.json');
+  const actual = JSON.parse(readFileSync(configPath)), desired = configuration(request.config);
+  const sameRequest = canonical(existing.request) === canonical(request);
+  requireValue(sameRequest || relayPluginOnly(existing.request, request), 'runtime_conflict', 'Owned runtime scope/configuration changed');
+  const sameFile = canonical(actual) === canonical(desired);
+  requireValue(sameFile || relayPluginOnly({ ...request, config: actual }, { ...request, config: desired }), 'runtime_conflict', 'Private runtime configuration changed outside the managed Relay plugin');
+  handle.relayPluginUpdatePending = !sameFile;
+  handle.tryRelayPluginUpdate = async () => {
+    if (!handle.relayPluginUpdatePending) return true;
+    handle.verify();
+    if (Object.keys(await handle.client.session.active()).length) return false;
+    const location = { directory: request.workspace };
+    try {
+      const [forms, permissions] = await Promise.all([handle.client.form.list({ location }), handle.client.permission.request.list({ location })]);
+      if (!Array.isArray(forms.data) || !Array.isArray(permissions.data) || forms.data.length || permissions.data.length) return false;
+    } catch { return false; }
+    handle.verify();
+    const current = JSON.parse(readFileSync(configPath));
+    requireValue(canonical(current) === canonical(actual) || canonical(current) === canonical(desired), 'runtime_conflict', 'Private runtime configuration changed during plugin update');
+    const write = (path, value) => { const temporary = `${path}.relay-${randomBytes(8).toString('hex')}`;
+      writeFileSync(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600, flush: true }); renameSync(temporary, path); };
+    // Neither the process nor its session is replaced. A crash between writes
+    // converges on the same permitted plugin-only change on the next attachment.
+    if (!sameFile) write(configPath, desired);
+    const updated = { ...existing, relayPlugin: { package: request.config.plugins.at(-1).package, updatedAt: new Date().toISOString(), launchRequestUnchanged: true } };
+    write(descriptorPath, updated);
+    handle.descriptor = updated; handle.relayPluginUpdatePending = false;
+    return true;
+  };
+  return handle;
+}
 
 const startIdentity = pid => {
   try {
@@ -27,8 +74,8 @@ export async function launchOwnedV2({ directory, executable, workspace, config, 
   let previous;
   if (existsSync(descriptorPath)) {
     const existing = JSON.parse(readFileSync(descriptorPath, 'utf8'));
-    requireValue(canonical(existing.request) === canonical(request), 'runtime_conflict', 'Runtime configuration changed');
-    if (existing.state === 'ready' && startIdentity(existing.pid) === existing.start) return ownedV2Handle(descriptorPath, existing);
+    if (existing.state === 'ready' && startIdentity(existing.pid) === existing.start) return reuseOwnedRuntime(descriptorPath, existing, request);
+    requireValue(canonical(existing.request) === canonical(request) || relayPluginOnly(existing.request, request), 'runtime_conflict', 'Runtime configuration changed');
     requireValue(resume && Number.isSafeInteger(existing.pid) && existing.start && startIdentity(existing.pid) !== existing.start &&
       processGroupMembers(existing.pid).length === 0, 'runtime_launch_uncertain', 'Explicit resume requires the prior process group to be proven gone');
     previous = existing;
@@ -37,9 +84,13 @@ export async function launchOwnedV2({ directory, executable, workspace, config, 
   const configDirectory = join(home, '.config/opencode');
   mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
   const configPath = join(configDirectory, 'opencode.json');
-  const configuration = JSON.stringify({ ...config, $schema: 'https://opencode.ai/config.json', update: 'disable', share: 'disabled' });
-  if (previous) requireValue(readFileSync(configPath, 'utf8') === configuration, 'runtime_conflict', 'Private runtime config changed before resume');
-  else writeFileSync(configPath, configuration, { flag: 'wx', mode: 0o600 });
+  const content = JSON.stringify(configuration(config));
+  if (previous) {
+    const old = JSON.parse(readFileSync(configPath));
+    requireValue(canonical(old) === canonical(configuration(previous.request.config)) ||
+      relayPluginOnly({ ...request, config: old }, { ...request, config: configuration(request.config) }), 'runtime_conflict', 'Private runtime config changed before resume');
+    writeFileSync(configPath, content, { mode: 0o600, flush: true });
+  } else writeFileSync(configPath, content, { flag: 'wx', mode: 0o600 });
   let descriptor = { request, nonce: randomBytes(24).toString('hex'), state: 'launching', generation: (previous?.generation ?? 0) + 1,
     history: previous ? [...(previous.history ?? []), { pid: previous.pid, start: previous.start, nonce: previous.nonce, state: previous.state }] : [] };
   writeFileSync(descriptorPath, JSON.stringify(descriptor), { flag: previous ? 'w' : 'wx', mode: 0o600 });

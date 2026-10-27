@@ -14,6 +14,7 @@ import { digest } from '../../src/protocol.mjs';
 import { readAttachmentStatus } from './attachment-status.mjs';
 import { registerCliBridge, interactiveCliSource } from './cli-bridge.mjs';
 import { registerHeadlessGrantTools } from './headless-grant-tools.mjs';
+import { headlessTaskOperationVariants } from '../../src/headless-task-schema.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.server',
@@ -77,7 +78,7 @@ export default Plugin.define({
         editor.add({ name: 'relay_headless_scope', description: 'Inspect the exact active headless execution\'s approved task actions, source namespaces and artifact paths. No authority expansion or arbitrary filesystem access.', options: { codemode: false },
           input: { type: 'object', properties: {}, additionalProperties: false }, execute: (input, context) => worker(context, 'headless-scope', { payload: input }) });
         editor.add({ name: 'relay_headless_task', description: 'Apply an explicitly granted human-owned native task create/update/comment/reference operation. Requires an exact active headless run, stable source identity, idempotency key and inspected revisions. No owner context, execution dispatch or arbitrary mutation.', options: { codemode: false },
-          input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 128 }, operation: { enum: ['task.create', 'task.update', 'comment.create', 'reference.attach'] }, source: sourceSchema, payload: { type: 'object', maxProperties: 8, additionalProperties: true } }, required: ['key', 'operation', 'source', 'payload'], additionalProperties: false },
+          input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 128 }, operation: { enum: ['task.create', 'task.update', 'comment.create', 'reference.attach'] }, source: sourceSchema, payload: { type: 'object' } }, oneOf: headlessTaskOperationVariants, required: ['key', 'operation', 'source', 'payload'], additionalProperties: false },
           execute: (input, context) => worker(context, 'headless-task', { key: input.key, payload: input }) });
         editor.add({ name: 'relay_headless_reference_lookup', description: 'Read exact native source identity and explicit imported aliases under the headless capability grant. Does not infer missing legacy references or mutate tasks.', options: { codemode: false },
           input: { type: 'object', properties: { reference: sourceSchema, aliases: { type: 'array', maxItems: 16, items: sourceSchema } }, required: ['reference'], additionalProperties: false },

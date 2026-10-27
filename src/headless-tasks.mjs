@@ -1,6 +1,7 @@
 import { digest, requireValue } from './protocol.mjs';
 import { headlessRunAuthority, headlessProbeId } from './headless-setup-contract.mjs';
 import { headlessSource } from './headless-capabilities.mjs';
+import { validateHeadlessTaskPayload } from './headless-task-schema.mjs';
 
 const fields = (p, allowed, required = []) => requireValue(p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).every(k => allowed.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_headless_request', 'Missing or unsupported headless capability fields');
 
@@ -15,6 +16,7 @@ export function applyHeadlessTask(store, actor, scope, p, { probe = false } = {}
   fields(p, ['operation', 'source', 'payload', 'key'], ['operation', 'source', 'payload', 'key']);
   requireValue(scope.profile.taskActions.includes(p.operation) && typeof p.key === 'string' && /^[A-Za-z0-9:_.-]{1,128}$/.test(p.key),
     'headless_operation_forbidden', 'Task action is outside the explicit capability grant', 403);
+  validateHeadlessTaskPayload(p.operation, p.payload);
   const source = headlessSource(scope.profile, p.source);
   requireValue(probe || !source.externalId.startsWith('__relay_probe__'), 'headless_source_forbidden', 'Readiness identities are reserved');
   const ownTask = id => {

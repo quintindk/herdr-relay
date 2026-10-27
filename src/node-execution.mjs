@@ -1,6 +1,7 @@
 import { digest, now, requireValue } from './protocol.mjs';
 import { reconcileObservationConflict } from './native-observation-recovery.mjs';
 import { reconcileInteractiveWork, installInteractionPublicationGuard } from './native-interaction.mjs';
+import { abandonedWork } from './node-journal.mjs';
 
 // A bounded node tick. Native bindings are injected by the local runtime host.
 // Persist admission and prompt intent before crossing either external boundary.
@@ -15,6 +16,7 @@ export async function tickNode(journal, api, resolveBinding) {
   for (let work of journal.works()) {
     try {
     let execution = work.execution;
+    if (abandonedWork(work)) continue;
     if (execution.localOccurrence) continue;
     if (execution.monitor && Date.now() >= Date.parse(execution.monitor.endsAt) && !execution.cancellationRequested &&
       !['completed', 'cancelled', 'failed', 'rejected'].includes(execution.state)) {
@@ -64,6 +66,7 @@ export async function tickNode(journal, api, resolveBinding) {
       // Lost replies and accepted attempts never take this path.
       if (fresh.state === 'requested' && fresh.targetNodeId === journal.nodeId && !fresh.bindingId) journal.transaction(() => {
         const key = `admit:${work.attempt}`;
+        if (journal.receipt(key)?.state !== 'conflict') return;
         const superseded = { ...recoveringAdmission, state: 'superseded' };
         journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify(superseded), key);
         journal.save({ ...work, execution: fresh, state: 'pending', bindingId: null, nativeConversationId: null, attempt: null, recovery: null });
@@ -77,7 +80,13 @@ export async function tickNode(journal, api, resolveBinding) {
       work = journal.save({ ...work, execution, answer, children, state: 'admitted', invocation: null, observation: null, interruption: null, staged: null,
         ...(work.interaction ? { interaction: null } : {}) });
     }
-    if (['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(execution.state) || work.state === 'settled') continue;
+    if (['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(execution.state) || work.state === 'settled') {
+      if (['completed', 'cancelled', 'failed', 'rejected'].includes(execution.state) &&
+        !['settled', 'native_finished', 'settled_waiting', 'terminal_unresolved'].includes(work.state))
+        journal.save({ ...work, state: 'terminal_unresolved', terminalProjection: { state: execution.state, revision: execution.revision,
+          previousLocalState: work.state, nativeSettlementClaimed: false, promptReplayAllowed: false, at: now() } });
+      continue;
+    }
     const binding = await resolveBinding(execution.targetAgentId, work.bindingId ? work : undefined);
     if (!binding) continue;
     work = await reconcileInteractiveWork(journal, binding, work);
@@ -166,6 +175,7 @@ export async function tickNode(journal, api, resolveBinding) {
           (execution.monitor ? `This is a bounded standing monitor through ${execution.monitor.endsAt}. Submit one check result; Relay retains this task and schedules the next interval. Do not run a continuous polling model turn.\n` : '') +
           (binding.workerInstructions?.(execution) ?? ''), createdAt: now() };
       work = journal.save({ ...work, state: 'intent', invocation });
+      if (abandonedWork(journal.work(work.id))) continue;
       try { await binding.native.send(invocation); }
       catch (error) { journal.save({ ...work, state: 'uncertain', error: error.code ?? 'native_delivery_uncertain' }); continue; }
       work = journal.save({ ...journal.work(work.id), state: 'observing' });

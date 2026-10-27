@@ -2,6 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync } from 'node:fs';
 import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { refusedDispatchErrors } from './interactive-dispatch-reconciliation.mjs';
+import { publicationOutcome, definitivePublicationRefusal } from './publication-outcomes.mjs';
+
+export const abandonedWork = work => work?.state === 'administratively_abandoned';
+export const commandWorkId = command => command.payload?.executionId ?? command.payload?.parentExecutionId ??
+  (command.action === 'schedule.ask' ? command.payload?.occurrenceId :
+    command.action.startsWith('execution.') || ['schedule.publish', 'schedule.fail'].includes(command.action) ? command.payload?.id : undefined);
 
 // Local node transport journal, separate from shared task storage and legacy runs.
 export class NodeJournal {
@@ -157,6 +163,16 @@ export class NodeJournal {
     const row = this.db.prepare('SELECT data FROM outbox WHERE key=?').get(key);
     return row ? JSON.parse(row.data) : null;
   }
+  recordPublication(item) {
+    return this.transaction(() => {
+      const current = this.receipt(item.command.key);
+      if (current?.state === 'administratively_abandoned' || current?.state === 'recorded' && item.state !== 'recorded') return current;
+      if (['refused', 'superseded'].includes(current?.state) && item.state !== 'recorded') return current;
+      requireValue(!current || canonical(current.command) === canonical(item.command), 'operation_conflict', 'Publication command changed during reconciliation');
+      this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(item.state, JSON.stringify(item), item.command.key);
+      return item;
+    });
+  }
   works() { return this.db.prepare('SELECT data FROM work ORDER BY id').all().map(row => JSON.parse(row.data)); }
   assertReceiver(binding) {
     if (!binding.receiverGeneration) return;
@@ -166,9 +182,77 @@ export class NodeJournal {
       'receiver_replaced', 'Receiving conversation changed before admission', 409);
   }
   save(work) {
-    this.db.prepare('INSERT INTO work VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,data=excluded.data')
-      .run(work.id, work.state, JSON.stringify(work));
-    return work;
+    return this.transaction(() => {
+      const current = this.work(work.id);
+      if (abandonedWork(current)) {
+        // A stale observer/admission callback cannot resurrect withdrawn work.
+        if ((work.execution?.revision ?? 0) > (current.execution?.revision ?? 0)) {
+          const next = { ...current, execution: work.execution };
+          this.db.prepare('UPDATE work SET data=? WHERE id=?').run(JSON.stringify(next), current.id); return next;
+        }
+        return current;
+      }
+      this.db.prepare('INSERT INTO work VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,data=excluded.data')
+        .run(work.id, work.state, JSON.stringify(work));
+      return work;
+    });
+  }
+  abandonWork(id, { key, reason, expectedDigest, proof, backup, actor = 'local_operator' }) {
+    return this.transaction(() => {
+      const request = { operation: 'work.abandon', id, key, reason, expectedDigest }, auditKey = `recovery:${digest(key)}`;
+      const previous = this.db.prepare('SELECT value FROM settings WHERE key=?').get(auditKey);
+      if (previous) { const saved = JSON.parse(previous.value); requireValue(saved.requestHash === digest(request), 'operation_conflict', 'Recovery key changed'); return saved.receipt; }
+      const work = this.work(id);
+      requireValue(work && digest(work) === expectedDigest, 'stale_recovery_preview', 'Local work changed; inspect it again');
+      requireValue(proof && proof.executionId === id && proof.nodeId === this.nodeId && (proof.terminalBackend || proof.cancelledLocalSchedule),
+        'recovery_ineligible', 'Current terminal backend execution or cancelled local-only schedule proof required');
+      requireValue(typeof reason === 'string' && reason.trim() && reason.length <= 2000, 'invalid_request', 'Explicit bounded abandonment reason required');
+      const linked = this.db.prepare("SELECT data FROM outbox WHERE state IN ('pending','conflict')").all().map(row => JSON.parse(row.data))
+        .filter(item => commandWorkId(item.command) === id);
+      requireValue(linked.length === 0, 'recovery_publication_pending', 'Inspect and reconcile or abandon associated publications first');
+      this.archive(work);
+      const disposition = { kind: 'abandonment', key, reason, actor, at: now(), proof, backup,
+        originalDigest: expectedDigest, invocationDigest: digest(work.invocation ?? null), observationDigest: digest(work.observation ?? null),
+        assignmentWithdrawn: true, promptReplayAllowed: false, nativeSettlementClaimed: false, successfulCompletionClaimed: false, nativeProcessTerminationClaimed: false };
+      const projection = proof.terminalBackend ? { ...work.execution, state: proof.backendState, revision: proof.backendRevision,
+        cancellationRequested: proof.cancellationRequested ?? work.execution.cancellationRequested } :
+        { ...work.execution, state: 'cancelled', cancellationRequested: true, administrativeDisposition: disposition };
+      requireValue(!proof.terminalBackend || ['completed', 'cancelled', 'failed', 'rejected'].includes(proof.backendState) &&
+        Number.isSafeInteger(proof.backendRevision) && proof.backendRevision >= work.execution.revision, 'recovery_ineligible', 'Fresh terminal execution proof required');
+      this.save({ ...work, execution: projection, state: 'administratively_abandoned', administrativeDisposition: disposition });
+      if (work.execution.localOccurrence) {
+        const row = this.db.prepare('SELECT data FROM occurrences WHERE id=?').get(id);
+        if (row) this.db.prepare('UPDATE occurrences SET state=?,data=? WHERE id=?').run('administratively_abandoned',
+          JSON.stringify({ ...JSON.parse(row.data), state: 'administratively_abandoned', administrativeDisposition: disposition }), id);
+      }
+      const receipt = { state: 'administratively_abandoned', kind: 'work', id, key, nativeSettlementClaimed: false,
+        nativeProcessTerminationClaimed: false, successfulCompletionClaimed: false, promptReplayed: false, backup };
+      this.db.prepare('INSERT INTO settings VALUES (?,?)').run(auditKey, JSON.stringify({ requestHash: digest(request), before: work, disposition, receipt }));
+      return receipt;
+    });
+  }
+  abandonPublication(id, { key, reason, expectedDigest, proof: inspectedProof, backup, actor = 'local_operator' }) {
+    return this.transaction(() => {
+      const request = { operation: 'publication.abandon', id, key, reason, expectedDigest }, auditKey = `recovery:${digest(key)}`;
+      const previous = this.db.prepare('SELECT value FROM settings WHERE key=?').get(auditKey);
+      if (previous) { const saved = JSON.parse(previous.value); requireValue(saved.requestHash === digest(request), 'operation_conflict', 'Recovery key changed'); return saved.receipt; }
+      const row = this.db.prepare('SELECT key,hash,state,data FROM outbox WHERE key=?').get(id);
+      requireValue(row && digest(JSON.parse(row.data)) === expectedDigest, 'stale_recovery_preview', 'Publication changed; inspect it again');
+      const item = JSON.parse(row.data);
+      const fence = inspectedProof?.kind === 'backend_revision_fence' && inspectedProof.nodeId === this.nodeId && inspectedProof.commandHash === row.hash &&
+        inspectedProof.receiptAbsent === true && Number.isSafeInteger(inspectedProof.currentRevision) &&
+        inspectedProof.expectedRevision === item.command?.payload?.expectedRevision && inspectedProof.currentRevision !== inspectedProof.expectedRevision;
+      const proof = definitivePublicationRefusal(row) ?? (fence && row.hash === digest(item.command) && !item.receipt && item.applied !== true ? inspectedProof : null);
+      requireValue(proof, 'publication_ineligible', 'Only a verified transactional validation refusal or inspected backend revision fence may be abandoned. Unresolved uncertainty requires reconciliation');
+      requireValue(typeof reason === 'string' && reason.trim() && reason.length <= 2000, 'invalid_request', 'Explicit bounded abandonment reason required');
+      const before = JSON.parse(row.data), disposition = { kind: 'abandonment', key, reason, actor, at: now(), backup, proof,
+        originalDigest: expectedDigest, commandHash: row.hash, replayAllowed: false, applied: false };
+      const next = { ...before, state: 'administratively_abandoned', outcome: 'administratively_abandoned', applied: false, effectsUncertain: false, administrativeDisposition: disposition };
+      this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(next.state, JSON.stringify(next), id);
+      const receipt = { state: next.state, kind: 'publication', id, key, applied: false, replayed: false, backup };
+      this.db.prepare('INSERT INTO settings VALUES (?,?)').run(auditKey, JSON.stringify({ requestHash: digest(request), before, disposition, receipt }));
+      return receipt;
+    });
   }
   archive(work) {
     if (!work.invocation || !work.execution?.runId) return;
@@ -187,6 +271,9 @@ export class NodeJournal {
         requireValue(previous.hash === digest(command), 'operation_conflict', 'Queued command payload changed');
         return JSON.parse(previous.data);
       }
+      const ownerId = commandWorkId(command);
+      const owner = typeof ownerId === 'string' ? this.work(ownerId) : null;
+      requireValue(!abandonedWork(owner), 'work_abandoned', 'Administrative abandonment forbids new dispatch/publication for the original invocation');
       const count = this.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE state IN ('pending','conflict')").get().n;
       requireValue(count < this.maxPending, 'outbox_full', 'Publication outbox is full. Resolve pending/conflicting operations before admitting more work', 503);
       const item = { command, state: 'pending', createdAt: now(), ...(inputRevision ? { inputRevision } : {}) };
@@ -222,37 +309,40 @@ export class NodeJournal {
   async flushPending(api) {
     for (const row of this.db.prepare("SELECT data FROM outbox WHERE state='pending' ORDER BY rowid").all()) {
       const item = JSON.parse(row.data);
+      const ownerId = commandWorkId(item.command);
+      if (typeof ownerId === 'string' && abandonedWork(this.work(ownerId))) continue;
+      let requestStarted = false, backendReplied = false;
       // Native backend commands compare payloads and persist idempotency receipts.
       // The same immutable command can therefore be retried after a lost reply.
       try {
         const admission = await this.beforePublish?.(item);
         if (admission === false) continue;
         if (admission === 'supersede' || admission?.refused) {
-          this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify({ ...item, state: 'superseded', outcome: 'refused', applied: false,
-            error: admission.reason ?? 'stale_input_revision', ...(admission.executionRevision ? { fencedExecutionRevision: admission.executionRevision } : {}) }), item.command.key);
+          this.recordPublication({ ...item, state: 'superseded', outcome: 'refused', applied: false,
+            error: admission.reason ?? 'stale_input_revision', ...(admission.executionRevision ? { fencedExecutionRevision: admission.executionRevision } : {}) });
           continue;
         }
         if (admission?.recordedReceipt) {
-          this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('recorded', JSON.stringify({ ...item, state: 'recorded', receipt: admission.recordedReceipt, reconciledWithoutReplay: true }), item.command.key);
+          this.recordPublication({ ...item, state: 'recorded', receipt: admission.recordedReceipt, reconciledWithoutReplay: true });
           continue;
         }
         item.attemptedAt ??= now();
-        this.db.prepare('UPDATE outbox SET data=? WHERE key=?').run(JSON.stringify(item), item.command.key);
-        const receipt = await api('POST', '/v1/commands', item.command);
+        if (this.receipt(item.command.key)?.state !== 'pending' || this.recordPublication(item).state !== 'pending') continue;
+        requestStarted = true;
+        const receipt = await api('POST', '/v1/commands', item.command); backendReplied = true;
         if (item.command.action === 'interactive.dispatch') requireValue(receipt?.id === item.command.payload.executionId && receipt.taskId === item.command.payload.taskId,
           'invalid_backend_response', 'Interactive dispatch receipt differs from the original task/execution', 502);
         const recorded = { ...item, state: 'recorded', receipt, ...(item.command.action === 'interactive.dispatch' ? { outcome: 'applied', applied: true, error: undefined } : {}) };
-        this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(recorded.state, JSON.stringify(recorded), item.command.key);
+        this.recordPublication(recorded);
       } catch (error) {
         if (['execution.monitor_result', 'execution.submit'].includes(item.command.action) && error.code === 'monitor_expired') {
           const skipped = { ...item, state: 'superseded', error: error.code };
-          this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(skipped.state, JSON.stringify(skipped), item.command.key);
+          this.recordPublication(skipped);
           continue;
         }
-        if ([400, 403, 404, 409].includes(error.status)) {
-          const conflict = { ...item, state: 'conflict', error: error.code };
-          this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(conflict.state, JSON.stringify(conflict), item.command.key);
-        }
+        const outcome = requestStarted && !backendReplied ? publicationOutcome(item.command, error) : { state: 'pending', outcome: 'uncertain', effectsUncertain: true };
+        const next = { ...item, ...outcome, error: error.code ?? 'transport_uncertain' };
+        this.recordPublication(next);
         throw error;
       }
     }

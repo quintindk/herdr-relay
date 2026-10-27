@@ -6,6 +6,10 @@ RC6 corrects identity checks for generated `worker-index.json`: JSON key orderin
 is ignored, but changed mappings still block maintenance. Credentials and all other
 configuration files remain byte-checked. Fingerprint versioning preserves the
 original checks for retained RC5 operations rather than reinterpreting old receipts.
+New compatible code switches use fingerprint version 3: existing identity,
+configuration and credential files remain byte-checked, while the generated worker
+index and legitimate new worker files may advance through concurrent enrolment.
+Those records are preserved, not restored from an old snapshot.
 Automatic service maintenance targets Linux user-systemd, including WSL2. Other
 process managers are not silently adopted.
 
@@ -29,6 +33,40 @@ herdr-relay backend status
 These report CLI and service versions separately. Evo has both roles. Surface
 normally has only a node service; its backend status is not a remote administration
 command. Use `herdr-relay doctor` to check the node's connection to its backend.
+
+## Code updates are not database migrations
+
+The target database contract decides the policy. A schema-compatible update reports
+`maintenancePolicy: compatible_code_switch`. Active native turns, accepted backend
+executions, local conflicts and pending publications are not upgrade blockers.
+They remain recorded work state. Status exposes them as `unsettledWork` and
+`databaseMigrationBlockers`, not generic blockers.
+
+A real schema transition reports `maintenancePolicy: database_migration` and still
+requires explicit migration authorisation, quiescent work and verified backups.
+Identity changes, corrupt databases, incompatible contracts, changed planned
+configuration, unverified releases and concurrent maintenance remain errors for
+both policies. There is no unsafe force flag.
+
+Compatible maintenance pauses new dispatch and briefly restarts Relay supervisors,
+not OpenCode or live owned model processes. The node's process-only systemd stop
+policy is loaded before stopping the old supervisor so detached workers are not
+killed with its cgroup. The same invocation IDs, process identities, journal and
+immutable outbox keys are reused. Dead owned runtimes with unresolved history stay
+unavailable rather than being relaunched; their state does not prevent node code
+upgrading. API calls may see a service interruption; this is not a zero-disruption
+or exactly-once external-effect guarantee.
+
+Pending UI decisions, or unavailable decision inspection, defer only the plugin
+reload. An operation may be committed with `pluginReloadDeferred` set. Resolve the
+original decision normally, then use `upgrade resume OPERATION_ID --apply` to apply
+the exact saved plugin change without service restarts. Changed configuration or a
+later CLI/release switch fences stale deferred updates. Owned workers retain their
+process and immutable launch request; their plugin-only change waits for idle and
+no pending decisions. Do not call a deferred UI update fully applied.
+
+See [administrative recovery](maintenance-recovery.md) for audited handback and
+abandonment. Recovery is not a prerequisite for a compatible code update.
 
 ## First transition from RC4
 
@@ -55,6 +93,19 @@ are pinned too. Later upgrades use the built-in upgrader rather than repeatedly
 replacing a globally installed package that a running service might reference.
 
 ## Plan, then apply
+
+When upgrading from an older CLI/plugin whose guard still blocks compatible
+updates, activate the new upgrader first:
+
+```sh
+herdr-relay release install --version EXACT_NEW_VERSION
+herdr-relay upgrade --services both --version EXACT_NEW_VERSION --key upgrade-KEY
+herdr-relay upgrade --services both --version EXACT_NEW_VERSION --key upgrade-KEY --apply
+```
+
+Run the public CLI from the terminal/shell, not a still-loaded older plugin's
+package-pinned CLI bridge. CLI activation does not restart services. Do not edit
+journals to bootstrap the new upgrade policy.
 
 On a node-only host:
 
@@ -95,16 +146,17 @@ dependency lifecycle scripts and refuses different bytes in an existing version.
 
 1. Acquire an OS-backed per-user upgrade lock. Refuse conflicting/incomplete operations.
 2. Validate managed systemd units, existing identity pins and schema compatibility.
-3. Refuse active/uncertain native turns, unresolved native notices/publications and
-   active backend execution/preparation/message delivery. Pending queued work and
-   settled human-review/question waits are retained rather than recreated.
+3. Require settlement only for database migrations. Compatible code switches
+   preserve active/uncertain turns, notices, publications and backend work unchanged.
    Before a plugin reload, inspect known bound/registered OpenCode services for
-   pending server-side forms/permissions. Existing decisions block the switch;
-   inspection failure is not treated as an empty inbox. No decision is answered/cancelled.
+   pending server-side forms/permissions. Existing decisions or inspection failure
+   defer only that reload for compatible code. Migrations retain the strict guard.
+   No decision is answered/cancelled and inspection failure is not an empty inbox.
 4. Stage the verified immutable release and require a zero-finding production audit.
 5. Save the operation, original unit/configuration bytes and intended replacements.
 6. Set maintenance guards. Stop selected node services before selected backends,
-   then repeat identity/quiescence checks to catch races with old RC4 code.
+   then repeat identity checks and, for migrations, quiescence checks. Compatible
+   switches retain work admitted by old code just before stopping.
 7. Back up databases using SQLite's backup API and verify integrity. Back up private
    identity files. Never copy a live SQLite file as if it were an online backup.
 8. Switch only service entrypoint/plugin package paths. Preserve ports, runtime
@@ -119,15 +171,17 @@ switch, but a late race or client-only Relay confirmation can still be invalidat
 and must be reopened. The updater does not approve, replay or weaken a decision. It does not
 claim zero disruption or conceal a required configuration reload.
 
-If an RC4 turn races the stop before any switch, the old supervisor is restarted
-with that same journal, not discarded. If a candidate fails health checks, compatible
+If a turn races a compatible code switch, it continues with that same journal,
+not a repeated prompt or replacement execution. If a candidate fails health checks, compatible
 old code/configuration is restored without replacing the current database. If safe
 recovery is blocked, the operation reports `upgrade_recovery_required`, retains its
 backups/maintenance record and requires explicit reconciliation. There is no force
-flag that bypasses uncertain work or identity pins.
+flag that bypasses identity, integrity or migration requirements. Uncertain work is
+preserved through compatible code switching, not declared completed or unapplied.
 If work has already begun after activation and then a health/recovery check fails,
-rollback will not interrupt or erase that work to force a downgrade. Let it settle,
-inspect the recorded recovery action and resume. A recovery-required record does
+compatible code rollback preserves it too. It does not interrupt native processes,
+erase their records or restore a database. Schema-incompatible rollback is refused.
+A recovery-required record does
 not mean a running model turn was stopped or that a database was restored.
 
 ## Status, resume and rollback

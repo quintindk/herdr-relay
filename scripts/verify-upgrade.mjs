@@ -19,6 +19,8 @@ import { workerConnection } from '../packages/opencode-relay/worker-context.mjs'
 import { call } from '../src/client.mjs';
 import { digest } from '../src/protocol.mjs';
 import { historicalUpgradeFixture } from './historical-upgrade-fixture.mjs';
+import { OpenCode } from '@opencode/client';
+import { NodeJournal } from '../src/node-journal.mjs';
 
 process.umask(0o077);
 const execute = promisify(execFile), root = mkdtempSync('/tmp/opencode/relay-upgrade-smoke-');
@@ -26,10 +28,12 @@ const releases = join(root, 'releases'), backendState = join(root, 'backend'), n
 for (const path of [backendState, nodeState, bin]) mkdirSync(path);
 const wait = async (label, check, timeout = 60000) => {
   const end = Date.now() + timeout;
-  while (Date.now() < end) { try { const value = await check(); if (value) return value; } catch {} await delay(100); }
+  while (Date.now() < end) { try { const value = await check(); if (value) return value; } catch (error) { if (error.fatal) throw error; } await delay(100); }
   throw Error(`Timed out: ${label}. Isolated state retained at ${root}`);
 };
-let runtime, owner, sender, receiver, failCandidate = false;
+const activeWork = process.argv.includes('--active-work');
+let runtime, owner, sender, receiver, failCandidate = false, releaseActive, activeHeld = false, ownedClient, ownedPid, ownedDescriptorPath, conflictRows;
+const activeGate = new Promise(resolve => { releaseActive = resolve; });
 const services = new Map();
 const manager = {
   async inspect(name) {
@@ -47,16 +51,32 @@ const manager = {
     assert.equal((await this.inspect(name)).active, false);
     entry.log = ''; entry.child = spawn(unit.args[0], unit.args.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
     for (const stream of [entry.child.stdout, entry.child.stderr]) stream.on('data', chunk => { entry.log = (entry.log + chunk).slice(-6000); });
-    await wait(`${entry.role} startup`, () => entry.log.includes(entry.role === 'backend' ? '"state":"listening"' : '"state":"running"'));
+    await wait(`${entry.role} startup`, () => {
+      if (entry.child.exitCode !== null || entry.child.signalCode !== null) throw Object.assign(Error(`Fixture ${entry.role} exited during startup: ${entry.log}. Fixture: ${root}`), { fatal: true });
+      return entry.log.includes(entry.role === 'backend' ? '"state":"listening"' : '"state":"running"');
+    }).catch(error => { console.error(JSON.stringify({ fixture: root, role: entry.role, startupLog: entry.log })); throw error; });
   },
   async reload() {},
 };
 const model = createServer(async (req, res) => {
-  for await (const _chunk of req) {};
+  let body = ''; for await (const chunk of req) body += chunk;
+  const input = JSON.parse(body), isActiveWork = activeWork && JSON.stringify(input.messages).includes('active-upgrade-execution');
+  let tool;
+  if (isActiveWork) {
+    const root = input.messages.findLastIndex(message => message.role === 'user');
+    const called = input.messages.slice(root + 1).filter(message => message.role === 'tool').length;
+    if (called === 1) { activeHeld = true; await activeGate; }
+    const name = ['relay_work_read', 'relay_work_submit'][called];
+    if (name) {
+      const selected = input.tools.find(item => item.function.name.endsWith(name)); assert.ok(selected);
+      tool = { index: 0, id: `active-call-${called}`, type: 'function', function: { name: selected.function.name,
+        arguments: JSON.stringify(called === 0 ? {} : { key: 'active-result', candidate: 'active-upgrade-fixture', summary: 'Same owned process and invocation continued across compatible code upgrade.' }) } };
+    }
+  }
   const base = { id: 'upgrade-fixture', created: 1, model: 'fixture', object: 'chat.completion.chunk' };
   res.setHeader('content-type', 'text/event-stream');
-  res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: 'UPGRADE_DELIVERY_OK' }, finish_reason: null }] })}\n\n`);
-  res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: tool ? { role: 'assistant', tool_calls: [tool] } : { role: 'assistant', content: 'UPGRADE_DELIVERY_OK' }, finish_reason: null }] })}\n\n`);
+  res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: tool ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
 });
 try {
   const old = await historicalUpgradeFixture({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.9', directory: releases });
@@ -100,6 +120,18 @@ try {
       sessionId: session.id, reserved: true, transport: 'tools', name }, dependencies);
   };
   sender = await enrol('Upgrade sender'); receiver = await enrol('Upgrade receiver');
+  if (activeWork) {
+    assert.equal(migration, false, 'Active work gate is for a schema-compatible baseline');
+    const workspace = join(root, 'owned-workspace'); mkdirSync(workspace);
+    const config = JSON.parse(readFileSync(joined.configFile));
+    config.bindings.push({ id: 'owned-active-binding', agentId: 'owned-active-agent', name: 'Owned active fixture', harness: 'opencode-v2-owned', mode: 'headless',
+      reserved: true, directory: workspace, executable: process.env.RELAY_V2_BINARY ?? resolve('packages/opencode-relay/node_modules/.bin/opencode2'),
+      config: { model: 'upgrade-fixture/fixture', compaction: { auto: false }, permissions: [{ action: '*', resource: '*', effect: 'deny' },
+        { action: 'relay_work_read', resource: '*', effect: 'allow' }, { action: 'relay_work_submit', resource: '*', effect: 'allow' }],
+        providers: { 'upgrade-fixture': { package: '@ai-sdk/openai-compatible', settings: { baseURL: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'fixture' },
+          models: { fixture: { name: 'Fixture', limit: { context: 8192, output: 256 } } } } } } });
+    writeFileSync(joined.configFile, JSON.stringify(config));
+  }
   const nodeName = addService('node', `herdr-relay-node-${joined.nodeId}.service`, ['--config', joined.configFile]);
   symlinkSync(join(old.directory, 'src/cli.mjs'), join(bin, 'herdr-relay'));
   symlinkSync(join(old.directory, 'src/remote.mjs'), join(bin, 'herdr-relay-remote'));
@@ -113,6 +145,27 @@ try {
     return wait(`delivered ${key}`, async () => { const m = await owner('GET', `/v1/messages/${sent.receipt.id}`); return m.state === 'delivered' && m; });
   };
   await send('before-upgrade');
+  if (activeWork) {
+    await wait('owned agent availability', async () => (await owner('GET', '/v1/agents/owned-active-agent')).availability === 'available');
+    const task = await owner('POST', '/v1/commands', { key: 'active-task', action: 'task.create', payload: { id: 'active-task', title: 'Active compatible upgrade fixture' } });
+    await owner('POST', '/v1/commands', { key: 'active-request', action: 'execution.request', payload: { id: 'active-upgrade-execution', taskId: task.id, taskRevision: task.revision,
+      targetAgentId: 'owned-active-agent', instructions: 'Call relay_work_read then relay_work_submit with the actual native terminal.' } });
+    await wait('owned provider stream held', () => activeHeld);
+    ownedDescriptorPath = join(nodeState, 'managed', digest('owned-active-binding'), 'runtime/runtime.json');
+    const descriptor = JSON.parse(readFileSync(ownedDescriptorPath)); ownedPid = descriptor.pid;
+    const auth = JSON.parse(readFileSync(join(nodeState, 'managed', digest('owned-active-binding'), 'runtime/auth.json')));
+    ownedClient = OpenCode.make({ baseUrl: descriptor.origin, headers: { authorization: `Basic ${Buffer.from(`opencode:${auth.password}`).toString('base64')}` } });
+    assert.equal((await ownedClient.server.info()).pid, ownedPid);
+    const journal = new NodeJournal(join(nodeState, 'node.sqlite'), { nodeId: joined.nodeId, instanceId: oldInfo.instanceId });
+    try {
+      for (const [key, action, error] of [['legacy-validation', 'headless.task', 'invalid_headless_request'], ['uncertain-key', 'task.create', 'operation_conflict']]) {
+        journal.queue({ key, action, payload: { id: `must-not-apply-${key}`, title: 'Historical fixture, never replay' } });
+        const row = journal.receipt(key);
+        journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('conflict', JSON.stringify({ ...row, state: 'conflict', error }), key);
+      }
+      conflictRows = journal.db.prepare("SELECT * FROM outbox WHERE key IN ('legacy-validation','uncertain-key') ORDER BY key").all();
+    } finally { journal.close(); }
+  }
   const identityFiles = [ownerPath, ...readdirSync(nodeState).filter(name => name.endsWith('.json') && !['runtime.json', 'maintenance.json'].includes(name)).map(name => join(nodeState, name))];
   const identityHash = path => basename(path) === 'worker-index.json' ? digest(JSON.parse(readFileSync(path, 'utf8'))) : hashBytes(readFileSync(path));
   const identities = identityFiles.map(identityHash);
@@ -138,15 +191,37 @@ try {
   const pendingForm = await runtime.client.session.form.create({ sessionID: sender.sessionId, title: 'Fixture pending decision',
     fields: [{ type: 'boolean', key: 'fixture', title: 'Fixture only', required: true }] });
   const beforeDecisionGuard = [(await manager.inspect(backendName)).pid, (await manager.inspect(nodeName)).pid];
-  await assert.rejects(serviceUpgrade({ ...request, key: 'blocked-pending-form' }, upgradeDependencies), { code: 'upgrade_pending_decisions' });
+  let result;
+  if (migration) await assert.rejects(serviceUpgrade({ ...request, key: 'blocked-pending-form' }, upgradeDependencies), { code: 'upgrade_pending_decisions' });
+  else {
+    result = await serviceUpgrade({ ...request, key: 'compatible-pending-form' }, upgradeDependencies);
+    assert.equal(result.state, 'committed'); assert.equal(result.pluginReloadDeferred.reason, 'upgrade_pending_decisions');
+  }
   assert.equal((await runtime.client.session.form.get({ sessionID: sender.sessionId, formID: pendingForm.id })).state.status, 'pending');
-  assert.deepEqual([(await manager.inspect(backendName)).pid, (await manager.inspect(nodeName)).pid], beforeDecisionGuard);
+  if (migration) assert.deepEqual([(await manager.inspect(backendName)).pid, (await manager.inspect(nodeName)).pid], beforeDecisionGuard);
   await runtime.client.session.form.cancel({ sessionID: sender.sessionId, formID: pendingForm.id }); // Own fixture only, never a user approval.
-  const result = await serviceUpgrade(request, upgradeDependencies);
+  if (migration) result = await serviceUpgrade(request, upgradeDependencies);
+  else {
+    const finished = await serviceUpgrade({ resume: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
+    assert.equal(finished.pluginReloadDeferred, null); assert.equal(finished.servicesRestarted, false);
+  }
   assert.equal(result.state, 'committed'); assert.equal((await owner('GET', '/v1/info')).version, candidate.version);
   assert.equal((await owner('GET', '/v1/info')).instanceId, oldInfo.instanceId);
   assert.deepEqual(identityFiles.map(identityHash), identities);
   assert.equal((await runtime.client.server.info()).pid, nativePid);
+  if (activeWork) {
+    assert.equal((await ownedClient.server.info()).pid, ownedPid, 'Supervisor upgrades must not stop the owned model process');
+    assert.equal((await owner('GET', '/v1/executions/active-upgrade-execution')).state, 'accepted');
+    const journal = new NodeJournal(join(nodeState, 'node.sqlite'), { nodeId: joined.nodeId, instanceId: oldInfo.instanceId });
+    try { assert.deepEqual(journal.db.prepare("SELECT * FROM outbox WHERE key IN ('legacy-validation','uncertain-key') ORDER BY key").all(), conflictRows); }
+    finally { journal.close(); }
+    releaseActive();
+    await wait('same active execution completes once after upgrade', async () => (await owner('GET', '/v1/executions/active-upgrade-execution')).state === 'completed');
+    const provision = JSON.parse(readFileSync(join(nodeState, 'managed', digest('owned-active-binding'), 'provision.json')));
+    const messages = (await ownedClient.message.list({ sessionID: provision.sessionId, order: 'asc', limit: 100 })).data;
+    assert.equal(messages.filter(message => message.metadata?.herdrRelayInvocation).length, 1, 'No original prompt is replayed');
+    assert.equal((await ownedClient.server.info()).pid, ownedPid);
+  }
   assert.equal((await runtime.client.session.get({ sessionID: receiver.sessionId })).id, receiver.sessionId);
   const deliveredAfterUpgrade = await send('after-upgrade');
   const transcript = await runtime.client.message.list({ sessionID: receiver.sessionId, order: 'desc', limit: 20 });
@@ -166,22 +241,31 @@ try {
   assert.equal((await owner('GET', '/v1/info')).instanceId, oldInfo.instanceId);
   assert.equal((await runtime.client.server.info()).pid, nativePid);
   const snapshot = await owner('GET', '/v1/snapshot');
-  assert.equal(snapshot.collections.task.length, 2); assert.equal(snapshot.collections.execution.length, 0);
-  assert.equal(snapshot.collections.message.length, 3); assert.equal(snapshot.collections.agent.length, 2);
+  assert.equal(snapshot.collections.task.length, activeWork ? 3 : 2); assert.equal(snapshot.collections.execution.length, activeWork ? 1 : 0);
+  assert.equal(snapshot.collections.message.length, 3); assert.equal(snapshot.collections.agent.length, activeWork ? 3 : 2);
   assert.deepEqual(identityFiles.map(identityHash), identities);
   console.log(JSON.stringify({ passed: true, from: old.version, to: candidate.version, actualBackendAndNodeProcesses: true,
     historicalBaselineFixtureOnly: old.historicalFixtureOnly, baselineProductionAuditFindings: old.productionAuditFindings,
     baselineProductionActivationAllowed: old.productionActivationAllowed, candidateFreshProductionAuditPassed: candidate.auditVerified,
     installedUpgradeEntrypoint: true, nativeToolsWithoutInjectedRuntimePaths: true,
     versionedCliActivationPassed: true, cachedReleaseAuditPassed: true,
-    pendingFormPreservedDuringRefusal: true,
+    pendingFormPreservedDuringMaintenance: true, compatiblePluginReloadDeferred: !migration, migrationDecisionGuardPassed: migration,
     realOpenCodeChatsPreserved: true, backendInstanceAndNodeIdentityPreserved: true, credentialsUnchanged: true,
     taskDataAndPostUpgradeEditsPreserved: true, nodeOnlyDidNotRestartBackend: true, messageDeliveryBeforeAndAfterPassed: true,
     explicitCompatibleNodeRollbackPassed: true, explicitCompatibleBackendRollbackPassed: !migration, failedHealthAutomaticRollbackPassed: true,
     schema2MigrationPassed: migration, schema1RollbackRefused: migration, databasesRestored: false,
+    activeOwnedModelSurvivedSupervisorUpgrade: activeWork, activeExecutionContinuedWithoutReplay: activeWork, conflictingPublicationsPreservedWithoutReplay: activeWork,
     userServicesTouched: false, userChatsTouched: false, physicalMachines: 1, state: root }, null, 2));
 } finally {
+  releaseActive();
   for (const role of ['node', 'backend']) for (const [name, entry] of services) if (entry.role === role) await manager.stop(name);
   if (runtime) { await wait('fixture native idle', async () => Object.keys(await runtime.client.session.active()).length === 0); await runtime.stop(); }
+  if (ownedClient && ownedDescriptorPath) {
+    await wait('owned fixture idle', async () => Object.keys(await ownedClient.session.active()).length === 0);
+    const descriptor = JSON.parse(readFileSync(ownedDescriptorPath));
+    const { launchOwnedV2 } = await import('../packages/opencode-relay/owned-runtime.mjs');
+    const handle = await launchOwnedV2({ directory: join(ownedDescriptorPath, '..'), executable: descriptor.request.executable, workspace: descriptor.request.workspace, config: descriptor.request.config });
+    await handle.stop();
+  }
   model.closeAllConnections(); await new Promise(resolve => model.close(resolve));
 }

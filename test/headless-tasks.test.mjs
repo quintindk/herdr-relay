@@ -102,3 +102,30 @@ test('worker routes reconcile lost replies and cached uncertain audit writes, th
   const checkpoint = await call(connection, 'POST', '/work/headless-artifacts', { ...scope, payload: { operation: 'checkpoint', key: 'checkpoint', expectedRevision: 0, data: { opaqueCursor: 'belongs-to-job' }, receiptIds: [durable.id] } }); assert.equal(checkpoint.revision, 1);
   f.store.save('execution', { ...f.store.get('execution', f.execution.id), cancellationRequested: true }); await assert.rejects(call(connection, 'POST', '/work/headless-task', request), { code: 'headless_execution_inactive' });
 });
+
+test('unsupported comment fields are rejected before durable enqueue with an exact actionable path', async t => {
+  const root = mkdtempSync('/tmp/opencode/headless-validation-'), f = fixture(t, { directory: root });
+  const created = f.mutate('task.create', 'capture', { title: 'Human owned record' });
+  const journal = new NodeJournal(join(root, 'node.sqlite'), { nodeId: 'node', instanceId: f.store.instance });
+  journal.save({ id: f.execution.id, state: 'observing', execution: f.execution, bindingId: f.setup.bindingId, nativeConversationId: f.setup.sessionId });
+  let posts = 0;
+  const api = async (_method, path, body) => {
+    if (path === '/v1/headless/read') { const scope = headlessExecutionScope(f.store, f.node, body); return { id: scope.setup.id, directory: scope.setup.directory, profile: scope.profile, readiness: false }; }
+    posts++; return f.store.command(f.node, body);
+  };
+  const socketPath = join(root, 'node.sock'), service = await startNodeService({ journal, socketPath, api,
+    workers: [{ token: 'fixture', agentId: f.setup.agentId, sessionId: f.setup.sessionId, headlessSetupId: f.setup.id }] });
+  t.after(async () => { await service.close(); journal.close(); rmSync(root, { recursive: true, force: true }); });
+  const body = { executionId: f.execution.id, runId: f.execution.runId, key: 'comment', payload: { key: 'comment', operation: 'comment.create', source: f.source,
+    payload: { taskId: created.taskId, expectedRevision: created.taskRevision, body: 'Valid comment', reason: 'Unsupported field' } } };
+  await assert.rejects(call({ socketPath, token: 'fixture' }, 'POST', '/work/headless-task', body), error => error.code === 'invalid_headless_request' && /Unsupported field: payload.reason/.test(error.message));
+  assert.equal(posts, 0); assert.equal(journal.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 0);
+  assert.equal(f.store.all('comment').length, 0);
+  delete body.payload.payload.reason;
+  assert.equal((await call({ socketPath, token: 'fixture' }, 'POST', '/work/headless-task', body)).state, 'recorded');
+  assert.equal(f.store.all('comment').length, 1);
+  body.key = body.payload.key = 'stale-comment'; body.payload.payload.expectedRevision = 0;
+  const stale = await call({ socketPath, token: 'fixture' }, 'POST', '/work/headless-task', body);
+  assert.equal(stale.state, 'conflict'); assert.equal(stale.outcome, 'revision_conflict'); assert.equal(stale.inspectionRequired, true);
+  assert.equal(stale.applied, false); assert.equal(stale.effectsUncertain, false); assert.equal(f.store.all('comment').length, 1);
+});

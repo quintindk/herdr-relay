@@ -2,6 +2,7 @@ import { digest, now, requireValue } from './protocol.mjs';
 import { observeV2 } from '../packages/opencode-relay/native.mjs';
 
 export const interactiveWork = (binding, work) => binding?.interactive === true && !binding.headlessSetupId &&
+  work.state !== 'administratively_abandoned' &&
   !work.execution.localOccurrence && !work.execution.monitor && work.execution.state === 'accepted' && work.invocation &&
   work.bindingId === binding.id && work.nativeConversationId === binding.identity?.sessionId;
 
@@ -10,7 +11,7 @@ export const interactiveWork = (binding, work) => binding?.interactive === true 
 export async function reconcileInteractiveWork(journal, binding, work) {
   if (!interactiveWork(binding, work) || work.execution.cancellationRequested) return work;
   if (work.state === 'conflict' && !work.invocation.interactive && !work.interactiveOwnership) return work;
-  if (journal.works().some(other => other.id !== work.id && other.bindingId === work.bindingId && other.execution.state === 'accepted'))
+  if (journal.works().some(other => other.id !== work.id && other.state !== 'administratively_abandoned' && other.bindingId === work.bindingId && other.execution.state === 'accepted'))
     return journal.save({ ...work, state: 'conflict', observation: { state: 'conflict', reason: 'ambiguous_execution_ownership' } });
   const observation = observeV2(await binding.native.snapshot(), { ...work.invocation, interactive: true });
   if (!observation.interaction) return journal.save({ ...journal.work(work.id), observation,
@@ -42,7 +43,7 @@ export async function reconcileInteractiveWork(journal, binding, work) {
 export async function previewInteractiveRecovery(journal, binding, work) {
   requireValue(interactiveWork(binding, work) && work.state === 'conflict' && work.observation?.reason === 'concurrent_native_input' &&
     !work.execution.cancellationRequested, 'recovery_ineligible', 'Exact conflicted, uncancelled interactive assignment required');
-  requireValue(!journal.works().some(other => other.id !== work.id && other.bindingId === work.bindingId && other.execution.state === 'accepted'),
+  requireValue(!journal.works().some(other => other.id !== work.id && other.state !== 'administratively_abandoned' && other.bindingId === work.bindingId && other.execution.state === 'accepted'),
     'recovery_ineligible', 'Multiple accepted assignments on this binding require separate disposition');
   const observation = observeV2(await binding.native.snapshot(), { ...work.invocation, interactive: true });
   requireValue(observation.interaction && ['observed', 'finished'].includes(observation.state), 'recovery_ineligible', 'Native input ownership is still ambiguous or contains a hard boundary');

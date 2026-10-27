@@ -23,6 +23,18 @@ compatibility: opencode
 
 ## Boundaries
 
+- A same-schema Relay code upgrade may pause its API briefly while preserving
+  this execution and original publication keys. It does not authorise a prompt
+  replay, duplicate operation or invented success. Reconcile native writes using
+  their original key after an uncertain reply.
+- `terminal_unresolved` means backend ownership ended but native evidence did not
+  establish settlement. Administrative abandonment is separate from success and
+  process termination. Do not revive an abandoned invocation or submit its result.
+- Headless task payloads are operation-specific. `comment.create` accepts only
+  taskId, expectedRevision and body. A local validation refusal such as
+  `Unsupported field: payload.reason` happens before enqueue; correct it rather
+  than inventing fields or treating it as an uncertain external effect.
+
 - In a verified interactive chat, ordinary human follow-ups steer the current
   assignment. They do not require a replacement execution. Later turns need their
   own terminal evidence; never submit a pre-correction outcome as current work.

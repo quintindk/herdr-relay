@@ -19,6 +19,6 @@ test('only generated node index JSON is canonicalised; changed mapping and priva
   writeFileSync(index, '{"nodeId":"node","sessions":{"ses_a":"a","ses_b":"b"}}');
   writeFileSync(credential, '{"userId":"owner","token":"same"}');
   assert.notEqual(identityFingerprint(identity), before);
-  assert.throws(() => identityFingerprint(identity, 3), { code: 'upgrade_incompatible' });
+  assert.throws(() => identityFingerprint(identity, 4), { code: 'upgrade_incompatible' });
   writeFileSync(index, 'invalid JSON'); assert.throws(() => identityFingerprint(identity));
 });

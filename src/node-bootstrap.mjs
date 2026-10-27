@@ -5,7 +5,7 @@ import { digest, requireValue } from './protocol.mjs';
 // node daemon credential. It may manage this node's enrolments and the same
 // human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
 export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'task.create', 'task.update', 'comment.create', 'reference.attach',
-  'execution.request', 'execution.cancel', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
+  'execution.request', 'execution.cancel', 'execution.handback', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
   'occurrence.review', 'notification.acknowledge', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 
 export function authoriseOperator(store, actor, action, payload) {

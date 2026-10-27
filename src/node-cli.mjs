@@ -103,13 +103,20 @@ try {
         const { provisionOwnedV2 } = await import('../packages/opencode-relay/provision.mjs');
         requireValue(entry.directory && entry.executable && entry.config && entry.reserved === true,
           'invalid_binding', 'Owned v2 executable, directory, private policy and reservation required');
-        if (entry.resume === true) requireValue(!journal.works().some(work => work.bindingId === entry.id &&
-          !['native_finished', 'settled', 'settled_waiting'].includes(work.state)) &&
+        const canRestart = !journal.works().some(work => work.bindingId === entry.id &&
+          !['native_finished', 'settled', 'settled_waiting', 'administratively_abandoned'].includes(work.state)) &&
           !journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain','conflict')").all()
-            .some(row => JSON.parse(row.data).bindingId === entry.id), 'native_unsettled', 'Resolve historical native work before owned runtime resume');
-        binding = await provisionOwnedV2({ stateDirectory: directory, bindingId: entry.id, agentId: entry.agentId,
-          executable: entry.executable, workspace: entry.directory, config: entry.config, workerContextFile: contextFile,
-          resume: entry.resume === true });
+            .some(row => JSON.parse(row.data).bindingId === entry.id);
+        try {
+          binding = await provisionOwnedV2({ stateDirectory: directory, bindingId: entry.id, agentId: entry.agentId,
+            executable: entry.executable, workspace: entry.directory, config: entry.config, workerContextFile: contextFile,
+            resume: entry.resume === true && canRestart });
+        } catch (error) {
+          if (error.code !== 'runtime_launch_uncertain') throw error;
+          journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(`runtime-health:${entry.agentId}`, JSON.stringify({ state: 'blocked', reason: error.code, invocationReplayed: false }));
+          return;
+        }
         ownedDefinitions.set(entry.agentId, { entry, contextFile, failures: 0 });
       } else {
         const { OpenCode } = await import('@opencode/client');
@@ -253,7 +260,7 @@ try {
           // A dead process is not proof that an unsettled native turn completed.
           // Recovery only resumes an idle owned binding with all old evidence kept.
           const unsettled = journal.works().some(work => work.bindingId === binding.id &&
-            !['settled', 'settled_waiting', 'native_finished'].includes(work.state));
+             !['settled', 'settled_waiting', 'native_finished', 'administratively_abandoned'].includes(work.state));
           const notices = journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain','conflict')").all()
             .some(row => JSON.parse(row.data).bindingId === binding.id);
           if (unsettled || notices || owned.failures >= 3) return null;
@@ -296,6 +303,12 @@ try {
         await tickAgentNotices(journal, api, resolveBinding);
         for (const [agentId, owned] of ownedDefinitions) {
           const binding = bindings.get(agentId);
+          if (binding.runtime?.relayPluginUpdatePending) {
+            await binding.runtime.tryRelayPluginUpdate();
+            journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+              .run(`runtime-health:${agentId}`, JSON.stringify({ state: 'ready', generation: binding.runtime.descriptor.generation,
+                pluginReloadPending: binding.runtime.relayPluginUpdatePending }));
+          }
           const priorRetirement = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`retired-binding:${binding.id}`);
           if (priorRetirement && JSON.parse(priorRetirement.value).state === 'retired') continue;
           const works = journal.works().filter(work => work.bindingId === binding.id);
