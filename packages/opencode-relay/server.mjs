@@ -150,14 +150,14 @@ export default Plugin.define({
           const string = { type: 'string', minLength: 1, maxLength: 256 };
           const properties = operation === 'prepare' ? { id: { ...string, maxLength: 96 }, grantId: string, nodeId: string, directory: { ...string, maxLength: 4096 },
             agentId: string, name: string, createDirectory: { type: 'boolean' }, instance: { enum: ['ensure', 'replace'] }, profile: string, topic: { type: 'string', maxLength: 4000 }, permissionScope: { type: 'object', additionalProperties: true } } :
-            operation === 'dispatch' ? { id: string, taskId: string, executionId: string, title: string, instructions: { ...string, maxLength: 16000 } } :
+            operation === 'dispatch' ? { id: string, taskId: string, taskRevision: { type: 'integer', minimum: 0 }, executionId: string, title: string, instructions: { ...string, maxLength: 16000 } } :
               { id: string, expectedRevision: { type: 'integer', minimum: 1 }, reason: { ...string, maxLength: 2000 } };
           editor.add({ name: `relay_interactive_${operation}`, options: { codemode: false },
             description: operation === 'prepare' ? 'Request an interactive Herdr agent. Matching standing permissions are reused automatically. Without permission, records an awaiting_approval request in Grants; no owner context or grant ID is needed. Approval resumes the saved preparation. Preparation alone never assigns work or runs a model.' :
-              operation === 'dispatch' ? 'Assign one bounded task separately to an exact ready interactive preparation. Requires an active grant explicitly allowing dispatch and human instruction.' :
+              operation === 'dispatch' ? 'Assign one bounded task to an exact ready preparation under its active dispatch grant and original human handover. Existing tasks are reused without edits: supply their inspected taskRevision. Title is required only when creating a task. Approval notices can continue the original authorised workflow; no new human phrase is needed. Reconcile the original key, never duplicate a task/execution.' :
                 'Cancel an outstanding interactive preparation. Does not kill processes or delete already created workspaces.',
             input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 100 }, payload: { type: 'object', properties,
-              required: operation === 'prepare' ? ['id', 'nodeId'] : operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'title', 'instructions'] : ['id', 'expectedRevision', 'reason'],
+              required: operation === 'prepare' ? ['id', 'nodeId'] : operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'instructions'] : ['id', 'expectedRevision', 'reason'],
               additionalProperties: false } }, required: ['key', 'payload'], additionalProperties: false }, execute: (input, context) => agent(context, `interactive-${operation}`, input) });
         }
         for (const operation of ['install', 'pause', 'resume', 'cancel']) editor.add({

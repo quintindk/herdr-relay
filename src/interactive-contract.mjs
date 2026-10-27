@@ -158,8 +158,9 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
     store.event('agent.attach', agent, actor, request.id); return agent;
   }
   if (action === 'interactive.dispatch') {
-    fields(p, ['id', 'requesterAgentId', 'sourceConversationId', 'sourceBindingRevision', 'taskId', 'executionId', 'title', 'instructions'],
-      ['id', 'requesterAgentId', 'sourceConversationId', 'sourceBindingRevision', 'taskId', 'executionId', 'title', 'instructions']);
+    fields(p, ['id', 'requesterAgentId', 'sourceConversationId', 'sourceBindingRevision', 'taskId', 'taskRevision', 'executionId', 'title', 'instructions'],
+      ['id', 'requesterAgentId', 'sourceConversationId', 'sourceBindingRevision', 'taskId', 'executionId', 'instructions']);
+    if (p.title !== undefined) text(p.title, 512);
     const requester = source(p), request = store.get('provision_request', p.id);
     const grant = store.get('provision_grant', request.grantId);
     requireValue(request.requesterAgentId === requester.id && grant.requesterAgentId === requester.id && grant.state === 'active' &&
@@ -169,8 +170,18 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
     const target = store.get('agent', request.agentId);
     requireValue(target.bindingId === request.receipt.bindingId && target.bindingRevision === request.receipt.generation,
       'stale_binding', 'The prepared receiver changed before work assignment', 409);
-    const task = store.apply(actor, 'task.create', { id: p.taskId, title: p.title, description: p.instructions }, { interactiveRequest: request });
-    store.event('task.create', task, actor, request.id);
+    let task = store.get('task', p.taskId, false);
+    if (task) {
+      // Older callers could not supply a revision. Their original, unchanged
+      // task is safe to reuse, but never silently adopt a later edited revision.
+      store.revision(task, p.taskRevision ?? 1);
+      requireValue(task.responsibleUserId === store.owner, 'task_scope_mismatch', 'Prepared dispatch requires a human-owned task', 403);
+    } else {
+      requireValue(p.taskRevision === undefined || p.taskRevision === 0, 'task_not_found', 'The inspected task no longer exists; dispatch will not recreate it', 404);
+      text(p.title, 512);
+      task = store.apply(actor, 'task.create', { id: p.taskId, title: p.title, description: p.instructions }, { interactiveRequest: request });
+      store.event('task.create', task, actor, request.id);
+    }
     const execution = store.apply(actor, 'execution.request', { id: p.executionId, taskId: task.id, taskRevision: task.revision,
       targetAgentId: target.id, originAgentId: requester.id, originConversation: p.sourceConversationId, instructions: p.instructions,
       reviewPolicy: grant.reviewPolicy }, { interactiveRequest: request });

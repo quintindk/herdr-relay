@@ -6,6 +6,8 @@ import { headlessProbeId } from './headless-setup-contract.mjs';
 import { digest, requireValue, RelayError, canonical } from './protocol.mjs';
 import { nativeTasksProvider } from './tasks-provider.mjs';
 import { herdrInventory } from './node-discovery.mjs';
+import { nativeReadApi } from './native-worker-api.mjs';
+import { reconcileDispatchIdentity, refusedDispatchErrors, dispatchReceipt } from './interactive-dispatch-reconciliation.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
@@ -28,7 +30,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       catch { throw new RelayError('invalid_json', 'JSON request required'); }
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
       const path = new URL(req.url, 'http://node').pathname;
-      const readOnly = ['/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
+      const readOnly = ['/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
         '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/task-identity', '/agent/comments', '/agent/relations',
         '/agent/questions', '/agent/messages', '/agent/message', '/agent/headless-status', '/agent/headless-grants', '/agent/headless-access', '/agent/headless-connections'];
       requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
@@ -46,6 +48,13 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         requireValue(existsSync(path) && JSON.parse(op.value).contractDigest === digest(readFileSync(path, 'utf8')),
           'job_contract_changed', 'The authorised job contract changed; reauthorisation required');
       };
+      if (path === '/agent/native-api') {
+        currentReceiver();
+        requireValue(api && !worker.headlessSetupId && Object.keys(body).length === 1 && body.request,
+          'interactive_cli_required', 'Enrolled interactive read-only CLI scope required', 403);
+        const result = await nativeReadApi(api, body.request, worker);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
       if (path === '/agent/headless-access') {
         requireValue(api && worker.headlessSetupId && Object.keys(body).length === 0, 'headless_grant_required', 'Exact headless worker scope required', 403);
         const result = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
@@ -163,7 +172,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           'interactive_human_context_required', 'Scheduled and delegated executions cannot create agents through the human-chat route', 403);
         const operation = path.slice('/agent/interactive-'.length);
         const allowed = operation === 'prepare' ? ['id', 'grantId', 'nodeId', 'directory', 'agentId', 'name', 'createDirectory', 'instance', 'profile', 'topic', 'permissionScope'] :
-          operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'title', 'instructions'] : ['id', 'expectedRevision', 'reason'];
+          operation === 'dispatch' ? ['id', 'taskId', 'taskRevision', 'executionId', 'title', 'instructions'] : ['id', 'expectedRevision', 'reason'];
         requireValue(Object.keys(body.payload).every(k => allowed.includes(k)), 'invalid_request', 'Caller cannot override its provisioning identity');
         if (operation === 'prepare' && !body.payload.grantId) requireValue((await getBackendFeatures?.())?.grantsManagement,
           'backend_upgrade_required', 'Backend must support Grants approval requests');
@@ -172,8 +181,17 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const inheritedModel = operation === 'prepare' ? previous ? previous.command.payload.model : await getNativeModel?.(worker) : undefined;
         const command = { key, action: `interactive.${operation === 'prepare' ? 'request' : operation}`,
           payload: { ...body.payload, ...(inheritedModel ? { model: inheritedModel } : {}), requesterAgentId: worker.agentId, sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision } };
-        journal.queue(command); await journal.flush(api);
-        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(journal.receipt(command.key))); return;
+        journal.queue(command);
+        if (operation === 'dispatch' && previous?.error === 'identity_conflict' && ['conflict', 'superseded'].includes(previous.state))
+          await reconcileDispatchIdentity(journal, api, worker, command, await getBackendFeatures?.());
+        try { await journal.flush(api); }
+        catch (error) {
+          const item = journal.receipt(key);
+          if (operation !== 'dispatch' || item?.state !== 'conflict' || !refusedDispatchErrors.has(item.error)) throw error;
+          journal.reconcileRefusedDispatch(command, { reason: 'Backend refused this exact dispatch without applying changes. Inspect the saved task, preparation and execution; do not create duplicates.' });
+        }
+        const item = journal.receipt(key);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(operation === 'dispatch' ? dispatchReceipt(item) : item)); return;
       }
       if (path === '/agent/status') {
         requireValue(Object.keys(body).length === 0, 'invalid_request', 'Status takes no overrides');
@@ -349,9 +367,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const target = new URL(request.path, 'http://relay');
         requireValue(target.origin === 'http://relay' && !target.hash && !request.path.includes('\\'), 'invalid_request', 'Native API path required');
         if (request.method === 'GET') {
-          requireValue(/^\/v1\/(info|tasks|agents|nodes|comments|executions|questions|schedules|occurrences|task-identity)(\/[^/]+)?$/.test(target.pathname) && request.body === undefined,
-            'forbidden', 'Execution CLI supports ordinary native reads, not credential or administrative routes', 403);
-          result = await api('GET', request.path);
+          result = await nativeReadApi(api, request, worker);
         } else {
           requireValue(request.method === 'POST' && request.path === '/v1/commands' && request.body &&
             Object.keys(request.body).every(key => ['key', 'action', 'payload'].includes(key)), 'forbidden', 'Native execution mutation required', 403);

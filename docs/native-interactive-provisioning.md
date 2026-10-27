@@ -140,7 +140,11 @@ prevent it from recording a preparation request. Dispatch remains separate.
 3. `relay_interactive_status({id})`: inspect durable progress, blockers and the
    eventual exact ready receipt. Do not repeat prepare to drive the operation.
 4. `relay_interactive_dispatch`: separately submit `{key,payload:{id,taskId,
-   executionId,title,instructions}}`. The grant must explicitly allow dispatch.
+   taskRevision,executionId,instructions}}`. The grant must explicitly allow dispatch.
+   Reuse an existing task at its inspected revision without changing its title,
+   description or other content. A positive `taskRevision` never recreates a missing
+   task. For a new task, omit the revision or use zero and supply `title`. Legacy
+   callers without a revision may reuse only an unchanged revision-one task.
    One task/execution can be assigned per preparation. Review policy comes from
    the human grant, not the requesting model. The prepared binding must still be
    current before assignment.
@@ -150,6 +154,24 @@ prevent it from recording a preparation request. Dispatch remains separate.
 Operator `native interactive request` and `dispatch` accept the same native
 payloads through explicit owner context. Agent calls always use scoped node-socket
 credentials instead. The maintained worker CLI exposes the same operations.
+
+A definitive dispatch refusal is reported as `refused`, with `applied: false`, not
+as an uncertain dispatch. Its original command remains in the journal as refusal
+evidence rather than an unresolved maintenance blocker. After an existing-task
+identity refusal, an explicit repeat of the exact key/payload can reconcile once
+when the backend advertises `interactiveExistingTaskDispatch`, the preparation is
+still ready and the inspected task is unchanged. Current grant/receiver and task
+admission checks still apply. An intervening TUI assignment must not produce a
+duplicate execution. Changed payloads or additional retry attempts are refused.
+Maintenance inspection also recognises hash-verified historical dispatch refusals
+as retained refusal evidence, not uncertain work. Pending operations, changed
+command hashes and unrelated conflicts remain blockers. It does not erase or
+replay those historical records to permit an upgrade.
+
+Ordinary read-only CLI reconciliation is available to an enrolled interactive
+agent even on approval-notice turns without an active execution. Use the default
+worker context, not `{operator}`. The preparation read remains requester-scoped.
+The notice is still evidence, not new human authority for mutation or dispatch.
 
 ## Model selection
 

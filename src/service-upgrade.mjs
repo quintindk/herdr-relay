@@ -60,7 +60,8 @@ export async function installationStatus({ services = ['backend', 'node'], nodeC
       const [{ name }] = serviceNames([role], nodeConfig), service = await manager.inspect(name);
       const unit = parseManagedUnit(readFileSync(service.path, 'utf8'), role), identity = serviceIdentity(unit);
       items.push({ role, service: name, active: service.active, pid: service.pid, version: unit.release.version, versionSource: 'managed_unit',
-        installation: unit.release.directory, instanceId: identity.instanceId, ...(identity.nodeId ? { nodeId: identity.nodeId } : {}), blockers: identity.blockers });
+        installation: unit.release.directory, instanceId: identity.instanceId, ...(identity.nodeId ? { nodeId: identity.nodeId } : {}), blockers: identity.blockers,
+        ...(identity.refusedPublications?.length ? { refusedPublications: identity.refusedPublications } : {}) });
     } catch (error) { items.push({ role, installed: false, code: error.code ?? 'service_unavailable' }); }
   }
   return { cliVersion: releaseVersion, services: items };

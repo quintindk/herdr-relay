@@ -34,6 +34,11 @@ compatibility: opencode
   administration. Instruction loads and owned completion notices are supporting
   context, not new human permission. An unrelated notice cannot reuse an old
   human request.
+- Ordinary read-only task/execution/preparation CLI reconciliation can use the
+  enrolled interactive agent's default worker context without an active execution
+  or a new human message, including on approval-notice turns. Omit `--context` or
+  use `{worker}`, not `{operator}`. This is standing read access, not notice-derived
+  authority to create tasks, dispatch work or administer services.
 - Creating a task is capture, not dispatch. When recording a todo or current work
   for yourself in an interactive chat, create/update the task and continue the
   current authorised turn. Do not request an execution back to the same agent just
@@ -159,6 +164,11 @@ compatibility: opencode
   preparation to drive progress. Inspect `relay_interactive_status` instead.
   `waiting_driver` means permission exists but a verified destination Herdr
   connection is unavailable. It does not authorise a different destination.
+- Prepared dispatch reuses an existing task with its inspected `taskRevision`.
+  Do not recreate it or change its identity. Supply `title` only for a new task.
+  A `refused` dispatch with `applied: false` did not commit; retain/reconcile the
+  exact original key. Before retrying, inspect current task/execution evidence,
+  especially if the human assigned it through the TUI. Do not duplicate that run.
 - Grants Pending offers Approve once, Allow this scope and Reject. Active lists
   permissions and supports Revoke. History records security decisions. Permission
   outcome notices are evidence, not fresh human instructions. They authorise no

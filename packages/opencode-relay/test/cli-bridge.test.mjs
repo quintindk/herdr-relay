@@ -10,7 +10,8 @@ import { nativeAdministrationGroups } from '../../../src/native-cli-surface.mjs'
 
 function fixture() {
   const f = { tools: [], calls: [], messages: [{ id: 'human', type: 'user', text: 'Create the task and send it to the other agent.', time: { created: 1 } },
-    { id: 'assistant', type: 'assistant', content: [] }], session: { location: { directory: '/workspace' } }, worker: { sessionId: 'session' } };
+    { id: 'assistant', type: 'assistant', content: [] }], session: { location: { directory: '/workspace' } },
+    worker: { sessionId: 'session', agentId: 'source', bindingId: 'binding', bindingRevision: 1 } };
   f.ctx = { options: { workerDirectory: '/node' }, location: { directory: '/workspace' },
     session: { get: async () => f.session, context: async () => f.messages }, permission: { assert: async () => { await f.onPermission?.(); } } };
   registerCliBridge({ add: tool => f.tools.push(tool) }, f.ctx, { connection: () => f.worker, workerContextPath: () => '/node/worker.json',
@@ -38,7 +39,9 @@ test('instruction loads and exact shell completions preserve human CLI provenanc
     { id: 'completion', type: 'synthetic', metadata: { source: 'shell', shellID: 'sh_owned', state: 'completed' } });
   await f.invoke({ args: ['native', 'task', 'list'] }); assert.equal(f.calls.length, 2);
   f.messages.splice(-1, 0, { id: 'unrelated', type: 'synthetic', metadata: { source: 'shell', shellID: 'sh_foreign', state: 'completed' } });
-  await assert.rejects(f.invoke({ args: ['native', 'task', 'list'] }), /human-source/); assert.equal(f.calls.length, 2);
+  await f.invoke({ args: ['native', 'task', 'list'] }); assert.equal(f.calls.length, 3);
+  assert.equal(f.calls.at(-1).agentReadSource.authority, 'agent_read'); assert.equal(f.calls.at(-1).operatorContextFile, undefined);
+  await assert.rejects(f.invoke({ args: ['native', 'task', 'create'] }), /human-source/); assert.equal(f.calls.length, 3);
 });
 
 test('an accepted Relay prompt never inherits an earlier human operator context through instruction loads', async () => {
@@ -58,7 +61,23 @@ test('a matching accepted execution uses worker CLI context and cannot become an
   await assert.rejects(runRelayCli({ args: ['backend', 'install'], directory: '/workspace', executionSource: f.calls[0].executionSource },
     { run: () => assert.fail('Lifecycle commands must never execute') }), { code: 'execution_cli_scope' });
   f.current.sourceMessageId = 'other';
-  await assert.rejects(f.invoke({ args: ['native', 'task', 'list'] }), { code: 'execution_source_required' });
+  await assert.rejects(f.invoke({ args: ['native', 'task', 'comment'] }), { code: 'execution_source_required' });
+});
+
+test('approval notices can reconcile execution/preparation reads without a human phrase, active execution or operator credential', async () => {
+  const f = fixture();
+  f.messages[0] = { id: 'permission-notice', type: 'user', text: 'Recorded approval evidence, not a human instruction',
+    metadata: { herdrRelayInvocation: 'permission-notice' } };
+  for (const args of [['native', 'execution', 'inspect', 'missing'], ['native', 'task', 'resolve', 'REL-285'], ['native', 'interactive', 'inspect', 'prepared']]) {
+    await f.invoke({ args });
+    assert.equal(f.calls.at(-1).agentReadSource.authority, 'agent_read'); assert.equal(f.calls.at(-1).operatorContextFile, undefined);
+    assert.equal(f.calls.at(-1).executionSource, undefined);
+  }
+  await assert.rejects(runRelayCli({ args: ['native', 'execution', 'request'], directory: '/workspace', agentReadSource: { authority: 'agent_read' } },
+    { run: () => assert.fail('Read-only notice must never dispatch') }), { code: 'agent_cli_read_only' });
+  await assert.rejects(f.invoke({ args: ['native', 'task', 'create'] }), /No accepted execution/);
+  const headless = fixture(); headless.worker.headlessSetupId = 'setup';
+  await assert.rejects(headless.invoke({ args: ['native', 'task', 'list'] }), { code: 'interactive_cli_required' });
 });
 
 test('headless, peer/scheduled input and stale human input cannot use the interactive operator bridge', async () => {

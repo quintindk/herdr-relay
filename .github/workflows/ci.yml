@@ -48,6 +48,8 @@ jobs:
         run: node scripts/verify-cli-bridge.mjs
       - name: Interactive self-capture records a todo without self-dispatch
         run: node scripts/verify-cli-bridge.mjs --self-capture
+      - name: Approval-notice CLI reads without an active execution or operator context
+        run: node scripts/verify-cli-bridge.mjs --notice-read
       - name: Never-prompted receiving chat, instruction load and execution-scoped CLI
         run: node packages/opencode-relay/smoke-receivers.mjs --first-message
       - name: Native task-independent message smoke

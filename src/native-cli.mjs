@@ -18,7 +18,7 @@ import { readPrivateJson } from './private-files.mjs';
 import { maintenanceCli } from './upgrade-cli.mjs';
 import { renameHerdrWorkspace } from '../packages/opencode-relay/herdr-session.mjs';
 import { nativeWorkerApi } from './native-worker-api.mjs';
-import { executionCliInvocation } from './native-cli-surface.mjs';
+import { executionCliInvocation, readOnlyCliInvocation, nativeCliCollections } from './native-cli-surface.mjs';
 
 export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
   headless provision|inspect --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
@@ -65,6 +65,8 @@ Run-now for an existing native cron is not implemented. Use an explicit executio
 Pause must be acknowledged by the owner node. Already admitted work is not interrupted.`;
 
 export async function main(args) {
+  requireValue(process.env.RELAY_CLI_READ_ONLY !== '1' || readOnlyCliInvocation(['native', ...args]),
+    'agent_cli_read_only', 'Enrolled read-only CLI scope cannot perform mutations or lifecycle administration', 403);
   requireValue(!process.env.RELAY_CLI_EXECUTION_ID || executionCliInvocation(['native', ...args]),
     'execution_cli_scope', 'Execution-scoped CLI cannot perform local lifecycle or operator administration', 403);
   if (args[0] === 'task' && args[1] === 'migrate-references') {
@@ -159,7 +161,7 @@ export async function main(args) {
   const context = readPrivateJson(path);
   const backend = { url: context.url ?? 'http://127.0.0.1:3210', ...(context.cloudflareAccess ? { cloudflareAccess: context.cloudflareAccess } : {}),
     ...(context.trustedHttpProxyOrigin ? { trustedHttpProxyOrigin: context.trustedHttpProxyOrigin } : {}) };
-  const api = context.socketPath ? nativeWorkerApi(context, { executionId: process.env.RELAY_CLI_EXECUTION_ID,
+  const api = context.socketPath ? nativeWorkerApi(context, { readOnly: process.env.RELAY_CLI_READ_ONLY === '1', executionId: process.env.RELAY_CLI_EXECUTION_ID,
     runId: process.env.RELAY_CLI_RUN_ID, sourceMessageId: process.env.RELAY_CLI_SOURCE_ID }) : nativeBackendClient({ ...backend, token: context.token });
   const payload = () => {
     requireValue(values.file, 'invalid_request', '--file is required');
@@ -216,7 +218,7 @@ export async function main(args) {
     } finally { journal.close(); }
     return;
   }
-  const collections = { task: 'tasks', 'task-reference': 'task_reference_grants', comment: 'comments', agent: 'agents', node: 'nodes', execution: 'executions', schedule: 'schedules', occurrence: 'occurrences', interactive: 'provision_requests' };
+  const collections = nativeCliCollections;
   if (group === 'task' && action === 'resolve') {
     requireValue(Boolean(id) !== Boolean(values.reference), 'invalid_request', 'Choose VALUE or --reference REF');
     const query = new URLSearchParams({ ...(id ? { value: id } : { reference: values.reference }), ...(values.scope ? { scope: values.scope } : {}) });

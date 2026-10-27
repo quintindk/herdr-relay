@@ -29,6 +29,16 @@ backend commands. New task creation, dispatch and lifecycle administration requi
 separate authority. These worker calls are bound to the originating invocation,
 execution and run. Headless jobs retain their granted tools rather than this CLI.
 
+An enrolled interactive agent can also perform ordinary read-only task, execution
+and preparation reconciliation when no execution is active, including on an
+automatic approval-notice turn. These calls use the default worker context or
+`{worker}`, never `{operator}`. The current receiver and native location must still
+match. Requests for another agent's preparation, credentials, grant decisions,
+mutation or local lifecycle commands are not authorised by this read scope. A
+missing execution is a read result/error, not evidence that dispatch occurred and
+not a reason to demand a fresh human phrase. Read-only failures carry
+`effectsUncertain: false`.
+
 ## Existing conversation enrolment
 
 For dedicated recurring automation without an interactive conversation, use the

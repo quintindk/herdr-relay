@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync } from 'node:fs';
 import { canonical, digest, now, requireValue } from './protocol.mjs';
+import { refusedDispatchErrors } from './interactive-dispatch-reconciliation.mjs';
 
 // Local node transport journal, separate from shared task storage and legacy runs.
 export class NodeJournal {
@@ -193,6 +194,26 @@ export class NodeJournal {
       return item;
     });
   }
+  reconcileRefusedDispatch(command, { retry = false, reason } = {}) {
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT hash,state,data FROM outbox WHERE key=?').get(command.key);
+      requireValue(row && row.hash === digest(command) && command.action === 'interactive.dispatch', 'operation_conflict', 'Exact original interactive dispatch required');
+      const item = JSON.parse(row.data);
+      requireValue(digest(item.command) === row.hash, 'operation_conflict', 'Stored dispatch command hash differs; inspect before reconciliation');
+      requireValue(item.state === row.state && !item.receipt && item.applied !== true, 'publication_ineligible', 'Inconsistent or previously applied dispatch requires inspection');
+      requireValue(['conflict', 'superseded'].includes(row.state) && refusedDispatchErrors.has(item.error),
+        'publication_ineligible', 'A known transaction-refused dispatch is required; uncertain outcomes cannot be retired');
+      requireValue(!retry || item.error === 'identity_conflict' && !item.dispatchReconciliation?.retried,
+        'publication_ineligible', 'Only one existing-task identity correction may retry this original dispatch');
+      if (!retry && row.state === 'superseded') return item;
+      const next = { ...item, state: retry ? 'pending' : 'superseded', outcome: retry ? 'reconciling' : 'refused', applied: retry ? undefined : false,
+        dispatchReconciliation: { ...item.dispatchReconciliation, retried: retry || item.dispatchReconciliation?.retried === true,
+          previousError: item.error, reason, at: now(), refusals: [...(item.dispatchReconciliation?.refusals ?? []),
+            ...(row.state === 'conflict' ? [{ error: item.error, observedAt: now() }] : [])] } };
+      this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(next.state, JSON.stringify(next), command.key);
+      return next;
+    });
+  }
   async flush(api) {
     if (this.flushing) return this.flushing;
     this.flushing = this.flushPending(api).finally(() => { this.flushing = null; });
@@ -205,7 +226,9 @@ export class NodeJournal {
       // The same immutable command can therefore be retried after a lost reply.
       try {
         const receipt = await api('POST', '/v1/commands', item.command);
-        const recorded = { ...item, state: 'recorded', receipt };
+        if (item.command.action === 'interactive.dispatch') requireValue(receipt?.id === item.command.payload.executionId && receipt.taskId === item.command.payload.taskId,
+          'invalid_backend_response', 'Interactive dispatch receipt differs from the original task/execution', 502);
+        const recorded = { ...item, state: 'recorded', receipt, ...(item.command.action === 'interactive.dispatch' ? { outcome: 'applied', applied: true, error: undefined } : {}) };
         this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(recorded.state, JSON.stringify(recorded), item.command.key);
       } catch (error) {
         if (['execution.monitor_result', 'execution.submit'].includes(item.command.action) && error.code === 'monitor_expired') {

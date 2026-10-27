@@ -264,6 +264,86 @@ test('readiness is separate from one bounded authorised dispatch and retains hum
   assert.equal(f.store.all('task').length, 1); assert.equal(f.store.all('execution').length, 1);
 });
 
+test('prepared dispatch reuses an existing inspected task without recreating or changing its content', async t => {
+  const f = fixture(t); await f.ready();
+  const task = f.command(f.owner, 'existing-task', 'task.create', { id: 'existing', title: 'Human task', description: 'Preserve the actual source and handover', priority: 'high' });
+  const payload = { id: f.request.id, requesterAgentId: 'initiator', sourceConversationId: 'ses_source', sourceBindingRevision: 1,
+    taskId: task.id, taskRevision: task.revision, executionId: 'existing-execution', instructions: 'Read the original task and handover.' };
+  const execution = f.command(f.actors.source, 'existing-dispatch', 'interactive.dispatch', payload);
+  assert.equal(execution.taskId, task.id); assert.equal(execution.targetAgentId, f.request.agentId);
+  assert.deepEqual(f.store.get('task', task.id), task); assert.equal(f.store.all('task').length, 1);
+  assert.deepEqual(f.command(f.actors.source, 'existing-dispatch', 'interactive.dispatch', payload), execution);
+  assert.equal(f.store.all('execution').length, 1);
+});
+
+test('legacy dispatch may reuse only an unchanged revision-one task, and an inspected missing task is never recreated', async t => {
+  const f = fixture(t); await f.ready();
+  const task = f.command(f.owner, 'existing-task', 'task.create', { id: 'existing', title: 'Human task' });
+  const payload = { id: f.request.id, requesterAgentId: 'initiator', sourceConversationId: 'ses_source', sourceBindingRevision: 1,
+    taskId: task.id, executionId: 'existing-execution', title: 'Human task', instructions: 'Bounded handover' };
+  f.command(f.owner, 'edit-existing', 'task.update', { id: task.id, expectedRevision: 1, changes: { description: 'New requirements' } });
+  assert.throws(() => f.command(f.actors.source, 'stale-legacy', 'interactive.dispatch', payload), { code: 'stale_revision' });
+  assert.throws(() => f.command(f.actors.source, 'missing-inspected', 'interactive.dispatch', { ...payload, taskId: 'missing', taskRevision: 1 }), { code: 'task_not_found' });
+  assert.equal(f.store.all('execution').length, 0); assert.equal(f.store.all('task').length, 1);
+  const execution = f.command(f.actors.source, 'fresh-revision', 'interactive.dispatch', { ...payload, taskRevision: 2 });
+  assert.equal(execution.taskRevision, 2);
+});
+
+for (const manualAssignment of [false, true]) test(`original refused dispatch reconciles without duplicate task/execution (manual assignment: ${manualAssignment})`, async t => {
+  const f = fixture(t); await f.ready();
+  f.command(f.owner, 'existing-task', 'task.create', { id: 'existing', title: 'Human task' });
+  const sourceJournal = new NodeJournal(':memory:', { nodeId: 'source', instanceId: f.store.instance });
+  const worker = { agentId: 'initiator', sessionId: 'ses_source', bindingId: 'source-binding', bindingRevision: 1, token: 'worker' };
+  sourceJournal.db.prepare('INSERT INTO settings VALUES (?,?)').run('receiver:initiator', JSON.stringify({ state: 'active', bindingId: worker.bindingId, generation: 1 }));
+  const sourceApi = f.apiFor(f.actors.source); let fixed = false, calls = 0;
+  const api = async (method, path, body) => {
+    if (body?.action === 'interactive.dispatch') {
+      calls++;
+      if (!fixed) throw Object.assign(Error('Unique task identity required'), { code: 'identity_conflict', status: 409 });
+    }
+    return sourceApi(method, path, body);
+  };
+  const socketPath = join(f.root, 'source-reconciliation.sock');
+  const service = await startNodeService({ journal: sourceJournal, socketPath, workers: [worker], api,
+    getBackendFeatures: async () => ({ interactiveExistingTaskDispatch: fixed }) });
+  t.after(async () => { await service.close(); sourceJournal.close(); });
+  const connection = { socketPath, token: worker.token }, body = { key: 'original', payload: { id: f.request.id, taskId: 'existing',
+    executionId: 'original-execution', title: 'Human task', instructions: 'Original unchanged handover' } };
+  const refused = await call(connection, 'POST', '/agent/interactive-dispatch', body);
+  assert.equal(refused.state, 'refused'); assert.equal(refused.effectsUncertain, false); assert.equal(refused.applied, false);
+  assert.equal(f.store.all('execution').length, 0); assert.equal(f.store.all('task').length, 1);
+  const original = sourceJournal.receipt('interactive-source:initiator:original').command;
+  await assert.rejects(call(connection, 'POST', '/agent/interactive-dispatch', { ...body,
+    payload: { ...body.payload, instructions: 'Changed handover must not replace the original' } }), { code: 'operation_conflict' });
+  assert.deepEqual(sourceJournal.receipt('interactive-source:initiator:original').command, original);
+  if (manualAssignment) f.command(f.owner, 'manual-assignment', 'execution.request', { id: 'manual-execution', taskId: 'existing',
+    taskRevision: 1, targetAgentId: f.request.agentId, instructions: 'Human TUI handover', reviewPolicy: 'none' });
+  fixed = true;
+  const result = await call(connection, 'POST', '/agent/interactive-dispatch', body);
+  assert.equal(result.state, manualAssignment ? 'refused' : 'recorded');
+  assert.deepEqual(sourceJournal.receipt('interactive-source:initiator:original').command, original);
+  assert.equal(f.store.all('execution').length, 1); assert.equal(f.store.all('task').length, 1);
+  if (manualAssignment) assert.equal(f.store.get('execution', 'original-execution', false), null);
+  else { assert.equal(result.receipt.id, 'original-execution'); assert.equal(result.applied, true); assert.equal(result.error, undefined);
+    assert.equal(result.dispatchReconciliation.refusals[0].error, 'identity_conflict'); }
+  await call(connection, 'POST', '/agent/interactive-dispatch', body); assert.equal(calls, 2, 'No automatic repeated retry or duplicate dispatch');
+  assert.equal(sourceJournal.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE state='conflict'").get().n, 0);
+});
+
+test('existing-task dispatch refuses terminal/busy tasks without consuming preparation or editing tasks', async t => {
+  const f = fixture(t); await f.ready();
+  const finished = f.command(f.owner, 'finished', 'task.create', { id: 'finished', title: 'Finished', status: 'done' });
+  const payload = { id: f.request.id, requesterAgentId: 'initiator', sourceConversationId: 'ses_source', sourceBindingRevision: 1,
+    taskId: finished.id, taskRevision: finished.revision, executionId: 'must-not-exist', instructions: 'No task recreation' };
+  assert.throws(() => f.command(f.actors.source, 'terminal', 'interactive.dispatch', payload), { code: 'task_terminal' });
+  const task = f.command(f.owner, 'busy-task', 'task.create', { id: 'busy', title: 'Busy' });
+  f.command(f.owner, 'existing-execution', 'execution.request', { id: 'manual', taskId: task.id, taskRevision: task.revision,
+    targetAgentId: f.request.agentId, instructions: 'Already assigned' });
+  assert.throws(() => f.command(f.actors.source, 'busy-dispatch', 'interactive.dispatch', { ...payload, taskId: task.id }), { code: 'task_busy' });
+  assert.equal(f.store.get('provision_request', f.request.id).dispatchedExecutionId, undefined);
+  assert.deepEqual(f.store.get('task', task.id), task); assert.equal(f.store.all('execution').length, 1);
+});
+
 test('ensure reuses an existing interactive receiver, while explicit replacement creates a new binding without closing the old pane', async t => {
   const f = fixture(t), original = await f.ready();
   const ensure = f.command(f.actors.source, 'ensure', 'interactive.request', { id: 'ensure', grantId: 'grant', nodeId: 'destination',
