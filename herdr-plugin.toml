@@ -1,6 +1,6 @@
 id = "quintindk.herdr-relay"
 name = "Herdr Relay"
-version = "0.2.1-rc1"
+version = "0.2.1-rc2"
 min_herdr_version = "0.9.3"
 platforms = ["linux", "macos"]
 description = "Native tasks, agent messaging and durable node services for Herdr."
