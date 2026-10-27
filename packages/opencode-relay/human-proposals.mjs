@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Rpc } from '@opencode/plugin/rpc';
 import { readFileSync } from 'node:fs';
+import { humanInput } from './native-input.mjs';
 
 export const proposalDigest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const HumanProposals = Rpc.define({
@@ -11,8 +12,7 @@ export const HumanProposals = Rpc.define({
 });
 
 export function humanSource(message) {
-  if (!message || message.type !== 'user' || !message.text?.trim() || message.metadata?.herdrRelayInvocation ||
-    message.metadata?.synthetic || message.metadata?.notification) throw new Error('Current human-source message required');
+  if (!humanInput(message)) throw new Error('Current human-source message required');
   return { id: message.id, text: message.text, createdAt: message.time.created };
 }
 

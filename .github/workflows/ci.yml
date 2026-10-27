@@ -52,6 +52,8 @@ jobs:
         run: node scripts/verify-cli-bridge.mjs --notice-read
       - name: Never-prompted receiving chat, instruction load and execution-scoped CLI
         run: node packages/opencode-relay/smoke-receivers.mjs --first-message
+      - name: Human steering, explicit historical recovery and independent human operations
+        run: node packages/opencode-relay/smoke-receivers.mjs --legacy-recovery
       - name: Native task-independent message smoke
         run: npm --prefix packages/opencode-relay run smoke:messages
       - name: Native reusable headless provisioning and schedule smoke
@@ -62,6 +64,8 @@ jobs:
         run: node scripts/verify-headless-setup.mjs --agent-grant --capabilities --shell
       - name: Approved headless task and artifact capability canaries
         run: node scripts/verify-headless-setup.mjs --capabilities
+      - name: Exact instruction revision approval, idle activation and refreshed native context
+        run: node scripts/verify-headless-setup.mjs --contract-update --capabilities
       - name: Actual headless cron admission, granted effects and result publication
         run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell
       - name: Headless MCP denied without connector permissions

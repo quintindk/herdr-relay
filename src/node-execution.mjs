@@ -1,9 +1,11 @@
 import { digest, now, requireValue } from './protocol.mjs';
 import { reconcileObservationConflict } from './native-observation-recovery.mjs';
+import { reconcileInteractiveWork, installInteractionPublicationGuard } from './native-interaction.mjs';
 
 // A bounded node tick. Native bindings are injected by the local runtime host.
 // Persist admission and prompt intent before crossing either external boundary.
 export async function tickNode(journal, api, resolveBinding) {
+  installInteractionPublicationGuard(journal, resolveBinding, api);
   let connected = true;
   try { await journal.flush(api); await journal.poll(api); }
   catch (error) {
@@ -72,12 +74,14 @@ export async function tickNode(journal, api, resolveBinding) {
       execution = execution.revision > recoveringAdmission.receipt.revision ? execution : recoveringAdmission.receipt;
       const answer = execution.answerQuestionId ? (await api('GET', `/v1/questions/${encodeURIComponent(execution.answerQuestionId)}`)).answer : null;
       const children = execution.childContinuationId ? await Promise.all(execution.childExecutionIds.map(id => api('GET', `/v1/executions/${encodeURIComponent(id)}`))) : [];
-      work = journal.save({ ...work, execution, answer, children, state: 'admitted', invocation: null, observation: null, interruption: null, staged: null });
+      work = journal.save({ ...work, execution, answer, children, state: 'admitted', invocation: null, observation: null, interruption: null, staged: null,
+        ...(work.interaction ? { interaction: null } : {}) });
     }
     if (['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(execution.state) || work.state === 'settled') continue;
     const binding = await resolveBinding(execution.targetAgentId, work.bindingId ? work : undefined);
     if (!binding) continue;
-    work = await reconcileObservationConflict(journal, binding, work);
+    work = await reconcileInteractiveWork(journal, binding, work);
+    if (!work.interaction) work = await reconcileObservationConflict(journal, binding, work);
     const exactConversation = binding.identity?.sessionId ?? binding.conversationId ?? null;
     if (work.nativeConversationId && work.nativeConversationId !== exactConversation) {
       journal.save({ ...work, state: 'conflict', error: 'native_conversation_replaced' }); continue;
@@ -135,7 +139,8 @@ export async function tickNode(journal, api, resolveBinding) {
       execution = receipt.receipt;
       const answer = execution.answerQuestionId ? (await api('GET', `/v1/questions/${encodeURIComponent(execution.answerQuestionId)}`)).answer : null;
       const children = execution.childContinuationId ? await Promise.all(execution.childExecutionIds.map(id => api('GET', `/v1/executions/${encodeURIComponent(id)}`))) : [];
-      work = journal.save({ ...work, execution, answer, children, state: 'admitted', invocation: null, observation: null, interruption: null, staged: null });
+      work = journal.save({ ...work, execution, answer, children, state: 'admitted', invocation: null, observation: null, interruption: null, staged: null,
+        ...(work.interaction ? { interaction: null } : {}) });
     }
     if (!['accepted', 'waiting', 'waiting_children', 'waiting_time', 'monitor_review', 'monitor_blocked'].includes(execution.state) || work.state === 'conflict') continue;
     if (work.bindingId !== binding.id) continue;
@@ -153,6 +158,7 @@ export async function tickNode(journal, api, resolveBinding) {
       if (!snapshot.idle || snapshot.inbox?.length) continue;
       const invocation = { runId: execution.runId, messageId: `msg_${digest([execution.id, execution.runId])}`, priorMessageIds: snapshot.messages.map(message => message.id),
         ...(binding.prepareInvocation?.(snapshot) ?? {}),
+        ...(binding.interactive && !binding.headlessSetupId ? { interactive: true } : {}),
         prompt: `Relay execution ${execution.id}, run ${execution.runId}.\n${execution.instructions}\n` +
           (work.answer ? `Clarification answer: ${work.answer.body}\n` : '') +
           (work.children?.length ? `Child result receipts for inspection: ${JSON.stringify(work.children.map(child => ({ id: child.id, revision: child.revision,
@@ -171,7 +177,8 @@ export async function tickNode(journal, api, resolveBinding) {
       try { await binding.interrupt(); }
       catch (error) { journal.save({ ...journal.work(work.id), interruption: { ...work.interruption, error: error.code ?? 'interrupt_uncertain' } }); }
     }
-    const observation = ['native_finished', 'settled_waiting'].includes(work.state) && work.observation?.state === 'finished' ?
+    work = await reconcileInteractiveWork(journal, binding, work);
+    const observation = work.interaction ? work.observation : ['native_finished', 'settled_waiting'].includes(work.state) && work.observation?.state === 'finished' ?
       work.observation : binding.observe(await binding.native.snapshot(), work.invocation);
     if (observation.state !== 'finished') {
       journal.save({ ...journal.work(work.id), observation, state: observation.state === 'conflict' ? 'conflict' : work.state });
@@ -185,7 +192,7 @@ export async function tickNode(journal, api, resolveBinding) {
       journal.queue({ key: `settle:${digest([execution.id, execution.runId])}`, action: 'execution.settle', payload: {
         id: execution.id, expectedRevision: execution.revision, outcome: execution.cancellationRequested ? 'cancelled' : 'failed',
         evidence: `Exact native terminal ${observation.messageId}, outcome ${observation.outcome}`,
-      } });
+      } }, { inputRevision: execution.cancellationRequested ? undefined : work.interaction?.revision });
       continue;
     }
     if (work.staged && observation.outcome === 'succeeded' && execution.state === 'accepted') {
@@ -199,18 +206,18 @@ export async function tickNode(journal, api, resolveBinding) {
       }
       else if (work.staged.kind === 'children') {
         journal.queue({ key: `children-wait:${digest([execution.id, execution.runId, work.staged])}`, action: 'execution.wait_children',
-          payload: { id: execution.id, expectedRevision: execution.revision, childExecutionIds: work.staged.payload.childExecutionIds } });
+          payload: { id: execution.id, expectedRevision: execution.revision, childExecutionIds: work.staged.payload.childExecutionIds } }, { inputRevision: work.interaction?.revision });
         journal.save({ ...work, state: 'settled_waiting' });
       } else if (work.staged.kind === 'delay') {
         journal.queue({ key: `delay:${digest([execution.id, execution.runId, work.staged])}`, action: 'execution.delay',
-          payload: { id: execution.id, expectedRevision: execution.revision, until: work.staged.payload.until, reason: work.staged.payload.reason } });
+          payload: { id: execution.id, expectedRevision: execution.revision, until: work.staged.payload.until, reason: work.staged.payload.reason } }, { inputRevision: work.interaction?.revision });
         journal.save({ ...work, state: 'settled_waiting' });
       } else {
         journal.queue({ key: `question:${digest([execution.id, execution.runId, work.staged])}`, action: 'question.ask', payload: {
           id: `question_${digest([execution.id, execution.runId, work.staged.key])}`, executionId: execution.id,
           expectedRevision: execution.revision, prompt: work.staged.payload.prompt, blocking: true,
           humanRequired: work.staged.payload.humanRequired ?? false,
-        } });
+        } }, { inputRevision: work.interaction?.revision });
         journal.save({ ...work, state: 'settled_waiting' });
       }
     }
@@ -228,8 +235,8 @@ export function submitNodeResult(journal, executionId, result) {
   requireValue(work?.state === 'native_finished' && work.observation?.outcome === 'succeeded',
     'native_unsettled', 'Successful exact native settlement required before result publication');
   const e = work.execution;
-  journal.queue({ key: `submit:${digest([e.id, e.runId, result])}`, action: 'execution.submit', payload: {
+  journal.queue({ key: `submit:${digest([e.id, e.runId, result, ...(work.interaction ? [work.interaction.revision] : [])])}`, action: 'execution.submit', payload: {
     id: e.id, expectedRevision: e.revision, candidate: result.candidate, summary: result.summary,
     evidence: `Native terminal ${work.observation.messageId}, run ${e.runId}`,
-  } });
+  } }, { inputRevision: work.interaction?.revision });
 }

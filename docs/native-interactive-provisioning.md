@@ -173,6 +173,57 @@ agent even on approval-notice turns without an active execution. Use the default
 worker context, not `{operator}`. The preparation read remains requester-scoped.
 The notice is still evidence, not new human authority for mutation or dispatch.
 
+## Human steering and historical input recovery
+
+An accepted interactive assignment can span human corrections in a busy native
+turn and subsequent human turns after idle. The node records adopted native input
+IDs and an input revision without recreating the task, changing its execution or
+replaying the original invocation. Its terminal evidence belongs to the turn after
+the latest adopted input. An earlier successful idle marker is not evidence that
+later instructions were completed, and native success alone is never a submitted
+Relay result.
+
+Only verified interactive receiver bindings use this policy. Scheduled/headless
+work, other Relay invocations, peer notifications and identity/control changes do
+not gain human steering or operator authority. A different assignment remains a
+separate work decision. The runtime does not guess task switches from keywords.
+
+Staged outcomes record their input revision. New steering retains obsolete staged
+outcomes as superseded evidence. Unattempted stale publications are retired without
+being sent. A publication already attempted when input changes remains explicitly
+fenced while the owning node inspects its exact backend receipt without replay.
+A confirmed receipt records the original effect and identifies later input as
+not covered by that submission. An absent receipt proves non-application only
+when the backend also atomically confirms an execution revision that fences the
+original command. Otherwise it remains blocked, not declared unapplied. Older or
+unavailable backends cannot supply this proof. Effects already sent cannot be
+undone by this fence.
+
+RC1 conflicts are not silently cleared during an upgrade. From the existing chat,
+inspect `relay_work_read` and `relay_attachment_status`, then use:
+
+```text
+relay_interactive_reconcile({operation:"preview", executionId:"EXACT_EXECUTION"})
+relay_interactive_reconcile({operation:"apply", executionId:"EXACT_EXECUTION",
+  key:"input-recovery-v1", previewHash:"EXACT_PREVIEW_HASH"})
+```
+
+Application requires a current human request and an unchanged preview, current
+receiver, accepted uncancelled backend execution and unambiguous native input
+history. Pending publications and hard boundaries are not cleared by it. The
+original invocation and prior conflict remain recorded. Recovery does not send a
+prompt, submit a result, close a task or cancel/redispatch work. Continue in the
+same chat under the recovered assignment. A subsequent steering message changes
+the preview and must be inspected before applying it.
+
+An earlier task's answered question can leave a separate `continuation_ready`
+execution on the same receiver. Do not replay its question or let recovery
+silently adopt it as the current assignment. If it is obsolete, its separately
+authorised cancellation must settle before that task can become Done. This does
+not make the earlier task a dependency of the successor.
+
+Isolated real-host gate: `node packages/opencode-relay/smoke-receivers.mjs --legacy-recovery`.
+
 ## Model selection
 
 Reusing a conversation preserves its human-selected model. New conversations

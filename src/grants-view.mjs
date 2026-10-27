@@ -23,6 +23,9 @@ export function buildGrantsView({ requests = [], decisions = [], grants = {}, ag
       ...(scope.contract ? [`Job contract: ${scope.contract}`] : []),
       ...(scope.capabilities?.sourceNamespaces ? [`Source namespaces: ${scope.capabilities.sourceNamespaces.join(', ')}`] : []),
       ...Object.entries(scope.capabilities?.artifacts ?? {}).map(([kind, path]) => `Artifact ${kind}: ${path}`)] :
+      kind === 'headless_contract' ? ['Update this exact instruction revision only. No expansion of existing business scope or capabilities is granted. Review content against the existing job purpose.',
+        `Base digest: ${raw.operation.fromDigest}`, `Preview digest: ${raw.requestHash}`,
+        ...raw.operation.files.flatMap(f => [`File: ${f.path}`, '--- Approved content', f.before ?? '(new file)', '+++ Proposed content', f.after])] :
       kind === 'reference' ? [`Allocate ${raw.prefix} task references`] : ['Review opted-in direct child results'];
     return { kind, entityId: raw.id, revision: raw.revision, requesterAgentId: requester?.id ?? raw.requesterAgentId,
       requesterName: requester?.name ?? (kind === 'reference' ? 'Node namespace' : 'Not recorded'), nodeId,
@@ -32,8 +35,8 @@ export function buildGrantsView({ requests = [], decisions = [], grants = {}, ag
         : kind === 'reference' ? `Maximum reference number: ${raw.maxNumber}` : kind === 'review' ? 'Only this parent execution and its opted-in children' : 'Only the recorded job contract and capabilities',
       scope, raw };
   };
-  const pending = requests.filter(r => r.state === 'awaiting_approval').map(r => ({ ...base('interactive', r),
-    id: `request:${r.id}`, section: 'pending', title: `Permission requested · ${r.name}`, summary: `${agent(r.requesterAgentId)?.name ?? r.requesterAgentId} → ${node(r.nodeId)?.name ?? r.nodeId}`,
+  const pending = requests.filter(r => r.state === 'awaiting_approval').map(r => ({ ...base(r.kind ?? 'interactive', r),
+    id: `request:${r.id}`, section: 'pending', title: `${r.kind === 'headless_contract' ? 'Instruction revision' : 'Permission requested'} · ${r.name}`, summary: `${agent(r.requesterAgentId)?.name ?? r.requesterAgentId} → ${node(r.nodeId)?.name ?? r.nodeId}`,
     stateLabel: 'Awaiting approval', requestHash: r.requestHash, topic: r.operation.topic, scope: r.scope }));
   const active = [], history = [];
   for (const [kind, records] of Object.entries(grants)) for (const raw of records) {

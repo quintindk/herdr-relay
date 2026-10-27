@@ -22,3 +22,10 @@ export function completionInput(message, preceding) {
 export function supportingInput(message, preceding) {
   return instructionInput(message) || completionInput(message, preceding);
 }
+
+// Native user input is collaboration only inside a verified interactive binding.
+// Relay/peer envelopes and synthetic prose never become human permission.
+export function humanInput(message) {
+  return message?.type === 'user' && typeof message.text === 'string' && !!message.text.trim() &&
+    !message.metadata?.herdrRelayInvocation && !message.metadata?.synthetic && !message.metadata?.notification && !message.metadata?.source;
+}

@@ -23,6 +23,17 @@ compatibility: opencode
 
 ## Boundaries
 
+- In a verified interactive chat, ordinary human follow-ups steer the current
+  assignment. They do not require a replacement execution. Later turns need their
+  own terminal evidence; never submit a pre-correction outcome as current work.
+- Work reads expose `inputRevision`. Direct tools recheck it automatically. CLI
+  workers must pass `--input-revision VALUE` on subsequent mutations. A stale
+  revision requires reading the new input, not inventing a result or retrying old
+  effects. Staged and published remain distinct.
+- Historical input conflicts have an inspected human-authorised recovery path.
+  Do not clear journals or borrow operator credentials. Separate human operations
+  can use their proper configured human route; worker scope itself is unchanged.
+
 - Cancellation is a stop request, not a completion receipt. Do not submit success
   after cancellation or invent terminal evidence for an interrupted runtime.
 - Review policy is supplied by the assignment. `none` does not relax tool

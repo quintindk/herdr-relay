@@ -160,6 +160,12 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
         if (!info.features?.scheduledHeadlessAdmission) {
           saveOccurrence('pending', { admission: { state: 'blocked', reason: 'Backend upgrade required for headless cron admission' } }); continue;
         }
+        if (info.features.headlessContractRevisions) {
+          const { setup } = await api('GET', `/v1/headless_setups/${binding.headlessSetupId}/authority`);
+          if (setup.contract && setup.appliedContractRevision !== setup.contract.revision) {
+            saveOccurrence('pending', { admission: { state: 'deferred', reason: 'contract_activation_pending' } }); continue;
+          }
+        }
         if (!capacityAvailable()) continue;
         const command = { key: `schedule-admit:${occurrence.id}`, action: 'schedule.admit', payload: {
           id: occurrence.id, scheduleId: occurrence.scheduleId, definitionRevision: occurrence.definition.revision, intendedAt: occurrence.intendedAt,

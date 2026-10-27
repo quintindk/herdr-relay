@@ -178,6 +178,28 @@ compatibility: opencode
 
 ## Installation and recovery
 
+- Ordinary human corrections in a verified interactive chat steer its current
+  assignment, including after a native idle boundary. Do not routinely cancel or
+  redispatch it. A native successful turn is not a submitted Relay result.
+- For an older `concurrent_native_input` conflict, use
+  `relay_interactive_reconcile` to preview the exact execution, then apply its
+  returned hash under a current human request and immutable key. It retains the
+  old invocation/conflict and never replays a prompt or fabricates completion.
+  Ambiguous ownership, pending publications and cancellation remain fenced.
+- A separate current human task operation uses the configured CLI operator route,
+  not expanded worker credentials. Do not infer a chat-wide restriction from an
+  assigned scope or invent an unattempted refusal. Inspect actual CLI arguments,
+  selected context and errors. An earlier task's unsettled continuation is its own
+  lifecycle obligation, not a dependency of the current assignment.
+- Update approved headless instructions with `relay_headless_contract`: preview
+  exact candidate file content, request approval with that preview hash, then let
+  the human approve the instruction revision in Grants. Do not edit the live
+  approved skill, issue a replacement grant, repeat unchanged business-scope
+  approval or approve your own proposal. Include linked collection protocols in
+  the pinned bundle. Activation waits for settlement and node acknowledgement.
+  It preserves the worker, grant, authentication and schedule. Capability changes
+  require their own security flow. Readiness/activation is not business success.
+
 - CLI activation, node/plugin service changes and skill installation are distinct.
   `release install` activates a verified release. Service changes require an
   explicit upgrade. Use the candidate CLI when upgrading from an older buggy CLI.

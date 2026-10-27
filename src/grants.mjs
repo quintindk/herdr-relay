@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { canonicalDirectory, withinRoots, interactiveOperationHash } from './interactive-contract.mjs';
+import { approveContractUpdate } from './headless-contract.mjs';
 
 const fields = (p, allowed, required = allowed) => requireValue(p && typeof p === 'object' && !Array.isArray(p) &&
   Object.keys(p).every(k => allowed.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_grant_request', 'Missing or unsupported grant fields');
@@ -109,6 +110,13 @@ export function applyGrantAction(store, actor, action, p, { created, changed }) 
     requireValue(['approve_once', 'allow_scope', 'reject'].includes(p.decision), 'invalid_grant_decision', 'Choose approve once, allow scope or reject');
     requireValue(p.reason === undefined || typeof p.reason === 'string' && p.reason.length <= 4000, 'invalid_request', 'Bounded decision reason required');
     const decision = { decision: p.decision, requestHash: request.requestHash, reason: p.reason ?? '', decidedBy: grantDecider(actor), at: now() };
+    if (request.kind === 'headless_contract') {
+      requireValue(['approve_once', 'reject'].includes(p.decision) && p.scope === undefined, 'invalid_grant_decision', 'Approve this exact instruction revision or reject it; standing scope is unchanged');
+      const result = p.decision === 'reject' ? changed('grant_request', request, { state: 'rejected', decision }) : approveContractUpdate(store, actor, request, changed, decision);
+      record({ requestId: request.id, grantKind: 'headless_contract', outcome: p.decision === 'reject' ? 'rejected' : 'instructions_approved',
+        reason: decision.reason, requestHash: request.requestHash });
+      return result;
+    }
     if (p.decision === 'reject') {
       record({ requestId: request.id, grantKind: 'interactive', outcome: 'rejected', reason: decision.reason });
       return changed('grant_request', request, { state: 'rejected', decision });

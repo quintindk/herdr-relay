@@ -36,9 +36,13 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
+        features: { headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
+      else if (req.method === 'GET' && /^\/v1\/command-receipts\/[^/]+$/.test(url.pathname)) {
+        requireValue(url.searchParams.size === 1 && url.searchParams.has('executionId'), 'invalid_query', 'Exact owning execution required');
+        result = store.commandReceipt(actor, decodeURIComponent(url.pathname.split('/')[3]), url.searchParams.get('executionId'));
+      }
       else if (req.method === 'GET' && /^\/v1\/nodes\/[^/]+\/provisioning-policy$/.test(url.pathname)) result = nodeGrantPolicy(store, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && /^\/v1\/headless_setups\/[^/]+\/authority$/.test(url.pathname)) result = headlessAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));

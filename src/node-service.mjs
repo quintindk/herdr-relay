@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
-import { chmodSync, existsSync, unlinkSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { chmodSync, existsSync, unlinkSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { headlessArtifactOperation, recordHeadlessObservation, probeHeadlessArtifacts } from './headless-artifacts.mjs';
 import { headlessProbeId } from './headless-setup-contract.mjs';
 import { digest, requireValue, RelayError, canonical } from './protocol.mjs';
@@ -8,10 +8,12 @@ import { nativeTasksProvider } from './tasks-provider.mjs';
 import { herdrInventory } from './node-discovery.mjs';
 import { nativeReadApi } from './native-worker-api.mjs';
 import { reconcileDispatchIdentity, refusedDispatchErrors, dispatchReceipt } from './interactive-dispatch-reconciliation.mjs';
+import { reconcileInteractiveWork, previewInteractiveRecovery, applyInteractiveRecovery } from './native-interaction.mjs';
+import { inspectContract, previewContractUpdate } from './node-headless-contract.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
-export async function startNodeService({ journal, socketPath, workers, api, tasks, getNativeModel, getHeadlessConnections, getHeadlessAccess, getBackendFeatures, maintenance = () => false }) {
+export async function startNodeService({ journal, socketPath, workers, api, tasks, resolveBinding, getNativeModel, getHeadlessConnections, getHeadlessAccess, getBackendFeatures, maintenance = () => false }) {
   tasks ??= api ? { ...nativeTasksProvider(api), type: 'native' } : null;
   requireValue(!existsSync(socketPath), 'socket_exists', 'Node socket already exists. Verify the old service before removing it');
   const server = createServer(async (req, res) => {
@@ -30,7 +32,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       catch { throw new RelayError('invalid_json', 'JSON request required'); }
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
       const path = new URL(req.url, 'http://node').pathname;
-      const readOnly = ['/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
+      const readOnly = ['/agent/interactive-reconcile-preview', '/agent/headless-contract-preview', '/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
         '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/task-identity', '/agent/comments', '/agent/relations',
         '/agent/questions', '/agent/messages', '/agent/message', '/agent/headless-status', '/agent/headless-grants', '/agent/headless-access', '/agent/headless-connections'];
       requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
@@ -43,11 +45,41 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         (!worker.bindingId || work.bindingId === worker.bindingId);
       const checkContract = (setup, grant) => {
         const op = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`headless-op:${setup.id}`);
-        if (!op) return;
-        const path = join(setup.directory, grant.contract);
-        requireValue(existsSync(path) && JSON.parse(op.value).contractDigest === digest(readFileSync(path, 'utf8')),
-          'job_contract_changed', 'The authorised job contract changed; reauthorisation required');
+        if (!op) { requireValue(!setup.contract, 'job_contract_missing', 'Pinned instruction state is missing'); return; }
+        return inspectContract(journal, setup, grant);
       };
+      if (['/agent/headless-contract-preview', '/agent/headless-contract-request'].includes(path)) {
+        currentReceiver();
+        requireValue(api && !worker.headlessSetupId && (await getBackendFeatures?.())?.headlessContractRevisions,
+          'headless_requester_scope', 'Interactive coordinator and contract-revision capable backend required', 403);
+        requireValue(Object.keys(body).every(k => ['setupId', 'files', 'key', 'previewHash'].includes(k)) && typeof body.setupId === 'string', 'invalid_contract_update', 'Exact setup and candidate files required');
+        const { setup, grant } = await api('GET', `/v1/headless_setups/${encodeURIComponent(body.setupId)}/authority`);
+        requireValue(setup.requesterAgentId === worker.agentId && setup.nodeId === journal.nodeId && setup.directory === grant.directory,
+          'headless_requester_scope', 'Only the original local coordinator may update instructions', 403);
+        const request = path.endsWith('request');
+        const key = `contract-request:${worker.agentId}:${body.key}`;
+        const previous = request && journal.receipt(key);
+        if (previous) {
+          requireValue(previous.command.payload.previewHash === body.previewHash &&
+            digest(previous.command.payload.files.map(f => ({ path: f.path, content: f.after }))) === digest(body.files), 'operation_conflict', 'Original instruction request changed');
+          await journal.flush(api);
+          res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(journal.receipt(key))); return;
+        }
+        const preview = previewContractUpdate(journal, setup, grant, body.files);
+        let result = preview;
+        if (request) {
+          requireValue(typeof body.key === 'string' && /^[A-Za-z0-9:_.-]{1,100}$/.test(body.key) && body.previewHash === preview.previewHash,
+            'stale_contract_preview', 'Stable key and exact preview hash required');
+          requireValue(!journal.works().some(w => ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state)),
+            'headless_human_context_required', 'Assigned executions cannot authorise instruction updates', 403);
+          journal.queue({ key, action: 'headless.contract_request', payload: { id: `contract_${digest([worker.agentId, body.key])}`,
+            setupId: setup.id, expectedRevision: setup.revision, grantRevision: grant.revision, fromDigest: preview.fromDigest,
+            files: preview.files, previewHash: preview.previewHash, requesterAgentId: worker.agentId,
+            sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision } });
+          await journal.flush(api); result = journal.receipt(key);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
       if (path === '/agent/native-api') {
         currentReceiver();
         requireValue(api && !worker.headlessSetupId && Object.keys(body).length === 1 && body.request,
@@ -55,13 +87,45 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const result = await nativeReadApi(api, body.request, worker);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
+      if (['/agent/interactive-reconcile-preview', '/agent/interactive-reconcile-apply'].includes(path)) {
+        currentReceiver();
+        requireValue(api && resolveBinding && !worker.headlessSetupId && Object.keys(body).every(k => ['executionId', 'key', 'previewHash', 'sourceMessageId'].includes(k)),
+          'recovery_ineligible', 'Exact local interactive recovery required');
+        const work = journal.work(body.executionId);
+        requireValue(ownsWork(work), 'forbidden', 'Recovery belongs to another assignment', 403);
+        const key = `interactive-recovery:${worker.agentId}:${body.key}`;
+        const applied = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+        if (path.endsWith('apply') && applied) {
+          const previous = JSON.parse(applied.value);
+          requireValue(previous.previewHash === body.previewHash && previous.sourceMessageId === body.sourceMessageId && previous.executionId === body.executionId,
+            'operation_conflict', 'Recovery key changed');
+          res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(previous)); return;
+        }
+        const fresh = await api('GET', `/v1/executions/${encodeURIComponent(work.id)}`);
+        requireValue(fresh.state === 'accepted' && !fresh.cancellationRequested && fresh.revision === work.execution.revision && fresh.runId === work.execution.runId,
+          'recovery_ineligible', 'Backend execution changed; inspect it again');
+        const binding = await resolveBinding(worker.agentId, work), preview = await previewInteractiveRecovery(journal, binding, work);
+        let result = preview;
+        if (path.endsWith('apply')) {
+          const current = await api('GET', `/v1/executions/${encodeURIComponent(work.id)}`);
+          requireValue(current.revision === fresh.revision && !current.cancellationRequested && current.state === 'accepted', 'recovery_ineligible', 'Execution changed during recovery inspection');
+          requireValue(typeof body.key === 'string' && /^[A-Za-z0-9:_.-]{1,100}$/.test(body.key) && preview.previewHash === body.previewHash,
+            'stale_recovery_preview', 'Exact preview and immutable key required');
+          result = journal.transaction(() => {
+            const recovered = applyInteractiveRecovery(journal, work, preview, body.sourceMessageId);
+            const receipt = { state: 'applied', executionId: work.id, previewHash: body.previewHash, sourceMessageId: body.sourceMessageId, localState: recovered.state, promptReplayed: false };
+            journal.db.prepare('INSERT INTO settings VALUES (?,?)').run(key, JSON.stringify(receipt)); return receipt;
+          });
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
       if (path === '/agent/headless-access') {
         requireValue(api && worker.headlessSetupId && Object.keys(body).length === 0, 'headless_grant_required', 'Exact headless worker scope required', 403);
         const result = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
         requireValue(result.setup.agentId === worker.agentId && result.setup.sessionId === worker.sessionId, 'headless_scope_mismatch', 'Headless session scope changed', 403);
-        checkContract(result.setup, result.grant);
+        const contract = checkContract(result.setup, result.grant);
         const { accessReferences } = await import('../packages/opencode-relay/headless-access.mjs');
-        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(accessReferences(result.grant))); return;
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ...accessReferences(result.grant), ...contract })); return;
       }
       if (path === '/agent/headless-connections') {
         currentReceiver(); requireValue(Object.keys(body).length === 0 && getHeadlessConnections, 'native_integration_unavailable', 'Existing authenticated OpenCode connection discovery unavailable');
@@ -112,9 +176,14 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           const installed = local && JSON.parse(local.data);
           let blocker = setup.blocker ?? null;
           try { const authority = await api('GET', `/v1/headless_setups/${setup.id}/authority`); checkContract(setup, authority.grant); await getHeadlessAccess?.(worker, setup); } catch (error) { blocker = error.code ?? 'headless_grant_unavailable'; }
-          result = { id: setup.id, agentId: setup.agentId, scheduleId: setup.scheduleId, state: blocker ? setup.state === 'ready' || setup.state === 'blocked' ? 'blocked' : 'waiting_for_access' : setup.state === 'ready' && schedule?.appliedRevision !== schedule?.revision ? 'awaiting_schedule_ack' : setup.state,
+          const activationPending = setup.contract && setup.appliedContractRevision !== setup.contract.revision;
+          const opRow = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`headless-op:${setup.id}`);
+          const op = opRow ? JSON.parse(opRow.value) : null;
+          result = { id: setup.id, agentId: setup.agentId, scheduleId: setup.scheduleId, state: blocker ? setup.state === 'ready' || setup.state === 'blocked' ? 'blocked' : 'waiting_for_access' : setup.contract && setup.appliedContractRevision !== setup.contract.revision ? 'awaiting_contract_activation' : setup.state === 'ready' && schedule?.appliedRevision !== schedule?.revision ? 'awaiting_schedule_ack' : setup.state,
             blocker, revision: schedule?.revision ?? null, appliedRevision: schedule?.appliedRevision ?? null,
-            nextFiring: !blocker && installed?.state === 'active' ? installed.nextAt : null, runtime: 'shared-auth-headless', restartRequired: false };
+            contract: setup.contract ?? null, appliedContractRevision: setup.appliedContractRevision ?? 0,
+            contractActivation: setup.contractActivation ? { ...setup.contractActivation, localState: op?.contractActivation?.state ?? null, blocker: activationPending ? op?.contractBlocker ?? null : null } : null,
+            nextFiring: !blocker && !activationPending && installed?.state === 'active' ? installed.nextAt : null, runtime: 'shared-auth-headless', restartRequired: false };
         }
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
@@ -298,16 +367,21 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       if (path === '/work/current') {
         requireValue(typeof worker.sessionId === 'string' && body.sessionId === worker.sessionId && Object.keys(body).length === 1,
           'forbidden', 'Exact enrolled native session required', 403);
+        if (resolveBinding) for (const work of journal.works().filter(work => ownsWork(work) && work.execution.state === 'accepted')) {
+          const binding = await resolveBinding(worker.agentId, work);
+          if (binding) await reconcileInteractiveWork(journal, binding, work);
+        }
         const matching = journal.works().filter(work => ownsWork(work) && work.execution.state === 'accepted');
         const candidates = matching.filter(work =>
           ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && work.execution.state === 'accepted');
         const conflicts = matching.filter(work => work.state === 'conflict');
-        const current = candidates.length === 1 ? candidates[0] : candidates.length === 0 && conflicts.length === 1 ? conflicts[0] : null;
+        const current = matching.length !== 1 ? null : candidates.length === 1 ? candidates[0] : candidates.length === 0 && conflicts.length === 1 ? conflicts[0] : null;
         requireValue(current, 'work_ambiguous', matching.length ? 'Multiple or non-running execution records require inspection' :
           'No active execution in this chat. Enrolment and schedule ownership do not themselves start a worker run', 409);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ execution: current.execution, answer: current.answer ?? null, localState: current.state, sourceMessageId: current.invocation?.messageId ?? null,
-          blocked: current.state === 'conflict', observation: current.observation ?? null, recovery: current.recovery ?? null })); return;
+          blocked: current.state === 'conflict', observation: current.observation ?? null, recovery: current.recovery ?? null,
+          inputRevision: current.interaction?.revision ?? null, interaction: current.interaction ?? null })); return;
       }
       if (path === '/work/children') {
         const parent = journal.work(body.executionId);
@@ -352,14 +426,20 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         }
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
-      const work = journal.work(body.executionId);
+      let work = journal.work(body.executionId);
       requireValue(ownsWork(work) && work.execution.runId === body.runId,
         'forbidden', 'Exact current worker execution required', 403);
+      if (resolveBinding) {
+        const binding = await resolveBinding(worker.agentId, work);
+        if (binding) work = await reconcileInteractiveWork(journal, binding, work);
+      }
+      if (work.interaction && path !== '/work/read') requireValue(body.inputRevision === work.interaction.revision,
+        'stale_input_revision', 'Human input changed. Read the current execution before acting', 409);
       let result;
       if (path === '/work/native-api') {
         requireValue(api && !worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
           ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && body.sourceMessageId === work.invocation?.messageId &&
-          Object.keys(body).every(key => ['executionId', 'runId', 'sourceMessageId', 'request'].includes(key)),
+          Object.keys(body).every(key => ['executionId', 'runId', 'sourceMessageId', 'inputRevision', 'request'].includes(key)),
         'execution_source_required', 'Native CLI requires this exact active interactive execution, not a human operator context', 403);
         const request = body.request;
         requireValue(request && Object.keys(request).every(key => ['method', 'path', 'body'].includes(key)) &&
@@ -391,7 +471,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           result = receipt.receipt;
         }
       }
-      else if (path === '/work/read') result = { execution: work.execution, localState: work.state,
+      else if (path === '/work/read') result = { execution: work.execution, localState: work.state, inputRevision: work.interaction?.revision ?? null,
         answer: work.answer ?? null, cancellationRequested: work.execution.cancellationRequested };
       else if (path === '/work/headless-access') {
         requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested &&
@@ -399,8 +479,8 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const result = await api('POST', '/v1/headless/read', { operation: 'permissions', executionId: work.id, runId: body.runId });
         requireValue(result.id === worker.headlessSetupId && result.sessionId === worker.sessionId, 'headless_scope_mismatch', 'Connector grant belongs to another worker', 403);
         const authority = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
-        checkContract(authority.setup, authority.grant);
-        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ...result, outcomeStaged: Boolean(work.staged) })); return;
+        const contract = checkContract(authority.setup, authority.grant);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ...result, ...contract, outcomeStaged: Boolean(work.staged) })); return;
       }
       else if (['/work/headless-task', '/work/headless-reference', '/work/headless-artifacts', '/work/headless-observation', '/work/headless-capabilities', '/work/headless-scope'].includes(path)) {
         requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
@@ -466,7 +546,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       else if (path === '/work/delegate') {
         requireValue(api && work.execution.allowDelegation && work.execution.state === 'accepted' && !work.execution.cancellationRequested &&
           !work.staged, 'delegation_not_authorised', 'Current execution needs an explicit delegation grant', 403);
-        requireValue(Object.keys(body).every(key => ['executionId', 'runId', 'key', 'payload'].includes(key)) && body.payload &&
+        requireValue(Object.keys(body).every(key => ['executionId', 'runId', 'inputRevision', 'key', 'payload'].includes(key)) && body.payload &&
           typeof body.key === 'string' && body.key.trim() &&
           Object.keys(body.payload).every(key => ['taskId', 'id', 'title', 'instructions', 'targetAgentId', 'reviewPolicy', 'reviewGrantId'].includes(key)),
         'invalid_request', 'Unsupported delegation fields');
@@ -487,7 +567,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       else if (['/work/ask', '/work/submit', '/work/wait-children', '/work/delay'].includes(path)) {
         requireValue(['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) &&
           !work.execution.cancellationRequested && work.execution.state === 'accepted', 'execution_inactive', 'Current worker turn required');
-        requireValue(Object.keys(body).every(key => ['executionId', 'runId', 'key', 'payload'].includes(key)) &&
+        requireValue(Object.keys(body).every(key => ['executionId', 'runId', 'inputRevision', 'key', 'payload'].includes(key)) &&
           typeof body.key === 'string' && body.key.length > 0 && body.payload && typeof body.payload === 'object', 'invalid_request', 'Key and payload required');
         let kind = path === '/work/ask' ? 'question' : path === '/work/wait-children' ? 'children' : path === '/work/delay' ? 'delay' : 'result';
         requireValue(!work.execution.localOccurrence || ['result', 'question'].includes(kind), 'unsupported_operation', 'Scheduled work supports questions/results only');
@@ -502,7 +582,8 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           typeof body.payload.summary === 'string' && body.payload.summary.trim() && body.payload.summary.length <= 16000),
         'invalid_request', 'Invalid worker outcome');
         if (kind === 'result' && work.execution.monitor) kind = 'monitor_result';
-        const staged = { kind, key: body.key, payload: body.payload, runId: body.runId };
+        const staged = { kind, key: body.key, payload: body.payload, runId: body.runId,
+          ...(work.interaction ? { inputRevision: work.interaction.revision, anchorId: work.interaction.anchorId } : {}) };
         journal.transaction(() => {
           const current = journal.work(work.id);
           requireValue(!current.staged || canonical(current.staged) === canonical(staged), 'operation_conflict', 'Worker outcome already recorded');

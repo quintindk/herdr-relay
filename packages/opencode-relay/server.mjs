@@ -12,7 +12,7 @@ import { registerHeadlessPermissionTools } from './headless-shell.mjs';
 import { waitHeadlessSetup } from '../../src/headless-setup-wait.mjs';
 import { digest } from '../../src/protocol.mjs';
 import { readAttachmentStatus } from './attachment-status.mjs';
-import { registerCliBridge } from './cli-bridge.mjs';
+import { registerCliBridge, interactiveCliSource } from './cli-bridge.mjs';
 import { registerHeadlessGrantTools } from './headless-grant-tools.mjs';
 
 export default Plugin.define({
@@ -43,11 +43,18 @@ export default Plugin.define({
           const connection = workerConnection(ctx.options, context.sessionID);
           if (connection.sessionId !== context.sessionID) throw new Error('Worker tool belongs to another exact conversation');
           const current = await call(connection, 'POST', '/work/current', { sessionId: context.sessionID });
+          if (current.interaction && action !== 'read') {
+            const messages = await ctx.session.context({ sessionID: context.sessionID });
+            const caller = messages.findIndex(message => message.id === context.messageID);
+            const anchor = messages.findIndex(message => message.id === current.interaction.anchorId);
+            if (caller < 0 || anchor < 0 || anchor > caller) throw new Error('stale_input_revision: New human input arrived after this tool invocation');
+          }
           if (action !== 'read' && current.blocked) throw new Error(`Execution blocked: ${current.observation?.reason ?? current.localState}. Inspect relay_work_read; no mutation was attempted`);
           const payload = action === 'ask' ? { prompt: input.prompt, humanRequired: input.humanRequired ?? false } :
             action === 'submit' ? { candidate: input.candidate, summary: input.summary } : input.payload;
           const result = action === 'read' ? current : await call(connection, 'POST', `/work/${action}`, {
             executionId: current.execution.id, runId: current.execution.runId,
+            ...(current.inputRevision ? { inputRevision: current.inputRevision } : {}),
             ...(input.key ? { key: input.key } : {}), ...(payload ? { payload } : {}),
           });
           return { content: JSON.stringify(result) };
@@ -107,6 +114,19 @@ export default Plugin.define({
           if (connection.sessionId !== context.sessionID) throw new Error('Agent tool belongs to another exact conversation');
           return { content: JSON.stringify(await call(connection, 'POST', `/agent/${action}`, input)) };
         };
+        editor.add({ name: 'relay_interactive_reconcile', description: 'Preview exact historical interactive-input recovery, then apply only on a current human request using the returned preview hash and an immutable key. Retains the old invocation/conflict and never replays a prompt, submits a result or redispatches work. No operator credential is borrowed.',
+          options: { codemode: false }, input: { type: 'object', properties: { operation: { enum: ['preview', 'apply'] }, executionId: { type: 'string' },
+            key: { type: 'string', maxLength: 100 }, previewHash: { type: 'string' } }, required: ['operation', 'executionId'], additionalProperties: false },
+          async execute({ operation, ...input }, context) {
+            const source = await interactiveCliSource(ctx, context, undefined, undefined, { readOnly: operation === 'preview' });
+            if (operation === 'apply') {
+              if (source.authority) throw new Error('human_source_required: Recovery application needs a current human request, not an assigned or peer turn');
+              await ctx.permission.assert({ sessionID: context.sessionID, agent: context.agent, action: 'relay_interactive_reconcile', resources: [input.executionId], source: { type: 'tool', messageID: context.messageID, id: context.id } });
+              const current = await interactiveCliSource(ctx, context);
+              if (JSON.stringify(current) !== JSON.stringify(source)) throw new Error('human_source_changed');
+            }
+            return agent(context, `interactive-reconcile-${operation}`, { ...input, ...(operation === 'apply' ? { sourceMessageId: source.id } : {}) });
+          } });
         editor.add({ name: 'relay_task_resolve', description: 'Resolve a native task ID, primary reference such as REL-32, or scoped imported alias such as DEF-32. Inspect state and matches. Ambiguous aliases never select a task automatically. Use the resolved native ID and inspected revision for subsequent operations.', options: { codemode: false },
           input: { type: 'object', properties: { value: { type: 'string', minLength: 1, maxLength: 512 }, reference: { type: 'string', minLength: 1, maxLength: 64 }, scope: { type: 'string', minLength: 1, maxLength: 512 } }, additionalProperties: false },
           execute: (input, context) => agent(context, 'task-identity', input) });
@@ -129,6 +149,12 @@ export default Plugin.define({
         editor.add({ name: 'relay_headless_status', description: 'Read setup blockers, durable identities, applied schedule revision and next firing without exposing credentials.',
           options: { codemode: false }, input: { type: 'object', properties: { id: { type: 'string', minLength: 1 } }, required: ['id'], additionalProperties: false },
           execute: (input, context) => agent(context, 'headless-status', input) });
+        editor.add({ name: 'relay_headless_contract', description: 'Preview an instruction-only update for an existing headless setup, then request human approval of that exact preview in Grants. Preserves worker, grant, authentication and schedule. Does not approve its own proposal or expand business scope. Candidate content is retained in private native Grants history. Activation resumes automatically at a settled boundary.',
+          options: { codemode: false }, input: { type: 'object', properties: {
+            operation: { enum: ['preview', 'request'] }, setupId: { type: 'string', minLength: 1 }, key: { type: 'string', minLength: 1, maxLength: 100 }, previewHash: { type: 'string' },
+            files: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } },
+          }, required: ['operation', 'setupId', 'files'], additionalProperties: false },
+          execute: ({ operation, ...input }, context) => agent(context, `headless-contract-${operation}`, input) });
         editor.add({ name: 'relay_interactive_status', description: 'Inspect one preparation requested by this durable agent. Ready receipts are historical placement evidence, not permanent availability.',
           options: { codemode: false }, input: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 96 } }, required: ['id'], additionalProperties: false },
           execute: (input, context) => agent(context, 'interactive-status', input) });
@@ -207,6 +233,7 @@ export default Plugin.define({
       catch { if ((await ctx.session.get({ sessionID: event.sessionID })).metadata?.relayHeadlessSetup) throw new Error('headless_worker_context_unavailable'); }
       if (connection?.headlessSetupId) {
         const refs = await call(connection, 'POST', '/agent/headless-access', {});
+        if (refs.contractInstructions) event.system.push({ type: 'text', text: `Authorised job instructions, revision ${refs.contractRevision}. These replace prior revisions of this job contract.\n${refs.contractInstructions}` });
         const check = await checkHeadlessAccess(ctx, refs);
         if (!check.allowed || event.model.providerID !== refs.model.providerID || event.model.id !== refs.model.id)
           throw new Error(check.allowed ? 'headless_model_changed' : check.blocker);

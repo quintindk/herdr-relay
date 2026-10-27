@@ -64,14 +64,20 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
     throw error;
   }
   let result;
-  const readScope = agentReadSource ? { authority: 'enrolled_read_only', operatorContextUsed: false } : {};
+  const contextIndex = argv.findIndex(arg => arg === '--context' || arg.startsWith('--context='));
+  const selectedContext = contextIndex < 0 ? executionSource || agentReadSource ? workerContextFile : operatorContextFile :
+    argv[contextIndex] === '--context' ? argv[contextIndex + 1] : argv[contextIndex].slice('--context='.length);
+  const readScope = { authority: agentReadSource ? 'enrolled_read_only' : executionSource ? 'execution' : operatorContextFile ? 'human_operator' : 'unscoped',
+    context: selectedContext && selectedContext === workerContextFile ? 'worker' : selectedContext && selectedContext === operatorContextFile ? 'operator' : 'none',
+    operatorContextUsed: Boolean(selectedContext && selectedContext === operatorContextFile) };
   try {
     // Inside the packaged OpenCode host, process.execPath is opencode.exe, not
     // node. Match the Relay executable's /usr/bin/env node interpreter instead.
     result = await run('node', [cli, ...argv], { cwd: directory, timeout, signal, maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, RELAY_CONTEXT: '', RELAY_NATIVE_CONTEXT: executionSource || agentReadSource ? workerContextFile : operatorContextFile ?? '', OPENCODE_SESSION_ID: sessionId ?? '',
         RELAY_CLI_READ_ONLY: agentReadSource ? '1' : '',
-        RELAY_CLI_EXECUTION_ID: executionSource?.executionId ?? '', RELAY_CLI_RUN_ID: executionSource?.runId ?? '', RELAY_CLI_SOURCE_ID: executionSource?.id ?? '' } });
+        RELAY_CLI_EXECUTION_ID: executionSource?.executionId ?? '', RELAY_CLI_RUN_ID: executionSource?.runId ?? '', RELAY_CLI_SOURCE_ID: executionSource?.id ?? '',
+        RELAY_CLI_INPUT_REVISION: executionSource?.inputRevision ?? '' } });
     if (scratch) rmSync(scratch, { recursive: true, force: true });
     return { exitCode: 0, stdout: cliBridgeOutput(result.stdout ?? ''), stderr: cliBridgeOutput(result.stderr ?? ''), effectsUncertain: false, ...readScope };
   } catch (error) {
@@ -110,7 +116,8 @@ export async function interactiveCliSource(ctx, context, connection = workerConn
       const current = await request(worker, 'POST', '/work/current', { sessionId: context.sessionID });
       requireValue(!current.blocked && current.execution?.state === 'accepted' && !current.execution.cancellationRequested && current.sourceMessageId === trigger.id,
         'execution_source_required', 'This Relay input has no matching active execution. Peer notices cannot acquire operator authority', 403);
-      source = { id: trigger.id, text: trigger.text, createdAt: trigger.time?.created, authority: 'execution', executionId: current.execution.id, runId: current.execution.runId };
+      source = { id: trigger.id, text: trigger.text, createdAt: trigger.time?.created, authority: 'execution', executionId: current.execution.id, runId: current.execution.runId,
+        ...(current.inputRevision ? { inputRevision: current.inputRevision } : {}) };
     }
   } else {
     try { source = humanSource(trigger); }
@@ -145,6 +152,7 @@ export function registerCliBridge(editor, ctx, dependencies = {}) {
         agentReadSource: source.authority === 'agent_read' ? source : undefined,
         executionSource: source.authority === 'execution' ? source : undefined, nodeConfigFile: join(directory, 'node.json'),
         workerContextFile: dependencies.workerContextPath?.(ctx.options, context.sessionID) ?? workerContextPath(ctx.options, context.sessionID) });
-      return { content: JSON.stringify(result) };
+      return { content: JSON.stringify({ ...result, authority: result.authority ?? (source.authority === 'agent_read' ? 'enrolled_read_only' : source.authority ?? 'human_operator'), sourceMessageId: source.id,
+        ...(source.executionId ? { executionId: source.executionId } : {}) }) };
     } });
 }

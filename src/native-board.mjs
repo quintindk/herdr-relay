@@ -173,7 +173,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
         requestHash: item.requestHash, decision, reason: reason ?? '', ...(decision === 'allow_scope' ? { scope: scope ?? item.scope } : {}) } } :
         { key, action: 'grant.revoke', payload: { id: item.entityId, kind: item.kind, expectedRevision: item.revision, reason: reason ?? '' } };
       await decisionJournal.submit(grantApi, command, item.instanceId);
-      return { state: 'recorded', message: pending ? decision === 'reject' ? 'Permission rejected. No operation started.' : 'Permission recorded. The saved preparation resumes automatically.' : 'Permission revoked. Existing processes were not terminated.' };
+      return { state: 'recorded', message: pending ? decision === 'reject' ? 'Permission rejected. No operation started.' : item.kind === 'headless_contract' ? 'Instruction revision approved. Activation waits for a settled worker and node acknowledgement. Existing scope is unchanged.' : 'Permission recorded. The saved preparation resumes automatically.' : 'Permission revoked. Existing processes were not terminated.' };
     },
     async createGrant({ key, payload }) {
       requireValue(decisionJournal, 'decision_storage_required', 'Durable Grants decision storage required');

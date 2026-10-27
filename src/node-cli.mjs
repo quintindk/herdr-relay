@@ -24,6 +24,7 @@ import { releaseVersion } from './release-info.mjs';
 import { writePrivateJson } from './private-files.mjs';
 import { nodeAgentInstructions } from './node-agent-instructions.mjs';
 import { tickHeadlessSetups, assertHeadlessAccess } from './node-headless-setup.mjs';
+import { tickHeadlessContractUpdates } from './node-headless-contract.mjs';
 import { HeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
@@ -158,13 +159,13 @@ try {
       workers.push(worker);
       contextFiles.set(entry.id, contextFile);
       const cli = `herdr-relay native work --context ${quote(contextFile)}`;
-      const configured = { ...binding, agentId: entry.agentId, ...(entry.headlessSetupId ? { headlessSetupId: entry.headlessSetupId } : {}), ...(entry.receiverGeneration ? { receiverGeneration: entry.receiverGeneration } : {}),
+      const configured = { ...binding, interactive: entry.mode === 'interactive' && !!entry.receiverGeneration, agentId: entry.agentId, ...(entry.headlessSetupId ? { headlessSetupId: entry.headlessSetupId } : {}), ...(entry.receiverGeneration ? { receiverGeneration: entry.receiverGeneration } : {}),
         ...(entry.directory ? { directory: resolve(entry.directory) } : {}), agentInstructions: () => nodeAgentInstructions({ directTools: directWorkerTools, cli }),
       workerInstructions: execution => directWorkerTools ? v2WorkerInstructions(execution) :
         `Read and check cancellation: ${cli} read --execution ${quote(execution.id)} --run ${quote(execution.runId)}\n` +
         (execution.allowDelegation ? `Explicit bounded delegation is granted. Use ${cli} delegate --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file CHILD_JSON with {id,taskId,title,instructions,targetAgentId,reviewPolicy}. Then stage ${cli} wait-children --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key WAIT_KEY --file WAIT_JSON with {childExecutionIds:[...]}, and finish the turn.\n` : '') +
         (execution.childExecutionIds?.length ? `Inspect supplied child receipts and refresh with ${cli} children --execution ${quote(execution.id)} --run ${quote(execution.runId)}. Only children with explicit agent review grants may be decided using ${cli} review-child --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key KEY --file JSON with {id,expectedRevision,candidate,decision,reason}. Others require the human. Final root review remains human.\n` : '') +
-        `Use the assigned scope. Do not read credentials. To ask asynchronously, create JSON {"prompt":"...","humanRequired":false} and call ${cli} ask --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key QUESTION_KEY --file /absolute/question.json.\n` +
+        `Use the assigned scope. Do not read credentials. When read returns inputRevision, pass --input-revision with that exact value on subsequent worker mutations. A stale revision means new human steering must be read first. To ask asynchronously, create JSON {"prompt":"...","humanRequired":false} and call ${cli} ask --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key QUESTION_KEY --file /absolute/question.json.\n` +
         `Otherwise write JSON {"candidate":"EXACT_CANDIDATE","summary":"RESULT"} and call ${cli} submit --execution ${quote(execution.id)} --run ${quote(execution.runId)} --key RESULT_KEY --file /absolute/result.json. After ask or submit finish this turn immediately.\n` };
       historicalBindings.set(entry.id, configured);
       if (!entry.receiverGeneration) bindings.set(entry.agentId, configured);
@@ -224,6 +225,7 @@ try {
       return binding;
     };
     service = await startNodeService({ journal, socketPath, workers, api, tasks, maintenance,
+      resolveBinding: async (agentId, pinned) => { const binding = historicalBindings.get(pinned.bindingId); return binding?.agentId === agentId ? binding : null; },
       getBackendFeatures: async () => (await api('GET', '/v1/info')).features,
       getHeadlessConnections: async worker => {
         const binding = coordinatorClient(worker); return binding.native.client.rpc(HeadlessAccess).inspect({}, { location: { directory: binding.identity.directory } });
@@ -289,6 +291,7 @@ try {
         // Requests arrive through the durable journal after capability negotiation.
         // Do not pin this gate to startup features: backend-only upgrades can add it.
         await tickHeadlessSetups(journal, api, config, loadBinding, resolveBinding);
+        await tickHeadlessContractUpdates(journal, api, resolveBinding);
         await tickAutomation(journal, resolveBinding, Date.now(), api);
         await tickAgentNotices(journal, api, resolveBinding);
         for (const [agentId, owned] of ownedDefinitions) {

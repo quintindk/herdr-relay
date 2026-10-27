@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
-import { supportingInput } from './native-input.mjs';
+import { supportingInput, humanInput } from './native-input.mjs';
+import { digest } from '../../src/protocol.mjs';
 
 function check(condition, code) {
   if (!condition) throw Object.assign(new Error(code), { code });
@@ -76,6 +77,33 @@ export function observeV2(snapshot, invocation) {
   if (index < 0) return { state: 'uncertain', reason: 'message_not_observed' };
   const user = snapshot.messages[index];
   if (user.type !== 'user' || user.text !== invocation.prompt) return { state: 'conflict', reason: 'message_payload_mismatch' };
+  if (invocation.interactive === true) {
+    const unexpected = snapshot.messages.slice(0, index).find((message, offset) =>
+      ['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type) &&
+      !invocation.priorMessageIds.includes(message.id) && !supportingInput(message, snapshot.messages.slice(0, offset)));
+    if (unexpected) return { state: 'conflict', reason: 'concurrent_native_input', inputId: unexpected.id, inputType: unexpected.type };
+    let anchor = index;
+    const inputs = [];
+    for (let offset = index + 1; offset < snapshot.messages.length; offset++) {
+      const message = snapshot.messages[offset];
+      if (humanInput(message)) { inputs.push({ id: message.id, digest: digest(message) }); anchor = offset; continue; }
+      if (['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type) &&
+        !supportingInput(message, snapshot.messages.slice(index + 1, offset)))
+        return { state: 'conflict', reason: 'concurrent_native_input', inputId: message.id, inputType: message.type };
+    }
+    // Choose the terminal after the latest adopted input, never a previous turn's
+    // idle receipt. This also handles a correction steered into a busy turn.
+    const interaction = { revision: digest(inputs), inputIds: inputs.map(input => input.id), anchorId: snapshot.messages[anchor].id };
+    const terminal = snapshot.messages.slice(anchor + 1).find(message => message.type === 'idle');
+    if (!terminal || !snapshot.idle || snapshot.inbox.length) return { state: 'observed', reason: 'awaiting_terminal_response', interaction };
+    const end = snapshot.messages.findIndex(message => message.id === terminal.id);
+    let turnStart = index + 1;
+    for (let offset = index + 1; offset < anchor; offset++) if (snapshot.messages[offset].type === 'idle') turnStart = offset + 1;
+    if (snapshot.messages.slice(turnStart, end).some(message => message.type === 'assistant' && message.content?.some(part =>
+      part.type === 'tool' && ['running', 'streaming'].includes(part.state.status)))) return { state: 'observed', reason: 'awaiting_tool_settlement', interaction };
+    if (!['succeeded', 'failed', 'interrupted'].includes(terminal.outcome)) return { state: 'uncertain', reason: 'invalid_terminal_outcome' };
+    return { state: 'finished', messageId: terminal.id, outcome: terminal.outcome, interaction };
+  }
   // The v2 transcript has no v1 assistant.parentID. Require a contiguous owned
   // turn through its first idle receipt and refuse any intervening foreign input.
   const terminalOffset = snapshot.messages.slice(index + 1).findIndex(message => message.type === 'idle');

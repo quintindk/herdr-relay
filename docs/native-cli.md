@@ -39,6 +39,20 @@ missing execution is a read result/error, not evidence that dispatch occurred an
 not a reason to demand a fresh human phrase. Read-only failures carry
 `effectsUncertain: false`.
 
+Ordinary human steering preserves an interactive assignment across native turns.
+Worker read results expose `inputRevision`. CLI workers must pass that value as
+`--input-revision` on mutations. `stale_input_revision` means the model must read
+the new steering before acting, not cancel and redispatch the assignment. Direct
+native work tools carry and recheck this revision automatically.
+
+An assignment's worker scope is not a permanent permission ceiling for the entire
+chat. A separately authorised current human operation can use the configured local
+operator route. Peer or assigned turns cannot borrow that route. CLI responses
+report `authority`, selected `context` (`worker`, `operator` or `none`) and source
+message ID without exposing credentials. Do not claim a permission refusal unless
+the actual operation was attempted and returned one. Task completion still checks
+unsettled executions, blocking questions, dependencies and result review.
+
 ## Existing conversation enrolment
 
 For dedicated recurring automation without an interactive conversation, use the

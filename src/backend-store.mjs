@@ -174,6 +174,13 @@ export class BackendStore {
     return agent;
   }
   revision(entity, expected) { requireValue(Number.isSafeInteger(expected) && expected === entity.revision, 'stale_revision', 'Inspect the current revision', 409); }
+  commandReceipt(actor, key, executionId) {
+    return this.transaction(() => {
+      const execution = this.get('execution', executionId); this.nodeOnly(actor, execution.targetNodeId);
+      const row = this.db.prepare('SELECT hash,data FROM receipts WHERE actor=? AND key=?').get(`node:${actor.id}`, key);
+      return row ? { state: 'recorded', hash: row.hash, receipt: JSON.parse(row.data), execution } : { state: 'absent', execution };
+    });
+  }
   mutate(actor, key, action, payload, fn) {
     requireValue(validId(key), 'invalid_key', 'Bounded idempotency key required');
     return this.transaction(() => {
@@ -504,11 +511,14 @@ export class BackendStore {
         'occurrence_identity_changed', 'Existing scheduled execution cannot change or restart', 409);
         return previous;
       }
+      requireValue(!setup.contract || setup.contract.revision === setup.appliedContractRevision,
+        'contract_activation_pending', 'Approved instructions must be acknowledged by the node before new admission', 409);
       const execution = created('execution', { id: p.id, taskId: null, scheduleId: schedule.id, definitionRevision: schedule.revision,
         intendedAt: p.intendedAt, targetAgentId: agent.id, targetNodeId: actor.id, targetConversationId: p.conversationId,
         bindingId: p.bindingId, runId: p.runId, instructions: schedule.definition.instructions, reviewPolicy: schedule.definition.reviewPolicy ?? 'none',
         responsibleUserId: this.owner, originAgentId: grant.requesterAgentId, originNodeId: actor.id, state: 'accepted',
-        localOccurrence: true, headlessScheduled: true, grantRevision: grant.revision, cancellationRequested: false });
+        localOccurrence: true, headlessScheduled: true, grantRevision: grant.revision, contractRevision: setup.appliedContractRevision ?? 0,
+        ...(setup.contract ? { contractDigest: setup.contract.digest } : {}), cancellationRequested: false });
       this.event('execution.schedule_admitted', execution, actor, p.id);
       return execution;
     }
@@ -697,6 +707,11 @@ export class BackendStore {
       if (p.originAgentId) this.get('agent', p.originAgentId);
       if (p.originConversation !== undefined) string(p.originConversation, 'originConversation', 512);
       const target = this.get('agent', p.targetAgentId);
+      if (target.headlessSetupId) {
+        const setup = this.get('headless_setup', target.headlessSetupId);
+        requireValue(!setup.contract || setup.contract.revision === setup.appliedContractRevision,
+          'contract_activation_pending', 'Finish instruction activation before requesting new headless work');
+      }
       requireValue(!target.capabilities.includes('observation_only'), 'target_not_enrolled', 'Observed conversation has no execution binding');
       requireValue(p.allowDelegation === undefined || typeof p.allowDelegation === 'boolean', 'invalid_request', 'Delegation grant must be boolean');
       requireValue(actor.type === 'user' || !p.allowDelegation, 'forbidden', 'Only human may grant fresh delegation scope', 403);
@@ -844,6 +859,14 @@ export class BackendStore {
       fields(p, ['id', 'expectedRevision', 'bindingId', 'runId'], ['id', 'expectedRevision', 'bindingId', 'runId']);
       const e = this.get('execution', p.id); this.nodeOnly(actor, e.targetNodeId); this.revision(e, p.expectedRevision);
       const target = this.get('agent', e.targetAgentId);
+      let contractPin = {};
+      if (target.headlessSetupId) {
+        const { setup } = headlessAuthority(this, actor, target.headlessSetupId);
+        // Requests already committed before approval must drain at the old
+        // revision. New requests and cron admissions are fenced separately.
+        const appliedDigest = setup.contract && setup.contract.revision === setup.appliedContractRevision ? setup.contract.digest : setup.contractActivation?.previousDigest;
+        contractPin = { contractRevision: setup.appliedContractRevision ?? 0, ...(appliedDigest ? { contractDigest: appliedDigest } : {}) };
+      }
       requireValue(!target.standingGrant || p.bindingId === target.bindingId,
         'stale_binding', 'Admission must use the designated receiver', 409);
       requireValue(!e.targetConversationId || target.conversationId === e.targetConversationId, 'target_conversation_replaced', 'Advertised execution target changed');
@@ -855,7 +878,7 @@ export class BackendStore {
         'dependencies_pending', 'Dependencies are not complete', 409);
       requireValue(validId(p.bindingId) && validId(p.runId), 'invalid_request', 'Exact binding and run required');
       taskDisposition(e.taskId, 'in_progress', e.id);
-      return changed('execution', e, { state: 'accepted', bindingId: p.bindingId, runId: p.runId,
+      return changed('execution', e, { state: 'accepted', bindingId: p.bindingId, runId: p.runId, ...contractPin,
         ...(target.standingGrant ? { targetConversationId: target.conversationId, targetBindingRevision: target.bindingRevision } : {}) });
     }
     if (action === 'execution.monitor_end') {

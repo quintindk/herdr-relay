@@ -16,11 +16,14 @@ import { launchOwnedV2 } from '../packages/opencode-relay/owned-runtime.mjs';
 import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
 import { call } from '../src/client.mjs';
 import { waitHeadlessSetup } from '../src/headless-setup-wait.mjs';
+import { nativeBoard } from '../src/native-board.mjs';
+import { NativeDecisionJournal } from '../src/native-decision-journal.mjs';
 
 process.umask(0o077);
 const capabilityMode = process.argv.includes('--capabilities');
 const agentGrantMode = process.argv.includes('--agent-grant');
 const cronMode = process.argv.includes('--cron');
+const contractMode = process.argv.includes('--contract-update');
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
@@ -28,7 +31,7 @@ const packageDirectory = resolve(process.env.RELAY_PACKAGE_DIRECTORY ?? '.');
 const shellOutput = join(root, 'outside-workspace-shell.txt');
 mkdirSync(workspace); mkdirSync(state); mkdirSync(join(workspace, '.opencode/skills/approved-job'), { recursive: true });
 writeFileSync(join(workspace, '.opencode/skills/approved-job/SKILL.md'), 'Inspect the approved fixture only. Submit a native result.');
-let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden = false, grantProposal;
+let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden = false, grantProposal, contractProposal, contractPreviewHash, revisedContextSeen = false;
 const mcpSessions = [];
 const mcp = createServer(async (req, res) => {
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
@@ -54,18 +57,24 @@ const model = createServer(async (req, res) => {
   const called = input.messages.slice(last + 1).filter(m => m.role === 'tool').length;
   const probe = JSON.stringify(input.messages[last]?.content).includes('Bounded platform readiness');
   const grantTurn = JSON.stringify(input.messages[last]?.content).includes('Create the node-local fixture grant only');
-  if (agentGrantMode && !grantTurn) assert.equal(Boolean(input.tools?.some(t => ['relay_headless_grant', 'relay_headless_revoke'].includes(t.function.name))), false,
+  const contractTurn = JSON.stringify(input.messages[last]?.content).includes('Propose fixture instruction revision');
+  if (contractMode && !probe && !grantTurn && !contractTurn) {
+    assert.match(JSON.stringify(input.messages.filter(m => m.role === 'system')), /REVISED_CONTRACT_FIXTURE/);
+    assert.match(JSON.stringify(input.messages.filter(m => m.role === 'system')), /PINNED_PROTOCOL_FIXTURE/); revisedContextSeen = true;
+  }
+  if (agentGrantMode && !grantTurn && !contractTurn) assert.equal(Boolean(input.tools?.some(t => ['relay_headless_grant', 'relay_headless_revoke'].includes(t.function.name))), false,
     'Headless workers must not acquire coordinator grant-management tools');
   if (!grantTurn && shellMode && !shellAllowed) {
     assert.equal(input.tools?.some(t => ['shell', 'relay_shell_call'].includes(t.function.name)), false, 'Denied shell must not be advertised');
     shellDeniedHidden = true;
   }
-  const steps = grantTurn ? ['relay_headless_grant'] : probe ? ['relay_headless_permissions', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
+  const steps = contractTurn ? ['relay_headless_contract', 'relay_headless_contract'] : grantTurn ? ['relay_headless_grant'] : probe ? ['relay_headless_permissions', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
     ['relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), ...(shellAllowed ? ['relay_shell_call'] : []), 'relay_work_submit'];
   const name = steps[called];
   const tool = name && input.tools?.find(t => t.function.name.endsWith(name));
   if (name && !tool) console.error(JSON.stringify({ missingTool: name, advertised: input.tools?.map(t => t.function.name) }));
-  const args = name === 'relay_headless_grant' ? { key: 'grant-once', payload: grantProposal } : name === 'relay_mcp_call' ? { tool: called === 1 ? 'records_read' : 'actions_send', arguments: called === 1 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
+  const args = name === 'relay_headless_contract' ? { ...contractProposal, operation: called === 0 ? 'preview' : 'request', ...(called === 1 ? { key: 'contract-once', previewHash: contractPreviewHash } : {}) } :
+    name === 'relay_headless_grant' ? { key: 'grant-once', payload: grantProposal } : name === 'relay_mcp_call' ? { tool: called === 1 ? 'records_read' : 'actions_send', arguments: called === 1 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
     ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : name === 'relay_shell_call' ? { command: `printf '%s' 'shell-fixture' > '${shellOutput}'` } : ['relay_headless_capabilities', 'relay_headless_permissions', 'relay_mcp_tools'].includes(name) ? {} :
     { key: probe ? 'ready' : 'job', candidate: probe ? 'headless-readiness' : 'fixture-job', summary: 'Native capability and result submission verified.' };
   const delta = tool ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${called}`, type: 'function', function: { name: tool.function.name, arguments: JSON.stringify(args) } }] }
@@ -173,6 +182,31 @@ try {
     assert.equal(snapshot.collections.task[0].title, 'Readiness: approved-worker');
     assert.equal(readFileSync(join(workspace, '.opencode/skills/approved-job/SKILL.md'), 'utf8'), 'Inspect the approved fixture only. Submit a native result.');
   }
+  if (contractMode) {
+    const beforeGrant = await owner('GET', '/v1/headless_grants/approved-job-grant'), beforeSchedule = await owner('GET', `/v1/schedules/${result.scheduleId}`);
+    contractProposal = { setupId: id, files: [
+      { path: grantProposal.contract, content: 'REVISED_CONTRACT_FIXTURE: Inspect only the fixture. Follow protocol.md and submit a native result.' },
+      { path: '.opencode/skills/approved-job/protocol.md', content: 'PINNED_PROTOCOL_FIXTURE: Bounded candidate collection. Do not claim business completeness.' },
+    ] };
+    contractPreviewHash = (await call(worker, 'POST', '/agent/headless-contract-preview', contractProposal)).previewHash;
+    await client.session.prompt({ sessionID: session.id, text: 'Propose fixture instruction revision. Preview then request approval only. Do not approve it yourself or run business tools.' });
+    await client.session.wait({ sessionID: session.id });
+    const requests = (await owner('GET', '/v1/grant_requests')).items.filter(r => r.kind === 'headless_contract');
+    assert.equal(requests.length, 1); assert.equal(requests[0].state, 'awaiting_approval');
+    assert.equal(readFileSync(join(workspace, grantProposal.contract), 'utf8'), 'Inspect the approved fixture only. Submit a native result.');
+    const decisions = new NativeDecisionJournal();
+    try {
+      const board = nativeBoard(owner, { decisionJournal: decisions });
+      const item = await board.detailGrant({ id: `request:${requests[0].id}` });
+      await board.decideGrant({ item, key: 'human-instruction-revision', decision: 'approve_once' });
+    } finally { decisions.close(); }
+    await wait('approved contract activation', async () => (await call(worker, 'POST', '/agent/headless-status', { id })).appliedContractRevision === 1);
+    const after = await owner('GET', `/v1/headless_setups/${id}`);
+    for (const field of ['agentId', 'sessionId', 'bindingId', 'grantId', 'scheduleId']) assert.equal(after[field], approvedSetup[field]);
+    assert.deepEqual(await owner('GET', '/v1/headless_grants/approved-job-grant'), beforeGrant);
+    assert.deepEqual(await owner('GET', `/v1/schedules/${result.scheduleId}`), beforeSchedule);
+    assert.equal(reads, 0); assert.equal(writes, 0, 'Approval and activation must not call external tools');
+  }
   // A second server is configured after approval/setup. The boolean MCP grant
   // covers newly available tools without any per-server/tool grant amendment.
   if (!cronMode) {
@@ -191,17 +225,19 @@ try {
     });
     const execution = await owner('GET', `/v1/executions/${occurrence.id}`);
     assert.equal(execution.headlessScheduled, true); assert.equal(execution.taskId, null);
+    if (contractMode) assert.equal(execution.contractRevision, 1);
     assert.equal(execution.state, 'completed'); assert.equal(execution.targetConversationId, approvedSetup.sessionId);
     await command('pause-after-cron', 'schedule.pause', { id: result.scheduleId, expectedRevision: 1 });
     await wait('cron pause acknowledged', async () => (await owner('GET', `/v1/schedules/${result.scheduleId}`)).appliedRevision === 2);
   } else {
   const job = await command('job-task', 'task.create', { id: 'fixture-job-task', title: 'Exercise generic MCP permission' });
   await command('job-execution', 'execution.request', { id: 'fixture-job', taskId: job.id, taskRevision: job.revision, targetAgentId: result.agentId, instructions: 'Exercise the fixture job and submit its result.' });
-  await wait('generic MCP job completion', async () => {
+   await wait('generic MCP job completion', async () => {
     const execution = await owner('GET', '/v1/executions/fixture-job');
     if (['failed', 'cancelled', 'rejected'].includes(execution.state)) throw Error(`Fixture job failed: ${JSON.stringify(execution)}`);
     return execution.state === 'completed';
-  });
+   });
+   if (contractMode) assert.equal((await owner('GET', '/v1/executions/fixture-job')).contractRevision, 1);
   }
   assert.equal(reads, mcpDenied ? 0 : 1); assert.equal(writes, mcpDenied ? 0 : 1);
   assert.equal(existsSync(shellOutput), shellAllowed);
@@ -210,6 +246,7 @@ try {
   assert.ok(mcpSessions.every(sessionId => sessionId === approvedSetup.sessionId), 'MCP calls must retain the dedicated worker session context');
   const unchangedGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
   assert.equal(unchangedGrant.revision, 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
+  if (contractMode) assert.equal(revisedContextSeen, true);
   await stopNode(); await startNode(joined.configFile);
   const restored = await call(worker, 'POST', '/agent/headless-status', { id });
   assert.equal(restored.agentId, result.agentId); assert.equal(restored.scheduleId, result.scheduleId); assert.equal(restored.appliedRevision, cronMode ? 2 : result.appliedRevision);
@@ -225,6 +262,7 @@ try {
     readCalls: reads, writeCalls: writes, shellAllowed, shellAttempted: shellAllowed, shellDeniedHidden, outsideWorkspaceShellWrite: existsSync(shellOutput), readinessHadNoExternalEffects: true, toolsAddedAfterSetupCovered: !cronMode,
     nativeResultSubmission: true, actualCronFiringVerified: cronMode, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
+    exactContractApprovalAndActivation: contractMode, revisedInstructionsInNativeModelContext: revisedContextSeen,
     credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {
   await stopNode();

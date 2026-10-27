@@ -24,5 +24,5 @@ export function nativeWorkerApi(connection, scope) {
   if (scope.readOnly) return (method, path, body) => call(connection, 'POST', '/agent/native-api', { request: { method, path, ...(body ? { body } : {}) } });
   requireValue(scope.executionId && scope.runId && scope.sourceMessageId, 'execution_context_required', 'Exact CLI execution provenance required');
   return (method, path, body) => call(connection, 'POST', '/work/native-api', { executionId: scope.executionId, runId: scope.runId,
-    sourceMessageId: scope.sourceMessageId, request: { method, path, ...(body ? { body } : {}) } });
+    sourceMessageId: scope.sourceMessageId, ...(scope.inputRevision ? { inputRevision: scope.inputRevision } : {}), request: { method, path, ...(body ? { body } : {}) } });
 }

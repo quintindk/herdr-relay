@@ -76,7 +76,7 @@ export class NodeJournal {
         const previous = this.db.prepare('SELECT data FROM inbox WHERE id=?').get(event.id);
         if (previous) { requireValue(previous.data === JSON.stringify(event), 'event_conflict', 'Event identity payload changed'); continue; }
         this.db.prepare('INSERT INTO inbox VALUES (?,?)').run(event.id, JSON.stringify(event));
-        if (['headless.request', 'headless.activate', 'headless.block'].includes(event.type) && event.data.nodeId === this.nodeId) {
+        if (['headless.request', 'headless.activate', 'headless.block', 'headless.contract_approved', 'headless.contract_applied'].includes(event.type) && event.data.nodeId === this.nodeId) {
           const key = `headless-setup:${event.entityId}`;
           const old = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
           if (!old || JSON.parse(old.value).revision < event.revision) this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
@@ -180,7 +180,7 @@ export class NodeJournal {
     }
     this.db.prepare('INSERT INTO execution_history VALUES (?,?)').run(id, JSON.stringify(work));
   }
-  queue(command) {
+  queue(command, { inputRevision } = {}) {
     return this.transaction(() => {
       const previous = this.db.prepare('SELECT hash,data FROM outbox WHERE key=?').get(command.key);
       if (previous) {
@@ -189,7 +189,7 @@ export class NodeJournal {
       }
       const count = this.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE state IN ('pending','conflict')").get().n;
       requireValue(count < this.maxPending, 'outbox_full', 'Publication outbox is full. Resolve pending/conflicting operations before admitting more work', 503);
-      const item = { command, state: 'pending', createdAt: now() };
+      const item = { command, state: 'pending', createdAt: now(), ...(inputRevision ? { inputRevision } : {}) };
       this.db.prepare('INSERT INTO outbox VALUES (?,?,?,?)').run(command.key, digest(command), item.state, JSON.stringify(item));
       return item;
     });
@@ -225,6 +225,19 @@ export class NodeJournal {
       // Native backend commands compare payloads and persist idempotency receipts.
       // The same immutable command can therefore be retried after a lost reply.
       try {
+        const admission = await this.beforePublish?.(item);
+        if (admission === false) continue;
+        if (admission === 'supersede' || admission?.refused) {
+          this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('superseded', JSON.stringify({ ...item, state: 'superseded', outcome: 'refused', applied: false,
+            error: admission.reason ?? 'stale_input_revision', ...(admission.executionRevision ? { fencedExecutionRevision: admission.executionRevision } : {}) }), item.command.key);
+          continue;
+        }
+        if (admission?.recordedReceipt) {
+          this.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run('recorded', JSON.stringify({ ...item, state: 'recorded', receipt: admission.recordedReceipt, reconciledWithoutReplay: true }), item.command.key);
+          continue;
+        }
+        item.attemptedAt ??= now();
+        this.db.prepare('UPDATE outbox SET data=? WHERE key=?').run(JSON.stringify(item), item.command.key);
         const receipt = await api('POST', '/v1/commands', item.command);
         if (item.command.action === 'interactive.dispatch') requireValue(receipt?.id === item.command.payload.executionId && receipt.taskId === item.command.payload.taskId,
           'invalid_backend_response', 'Interactive dispatch receipt differs from the original task/execution', 502);

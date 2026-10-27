@@ -10,6 +10,7 @@ export function validateHeadlessPermissions(permissions) {
 
 export function headlessSessionPermissions(grant, mcpTools = []) {
   const permissions = [{ action: '*', resource: '*', effect: 'deny' }, { action: 'read', resource: `${grant.directory}/${grant.contract}`, effect: 'allow' },
+    ...(grant.contractFiles ?? []).map(f => ({ action: 'read', resource: `${grant.directory}/${f.path}`, effect: 'allow' })),
     ...['relay_work_read', 'relay_work_submit', 'relay_work_ask', 'relay_task_list', 'relay_task_inspect', 'relay_task_comments', 'relay_task_relations']
       .map(action => ({ action, resource: '*', effect: 'allow' }))];
   const actions = ['relay_headless_permissions', 'relay_mcp_tools', ...(grant.permissions.mcp ? ['relay_mcp_call', ...mcpTools.map(tool => tool.id)] : []),

@@ -15,10 +15,10 @@ export const nativeBoardTabs = (board, offline, loaded) => [['tasks', 'Tasks'], 
 function GrantDialog({ modal, setModal, submit, board, width, height }) {
   const item = modal.item, creating = modal.creating;
   const choices = modal.loadingFailed ? [] : creating ? ['Create standing permission'] : item?.kind === 'publication' ? [item.action === 'dismiss' ? 'Dismiss refused decision' : 'Retry original decision'] :
-    item?.section === 'pending' ? ['Approve once', 'Allow this scope', 'Reject'] : item?.section === 'active' ? ['Revoke'] : [];
+    item?.section === 'pending' ? item.kind === 'headless_contract' ? ['Approve instruction revision', 'Reject'] : ['Approve once', 'Allow this scope', 'Reject'] : item?.section === 'active' ? ['Revoke'] : [];
   const agents = modal.agents ?? board.agents.filter(a => a.mode === 'interactive' && a.standingGrant), nodes = modal.nodes ?? board.nodes ?? [];
   const requester = agents[modal.agentIndex ?? 0], node = nodes[modal.nodeIndex ?? 0];
-  const scopeEditing = creating || item?.section === 'pending' && modal.index === 1 && (item.scope?.roots?.length ?? 0) === 1;
+  const scopeEditing = creating || item?.kind === 'interactive' && item.section === 'pending' && modal.index === 1 && (item.scope?.roots?.length ?? 0) === 1;
   const fields = creating ? ['agent', 'node', 'root', 'profile', 'limit', 'directories', 'dispatch', 'replacement', 'reason'] :
     [...(choices.length ? ['choice'] : []), ...(scopeEditing ? ['root', 'limit'] : []), ...(choices.length && item?.kind !== 'publication' ? ['reason'] : [])];
   useInput((input, key) => {
@@ -92,7 +92,7 @@ export function GrantsPanel({ board, offline, loaded, width, height, detailGrant
   const submit = async current => {
     let payload, scope;
     try {
-      if (current.creating || current.item.section === 'pending' && current.index === 1 && current.item.kind !== 'publication') {
+      if (current.creating || current.item.section === 'pending' && current.index === 1 && current.item.kind === 'interactive') {
         const node = current.creating ? current.nodes?.[current.nodeIndex] : { id: current.item.nodeId };
         const ceiling = board.nodePolicies?.[node?.id];
         if (!ceiling) throw Error('Destination node workspace policy is unavailable. No decision was sent.');
@@ -113,7 +113,7 @@ export function GrantsPanel({ board, offline, loaded, width, height, detailGrant
     setModal({ ...current, busy: true, locked: true, error: '' });
     try {
       const result = current.creating ? await createGrant({ key: current.key, payload }) : await decideGrant({ item: current.item, key: current.key,
-        decision: ['approve_once', 'allow_scope', 'reject'][current.index], reason: current.reason, scope });
+        decision: (current.item?.kind === 'headless_contract' ? ['approve_once', 'reject'] : ['approve_once', 'allow_scope', 'reject'])[current.index], reason: current.reason, scope });
       if (result.state !== 'recorded') throw Error('Security decision is not confirmed');
       setModal(null); setNotice(result.message); refresh();
     } catch (error) { setModal({ ...current, busy: false, locked: true, error: error.message }); refresh(pendingGrantDecisions?.()); }

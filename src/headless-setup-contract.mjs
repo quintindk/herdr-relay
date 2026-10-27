@@ -3,6 +3,7 @@ import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { validateHeadlessCapabilities } from './headless-capabilities.mjs';
 import { validateHeadlessPermissions } from './headless-permissions.mjs';
+import { requestContractUpdate, acknowledgeContractUpdate } from './headless-contract.mjs';
 
 const fields = (p, keys, required = keys) => requireValue(p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).every(k => keys.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_headless_setup', 'Missing or unsupported headless setup fields');
 const text = (s, max = 256) => requireValue(typeof s === 'string' && s.trim() && s.length <= max && !/[\x00-\x1f]/.test(s), 'invalid_headless_setup', 'Bounded text required');
@@ -42,10 +43,14 @@ export function headlessRunAuthority(store, actor, p) {
   requireValue(setup.agentId === agent.id && setup.sessionId === agent.conversationId && execution.bindingId === setup.bindingId,
     'headless_scope_mismatch', 'Headless execution, session and binding must match the current grant', 403);
   requireValue(setup.state === 'ready' || execution.id === headlessProbeId(setup), 'headless_not_ready', 'Complete setup before job operations');
+  if (execution.contractRevision !== undefined) requireValue(execution.contractRevision === (setup.appliedContractRevision ?? 0),
+    'job_contract_changed', 'Execution is pinned to another instruction revision');
   return { execution, agent, setup, grant };
 }
 
 export function applyHeadlessSetup(store, actor, action, p, { created, changed, requester: source }) {
+  if (action === 'headless.contract_request') return requestContractUpdate(store, actor, p, { created });
+  if (action === 'headless.contract_applied') return acknowledgeContractUpdate(store, actor, p, changed);
   if (action === 'agent.headless_grant' || action === 'agent.headless_revoke') {
     fields(p, ['agentId', 'conversationId', 'bindingRevision', 'payload']);
     const requester = store.agent(actor, p.agentId);

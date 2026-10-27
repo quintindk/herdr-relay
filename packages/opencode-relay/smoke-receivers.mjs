@@ -5,8 +5,8 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launchOwnedV2 } from './owned-runtime.mjs';
 import { startBackend } from '../../src/backend-service.mjs';
@@ -17,13 +17,17 @@ import { workerConnection } from './worker-context.mjs';
 import { call } from '../../src/client.mjs';
 import { nativeBoard } from '../../src/native-board.mjs';
 import { NativeDecisionJournal } from '../../src/native-decision-journal.mjs';
+import { createNodeBundle, joinNode } from '../../src/native-onboarding.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const packageDirectory = resolve(process.env.RELAY_PACKAGE_DIRECTORY ?? join(here, '../..'));
 const root = mkdtempSync('/tmp/opencode/relay-receivers-smoke-');
 const workspace = join(root, 'workspace'), state = join(root, 'node');
 mkdirSync(workspace); mkdirSync(state);
 const binary = process.env.RELAY_V2_BINARY ?? join(here, 'node_modules/.bin/opencode2');
-const firstMessage = process.argv.includes('--first-message');
+const legacyRecovery = process.argv.includes('--legacy-recovery');
+const steering = process.argv.includes('--steering') || legacyRecovery;
+const firstMessage = process.argv.includes('--first-message') || steering;
 const tuiOnly = process.argv.includes('--tui-only') || firstMessage;
 if (firstMessage) {
   mkdirSync(join(workspace, 'nested'));
@@ -31,7 +35,7 @@ if (firstMessage) {
   writeFileSync(join(workspace, 'nested/probe.txt'), 'Disposable first-message fixture.');
 }
 const landing = process.argv.includes('--landing');
-let runtime, backend, daemon, journal, log = '', requests = 0;
+let runtime, backend, daemon, journal, log = '', requests = 0, steeringGate;
 const wait = async (label, check, timeout = 100000) => {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -47,14 +51,30 @@ const model = createServer(async (req, res) => {
   for await (const chunk of req) body += chunk;
   const input = JSON.parse(body);
   const last = input.messages.findLastIndex(m => m.role === 'user' && (!firstMessage || /Relay (execution|local occurrence) /.test(JSON.stringify(m.content))));
-  const tools = input.messages.slice(last + 1).filter(m => m.role === 'tool');
+  let tools = input.messages.slice(last + 1).filter(m => m.role === 'tool');
   const source = JSON.stringify(input.messages[last]?.content) ?? '';
   const taskId = /Read task [^\n]+ \(([^)]+)\),/.exec(source.replaceAll('\\n', '\n'))?.[1];
-  const steps = firstMessage && taskId ? ['relay_work_read', 'read', 'relay_work_read', 'relay_cli', 'relay_work_submit'] : ['relay_work_read', 'relay_work_submit'];
+  const latestUser = input.messages.findLastIndex(m => m.role === 'user');
+  const human = JSON.stringify(input.messages[latestUser]?.content);
+  const recovering = legacyRecovery && human.includes('RECOVER_OWNERSHIP_FIXTURE');
+  const closing = steering && human.includes('CLOSE_OLD_FIXTURE'), powerBi = steering && human.includes('POWER_BI_STEERING_FIXTURE');
+  if (closing || powerBi || recovering) tools = input.messages.slice(latestUser + 1).filter(m => m.role === 'tool');
+  if (steering && taskId && !closing && !powerBi && !recovering && tools.length === 1 && steeringGate && !steeringGate.ready) {
+    steeringGate.ready = true; await steeringGate.wait;
+  }
+  const steps = steering && taskId ? recovering ? ['relay_interactive_reconcile', 'relay_interactive_reconcile', 'relay_work_read'] : closing ? ['relay_cli', 'relay_work_read', 'relay_work_submit'] : powerBi ? ['relay_work_read'] : ['relay_work_read', 'read', 'relay_work_read'] :
+    firstMessage && taskId ? ['relay_work_read', 'read', 'relay_work_read', 'relay_cli', 'relay_work_submit'] : ['relay_work_read', 'relay_work_submit'];
   const name = steps[tools.length];
   const tool = name && input.tools?.find(t => t.function?.name.endsWith(name) && (name !== 'read' || !t.function.name.includes('relay_')));
   assert.ok(!name || tool, `Missing actual native fixture tool: ${name}`);
-  const args = name === 'relay_cli' ? { args: ['native', 'task', 'comment', '--key', 'first-comment', '--file', '{payload}'],
+  const previewHash = value => {
+    if (typeof value === 'string') { try { return previewHash(JSON.parse(value)); } catch { return; } }
+    if (value && typeof value === 'object') return value.previewHash ?? Object.values(value).map(previewHash).find(Boolean);
+  };
+  const args = name === 'relay_interactive_reconcile' ? { operation: tools.length === 0 ? 'preview' : 'apply', executionId: /Relay execution ([A-Za-z0-9_]+)/.exec(source)[1],
+    ...(tools.length === 1 ? { key: `recover-${taskId}`, previewHash: previewHash(tools[0]) } : {}) } :
+    name === 'relay_cli' && closing ? { args: ['native', 'task', 'complete', `old-${taskId}`, '--revision', '1', '--key', `close-${taskId}`] } :
+    name === 'relay_cli' ? { args: ['native', 'task', 'comment', '--key', 'first-comment', '--file', '{payload}'],
     payload: { id: `comment-${taskId}`, taskId, body: 'Execution-scoped CLI comment after automatic instruction loading.' } } :
     name === 'relay_work_submit' ? { key: 'submit', candidate: 'receiver-fixture', summary: 'Persistent receiver native-tool smoke passed.' } :
     name === 'read' ? { path: join(workspace, 'nested/probe.txt') } : {};
@@ -76,11 +96,12 @@ const stopDaemon = async () => {
 };
 try {
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
-  backend = await startBackend({ database: join(root, 'backend.sqlite') });
+  const launchBackend = process.env.RELAY_PACKAGE_DIRECTORY ? (await import(pathToFileURL(join(packageDirectory, 'src/backend-service.mjs')))).startBackend : startBackend;
+  backend = await launchBackend({ database: join(root, 'backend.sqlite') });
   const ownerToken = backend.store.bootstrap().token;
   const owner = nativeBackendClient({ url: backend.origin, token: ownerToken });
   runtime = await launchOwnedV2({ directory: join(root, 'runtime'), executable: binary, workspace, config: {
-    plugins: [{ package: here, options: { workerDirectory: state } }], model: 'receiver-fixture/fixture', compaction: { auto: false },
+    plugins: [{ package: join(packageDirectory, 'packages/opencode-relay'), options: { workerDirectory: state } }], model: 'receiver-fixture/fixture', compaction: { auto: false },
     providers: { 'receiver-fixture': { package: '@ai-sdk/openai-compatible', settings: {
       baseURL: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'disposable-fixture',
     }, models: { fixture: { name: 'Fixture', limit: { context: 8192, output: 256 } } } } },
@@ -89,11 +110,16 @@ try {
   const password = JSON.parse(readFileSync(join(root, 'runtime/auth.json'))).password;
   const dependencies = { discover: async () => ({ url: runtime.descriptor.origin, auth: { type: 'basic', username: 'opencode', password } }), makeClient: () => runtime.client };
   const input = { api: owner, backend: { url: backend.origin }, configFile: join(state, 'node.json'), directory: workspace };
+  if (steering) {
+    const bundleFile = join(root, 'fixture-node.bundle.json');
+    await createNodeBundle({ api: owner, output: bundleFile, key: 'steering-node', name: 'Steering fixture', url: backend.origin, mode: 'localUser' });
+    await joinNode({ bundleFile, configFile: input.configFile });
+  }
   const first = await enrolInteractive({ ...input, sessionId: firstSession.id, reserved: true, transport: 'tools', name: 'Wright fixture' }, dependencies);
   journal = new NodeJournal(join(state, 'node.sqlite'), { nodeId: first.nodeId, instanceId: backend.store.instance });
   const startDaemon = async () => {
     log = '';
-    daemon = spawn(process.execPath, [join(here, '../../src/node-cli.mjs'), '--config', input.configFile], { stdio: ['ignore', 'pipe', 'pipe'] });
+    daemon = spawn(process.execPath, [join(packageDirectory, 'src/node-cli.mjs'), '--config', input.configFile], { stdio: ['ignore', 'pipe', 'pipe'] });
     for (const stream of [daemon.stdout, daemon.stderr]) stream.on('data', chunk => { log = (log + chunk).slice(-8000); });
     await wait('node ready', () => log.includes('"state":"running"'));
   };
@@ -107,9 +133,39 @@ try {
       const task = await owner('POST', '/v1/commands', { key: `first-task-${suffix}`, action: 'task.create', payload: {
         id: `first-task-${suffix}`, title: 'First prompt must be the assigned task', description: 'Disposable fixture only.' } });
       const board = nativeBoard(owner, { decisionJournal: decisions });
+      if (steering) {
+        await owner('POST', '/v1/commands', { key: `old-${task.id}`, action: 'task.create', payload: { id: `old-${task.id}`, title: 'Separate human closure fixture' } });
+        steeringGate = { ready: false };
+        steeringGate.wait = new Promise(resolve => { steeringGate.release = resolve; });
+      }
       const input = { taskId: task.id, expectedRevision: task.revision, key: `first-handover-${suffix}`,
         payload: { targetAgentId: agentId, instructions: 'Call relay_work_read and relay_work_submit. This task is your first prompt.' } };
       const sent = await board.dispatchTask(input);
+      if (steering) {
+        await wait('busy native model steering boundary', () => steeringGate.ready);
+        const connection = workerConnection({ workerDirectory: state }, sessionId);
+        await runtime.client.session.prompt({ sessionID: sessionId, text: 'there is a per account cost too...', delivery: 'steer' });
+        steeringGate.release();
+        await runtime.client.session.wait({ sessionID: sessionId });
+        await wait('first corrected native terminal', () => journal.work(sent.execution.id)?.state === 'native_finished');
+        assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
+        const firstTerminal = journal.work(sent.execution.id).observation.messageId;
+        if (legacyRecovery) {
+          const work = journal.work(sent.execution.id), { interactive, ...invocation } = work.invocation;
+          const messages = (await runtime.client.message.list({ sessionID: sessionId, order: 'asc', limit: 100 })).data;
+          journal.save({ ...work, interaction: undefined, invocation, state: 'conflict', observation: { state: 'conflict', reason: 'concurrent_native_input',
+            inputId: messages.find(m => m.type === 'user' && m.text === 'there is a per account cost too...').id, inputType: 'user' } });
+          await runtime.client.session.prompt({ sessionID: sessionId, text: 'RECOVER_OWNERSHIP_FIXTURE: Preview and apply recovery of this existing assignment. Do not redispatch or replay it.', delivery: 'steer' });
+          await runtime.client.session.wait({ sessionID: sessionId });
+          await wait('explicit inspected legacy recovery', () => journal.work(sent.execution.id)?.interactiveOwnership === true && journal.work(sent.execution.id)?.state === 'native_finished');
+        }
+        await runtime.client.session.prompt({ sessionID: sessionId, text: 'POWER_BI_STEERING_FIXTURE: Investigate the report too.', delivery: 'steer' });
+        await runtime.client.session.wait({ sessionID: sessionId });
+        await wait('post-idle steering terminal', () => journal.work(sent.execution.id)?.observation.messageId !== firstTerminal && journal.work(sent.execution.id)?.state === 'native_finished');
+        assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
+        assert.equal((await call(connection, 'POST', '/work/current', { sessionId })).blocked, false);
+        await runtime.client.session.prompt({ sessionID: sessionId, text: 'CLOSE_OLD_FIXTURE: Close the separate old fixture task, then submit the assigned task result.', delivery: 'steer' });
+      }
       await wait('fresh never-prompted receiver task completion', async () => {
         const execution = await owner('GET', `/v1/executions/${sent.execution.id}`);
         assert.ok(!['failed', 'cancelled', 'rejected'].includes(execution.state), JSON.stringify(execution));
@@ -118,13 +174,19 @@ try {
       await board.dispatchTask(input);
       const messages = (await runtime.client.message.list({ sessionID: sessionId, order: 'asc', limit: 100 })).data;
       const prompts = messages.filter(message => message.type === 'user');
-      assert.equal(prompts.length, 1); assert.ok(prompts[0].metadata?.herdrRelayInvocation);
+      assert.equal(prompts.length, steering ? legacyRecovery ? 5 : 4 : 1); assert.ok(prompts[0].metadata?.herdrRelayInvocation);
+      assert.equal(prompts.filter(prompt => prompt.metadata?.herdrRelayInvocation).length, 1, 'Steering must not redispatch or replay');
       assert.match(prompts[0].text, /first prompt/);
       assert.ok(messages.some(message => message.type === 'synthetic' && message.metadata?.instruction?.paths?.includes(join(workspace, 'nested/AGENTS.md'))),
         'The actual native file tool must load nested AGENTS instructions during the owned execution');
       assert.equal((await owner('GET', '/v1/executions')).items.filter(execution => execution.taskId === task.id).length, 1);
       const comments = (await owner('GET', `/v1/comments?taskId=${task.id}`)).items;
-      assert.equal(comments.length, 1); assert.equal(comments[0].author.type, 'node', 'Assigned runs must not borrow human operator identity');
+      if (steering) {
+        const calls = messages.filter(m => m.type === 'assistant').flatMap(m => m.content.filter(p => p.type === 'tool' && p.name === 'relay_cli'));
+        assert.equal(calls.length, 1); const result = JSON.parse(calls[0].state.content[0].text);
+        assert.equal(result.exitCode, 0, JSON.stringify({ result, fixture: root })); assert.equal(result.authority, 'human_operator');
+        assert.equal(comments.length, 0); assert.equal((await owner('GET', `/v1/tasks/old-${task.id}`)).status, 'done');
+      } else { assert.equal(comments.length, 1); assert.equal(comments[0].author.type, 'node', 'Assigned runs must not borrow human operator identity'); }
       assert.ok(requests > requestsBefore, 'The assigned task, not enrolment, starts model execution');
     } finally { decisions.close(); }
   };
@@ -253,7 +315,9 @@ try {
     conversations: [first.sessionId, second.sessionId], cronFirings: tuiOnly ? 0 : 2, realMinuteTicks: !tuiOnly, nodeHotAttachment: true,
     replacementChatScheduleManagement: true, staleCredentialRefused: true, restartPreservedReceiver: true,
     neverPromptedAssignmentVerified: firstMessage, firstTaskDeliveryExactlyOnce: firstMessage, instructionLoadDuringExecutionVerified: firstMessage,
-    executionScopedCliCommentVerified: firstMessage,
+    executionScopedCliCommentVerified: firstMessage && !steering, humanSteeringWithoutRedispatch: steering,
+    postIdleSteeringTerminalVerified: steering, separateHumanTaskClosureVerified: steering,
+    explicitHistoricalInputRecoveryVerified: legacyRecovery,
     keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands,
     landingScreenCommands: keyboardCommands && landing, scopedHumanOperator: keyboardCommands && process.argv.includes('--scoped-operator'), state: root }, null, 2));
 } finally {

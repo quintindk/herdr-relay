@@ -19,6 +19,9 @@ herdr-relay headless inspect --file MANIFEST_JSON [--config NODE_JSON]
   Inspect configuration only. Node readiness and schedule acknowledgement must be checked separately.
 Also available as herdr-relay native agent provision with the same provisioning options.
 herdr-relay headless connections|grants [--config NODE_JSON]  [enrolled coordinator; no secrets]
+herdr-relay headless contract-preview|contract-request --file JSON [--config NODE_JSON]
+  Original coordinator only. Preview {setupId,files:[{path,content}]}; request also needs key and previewHash.
+  Human approves the exact instruction revision in Grants. Idle-boundary activation preserves worker/grant/schedule.
 herdr-relay headless grant|revoke --file PAYLOAD_JSON --key KEY [--config NODE_JSON] [--context OPERATOR_JSON]
   Enrolled chats use their existing agent identity. Outside a chat, the joined node operator is used by default.
   No backend-owner context is required. Agents manage only their own node/workspace grants.
@@ -123,6 +126,13 @@ export async function headlessCli(args) {
     file: { type: 'string' }, config: { type: 'string' }, apply: { type: 'boolean' }, 'schedule-output': { type: 'string' },
     context: { type: 'string' }, key: { type: 'string' }, 'grant-id': { type: 'string' }, id: { type: 'string' }, retry: { type: 'boolean' },
   } });
+  if (['contract-preview', 'contract-request'].includes(positionals[1])) {
+    requireValue(positionals.length === 2 && values.file && Object.keys(values).every(k => ['file', 'config'].includes(k)), 'invalid_request', 'Use headless contract-preview|contract-request --file JSON from the original enrolled coordinator');
+    const sessionId = process.env.OPENCODE_SESSION_ID;
+    requireValue(sessionId, 'human_coordinator_required', 'Use the original enrolled coordinator, not an operator credential workaround');
+    const connection = workerConnection({ workerDirectory: dirname(resolve(values.config ?? nativeNodeConfig())) }, sessionId);
+    console.log(JSON.stringify(await call(connection, 'POST', `/agent/headless-${positionals[1]}`, readPrivateJson(values.file)), null, 2)); return true;
+  }
   if (['grant', 'revoke', 'setup', 'status', 'grants', 'connections'].includes(positionals[1])) {
     const action = positionals[1];
     const permitted = ['grant', 'revoke'].includes(action) ? ['file', 'context', 'key', 'config'] : ['config', ...(action === 'setup' ? ['key', 'grant-id', 'retry'] : action === 'status' ? ['id'] : [])];

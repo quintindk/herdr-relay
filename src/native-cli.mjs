@@ -161,7 +161,7 @@ export async function main(args) {
   const context = readPrivateJson(path);
   const backend = { url: context.url ?? 'http://127.0.0.1:3210', ...(context.cloudflareAccess ? { cloudflareAccess: context.cloudflareAccess } : {}),
     ...(context.trustedHttpProxyOrigin ? { trustedHttpProxyOrigin: context.trustedHttpProxyOrigin } : {}) };
-  const api = context.socketPath ? nativeWorkerApi(context, { readOnly: process.env.RELAY_CLI_READ_ONLY === '1', executionId: process.env.RELAY_CLI_EXECUTION_ID,
+  const api = context.socketPath ? nativeWorkerApi(context, { inputRevision: process.env.RELAY_CLI_INPUT_REVISION, readOnly: process.env.RELAY_CLI_READ_ONLY === '1', executionId: process.env.RELAY_CLI_EXECUTION_ID,
     runId: process.env.RELAY_CLI_RUN_ID, sourceMessageId: process.env.RELAY_CLI_SOURCE_ID }) : nativeBackendClient({ ...backend, token: context.token });
   const payload = () => {
     requireValue(values.file, 'invalid_request', '--file is required');

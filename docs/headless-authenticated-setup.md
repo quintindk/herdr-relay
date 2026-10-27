@@ -149,6 +149,58 @@ step, not merely inspection. Await the destination's applied schedule revision;
 
 ## Runtime tools and enforcement
 
+### Updating approved instructions
+
+Use the existing coordinator and setup, not a replacement grant or worker:
+
+```text
+relay_headless_contract({operation:"preview", setupId:"SETUP_ID", files:[
+  {path:".opencode/skills/approved-job/SKILL.md", content:"EXACT_NEW_MARKDOWN"},
+  {path:".opencode/skills/approved-job/protocol.md", content:"EXACT_PROTOCOL"}
+]})
+relay_headless_contract({operation:"request", setupId:"SETUP_ID", files:[...],
+  key:"instructions-v2", previewHash:"EXACT_PREVIEW_HASH"})
+```
+
+CLI equivalents in that coordinator are `headless contract-preview --file JSON`
+and `headless contract-request --file JSON`. The payload has `setupId` and `files`;
+the request additionally needs `key` and `previewHash`. Candidate files are supplied
+as content. Do not edit the live approved skill to prepare a preview. All pinned
+resources must be included on later revisions. Markdown files must remain within
+the original skill directory, with canonical parents and no symlink redirection.
+Include any collection protocol the skill relies on instead of leaving it mutable.
+
+The saved proposal appears in **Grants → Pending**, with complete approved/proposed
+content and the exact preview digest. **Approve instruction revision** authorises
+that content only. It does not ask for approval of the unchanged business scope
+again, create a standing permission, change capabilities or approve itself. The
+human decision is recorded in Grants history and resumes the saved update.
+Instruction content is retained in the private native Grants audit history. Do
+not include credentials or collected source payloads in a proposal.
+
+Approval fences new work requests and cron admissions. Work already requested or
+accepted drains under the previous applied revision. Activation waits for
+the existing worker's executions, native activity and publications to settle.
+`awaiting_contract_activation` is not applied. The node records write-ahead intent,
+compares every file against the inspected before/after content and applies each
+file through a durable atomic rename. Interrupted multi-file activation resumes
+the same approved bundle. Unexpected edits block it rather than being overwritten.
+The backend acknowledges the exact digest before new runs are admitted.
+
+Each new run pins the applied contract revision. Runtime checks cover every pinned
+resource, and the context hook supplies the currently verified instructions on
+every model turn, replacing older job revisions in context. The same worker,
+session, binding, grant, authenticated connections and schedule remain intact.
+No OpenCode restart is involved. Rollback is another preview and approval of the
+desired previous content, not a journal reset or a capability change.
+
+Permissions and other grant changes require their proper security flow. An equal
+capability digest does not prove that arbitrary new prose preserves business
+scope: the human must review the content. Platform activation and readiness are
+not evidence that the actual mailbox/Teams/calendar collection is complete.
+
+Isolated real-host gate: `node scripts/verify-headless-setup.mjs --contract-update --capabilities`.
+
 - `relay_headless_permissions` inspects MCP and shell policy without executing
   external effects. A granted shell must have a native shell executor available.
 - `relay_shell_call` uses the native shell input schema, session and cancellation
