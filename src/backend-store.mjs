@@ -39,9 +39,7 @@ export class BackendStore {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
     if (version !== 0 && version !== backendSchema) {
       this.db.close();
-      requireValue(false, version === 1 ? 'task_identity_migration_required' : 'unsupported_schema', version === 1
-        ? 'Stop the backend and run the explicit task-reference migration with a backup before starting this build'
-        : 'Native backend schema is newer than this build');
+      requireValue(false, 'unsupported_schema', 'Native backend requires schema 2. Older development schemas are unsupported and are not migrated');
     }
     if (version === backendSchema) {
       try { assertTaskIdentityIntegrity(this.db); } catch (error) { this.db.close(); throw error; }

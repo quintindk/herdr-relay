@@ -3,11 +3,11 @@ import test from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { stageRelease, hashBytes } from '../src/release-install.mjs';
-import { compatibility } from '../src/release-info.mjs';
+import { compatibility, assertSupportedRelease } from '../src/release-info.mjs';
 
 function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/release-stage-'), artifact = join(root, 'fixture.tgz'), bytes = Buffer.from('fixture package bytes');
-  writeFileSync(artifact, bytes); const f = { root, artifact, bytes, installs: 0, audits: 0, version: '0.2.0-rc.5' };
+  writeFileSync(artifact, bytes); const f = { root, artifact, bytes, installs: 0, audits: 0, version: '0.2.1' };
   f.input = { artifact, sha256: hashBytes(bytes), directory: join(root, 'releases') };
   f.run = async (command, args, options) => {
     assert.equal(command, 'npm');
@@ -27,7 +27,7 @@ function fixture(t) {
 
 test('verified artifact stages side-by-side with ignored scripts and a fresh audit, and exact retries never overwrite it', async t => {
   const f = fixture(t), result = await stageRelease(f.input, { run: f.run });
-  assert.equal(result.version, '0.2.0-rc.5'); assert.equal(result.auditVerified, true); assert.equal(result.reused, false);
+  assert.equal(result.version, '0.2.1'); assert.equal(result.auditVerified, true); assert.equal(result.reused, false);
   const original = readFileSync(join(result.directory, 'package.json'), 'utf8');
   const retry = await stageRelease({ ...f.input, version: result.version }, { run: f.run });
   assert.equal(retry.reused, true); assert.equal(f.installs, 1); assert.equal(f.audits, 2);
@@ -59,7 +59,7 @@ test('a cached package changed after verification is rejected before activation 
 test('version downloads verify the exact GitHub checksum asset and refuse malformed versions or redirects to HTTP', async t => {
   const f = fixture(t), urls = [];
   const fetcher = async url => {
-    urls.push(url); assert.match(url, /^https:\/\/github.com\/quintindk\/herdr-relay\/releases\/download\/v0\.2\.0-rc\.5\//);
+    urls.push(url); assert.match(url, /^https:\/\/github.com\/quintindk\/herdr-relay\/releases\/download\/v0\.2\.1\//);
     return new Response(url.endsWith('SHA256SUMS') ? `${hashBytes(f.bytes)}  herdr-relay-${f.version}.tgz\n` : f.bytes);
   };
   const result = await stageRelease({ version: f.version, directory: f.input.directory }, { run: f.run, fetch: fetcher });
@@ -68,4 +68,12 @@ test('version downloads verify the exact GitHub checksum asset and refuse malfor
   await assert.rejects(stageRelease({ version: f.version, directory: f.input.directory }, { run: f.run, fetch: async () => {
     const response = new Response(''); Object.defineProperty(response, 'url', { value: 'http://untrusted/' }); return response;
   } }), { code: 'release_download_failed' });
+});
+
+test('RC4 is the minimum release and older versions fail before any download or installation', async t => {
+  for (const version of ['0.2.1-rc4', '0.2.1-rc10', '0.2.1', '0.2.2', '0.3.0', '1.0.0']) assert.doesNotThrow(() => assertSupportedRelease(version));
+  for (const version of ['0.1.99', '0.2.0', '0.2.1-rc1', '0.2.1-rc3', '0.2.1-rc.4', '0.2.1-beta', 'invalid']) assert.throws(() => assertSupportedRelease(version), { code: 'upgrade_incompatible' });
+  const f = fixture(t);
+  await assert.rejects(stageRelease({ version: '0.2.1-rc3', directory: f.input.directory }, { run: f.run, fetch: () => { throw Error('Must not download'); } }), { code: 'upgrade_incompatible' });
+  assert.equal(f.installs, 0); assert.equal(existsSync(f.input.directory), false);
 });

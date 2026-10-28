@@ -4,9 +4,9 @@ Every new native task has an immutable machine `id` and an immutable readable
 `reference`. Relay automatically allocates `REL-1`, `REL-2`, etc. Consumers do not
 have to supply either identity. Existing clients supplying native IDs still work.
 
-Backend schema **2** is required and node journals remain schema **1**. An older
-schema-1 backend requires the explicit native migration described below. RC4 and
-current schema-2 installations do not repeat it. Reading this guide changes no state.
+Backend schema **2** is required and node journals remain schema **1**. The minimum
+supported upgrade source is **0.2.1-rc4**. Older development schemas are refused,
+not migrated. Reading this guide changes no state.
 
 ## Create and retry
 
@@ -118,59 +118,15 @@ when metadata changes. No private export is re-imported by this feature.
 Those stored scopes are historical provenance only. There is no live tracker
 connection, new source-import command or planned integration behind them.
 
-## Explicit offline migration
-
-Read-only plan against an existing state directory:
-
-```sh
-herdr-relay native task migrate-references --state-dir BACKEND_STATE
-```
-
-An authorised operator must settle active work and stop the backend before applying:
-
-```sh
-herdr-relay native task migrate-references --state-dir BACKEND_STATE --apply --backup NEW_BACKUP.sqlite
-```
-
-This command acquires the backend service lock and refuses an existing maintenance
-operation. It never initialises a missing backend, recreates credentials or starts
-services. It is also packaged as `scripts/migrate-task-references.mjs`.
-
-The migration:
-
-1. Checks schema, integrity, identity, existing claims and backend work blockers.
-2. Takes an exclusive write boundary, creates a private consistent SQLite backup,
-   verifies/syncs it and records its SHA-256.
-3. Reserves any existing canonical primary references before allocating missing ones.
-4. Backfills by valid creation timestamp then native ID. Invalid/missing timestamps
-   sort last. IDs break ties using stable code-point ordering.
-5. Preserves native IDs, creation times, provenance, graphs, comments, credentials,
-   enrolments and old receipt bytes. Changed task rows advance revision/update time
-   and receive a system migration event.
-6. Indexes imported aliases, checks complete claim/counter coverage, records the
-   migration receipt and commits schema 2 in the same transaction.
-
-A failed migration rolls back all identity changes and retains its backup. Repeating
-an already successful migration does not renumber anything or create another backup.
-Historical task-create responses may be enriched with their backfilled immutable
-reference. Their original hash, mutable fields and audit record remain unchanged.
-
 ## Upgrade and recovery boundary
 
-- An older backend rejects schema 2 at startup. SQL triggers also reject an older
-  process trying to insert/update tasks without their registered reference.
-- The current backend refuses schema 1 rather than silently migrating on startup.
+- SQL triggers reject writes that omit a task's registered reference.
+- Startup refuses unsupported backend schemas rather than migrating them.
 - Missing claim registries, inconsistent coverage or counters below retained claims
   require recovery. Startup does not reconstruct issued history from live task rows.
 - Normal service upgrades require candidate and database schemas to match. They do
-  not silently migrate or restore databases. The updater explicitly supports the managed
-  `--migrate-task-references` transition described in [service upgrades](service-upgrades.md).
-  Rollback to a schema-1 backend
-  after migration is refused before switching service pointers.
-- The cross-schema cutover is a deliberate operator-approved procedure using the
-  verified candidate CLI. The managed transition retains service arguments, port,
-  ingress config, unit backup and state paths. Do not use a generic reinstall that
-  overwrites those settings. This transition never creates grants or schedules.
+  not migrate or restore databases. Schema-incompatible rollback is refused before
+  switching service pointers. See [service upgrades](service-upgrades.md).
 - Never restore an old database and resume numbering without reconciling all issued
   high-water marks. An internally consistent older snapshot cannot prove which
   numbers were issued after that snapshot. This version has no automatic disaster-

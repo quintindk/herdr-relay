@@ -13,7 +13,7 @@ test('a live owned process is reused during compatible Relay plugin changes; rel
     writeFileSync(join(path, 'package.json'), JSON.stringify({ name: 'herdr-relay', version, relayCompatibility: compatibility }));
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({ name: '@herdr/relay-opencode', version })); return plugin;
   };
-  const old = release('0.2.1-rc1'), next = release('0.2.1-rc2'), directory = join(root, 'runtime'), workspace = join(root, 'workspace');
+  const old = release('0.2.1-rc4'), next = release('0.2.1'), directory = join(root, 'runtime'), workspace = join(root, 'workspace');
   mkdirSync(workspace); const configDirectory = join(directory, 'home/.config/opencode'); mkdirSync(configDirectory, { recursive: true });
   const config = { model: 'fixture/model', plugins: [{ package: old, options: { workerContextFile: join(root, 'worker.json') } }] };
   const request = { executable: process.execPath, workspace, config };

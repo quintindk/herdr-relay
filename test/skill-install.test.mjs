@@ -9,7 +9,7 @@ import { installSkills, skillStatus } from '../src/skill-install.mjs';
 function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/skill-install-'), sourceDirectory = join(root, 'release'), configDirectory = join(root, 'opencode');
   mkdirSync(sourceDirectory); mkdirSync(configDirectory);
-  writeFileSync(join(sourceDirectory, 'package.json'), '{"version":"0.2.0-rc.7"}');
+  writeFileSync(join(sourceDirectory, 'package.json'), '{"version":"0.2.1"}');
   for (const name of ['herdr-relay', 'relay-work']) {
     mkdirSync(join(sourceDirectory, 'skills', name), { recursive: true });
     writeFileSync(join(sourceDirectory, 'skills', name, 'SKILL.md'), `---\nname: ${name}\n---\nNative fixture.\n`);

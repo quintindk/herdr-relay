@@ -199,7 +199,7 @@ original command. Otherwise it remains blocked, not declared unapplied. Older or
 unavailable backends cannot supply this proof. Effects already sent cannot be
 undone by this fence.
 
-RC1 conflicts are not silently cleared during an upgrade. From the existing chat,
+Retained input conflicts are not silently cleared during an upgrade. From the existing chat,
 inspect `relay_work_read` and `relay_attachment_status`, then use:
 
 ```text

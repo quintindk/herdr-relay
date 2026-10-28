@@ -15,9 +15,18 @@ test('public CLI exposes native backend/node maintenance and version reporting w
 });
 
 test('unsupported maintenance fields, missing checksums and attempted service override fail before network/service actions', async () => {
-  for (const args of [['node', 'upgrade', '--artifact', '/private/no-read'], ['backend', 'upgrade', '--version', '0.2.0-rc.5', '--services', 'node'],
-    ['upgrade', 'resume', '../not-an-operation', '--apply'], ['release', 'install', '--version', '0.2.0-rc.5', '--apply'],
-    ['upgrade', 'status', 'id', '--version', '0.2.0-rc.5']]) {
+  for (const args of [['node', 'upgrade', '--artifact', '/private/no-read'], ['backend', 'upgrade', '--version', '0.2.1', '--services', 'node'],
+    ['upgrade', 'resume', '../not-an-operation', '--apply'], ['release', 'install', '--version', '0.2.1', '--apply'],
+    ['upgrade', 'status', 'id', '--version', '0.2.1']]) {
     await assert.rejects(execute(process.execPath, ['src/cli.mjs', ...args]), error => { assert.match(error.stderr, /invalid_request/); return true; });
+  }
+});
+
+test('retired migration verbs and flags are rejected without reading private state', async () => {
+  for (const args of [['native', 'task', 'migrate-references', '--state-dir', '/private/must-not-read'],
+    ['upgrade', '--version', '0.2.1', '--migrate-task-references']]) {
+    await assert.rejects(execute(process.execPath, ['src/cli.mjs', ...args]), error => {
+      assert.match(error.stderr, /ERR_PARSE_ARGS_UNKNOWN_OPTION/); assert.doesNotMatch(error.stderr, /ENOENT/); return true;
+    });
   }
 });

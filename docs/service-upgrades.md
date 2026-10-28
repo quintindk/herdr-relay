@@ -7,6 +7,9 @@ Upgrades preserve the backend instance, node/agent identities, credentials,
 enrolments, tasks, schedules, journals, pending work and original publication keys.
 Do not bootstrap/join again or delete state to perform an upgrade.
 
+The minimum supported source is **0.2.1-rc4**. Older development releases and
+cross-schema migrations are unsupported. Unsupported state is refused, not reset.
+
 ## 1. Inspect and activate the intended CLI
 
 ```sh
@@ -52,13 +55,10 @@ and `backend upgrade` commands are also supported. Use exact versions, not `late
 Planning may download/install/audit a private cached release but does not switch
 live services or configuration.
 
-The target database contract decides the policy:
-
-- `maintenancePolicy: compatible_code_switch`: active native turns, conflicts,
-  pending publications and backend executions remain recorded work state. They
-  do not block schema-compatible maintenance or require cancellation.
-- `maintenancePolicy: database_migration`: explicit migration authorisation,
-  settlement, verified backups and schema-specific recovery are still required.
+Maintenance uses `maintenancePolicy: compatible_code_switch`. Active native turns,
+conflicts, pending publications and backend executions remain recorded work state.
+They do not block schema-compatible maintenance or require cancellation. Candidate
+and database schemas must match.
 
 RC4-to-0.2.1 retains protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
@@ -88,8 +88,8 @@ pins, stages the verified release and requires a fresh zero-finding production
 audit. Unavailable audit/registry access is not a successful audit.
 
 It records intended changes and original bytes, sets maintenance guards, stops
-selected nodes before selected backends and repeats identity checks. Database
-migrations repeat settlement checks. SQLite backups use the online backup API and
+selected nodes before selected backends and repeats identity checks.
+SQLite backups use the online backup API and
 are integrity-checked; a live WAL database is not copied as an ordinary file.
 
 Compatible switching preserves live owned native processes. Before stopping an old
@@ -105,7 +105,7 @@ verified before maintenance is cleared. No general OpenCode process is restarted
 
 There may be a brief Relay API interruption. This is not a zero-disruption or an
 exactly-once external-effect guarantee. There is no unsafe force flag bypassing
-identity, integrity, provenance or migration requirements.
+identity, integrity, provenance or schema requirements.
 
 ## Status, resume and rollback
 
@@ -130,15 +130,3 @@ reference them. Schema-incompatible rollback is refused.
 An `upgrade_recovery_required` result retains its backups and maintenance evidence.
 It does not prove a native process stopped or a database was restored. Inspect the
 saved operation rather than clearing journals. See [recovery](maintenance-recovery.md).
-
-## Older native schema compatibility
-
-The updater retains explicit task-reference migration for schema-1 native backends
-using `--migrate-task-references`. This is not required for RC4 or later schema-2
-installations. It allocates immutable references under a verified backup and state
-lock, preserves original task IDs and retains its migration receipt.
-
-After schema 2 commits, schema-1 backend rollback is refused. Recovery is
-roll-forward with the saved operation, not an automatic database restore. The
-metadata-free 0.2.0-rc.4 adoption fixture and schema-1 fixtures remain upgrade tests,
-not current installation instructions or an external-provider integration plan.

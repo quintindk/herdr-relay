@@ -7,7 +7,7 @@ export const interactiveWork = (binding, work) => binding?.interactive === true 
   work.bindingId === binding.id && work.nativeConversationId === binding.identity?.sessionId;
 
 // Only verified interactive assignments opt into multi-input ownership. The
-// original invocation is immutable, including when recovering an RC1 conflict.
+// original invocation is immutable, including when recovering a retained conflict.
 export async function reconcileInteractiveWork(journal, binding, work) {
   if (!interactiveWork(binding, work) || work.execution.cancellationRequested) return work;
   if (work.state === 'conflict' && !work.invocation.interactive && !work.interactiveOwnership) return work;

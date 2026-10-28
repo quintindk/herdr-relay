@@ -2,7 +2,7 @@
 
 Compatible code upgrades do not depend on work settlement. Use recovery when the
 human actually wants to withdraw stale bookkeeping, not to make an upgrade pass.
-Database migrations retain their quiescence and integrity requirements.
+Cross-schema database migrations are unsupported.
 
 ## Human assignment handback
 
@@ -86,5 +86,5 @@ refusals, revision fences, idempotent CLI recovery and restart/no-replay behavio
 `node scripts/verify-upgrade.mjs --active-work` additionally uses disposable real
 backend/node/owned OpenCode processes, holds an active model turn across compatible
 upgrade and rollback, checks the same process and execution continue once, and
-retains conflicting publications without replay. Migration variants retain the
-stricter guards. These fixtures never control the user's services or source work.
+retains conflicting publications without replay. These fixtures never control the
+user's services or source work.

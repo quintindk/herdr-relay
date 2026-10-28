@@ -7,6 +7,16 @@ import { requireValue } from './protocol.mjs';
 export const packageDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 export const releaseVersion = JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')).version;
 export const compatibility = Object.freeze({ protocol: 'relay/0.2', backendSchema: 2, nodeSchema: 1 });
+export const minimumUpgradeVersion = '0.2.1-rc4';
+export function assertSupportedRelease(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?$/.exec(version ?? '');
+  const numbers = match?.slice(1, 4).map(Number);
+  const newer = numbers && (numbers[0] > 0 || numbers[1] > 2 || numbers[1] === 2 && numbers[2] > 1);
+  const baseline = numbers && numbers[0] === 0 && numbers[1] === 2 && numbers[2] === 1 &&
+    (!match[4] || /^rc(?:[4-9]|[1-9]\d+)$/.test(match[4]));
+  requireValue(numbers?.every(Number.isSafeInteger) && (newer || baseline), 'upgrade_incompatible',
+    `Relay ${minimumUpgradeVersion} or later is required. Older development releases are unsupported`);
+}
 function fingerprint(directory) {
   const hash = createHash('sha256');
   const visit = relative => {
@@ -20,9 +30,9 @@ function fingerprint(directory) {
 export function releaseInfo(directory) {
   const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
   requireValue(manifest.name === 'herdr-relay' && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.version), 'invalid_release', 'A versioned Relay package is required');
-  // RC4 predates compatibility metadata. It is the sole explicit adoption baseline.
-  const contract = manifest.relayCompatibility ?? (manifest.version === '0.2.0-rc.4' ? { protocol: 'relay/0.2', backendSchema: 1, nodeSchema: 1 } : null);
-  requireValue(contract && contract.protocol === compatibility.protocol && [1, 2].includes(contract.backendSchema) && contract.nodeSchema === 1,
-    'upgrade_incompatible', 'Only explicit relay/0.2 backend schema-1/schema-2 and node schema-1 contracts are supported');
+  assertSupportedRelease(manifest.version);
+  const contract = manifest.relayCompatibility;
+  requireValue(contract && contract.protocol === compatibility.protocol && contract.backendSchema === compatibility.backendSchema && contract.nodeSchema === compatibility.nodeSchema,
+    'upgrade_incompatible', 'Explicit relay/0.2 backend schema-2 and node schema-1 metadata is required');
   return { directory, version: manifest.version, compatibility: contract, fingerprint: fingerprint(directory) };
 }

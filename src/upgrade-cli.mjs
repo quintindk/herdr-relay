@@ -13,15 +13,14 @@ export const upgradeHelp = `Relay service maintenance (node means Relay node, no
   node upgrade --version VERSION [--apply] [--key KEY]
   backend upgrade --version VERSION [--apply] [--key KEY]
   upgrade --services both|node|backend --version VERSION [--apply] [--key KEY]
-    --migrate-task-references explicitly permits the backup-backed backend schema-1 to schema-2 migration.
-    After migration, recovery is roll-forward only. RC8/schema-1 rollback is refused.
     Or use --artifact VERIFIED_TGZ --sha256 TRUSTED_DIGEST instead of --version.
   upgrade status [OPERATION_ID]
   upgrade resume OPERATION_ID --apply
   upgrade rollback OPERATION_ID [--apply]
 Without --apply, upgrade stages/audits the release and shows a plan only.
 Schema-compatible code upgrades preserve active/conflicted work and pending publications.
-Only database migrations require activity settlement. Identity/integrity/provenance checks remain mandatory.
+RC4 (0.2.1-rc4) is the minimum upgrade source. Database schemas must match; migrations are unsupported.
+Identity/integrity/provenance checks remain mandatory.
 Pending UI decisions defer plugin reload; upgrade resume OPERATION_ID --apply finishes it without restarting services.
 Local recovery: node recover list|work|publication ... (node recover --help).
 Upgrades preserve state and enrolments. Rollback switches compatible code/configuration,
@@ -33,12 +32,12 @@ export async function maintenanceCli(args) {
   if (args.includes('--help')) { console.log(upgradeHelp); return true; }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     ...Object.fromEntries(['version', 'artifact', 'sha256', 'key', 'services', 'config', 'upgrade-dir', 'releases-dir', 'config-dir', 'bin-dir'].map(name => [name, { type: 'string' }])),
-    apply: { type: 'boolean' }, 'migrate-task-references': { type: 'boolean' },
+    apply: { type: 'boolean' },
   } });
   const operation = group === 'upgrade' ? action : 'service';
   const permitted = group === 'release' ? ['version', 'artifact', 'sha256', 'upgrade-dir', 'releases-dir', 'bin-dir', 'config-dir'] : group !== 'upgrade' && action === 'status' ? ['config'] :
     ['status', 'resume', 'rollback'].includes(operation) ? ['upgrade-dir', ...(operation !== 'status' ? ['apply'] : [])] :
-    ['version', 'artifact', 'sha256', 'key', 'services', 'config', 'upgrade-dir', 'releases-dir', 'config-dir', 'bin-dir', 'apply', 'migrate-task-references'];
+    ['version', 'artifact', 'sha256', 'key', 'services', 'config', 'upgrade-dir', 'releases-dir', 'config-dir', 'bin-dir', 'apply'];
   for (const key of Object.keys(values)) requireValue(permitted.includes(key), 'invalid_request', `--${key} is not supported here`);
   const output = value => console.log(JSON.stringify(value, null, 2));
   if (group === 'release') {
@@ -76,7 +75,6 @@ export async function maintenanceCli(args) {
   const selected = group === 'upgrade' ? values.services ?? 'node' : group;
   requireValue(['both', 'backend', 'node'].includes(selected), 'invalid_request', 'Use both, backend or node');
   output(await serviceUpgrade({ services: selected === 'both' ? ['backend', 'node'] : [selected], version: values.version,
-    migrateTaskReferences: values['migrate-task-references'],
     artifact: values.artifact, sha256: values.sha256, key: values.key, apply: values.apply, nodeConfig: values.config,
     directory: values['upgrade-dir'], releasesDirectory: values['releases-dir'], configDirectory: values['config-dir'], binDirectory: values['bin-dir'] }));
   return true;

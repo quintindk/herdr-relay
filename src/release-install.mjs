@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { requireValue } from './protocol.mjs';
 import { writePrivateJson, readPrivateJson } from './private-files.mjs';
-import { releaseInfo } from './release-info.mjs';
+import { releaseInfo, assertSupportedRelease } from './release-info.mjs';
 
 export const releasesDirectory = () => join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), 'herdr-relay/releases');
 export const hashBytes = value => createHash('sha256').update(value).digest('hex');
@@ -28,7 +28,10 @@ export async function stageRelease({ version, artifact, sha256, directory = rele
   const execute = dependencies.run ?? run, fetcher = dependencies.fetch ?? fetch;
   requireValue(artifact ? typeof sha256 === 'string' && /^[a-f0-9]{64}$/.test(sha256) : validVersion(version) && !sha256,
     'invalid_release', 'Choose --version VERSION or --artifact TGZ --sha256 TRUSTED_DIGEST');
-  if (version !== undefined) requireValue(validVersion(version), 'invalid_release', 'Exact release version required, not latest');
+  if (version !== undefined) {
+    requireValue(validVersion(version), 'invalid_release', 'Exact release version required, not latest');
+    assertSupportedRelease(version);
+  }
   let bytes;
   if (artifact) bytes = readFileSync(resolve(artifact));
   else {

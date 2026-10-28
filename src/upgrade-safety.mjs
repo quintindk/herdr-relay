@@ -23,11 +23,11 @@ export function inspectDatabase(path, role) {
   const db = new DatabaseSync(path, { readOnly: true });
   try {
     const schema = db.prepare('PRAGMA user_version').get().user_version;
-    requireValue((role === 'backend' ? [1, 2] : [1]).includes(schema), 'upgrade_incompatible', 'Unsupported service database schema');
+    requireValue(schema === (role === 'backend' ? 2 : 1), 'upgrade_incompatible', 'Unsupported service database schema');
     requireValue(db.prepare('PRAGMA quick_check').get().quick_check === 'ok', 'upgrade_state_invalid', 'Database integrity check failed');
     const blockers = [];
     if (role === 'backend') {
-      if (schema === 2) assertTaskIdentityIntegrity(db);
+      assertTaskIdentityIntegrity(db);
       const instanceId = db.prepare("SELECT value FROM settings WHERE key='instance'").get()?.value;
       requireValue(instanceId, 'upgrade_state_invalid', 'Existing backend instance identity is missing');
       blockers.push(...backendMaintenanceBlockers(db));

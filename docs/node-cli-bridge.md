@@ -20,7 +20,7 @@ for native work.
 | Node installation, ensure, run, policy, join, bootstrap and revoke | `relay_cli` with the corresponding native/node command |
 | Headless provision, inspection, connections, grants, setup and status | `relay_cli` with `headless ...` |
 | Backend installation, initialisation, run, backup, status and inventory | `relay_cli` with the corresponding native/backend command |
-| Task-reference grants and migration | `relay_cli` with `native task-reference ...` or `native task migrate-references ...` |
+| Task-reference grants | `relay_cli` with `native task-reference ...` |
 | Plugin and skill install/status/uninstall, doctor | `relay_cli` with the corresponding native CLI command |
 | Release install, node/backend upgrade, upgrade status/resume/rollback | `relay_cli` with the corresponding maintenance command |
 | Board and version/help | `relay_cli` with `tui --json`, `--version` or help arguments |

@@ -59,5 +59,5 @@ as unapplied only with the verified proof used by the native recovery logic. Do
 not broadly exempt HTTP 4xx responses or reinterpret a revision conflict as absence.
 
 Compatible maintenance preserves identities, credentials, native processes and
-pending work. Real database migrations retain settlement and backup requirements.
+pending work. Database schemas must match. Cross-schema migrations are unsupported.
 See [upgrades](service-upgrades.md) and [recovery](maintenance-recovery.md).

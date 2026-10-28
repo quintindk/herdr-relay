@@ -23,8 +23,7 @@ function fixture(t) {
     writeFileSync(join(directory, 'packages/opencode-relay/package.json'), JSON.stringify({ name: '@herdr/relay-opencode', version }));
     return directory;
   };
-  // Synthetic compatible packages, not claims that historical RC4 supported schema 2.
-  const previous = makePackage('0.2.0-rc.4'), candidate = makePackage('0.2.0-rc.5');
+  const previous = makePackage('0.2.1-rc4'), candidate = makePackage('0.2.1');
   symlinkSync(join(previous, 'src/cli.mjs'), join(bin, 'herdr-relay'));
   const store = new BackendStore(join(backend, 'backend.sqlite'));
   const ownerToken = store.bootstrap().token, owner = store.authenticate(ownerToken);
@@ -54,13 +53,14 @@ function fixture(t) {
     start: async name => { calls.push(['start', name]); states.get(name).active = true; states.get(name).pid++; },
     reload: async () => { calls.push(['reload']); },
   };
-  f.dependencies = { manager: f.manager, stageRelease: async () => ({ directory: candidate, version: '0.2.0-rc.5', auditVerified: true }), healthAttempts: 1, healthDelay: 0,
+  f.dependencies = { manager: f.manager, stageRelease: async () => ({ directory: candidate, version: '0.2.1', auditVerified: true }), healthAttempts: 1, healthDelay: 0,
     health: async (service, unit, manager, paused, required) => {
       assert.equal((await manager.inspect(service.name)).active, service.active);
-      if (f.failHealth && required) throw Error('candidate failed');
-      if (f.onHealth) f.onHealth(service, unit, paused, required);
+      const candidateRequired = required && unit.release.directory === candidate;
+      if (f.failHealth && candidateRequired) throw Error('candidate failed');
+      if (f.onHealth) f.onHealth(service, unit, paused, candidateRequired);
     } };
-  f.input = { services: ['backend', 'node'], version: '0.2.0-rc.5', key: 'test-upgrade', nodeConfig,
+  f.input = { services: ['backend', 'node'], version: '0.2.1', key: 'test-upgrade', nodeConfig,
     directory: join(root, 'upgrades'), configDirectory: config, binDirectory: bin };
   f.apply = extra => serviceUpgrade({ ...f.input, apply: true, ...extra }, f.dependencies);
   f.operation = id => join(root, 'upgrades/operations', id);
@@ -75,78 +75,29 @@ test('database schema mismatch refuses downgrade or implicit migration before an
   assert.equal(f.calls.some(([action]) => action === 'stop'), false);
 });
 
-function legacyBackend(f) {
-  // Disposable fixture only. Represent the actual schema-1 predecessor without
-  // loading a second implementation into this process.
-  for (const row of f.store.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'task_%'").all()) f.store.db.exec(`DROP TRIGGER ${row.name}`);
-  f.store.db.exec('DROP TABLE task_reference_claims; DROP TABLE task_reference_counters; DROP TABLE task_aliases; PRAGMA user_version=1;');
-  const task = { id: 'legacy-task', title: 'Keep original task', revision: 1, createdAt: '2020-01-01', updatedAt: '2020-01-01' };
-  f.store.db.prepare('INSERT INTO entities VALUES (?,?,?,?)').run('task', task.id, task.revision, JSON.stringify(task));
-  const path = join(f.previous, 'package.json'), manifest = JSON.parse(readFileSync(path));
-  writeFileSync(path, JSON.stringify({ ...manifest, relayCompatibility: { ...compatibility, backendSchema: 1 } }));
-}
-
-test('explicit managed schema migration preserves identity/data, backfills references and refuses old-writer rollback', async t => {
-  const f = fixture(t); legacyBackend(f);
-  const plan = await serviceUpgrade({ ...f.input, migrateTaskReferences: true }, f.dependencies);
-  assert.equal(plan.taskReferenceMigration, true); assert.equal(f.store.db.prepare('PRAGMA user_version').get().user_version, 1);
-  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
-  const result = await f.apply({ migrateTaskReferences: true });
-  assert.equal(result.state, 'committed'); assert.equal(f.store.get('task', 'legacy-task').reference, 'REL-1');
-  const record = JSON.parse(readFileSync(join(f.operation(result.operationId), 'operation.json')));
-  assert.equal(record.migration.backfilled, 1); assert.equal(record.migration.instanceId, f.store.instance);
-  assert.ok(existsSync(record.migration.backup));
-  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_incompatible' });
-  assert.ok([...f.states.values()].every(state => state.active));
+test('pre-RC4 sources and schema-1 state are refused before staging or stopping services', async t => {
+  const f = fixture(t), manifest = join(f.previous, 'package.json'), value = JSON.parse(readFileSync(manifest));
+  writeFileSync(manifest, JSON.stringify({ ...value, version: '0.2.1-rc3' }));
+  await assert.rejects(f.apply(), { code: 'upgrade_incompatible' });
+  writeFileSync(manifest, JSON.stringify(value));
+  f.store.db.exec('PRAGMA user_version=1');
+  await assert.rejects(f.apply(), { code: 'upgrade_incompatible' });
+  assert.equal(f.calls.length, 0);
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
 });
 
-test('failed health after schema migration retains candidate state for exact roll-forward resume, never schema-1 rollback', async t => {
-  const f = fixture(t); legacyBackend(f); f.failHealth = true;
-  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_recovery_required' });
-  const id = JSON.parse(readFileSync(join(f.root, 'upgrades/operations', readdirSync(join(f.root, 'upgrades/operations'))[0], 'operation.json'))).id;
-  const path = join(f.operation(id), 'operation.json'), record = JSON.parse(readFileSync(path));
-  assert.equal(record.recoveryAction, 'resume'); assert.equal(f.store.get('task', 'legacy-task').reference, 'REL-1');
-  // Emulate a crash between migration commit and saving its result receipt.
-  delete record.migration; writeFileSync(path, JSON.stringify(record));
-  f.failHealth = false;
-  const result = await serviceUpgrade({ resume: id, directory: f.input.directory, apply: true }, f.dependencies);
-  assert.equal(result.state, 'committed'); assert.equal(f.store.all('task').length, 1);
-  assert.equal(f.store.get('task', 'legacy-task').reference, 'REL-1');
-});
-
-test('post-activation migration recovery resumes health checks without stopping newly admitted work', async t => {
-  const f = fixture(t); legacyBackend(f);
-  f.onHealth = (_service, _unit, paused, required) => {
-    if (required && !paused) {
-      f.journal.save({ id: 'post-activation', state: 'observing', execution: { id: 'post-activation', state: 'accepted' } });
-      throw Error('Post-activation health unavailable');
-    }
-  };
-  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_recovery_required' });
-  const id = readdirSync(join(f.root, 'upgrades/operations'))[0], path = join(f.operation(id), 'operation.json');
-  assert.equal(JSON.parse(readFileSync(path)).resumePhase, 'activating');
-  f.onHealth = null; f.calls.length = 0;
-  assert.equal((await serviceUpgrade({ resume: id, directory: f.input.directory, apply: true }, f.dependencies)).state, 'committed');
-  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
-  assert.equal(f.journal.work('post-activation').state, 'observing');
-});
-
-test('retained schema-1 rollback is refused after migration without touching current service pointers', async t => {
-  const f = fixture(t), manifest = join(f.previous, 'package.json'), value = JSON.parse(readFileSync(manifest, 'utf8'));
-  writeFileSync(manifest, JSON.stringify({ ...value, relayCompatibility: { ...compatibility, backendSchema: 1 } }));
-  const result = await f.apply();
-  f.calls.length = 0;
-  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_incompatible' });
-  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
-  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
+test('release compatibility metadata is mandatory even for RC4', t => {
+  const f = fixture(t), path = join(f.previous, 'package.json'), manifest = JSON.parse(readFileSync(path));
+  delete manifest.relayCompatibility; writeFileSync(path, JSON.stringify(manifest));
+  assert.throws(() => releaseInfo(f.previous), { code: 'upgrade_incompatible' });
 });
 
 test('managed service parsing preserves quoted paths, port, runtime executable and state while changing release only', t => {
   const f = fixture(t), service = f.states.get('herdr-relay-backend.service');
   const before = readFileSync(service.path, 'utf8'), unit = parseManagedUnit(before, 'backend');
-  assert.equal(unit.release.version, '0.2.0-rc.4'); assert.equal(unit.statePath, f.backend);
+  assert.equal(unit.release.version, '0.2.1-rc4'); assert.equal(unit.statePath, f.backend);
   const after = parseManagedUnit(unit.replace(f.candidate), 'backend');
-  assert.equal(after.release.version, '0.2.0-rc.5'); assert.deepEqual(after.args.slice(2), unit.args.slice(2));
+  assert.equal(after.release.version, '0.2.1'); assert.deepEqual(after.args.slice(2), unit.args.slice(2));
   assert.equal(after.args[0], process.execPath);
   assert.throws(() => parseManagedUnit(before.replace('# Managed', '# Unmanaged'), 'backend'), { code: 'unmanaged_service' });
   assert.throws(() => releaseInfo(fixture(t).root));
@@ -163,7 +114,7 @@ test('generated worker index key reordering during service restart does not bloc
   assert.equal(rollback.state, 'rolled_back');
 });
 
-test('retained RC5 operation records without a fingerprint version still use their original byte-level guard', async t => {
+test('retained operation records without a fingerprint version still use their original byte-level guard', async t => {
   const f = fixture(t);
   writeFileSync(join(f.node, 'worker-index.json'), '{"nodeId":"test-node","sessions":{}}');
   const result = await f.apply(), path = join(f.operation(result.operationId), 'operation.json');
@@ -216,7 +167,7 @@ test('upgrade switches backend/node/plugin/CLI together and preserves all identi
   assert.equal(f.calls.some(c => String(c).includes('opencode')), false);
   const count = f.calls.length;
   assert.equal((await f.apply()).replayed, true); assert.equal(f.calls.length, count);
-  await assert.rejects(f.apply({ version: '0.2.0-rc.6' }), { code: 'operation_conflict' });
+  await assert.rejects(f.apply({ version: '0.2.2' }), { code: 'operation_conflict' });
 });
 
 test('node-only upgrade needs no backend-root credential and does not restart the backend', async t => {
@@ -224,7 +175,7 @@ test('node-only upgrade needs no backend-root credential and does not restart th
   const result = await f.apply({ services: ['node'] });
   assert.deepEqual(result.services, ['node']); assert.ok(f.calls.every(c => c[1] !== 'herdr-relay-backend.service'));
   const status = await installationStatus({ services: ['node'], nodeConfig: f.nodeConfig }, { manager: f.manager });
-  assert.equal(status.services[0].version, '0.2.0-rc.5'); assert.equal(status.services[0].nodeId, 'test-node');
+  assert.equal(status.services[0].version, '0.2.1'); assert.equal(status.services[0].nodeId, 'test-node');
 });
 
 test('backend-only upgrade neither reads node credentials nor rewrites node/plugin configuration', async t => {
@@ -237,7 +188,7 @@ test('backend-only upgrade neither reads node credentials nor rewrites node/plug
 test('release install activates one verified public CLI without service changes and removes only the package-owned SSH executable', async t => {
   const f = fixture(t); writeFileSync(join(f.previous, 'src/remote.mjs'), '// retired');
   symlinkSync(join(f.previous, 'src/remote.mjs'), join(f.bin, 'herdr-relay-remote'));
-  const request = { version: '0.2.0-rc.5', directory: f.input.directory, binDirectory: f.bin };
+  const request = { version: '0.2.1', directory: f.input.directory, binDirectory: f.bin };
   const result = await installCliRelease(request, f.dependencies);
   assert.equal(result.servicesChanged, false); assert.equal(result.state, 'cli_activated'); assert.equal(f.calls.length, 0);
   assert.equal(existsSync(join(f.bin, 'herdr-relay-remote')), false);
@@ -251,7 +202,7 @@ test('release install activates one verified public CLI without service changes 
 test('an unfinished operation fences CLI-only activation too', async t => {
   const f = fixture(t), path = join(f.input.directory, 'operations/pending'); mkdirSync(path, { recursive: true });
   writeFileSync(join(path, 'operation.json'), JSON.stringify({ phase: 'switching' }));
-  await assert.rejects(installCliRelease({ version: '0.2.0-rc.5', directory: f.input.directory, binDirectory: f.bin }, f.dependencies), { code: 'upgrade_in_progress' });
+  await assert.rejects(installCliRelease({ version: '0.2.1', directory: f.input.directory, binDirectory: f.bin }, f.dependencies), { code: 'upgrade_in_progress' });
   assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
 });
 
@@ -266,6 +217,20 @@ test('pending forms defer only the plugin reload while compatible services upgra
   const resumed = await serviceUpgrade({ resume: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
   assert.equal(resumed.pluginReloadDeferred, null); assert.equal(resumed.servicesRestarted, false); assert.equal(f.calls.length, 0);
   assert.notEqual(readFileSync(f.serverConfig, 'utf8'), before);
+});
+
+test('a committed supported release can finish its saved plugin reload without enabling pre-RC4 rollback', async t => {
+  const f = fixture(t);
+  f.dependencies.nativeDecisions = async () => { throw Object.assign(Error('pending'), { code: 'upgrade_pending_decisions' }); };
+  const result = await f.apply();
+  // The committed code is supported even when its retained predecessor is not.
+  const path = join(f.previous, 'package.json'), manifest = JSON.parse(readFileSync(path));
+  writeFileSync(path, JSON.stringify({ ...manifest, version: '0.2.1-rc3' }));
+  f.dependencies.nativeDecisions = async () => ({}); f.calls.length = 0;
+  const resumed = await serviceUpgrade({ resume: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
+  assert.equal(resumed.pluginReloadDeferred, null); assert.equal(resumed.servicesRestarted, false);
+  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_incompatible' });
+  assert.equal(f.calls.length, 0);
 });
 
 test('a permission arriving in the stop window also defers the plugin rather than rolling back compatible code', async t => {
@@ -343,13 +308,16 @@ test('a turn racing explicit compatible rollback is retained without blocking th
   assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
 });
 
-test('database migrations still reject active work and pending native decisions before stopping', async t => {
-  const f = fixture(t); legacyBackend(f);
-  f.journal.save({ id: 'active', state: 'observing', execution: { state: 'accepted' } });
-  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_busy' }); assert.equal(f.calls.length, 0);
-  f.journal.save({ ...f.journal.work('active'), state: 'settled', execution: { state: 'cancelled' } });
-  f.dependencies.nativeDecisions = async () => { throw Object.assign(Error('pending'), { code: 'upgrade_pending_decisions' }); };
-  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'upgrade_pending_decisions' }); assert.equal(f.calls.length, 0);
+test('removed migration requests and saved migration operations fail without changing services', async t => {
+  const f = fixture(t);
+  await assert.rejects(f.apply({ migrateTaskReferences: true }), { code: 'invalid_request' });
+  const result = await f.apply(), path = join(f.operation(result.operationId), 'operation.json');
+  const record = JSON.parse(readFileSync(path));
+  writeFileSync(path, JSON.stringify({ ...record, migrateTaskReferences: true }));
+  f.calls.length = 0;
+  await assert.rejects(serviceUpgrade({ resume: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_incompatible' });
+  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_incompatible' });
+  assert.equal(f.calls.length, 0);
 });
 
 test('process-only stop policy is loaded before stopping the old node, preserving independent native children', async t => {

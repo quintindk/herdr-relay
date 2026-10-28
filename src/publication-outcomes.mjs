@@ -24,8 +24,8 @@ export function definitivePublicationRefusal(row) {
   if (item.state !== row.state || item.receipt || item.applied === true || item.command?.key !== row.key || digest(item.command) !== row.hash) return null;
   if (item.outcome === 'uncertain' || item.effectsUncertain === true) return null;
   if (!validation.get(item.command.action)?.has(item.error)) return null;
-  // RC1/RC2 persisted this code only after the native POST transaction refused.
-  // New records additionally retain the explicit response proof.
+  // Retained records may lack response proof. Only the exact transactional
+  // validation codes above establish non-application without that proof.
   if (item.refusal && (item.refusal.kind !== 'transactional_validation' || item.refusal.status !== 400 || item.refusal.code !== item.error)) return null;
   return { id: row.key, action: item.command.action, error: item.error, applied: false, kind: 'transactional_validation' };
 }

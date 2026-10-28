@@ -1,16 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { execFileSync, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BackendStore } from '../src/backend-store.mjs';
 import { startBackend } from '../src/backend-service.mjs';
-import { digest } from '../src/protocol.mjs';
 import { parseTaskReference, resolveTaskIdentity } from '../src/task-identity.mjs';
-import { migrateTaskIdentity, planTaskIdentityMigration } from '../src/task-identity-migration.mjs';
-import { serviceLock } from '../src/service-lock.mjs';
 import { NodeJournal } from '../src/node-journal.mjs';
 import { startNodeService } from '../src/node-service.mjs';
 import { nativeTasksProvider } from '../src/tasks-provider.mjs';
@@ -26,19 +23,6 @@ function fixture(t, path = ':memory:') {
 function directory(t) {
   const root = mkdtempSync('/tmp/opencode/task-identity-');
   t.after(() => rmSync(root, { recursive: true, force: true })); return root;
-}
-function legacyDatabase(path, tasks = []) {
-  const db = new DatabaseSync(path);
-  db.exec(`CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-    CREATE TABLE credentials(id TEXT PRIMARY KEY,hash TEXT UNIQUE NOT NULL,data TEXT NOT NULL);
-    CREATE TABLE entities(kind TEXT,id TEXT,revision INTEGER,data TEXT,PRIMARY KEY(kind,id));
-    CREATE TABLE receipts(actor TEXT,key TEXT,hash TEXT,data TEXT,PRIMARY KEY(actor,key));
-    CREATE TABLE changes(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE,at TEXT,data TEXT);
-    PRAGMA user_version=1;`);
-  db.prepare('INSERT INTO settings VALUES (?,?)').run('owner', 'owner');
-  db.prepare('INSERT INTO settings VALUES (?,?)').run('instance', 'original-instance');
-  for (const task of tasks) db.prepare('INSERT INTO entities VALUES (?,?,?,?)').run('task', task.id, task.revision, JSON.stringify(task));
-  return db;
 }
 
 test('automatic references and generated IDs share atomic creation receipts, including later human edits', t => {
@@ -122,45 +106,14 @@ test('safe integer exhaustion fails closed without wrapping or corrupting a clai
   assert.equal(f.store.all('task').length, 1);
 });
 
-test('explicit backup-backed migration is deterministic, idempotent and preserves old receipts and identities', t => {
-  const root = directory(t), path = join(root, 'backend.sqlite'), backup = join(root, 'before.sqlite');
-  const tasks = [{ id: 'z', title: 'Z', revision: 2, createdAt: '2020-01-01', source: { provider: 'paperclip', scope: 'old', metadata: { identifier: 'DEF-32' } } },
-    { id: 'a', title: 'A', revision: 1, createdAt: '2020-01-01', parentId: 'z' }];
-  const db = legacyDatabase(path, tasks), payload = { id: 'a', title: 'A' }, receipt = JSON.stringify(tasks[1]);
-  const credential = { id: 'old-credential', type: 'user', actorId: 'owner', revoked: false };
-  db.prepare('INSERT INTO credentials VALUES (?,?,?)').run(credential.id, digest('legacy-fixture-token'), JSON.stringify(credential));
-  const comment = JSON.stringify({ id: 'comment', taskId: 'z', revision: 1, body: 'Original comment', author: { type: 'user', id: 'owner' } });
-  db.prepare('INSERT INTO entities VALUES (?,?,?,?)').run('comment', 'comment', 1, comment);
-  db.prepare('INSERT INTO receipts VALUES (?,?,?,?)').run('user:owner', 'old-create', digest({ action: 'task.create', payload }), receipt);
-  db.close();
-  const before = readFileSync(path);
-  assert.equal(planTaskIdentityMigration(path).pending, 2);
-  assert.deepEqual(readFileSync(path), before, 'planning must not mutate the database');
-  assert.throws(() => new BackendStore(path), { code: 'task_identity_migration_required' });
-  const result = migrateTaskIdentity(path, { backup }); assert.equal(result.backfilled, 2);
-  assert.equal(statSync(backup).mode & 0o777, 0o600);
-  const old = new DatabaseSync(backup, { readOnly: true });
-  assert.equal(old.prepare('PRAGMA user_version').get().user_version, 1); old.close();
-  const store = new BackendStore(path); t.after(() => store.close());
-  assert.equal(store.instance, 'original-instance');
-  assert.equal(store.authenticate('legacy-fixture-token').credentialId, credential.id);
-  assert.equal(store.db.prepare("SELECT data FROM entities WHERE kind='comment'").get().data, comment);
-  assert.equal(store.get('task', 'a').reference, 'REL-1'); assert.equal(store.get('task', 'z').reference, 'REL-2');
-  assert.equal(store.get('task', 'a').parentId, 'z'); assert.equal(store.get('task', 'z').revision, 3);
-  assert.equal(store.db.prepare('SELECT data FROM receipts WHERE key=?').get('old-create').data, receipt);
-  assert.deepEqual(store.command({ type: 'user', id: 'owner' }, { key: 'old-create', action: 'task.create', payload }), { ...tasks[1], reference: 'REL-1' });
-  assert.equal(resolveTaskIdentity(store, { value: 'DEF-32' }).matches[0].task.id, 'z');
-  assert.equal(migrateTaskIdentity(path, { backup: join(root, 'unused.sqlite') }).alreadyApplied, true);
-  const legacy = new DatabaseSync(path, { readOnly: true });
-  assert.ok(legacy.prepare('PRAGMA user_version').get().user_version > 1, 'old backend startup rejects the bumped schema'); legacy.close();
-});
-
-test('migration CLI refuses an active backend lock and needs a new backup path', t => {
-  const root = directory(t), path = join(root, 'backend.sqlite'); legacyDatabase(path).close();
-  const unlock = serviceLock(root);
-  try { assert.throws(() => execFileSync(process.execPath, ['scripts/migrate-task-references.mjs', '--state-dir', root, '--apply', '--backup', join(root, 'backup.sqlite')], { stdio: 'pipe' }), error => /already_running/.test(error.stderr)); }
-  finally { unlock(); }
-  assert.throws(() => migrateTaskIdentity(path), { code: 'migration_backup_required' });
+test('unsupported backend schemas are refused without migrating or changing existing bytes', t => {
+  const root = directory(t), path = join(root, 'backend.sqlite');
+  for (const schema of [1, 3]) {
+    const db = new DatabaseSync(path); db.exec(`PRAGMA user_version=${schema}`); db.close();
+    const before = readFileSync(path);
+    assert.throws(() => new BackendStore(path), { code: 'unsupported_schema' });
+    assert.deepEqual(readFileSync(path), before);
+  }
 });
 
 test('HTTP create and exact identity lookup expose canonical references without changing ID-addressed routes', async t => {
@@ -190,18 +143,6 @@ test('independent concurrent processes share one allocator and lost committed re
   assert.equal(store.get('task', replay.unique.id).reference, replay.unique.reference);
 });
 
-test('migration failure preserves schema/tasks and backup, without leaking partially assigned references', t => {
-  const root = directory(t), path = join(root, 'backend.sqlite'), backup = join(root, 'backup.sqlite');
-  const task = { id: 'a', title: 'A', revision: 1 }, db = legacyDatabase(path, [task]);
-  db.exec("CREATE TRIGGER fail_backfill BEFORE UPDATE ON entities BEGIN SELECT RAISE(ABORT,'simulated migration crash'); END;"); db.close();
-  assert.throws(() => migrateTaskIdentity(path, { backup }), /simulated migration crash/);
-  const inspect = new DatabaseSync(path);
-  assert.equal(inspect.prepare('PRAGMA user_version').get().user_version, 1);
-  assert.deepEqual(JSON.parse(inspect.prepare("SELECT data FROM entities WHERE kind='task'").get().data), task);
-  assert.equal(inspect.prepare("SELECT name FROM sqlite_master WHERE name='task_reference_claims'").get(), undefined);
-  inspect.exec('DROP TRIGGER fail_backfill'); inspect.close();
-  assert.equal(migrateTaskIdentity(path, { backup: join(root, 'retry.sqlite') }).backfilled, 1);
-});
 
 test('parallel custom claims have one winner and explicit conflicts, never fallback references', async t => {
   const root = directory(t), path = join(root, 'backend.sqlite'), initial = new BackendStore(path); initial.close();
@@ -214,21 +155,13 @@ test('parallel custom claims have one winner and explicit conflicts, never fallb
   assert.equal(store.db.prepare("SELECT high_water FROM task_reference_counters WHERE prefix='REL'").get(), undefined);
 });
 
-test('new schema planning refuses missing claim coverage instead of repairing state by guessing', t => {
+test('startup refuses missing claim coverage instead of repairing state by guessing', t => {
   const root = directory(t), path = join(root, 'backend.sqlite'), store = new BackendStore(path);
   store.db.exec('DROP TRIGGER task_reference_required_insert');
   store.db.prepare('INSERT INTO entities VALUES (?,?,?,?)').run('task', 'corrupt', 1, JSON.stringify({ id: 'corrupt', revision: 1 })); store.close();
-  assert.throws(() => planTaskIdentityMigration(path), { code: 'task_identity_recovery_required' });
   assert.throws(() => new BackendStore(path), { code: 'task_identity_recovery_required' });
 });
 
-test('migration blocks active work and missing state without creating a backend or backup', t => {
-  const root = directory(t), path = join(root, 'backend.sqlite'), db = legacyDatabase(path);
-  db.prepare('INSERT INTO entities VALUES (?,?,?,?)').run('execution', 'active', 1, JSON.stringify({ id: 'active', state: 'accepted', revision: 1 })); db.close();
-  assert.equal(planTaskIdentityMigration(path).ready, false);
-  assert.throws(() => migrateTaskIdentity(path, { backup: join(root, 'backup.sqlite') }), { code: 'migration_busy' });
-  assert.throws(() => migrateTaskIdentity(join(root, 'missing.sqlite'), { backup: join(root, 'backup.sqlite') }), { code: 'migration_state_missing' });
-});
 
 test('enrolled worker and native CLI resolve references through real scoped transports without dispatch or writes', async t => {
   const root = directory(t), backend = await startBackend({ database: ':memory:' });

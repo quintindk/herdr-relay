@@ -18,7 +18,7 @@ import { launchOwnedV2 } from '../packages/opencode-relay/owned-runtime.mjs';
 import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
 import { call } from '../src/client.mjs';
 import { digest } from '../src/protocol.mjs';
-import { historicalUpgradeFixture } from './historical-upgrade-fixture.mjs';
+import { upgradeBaselineFixture } from './upgrade-baseline-fixture.mjs';
 import { OpenCode } from '@opencode/client';
 import { NodeJournal } from '../src/node-journal.mjs';
 
@@ -81,8 +81,7 @@ const model = createServer(async (req, res) => {
   res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: tool ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
 });
 try {
-  const old = await historicalUpgradeFixture({ version: process.env.RELAY_UPGRADE_BASELINE ?? '0.2.0-rc.9', directory: releases });
-  const migration = old.compatibility.backendSchema === 1;
+  const old = await upgradeBaselineFixture({ directory: releases });
   const [packed] = JSON.parse((await execute('npm', ['pack', '--json', '--pack-destination', root])).stdout);
   const tarball = join(root, packed.filename), artifactHash = hashBytes(readFileSync(tarball));
   const candidate = await stageRelease({ artifact: tarball, sha256: artifactHash, directory: releases });
@@ -123,7 +122,6 @@ try {
   };
   sender = await enrol('Upgrade sender'); receiver = await enrol('Upgrade receiver');
   if (activeWork) {
-    assert.equal(migration, false, 'Active work gate is for a schema-compatible baseline');
     const workspace = join(root, 'owned-workspace'); mkdirSync(workspace);
     const config = JSON.parse(readFileSync(joined.configFile));
     config.bindings.push({ id: 'owned-active-binding', agentId: 'owned-active-agent', name: 'Owned active fixture', harness: 'opencode-v2-owned', mode: 'headless',
@@ -136,7 +134,6 @@ try {
   }
   const nodeName = addService('node', `herdr-relay-node-${joined.nodeId}.service`, ['--config', joined.configFile]);
   symlinkSync(join(old.directory, 'src/cli.mjs'), join(bin, 'herdr-relay'));
-  symlinkSync(join(old.directory, 'src/remote.mjs'), join(bin, 'herdr-relay-remote'));
   const activated = await installCliRelease({ version: candidate.version, directory: join(root, 'upgrades'), binDirectory: bin }, { stageRelease: async () => candidate });
   assert.equal(activated.servicesChanged, false);
   await manager.start(nodeName);
@@ -175,38 +172,27 @@ try {
   writeFileSync(join(nativeConfig, 'cli.json'), JSON.stringify({ theme: 'preserve', plugins: [{ package: join(old.directory, 'packages/opencode-relay'),
     options: { ownerContextFile: joined.operatorContextFile, notificationSessionId: sender.sessionId } }] }), { mode: 0o600 });
   const request = { services: ['backend', 'node'], version: candidate.version, key: 'real-upgrade', nodeConfig: joined.configFile,
-    migrateTaskReferences: migration,
     directory: join(root, 'upgrades'), configDirectory: nativeConfig, binDirectory: bin, apply: true };
   const upgradeDependencies = { manager, stageRelease: async () => candidate,
     health: async (...args) => { if (failCandidate && args[4] && args[1].release.version === candidate.version) throw Error('Intentional health failure'); return verifyServiceHealth(...args); },
     healthAttempts: 20, healthDelay: 100 };
-  // Node schema is unchanged: prove compatible code rollback before the
-  // irreversible backend identity migration, without restoring any database.
+  // Both schemas are unchanged. Prove compatible rollback without restoring data.
   const backendPid = (await manager.inspect(backendName)).pid;
-  const nodeOnly = await serviceUpgrade({ ...request, migrateTaskReferences: false, services: ['node'], key: 'node-only' }, upgradeDependencies);
+  const nodeOnly = await serviceUpgrade({ ...request, services: ['node'], key: 'node-only' }, upgradeDependencies);
   assert.equal((await manager.inspect(backendName)).pid, backendPid);
   await send('node-only-upgrade');
   await serviceUpgrade({ rollback: nodeOnly.operationId, directory: request.directory, apply: true }, upgradeDependencies);
   failCandidate = true;
-  await assert.rejects(serviceUpgrade({ ...request, migrateTaskReferences: false, services: ['node'], key: 'failed-health' }, upgradeDependencies), { code: 'upgrade_rolled_back' });
+  await assert.rejects(serviceUpgrade({ ...request, services: ['node'], key: 'failed-health' }, upgradeDependencies), { code: 'upgrade_rolled_back' });
   failCandidate = false;
   const pendingForm = await runtime.client.session.form.create({ sessionID: sender.sessionId, title: 'Fixture pending decision',
     fields: [{ type: 'boolean', key: 'fixture', title: 'Fixture only', required: true }] });
-  const beforeDecisionGuard = [(await manager.inspect(backendName)).pid, (await manager.inspect(nodeName)).pid];
-  let result;
-  if (migration) await assert.rejects(serviceUpgrade({ ...request, key: 'blocked-pending-form' }, upgradeDependencies), { code: 'upgrade_pending_decisions' });
-  else {
-    result = await serviceUpgrade({ ...request, key: 'compatible-pending-form' }, upgradeDependencies);
-    assert.equal(result.state, 'committed'); assert.equal(result.pluginReloadDeferred.reason, 'upgrade_pending_decisions');
-  }
+  const result = await serviceUpgrade({ ...request, key: 'compatible-pending-form' }, upgradeDependencies);
+  assert.equal(result.state, 'committed'); assert.equal(result.pluginReloadDeferred.reason, 'upgrade_pending_decisions');
   assert.equal((await runtime.client.session.form.get({ sessionID: sender.sessionId, formID: pendingForm.id })).state.status, 'pending');
-  if (migration) assert.deepEqual([(await manager.inspect(backendName)).pid, (await manager.inspect(nodeName)).pid], beforeDecisionGuard);
   await runtime.client.session.form.cancel({ sessionID: sender.sessionId, formID: pendingForm.id }); // Own fixture only, never a user approval.
-  if (migration) result = await serviceUpgrade(request, upgradeDependencies);
-  else {
-    const finished = await serviceUpgrade({ resume: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
-    assert.equal(finished.pluginReloadDeferred, null); assert.equal(finished.servicesRestarted, false);
-  }
+  const finished = await serviceUpgrade({ resume: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
+  assert.equal(finished.pluginReloadDeferred, null); assert.equal(finished.servicesRestarted, false);
   assert.equal(result.state, 'committed'); assert.equal((await owner('GET', '/v1/info')).version, candidate.version);
   assert.equal((await owner('GET', '/v1/info')).instanceId, oldInfo.instanceId);
   assert.deepEqual(identityFiles.map(identityHash), identities);
@@ -234,8 +220,7 @@ try {
   const recorded = JSON.parse((await execute(join(bin, 'herdr-relay'), ['upgrade', 'status', result.operationId, '--upgrade-dir', request.directory])).stdout);
   assert.equal(recorded.operations[0].phase, 'committed');
   await owner('POST', '/v1/commands', { key: 'later-task', action: 'task.create', payload: { id: 'later-task', title: 'Must survive rollback' } });
-  if (migration) await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies), { code: 'upgrade_incompatible' });
-  else await serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
+  await serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
   assert.equal((await owner('GET', '/v1/tasks/later-task')).title, 'Must survive rollback');
   assert.match((await owner('GET', '/v1/tasks/keep-task')).reference, /^REL-[1-9][0-9]*$/);
   assert.match((await owner('GET', '/v1/tasks/later-task')).reference, /^REL-[1-9][0-9]*$/);
@@ -247,15 +232,15 @@ try {
   assert.equal(snapshot.collections.message.length, 3); assert.equal(snapshot.collections.agent.length, activeWork ? 3 : 2);
   assert.deepEqual(identityFiles.map(identityHash), identities);
   console.log(JSON.stringify({ passed: true, from: old.version, to: candidate.version, actualBackendAndNodeProcesses: true,
-    historicalBaselineFixtureOnly: old.historicalFixtureOnly, baselineProductionAuditFindings: old.productionAuditFindings,
+    baselineFixtureOnly: old.baselineFixtureOnly, baselineProductionAuditFindings: old.productionAuditFindings,
     baselineProductionActivationAllowed: old.productionActivationAllowed, candidateFreshProductionAuditPassed: candidate.auditVerified,
     installedUpgradeEntrypoint: true, nativeToolsWithoutInjectedRuntimePaths: true,
     versionedCliActivationPassed: true, cachedReleaseAuditPassed: true,
-    pendingFormPreservedDuringMaintenance: true, compatiblePluginReloadDeferred: !migration, migrationDecisionGuardPassed: migration,
+    pendingFormPreservedDuringMaintenance: true, compatiblePluginReloadDeferred: true,
     realOpenCodeChatsPreserved: true, backendInstanceAndNodeIdentityPreserved: true, credentialsUnchanged: true,
     taskDataAndPostUpgradeEditsPreserved: true, nodeOnlyDidNotRestartBackend: true, messageDeliveryBeforeAndAfterPassed: true,
-    explicitCompatibleNodeRollbackPassed: true, explicitCompatibleBackendRollbackPassed: !migration, failedHealthAutomaticRollbackPassed: true,
-    schema2MigrationPassed: migration, schema1RollbackRefused: migration, databasesRestored: false,
+    explicitCompatibleNodeRollbackPassed: true, explicitCompatibleBackendRollbackPassed: true, failedHealthAutomaticRollbackPassed: true,
+    databasesRestored: false,
     activeOwnedModelSurvivedSupervisorUpgrade: activeWork, activeExecutionContinuedWithoutReplay: activeWork, conflictingPublicationsPreservedWithoutReplay: activeWork,
     userServicesTouched: false, userChatsTouched: false, physicalMachines: 1, state: root }, null, 2));
 } finally {

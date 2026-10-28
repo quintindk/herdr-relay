@@ -74,18 +74,10 @@ jobs:
         run: node scripts/verify-headless-setup.mjs --shell
       - name: Headless shell denied without effect
         run: node scripts/verify-headless-setup.mjs --shell-denied --mcp-denied
-      - name: Installed RC9 compatible upgrade, rollback and chat-continuity smoke
+      - name: Installed RC4 compatible upgrade, rollback and chat-continuity smoke
         run: node scripts/verify-upgrade.mjs
       - name: Compatible upgrade with active owned model and retained publication conflicts
         run: node scripts/verify-upgrade.mjs --active-work
-      - name: Installed RC8 task-reference migration and old-writer refusal
-        env:
-          RELAY_UPGRADE_BASELINE: 0.2.0-rc.8
-        run: node scripts/verify-upgrade.mjs
-      - name: Retained RC4 adoption and rollback compatibility
-        env:
-          RELAY_UPGRADE_BASELINE: 0.2.0-rc.4
-        run: node scripts/verify-upgrade.mjs
 
   package:
     name: Verify installed release package

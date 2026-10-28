@@ -23,7 +23,6 @@
     "scripts/install-native-node.mjs",
     "scripts/install-native-backend.mjs",
     "scripts/verify-backend-ingress.mjs",
-    "scripts/migrate-task-references.mjs",
     "herdr-plugin.toml",
     "CHANGELOG.md",
     "docs/*.md"

@@ -40,7 +40,6 @@ export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
   task create|edit|comment --file PAYLOAD_JSON --key KEY
   task resolve VALUE [--scope ALIAS_SCOPE]  [returns resolved, ambiguous or not_found, never guesses]
   task resolve --reference REL-32  [explicit primary-reference lookup]
-  task migrate-references --state-dir DIR [--apply --backup NEW_SQLITE]  [offline operator, read-only plan by default]
   task-reference grant|revoke --file PAYLOAD_JSON --key KEY --context OWNER_JSON  [backend-root namespace approval]
   task-reference list|inspect [ID] --context CONTEXT  [inspect namespace-grant revisions]
   task complete|cancel ID --revision N --key KEY  [human task status only, not native execution settlement]
@@ -73,9 +72,6 @@ export async function main(args) {
     'agent_cli_read_only', 'Enrolled read-only CLI scope cannot perform mutations or lifecycle administration', 403);
   requireValue(!process.env.RELAY_CLI_EXECUTION_ID || executionCliInvocation(['native', ...args]),
     'execution_cli_scope', 'Execution-scoped CLI cannot perform local lifecycle or operator administration', 403);
-  if (args[0] === 'task' && args[1] === 'migrate-references') {
-    execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/migrate-task-references.mjs', import.meta.url)), ...args.slice(2)], { stdio: 'inherit' }); return;
-  }
   if (args[0] === 'headless' || args[0] === 'agent' && args[1] === 'provision') {
     const { headlessCli } = await import('./native-headless.mjs');
     return headlessCli(args[0] === 'agent' ? ['headless', ...args.slice(1)] : args);

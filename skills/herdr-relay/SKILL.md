@@ -202,8 +202,8 @@ compatibility: opencode
 
 - Schema-compatible code upgrades preserve active/conflicted work and pending
   publications. Activity status is not a reason to block them or cancel work.
-  Actual database migrations still require quiescence. Identity, integrity,
-  configuration and verified-release checks remain mandatory.
+   The minimum upgrade source is 0.2.1-rc4. Cross-schema migrations are unsupported.
+   Identity, integrity, configuration and verified-release checks remain mandatory.
 - Pending UI decisions defer only the plugin reload. A committed operation with
   `pluginReloadDeferred` is not a completed UI update. Resolve the original
   decision normally, then `upgrade resume OPERATION --apply` finishes the saved

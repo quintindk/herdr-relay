@@ -38,7 +38,8 @@ for (const path of documents) {
 const retired = ['src/adapter.mjs', 'src/service.mjs', 'src/paperclip.mjs', 'src/paperclip-provider.mjs', 'src/provider-selection.mjs',
   'scripts/migrate-paperclip-tasks.mjs', 'docs/model-gateway.md', 'services/litellm/install.mjs',
   'services/litellm/compose.yaml', 'services/litellm/pyproject.toml', 'services/litellm', '.litellm',
-  'src/native-board-cli.mjs', 'services/relay-backend.service', 'services/cloudflared-relay.example.yml'];
+  'src/native-board-cli.mjs', 'services/relay-backend.service', 'services/cloudflared-relay.example.yml',
+  'src/task-identity-migration.mjs', 'scripts/migrate-task-references.mjs', 'scripts/historical-upgrade-fixture.mjs'];
 for (const name of retired) if (existsSync(join(root, name))) failures.push(`Retired integration returned: ${name}`);
 for (const name of ['evaluation', 'docs/archive', 'docs/evidence']) if (walk(join(root, name)).length) failures.push(`Development journals/output returned: ${name}`);
 assert.equal(failures.length, 0, failures.join('\n'));
