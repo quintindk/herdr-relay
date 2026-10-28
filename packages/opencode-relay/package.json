@@ -1,0 +1,40 @@
+{
+  "name": "@herdr/relay-opencode",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "description": "Herdr Relay server and terminal integration for OpenCode",
+  "exports": {
+    ".": "./server.mjs",
+    "./server": "./server.mjs",
+    "./tui": "./tui.mjs",
+    "./rpc": "./rpc.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node smoke.mjs",
+    "smoke:interactive-cron": "node smoke-interactive-cron.mjs",
+    "smoke:receivers": "node smoke-receivers.mjs",
+    "smoke:messages": "node smoke-messages.mjs"
+  },
+  "dependencies": {
+    "@opencode/client": "2.1.0",
+    "@opencode/plugin": "2.1.0"
+  },
+  "devDependencies": {
+    "@opencode/cli": "2.1.0",
+    "solid-js": "1.9.17"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.6.6 <0.7.0",
+    "@opentui/solid": ">=0.6.6 <0.7.0",
+    "solid-js": ">=1.9.0 <2"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": { "optional": true },
+    "@opentui/solid": { "optional": true }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import { stripVTControlCharacters } from 'node:util';
-import { buildBoardRows, renderTaskBoard, watchTaskBoard } from '../src/task-board-view.mjs';
+import { buildBoardRows, buildAgentRows, renderTaskBoard, watchTaskBoard } from '../src/task-board-view.mjs';
 
 const now = Date.parse('2026-10-07T10:00:00Z');
 const task = (id, extra = {}) => ({ id, companyId: 'c', identifier: `R-${id}`, title: `Task ${id}`, status: 'todo', priority: 'medium', ...extra });
@@ -101,11 +101,45 @@ test('ownership distinguishes board, humans, unassigned, missing agents and idle
     bridgeState: 'connected', nativeState: 'idle' });
   const rows = buildBoardRows(value);
   assert.deepEqual(rows.filter(row => row.type === 'group').map(row => row.name), [
-    'Human: Board (local-board)', 'Babbage', 'Present agent', 'Human: quintin', 'Unassigned', 'Agent: absent (missing)',
+    'Human: Board (local-board)', 'Human: quintin', 'Babbage', 'Present agent', 'Unassigned', 'Agent: absent (missing)',
   ]);
   assert.equal(rows.filter(row => row.type === 'task').length, 4);
   assert.ok(buildBoardRows(value, { showIdle: true }).some(row => row.name === 'Ada'));
   assert.deepEqual(buildBoardRows(value, { filter: 'no task matches' }).map(row => row.name), ['Present agent']);
+});
+
+test('human task boards precede agent groups regardless of input or refresh order', () => {
+  const value = { ...board([task('agent', { assigneeAgentId: 'b' }), task('human', { assigneeUserId: 'owner' })]), showEmptyLocalBoard: false };
+  for (const tasks of [value.tasks, [...value.tasks].reverse()]) {
+    const groups = buildBoardRows({ ...value, tasks }).filter(row => row.type === 'group');
+    assert.equal(groups[0].kind, 'human'); assert.equal(groups[0].name, 'Human: owner');
+  }
+});
+
+const agentBoard = () => ({ agents: [
+  { id: 'remote', companyId: 'native', nodeId: 'remote', nodeName: 'Alpha', machineName: 'duplicate-host', displayName: 'Remote agent' },
+  { id: 'z', companyId: 'native', nodeId: 'local', nodeName: 'Zulu', machineName: 'duplicate-host', displayName: 'Zulu agent', directory: '/workspace/z' },
+  { id: 'unknown', companyId: 'native', displayName: 'Unknown agent' },
+  { id: 'a', companyId: 'native', nodeId: 'local', nodeName: 'Zulu', machineName: 'duplicate-host', displayName: 'Alpha agent', directory: '/workspace/a' },
+], localNode: { id: 'local', name: 'Zulu' } });
+
+test('agent machine trees pin the local node, sort children and never merge matching hostnames', () => {
+  const value = agentBoard(), rows = buildAgentRows(value), parents = rows.filter(row => row.type === 'machine');
+  assert.deepEqual(parents.map(row => [row.nodeId, row.local, row.count]), [['local', true, 2], ['remote', false, 1], [null, false, 1]]);
+  assert.deepEqual(rows.filter(row => row.type === 'agent').map(row => row.agent.id), ['a', 'z', 'remote', 'unknown']);
+  assert.deepEqual(buildAgentRows({ ...value, agents: [...value.agents].reverse() }).map(row => row.id), rows.map(row => row.id));
+  assert.deepEqual(buildAgentRows({ ...value, localNode: null }).filter(row => row.type === 'machine').map(row => [row.nodeId, row.local]), [['remote', false], ['local', false], [null, false]]);
+});
+
+test('agent search retains machine parents and counts, and collapse is independent per durable group', () => {
+  const value = agentBoard(), local = buildAgentRows(value)[0];
+  assert.deepEqual(buildAgentRows(value, { filter: 'workspace/a' }).map(row => row.type), ['machine', 'agent']);
+  assert.equal(buildAgentRows(value, { filter: 'Alpha agent' })[0].total, 2);
+  assert.equal(buildAgentRows(value, { filter: 'Zulu' }).filter(row => row.type === 'agent').length, 2);
+  const collapsed = buildAgentRows(value, { collapsed: new Set([local.id]) });
+  assert.equal(collapsed[0].expanded, false); assert.equal(collapsed.some(row => row.agent?.nodeId === 'local'), false);
+  assert.equal(collapsed.some(row => row.agent?.nodeId === 'remote'), true);
+  assert.deepEqual(buildAgentRows(value, { filter: 'does not exist' }), []);
 });
 
 test('completed ancestors remain context across assignment, filters and collapse', () => {

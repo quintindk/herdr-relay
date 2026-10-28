@@ -1,0 +1,128 @@
+import { isAbsolute } from 'node:path';
+import { supportingInput, humanInput } from './native-input.mjs';
+import { digest } from '../../src/protocol.mjs';
+
+function check(condition, code) {
+  if (!condition) throw Object.assign(new Error(code), { code });
+}
+
+export function checkV2Version(version) {
+  // Major-version admission is not API certification. Exact identity, decoded
+  // response contracts and correlated native terminal checks still fail closed.
+  check(typeof version === 'string' && version.trim() === version &&
+    /^2\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version), 'unsupported_native_version');
+  return version;
+}
+
+// Versioned OpenCode adapter used by Relay node execution and observation.
+export class NativeOpenCodeV2 {
+  constructor(client, identity) {
+    check(identity && typeof identity.sessionId === 'string' && identity.sessionId &&
+      typeof identity.projectId === 'string' && identity.projectId &&
+      typeof identity.directory === 'string' && isAbsolute(identity.directory) &&
+      Number.isSafeInteger(identity.createdAt) && identity.createdAt > 0, 'invalid_native_identity');
+    this.client = client;
+    this.identity = structuredClone(identity);
+  }
+
+  async verify() {
+    const session = await this.client.session.get({ sessionID: this.identity.sessionId });
+    check(session.id === this.identity.sessionId && session.projectID === this.identity.projectId &&
+      session.location?.directory === this.identity.directory && session.time?.created === this.identity.createdAt &&
+      !session.time.archived && !session.revert, 'native_identity_mismatch');
+    return session;
+  }
+
+  async snapshot() {
+    await this.verify();
+    const messages = [];
+    const cursors = new Set();
+    const ids = new Set();
+    let cursor;
+    do {
+      const page = await this.client.message.list({ sessionID: this.identity.sessionId,
+        ...(cursor ? { cursor } : { order: 'asc', limit: 100 }) });
+      check(page && Array.isArray(page.data) && page.cursor, 'invalid_native_response');
+      for (const message of page.data) {
+        check(message && typeof message.id === 'string' && !ids.has(message.id), 'invalid_native_response');
+        ids.add(message.id);
+      }
+      messages.push(...page.data);
+      cursor = page.cursor.next;
+      check(!cursor || typeof cursor === 'string' && !cursors.has(cursor), 'invalid_native_cursor');
+      if (cursor) cursors.add(cursor);
+      check(messages.length <= 10000, 'native_snapshot_incomplete');
+    } while (cursor);
+    const [active, inbox] = await Promise.all([
+      this.client.session.active(), this.client.session.inbox.list({ sessionID: this.identity.sessionId }),
+    ]);
+    check(active && typeof active === 'object' && !Array.isArray(active) && Array.isArray(inbox), 'invalid_native_response');
+    await this.verify();
+    return { messages, idle: !active[this.identity.sessionId], inbox };
+  }
+
+  async send(invocation, options) {
+    await this.verify();
+    check(typeof invocation.messageId === 'string' && invocation.messageId &&
+      typeof invocation.prompt === 'string' && invocation.prompt, 'invalid_native_invocation');
+    // Durable callers persist intent; explicitly best-effort run notices do not.
+    // All callers enforce local admission. No retry or atomic idle-and-send claim.
+    return this.client.session.prompt({ sessionID: this.identity.sessionId,
+      id: invocation.messageId, text: invocation.prompt, delivery: 'queue', metadata: { herdrRelayInvocation: invocation.messageId,
+        ...(invocation.runResultNotice ? { herdrRelayRunResult: invocation.runResultNotice } : {}) } }, options);
+  }
+}
+
+export function observeV2(snapshot, invocation) {
+  const index = snapshot.messages.findIndex(message => message.id === invocation.messageId);
+  if (index < 0) return { state: 'uncertain', reason: 'message_not_observed' };
+  const user = snapshot.messages[index];
+  if (user.type !== 'user' || user.text !== invocation.prompt) return { state: 'conflict', reason: 'message_payload_mismatch' };
+  if (invocation.interactive === true) {
+    const unexpected = snapshot.messages.slice(0, index).find((message, offset) =>
+      ['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type) &&
+      !invocation.priorMessageIds.includes(message.id) && !supportingInput(message, snapshot.messages.slice(0, offset)));
+    if (unexpected) return { state: 'conflict', reason: 'concurrent_native_input', inputId: unexpected.id, inputType: unexpected.type };
+    let anchor = index;
+    const inputs = [];
+    for (let offset = index + 1; offset < snapshot.messages.length; offset++) {
+      const message = snapshot.messages[offset];
+      if (humanInput(message)) { inputs.push({ id: message.id, digest: digest(message) }); anchor = offset; continue; }
+      if (['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type) &&
+        !supportingInput(message, snapshot.messages.slice(index + 1, offset)))
+        return { state: 'conflict', reason: 'concurrent_native_input', inputId: message.id, inputType: message.type };
+    }
+    // Choose the terminal after the latest adopted input, never a previous turn's
+    // idle receipt. This also handles a correction steered into a busy turn.
+    const interaction = { revision: digest(inputs), inputIds: inputs.map(input => input.id), anchorId: snapshot.messages[anchor].id };
+    const terminal = snapshot.messages.slice(anchor + 1).find(message => message.type === 'idle');
+    if (!terminal || !snapshot.idle || snapshot.inbox.length) return { state: 'observed', reason: 'awaiting_terminal_response', interaction };
+    const end = snapshot.messages.findIndex(message => message.id === terminal.id);
+    let turnStart = index + 1;
+    for (let offset = index + 1; offset < anchor; offset++) if (snapshot.messages[offset].type === 'idle') turnStart = offset + 1;
+    if (snapshot.messages.slice(turnStart, end).some(message => message.type === 'assistant' && message.content?.some(part =>
+      part.type === 'tool' && ['running', 'streaming'].includes(part.state.status)))) return { state: 'observed', reason: 'awaiting_tool_settlement', interaction };
+    if (!['succeeded', 'failed', 'interrupted'].includes(terminal.outcome)) return { state: 'uncertain', reason: 'invalid_terminal_outcome' };
+    return { state: 'finished', messageId: terminal.id, outcome: terminal.outcome, interaction };
+  }
+  // The v2 transcript has no v1 assistant.parentID. Require a contiguous owned
+  // turn through its first idle receipt and refuse any intervening foreign input.
+  const terminalOffset = snapshot.messages.slice(index + 1).findIndex(message => message.type === 'idle');
+  const end = terminalOffset < 0 ? snapshot.messages.length : index + 1 + terminalOffset;
+  const foreign = snapshot.messages.slice(0, end).find((message, offset) =>
+    ['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type) &&
+    message.id !== invocation.messageId && !invocation.priorMessageIds.includes(message.id) &&
+    !supportingInput(message, snapshot.messages.slice(index + 1, offset)));
+  if (foreign) return { state: 'conflict', reason: 'concurrent_native_input', inputId: foreign.id, inputType: foreign.type };
+  if (terminalOffset < 0 || !snapshot.idle || snapshot.inbox.length) return { state: 'observed', reason: 'awaiting_terminal_response' };
+  const terminal = snapshot.messages[end];
+  if (!['succeeded', 'failed', 'interrupted'].includes(terminal.outcome)) return { state: 'uncertain', reason: 'invalid_terminal_outcome' };
+  const activeTool = snapshot.messages.slice(index + 1, end).some(message =>
+    message.type === 'assistant' && message.content.some(part => part.type === 'tool' && ['running', 'streaming'].includes(part.state.status)));
+  if (activeTool) return { state: 'observed', reason: 'awaiting_tool_settlement' };
+  return { state: 'finished', messageId: terminal.id, outcome: terminal.outcome,
+    ...(terminal.error ? { error: terminal.error.type, failure: terminal.error.message === 'Unknown execution'
+      ? { stage: 'context', code: 'scheduled_execution_missing', message: 'Backend execution admission was missing before native context preparation.' }
+      : { stage: 'native', code: /^[a-z][a-z0-9_]{0,95}$/.test(terminal.error.type ?? '') ? terminal.error.type : 'native_error',
+        message: 'Native execution failed. Inspect the exact terminal receipt on the destination.' } } : {}) };
+}

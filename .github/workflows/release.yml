@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Test and package exact tag
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish immutable GitHub release
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-assets
+          path: release
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Verify artifact provenance and tag before publication
+        working-directory: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, readdirSync } from 'node:fs';
+          const reports = readdirSync('.').filter(file => file.endsWith('.tgz.verification.json'));
+          assert.equal(reports.length, 1);
+          const report = JSON.parse(readFileSync(reports[0], 'utf8'));
+          assert.equal(`v${report.version}`, process.env.RELEASE_TAG);
+          assert.equal(report.sourceCommit, process.env.SOURCE_COMMIT);
+          assert.equal(report.sourceTreeClean, true);
+          assert.equal(report.releaseVerified, true);
+          assert.equal(report.auditVerified, true);
+          assert.equal(report.vulnerabilities.total, 0);
+          assert.deepEqual(report.installedTuiVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2']);
+          for (const test of report.installedTuiVerifications) {
+            assert.equal(test.passed && test.productionPackageTuiLoaded && test.sidebarMounted && test.scopedStatusReceived && test.runtimeCommandAndNotification, true);
+            assert.equal(test.pluginLoadErrors, 0);
+          }
+          assert.deepEqual(report.installedCliBridgeVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2']);
+          for (const test of report.installedCliBridgeVerifications) {
+            assert.equal(test.passed && test.realModelToolTurn && test.pluginInvokedActualCli && test.humanTaskCreated && test.existingPeerExecutionRequested, true);
+            assert.equal(test.activeParentRequired, false);
+          }
+          assert.deepEqual(report.installedAgentGrantVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2']);
+          for (const test of report.installedAgentGrantVerifications) {
+            assert.equal(test.passed && test.grantIssuedByCoordinatorWithoutOwner && test.agentGrantRetryIdempotent && test.revocationPausedSchedule && test.readinessHadNoExternalEffects, true);
+          }
+          NODE
+          sha256sum -c SHA256SUMS
+      - name: Publish without replacing an existing release or assets
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists. Refusing to replace it or its assets."
+            exit 1
+          fi
+          FLAGS=(--latest)
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            FLAGS=(--prerelease --latest=false)
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "Herdr Relay $RELEASE_TAG" \
+            --notes-file RELEASE-NOTES.md "${FLAGS[@]}" \
+            ./*.tgz ./SHA256SUMS ./*.tgz.verification.json

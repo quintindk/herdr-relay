@@ -1,0 +1,31 @@
+{
+  "nodeId": "worker-node",
+  "stateDirectory": "/private/herdr-relay-node",
+  "backend": {
+    "url": "https://relay.synthswarm.com",
+    "token": "REPLACE_WITH_ENROLLED_NODE_TOKEN",
+    "cloudflareAccess": {
+      "clientId": "LOAD_EXISTING_PORTCULLIS_CLIENT_ID",
+      "clientSecret": "LOAD_EXISTING_PORTCULLIS_CLIENT_SECRET"
+    }
+  },
+  "bindings": [
+    {
+      "id": "owned-worker",
+      "agentId": "worker-agent",
+      "name": "Worker",
+      "mode": "headless",
+      "harness": "opencode-v2-owned",
+      "reserved": true,
+      "executable": "/absolute/path/to/isolated/opencode2",
+      "directory": "/absolute/path/to/workspace",
+      "config": {
+        "$schema": "https://opencode.ai/config.json",
+        "model": "provider/model",
+        "permissions": [
+          { "action": "*", "resource": "*", "effect": "ask" }
+        ]
+      }
+    }
+  ]
+}

@@ -48,6 +48,8 @@ class ToggleBoardTests(unittest.TestCase):
         self.other = self.identity(self.panes["other-board"])
         self.state.write_text(json.dumps([self.other]))
         self.calls = []
+        self.focused = []
+        self.enterContext(patch.object(board, "focus", side_effect=self.focus))
         self.width = 160
         self.zoomed = False
         self.sequence = 0
@@ -60,7 +62,10 @@ class ToggleBoardTests(unittest.TestCase):
                 "tab_id": tab_id, "cwd": f"/fake/{tab_id}/working directory"}
 
     def identity(self, pane):
-        return {key: pane[key] for key in ("pane_id", "terminal_id")}
+        return {key: pane[key] for key in ("pane_id", "terminal_id", "return_to") if key in pane}
+
+    def focus(self, pane_id):
+        self.focused.append(pane_id)
 
     def saved(self):
         return json.loads(self.state.read_text())
@@ -90,13 +95,14 @@ class ToggleBoardTests(unittest.TestCase):
             anchor = self.panes[target]
             self.assertEqual(args, (
                 "plugin", "pane", "open", "--plugin", "quintindk.herdr-relay",
-                "--entrypoint", "work", "--placement", "split", "--target-pane", target,
+                "--entrypoint", "native-work", "--placement", "split", "--target-pane", target,
                 "--direction", "right" if self.width >= 160 else "down",
-                "--cwd", str(board.PLUGIN_ROOT), "--no-focus",
+                "--cwd", str(board.PLUGIN_ROOT), "--focus", "--env", "RELAY_RETURN_PANE=" + json.dumps({key: anchor[key] for key in ("pane_id", "terminal_id", "tab_id")}),
             ))
             self.sequence += 1
             opened = self.pane(f"new-{self.sequence}", f"new-terminal-{self.sequence}",
-                               anchor["tab_id"])
+                                anchor["tab_id"])
+            opened["return_to"] = {key: anchor[key] for key in ("pane_id", "terminal_id", "tab_id")}
             self.panes[opened["pane_id"]] = opened
             self.peak_boards = max(self.peak_boards, sum(
                 pane_id.startswith("new-") for pane_id in self.panes))
@@ -245,6 +251,20 @@ class ToggleBoardTests(unittest.TestCase):
                 self.assertEqual(mutations[-1], ("plugin", "pane", "close", f"new-{self.sequence}"))
                 self.assertEqual(self.panes, original)
                 self.assertEqual(self.saved(), [self.other])
+
+    def test_exact_focus_restoration_checks_terminal_tab_and_current_focus(self):
+        target = {key: self.panes["anchor-a"][key] for key in ("pane_id", "terminal_id", "tab_id")}
+        self.panes["other-board"]["focused"] = True
+        board.restore(target, "other-board")
+        self.assertEqual(self.focused, ["anchor-a"])
+        self.focused.clear()
+        self.panes["other-board"]["focused"] = False
+        board.restore(target, "other-board")
+        self.assertEqual(self.focused, [])
+        self.panes["other-board"]["focused"] = True
+        self.panes["anchor-a"]["terminal_id"] = "replacement"
+        board.restore(target, "other-board")
+        self.assertEqual(self.focused, [])
 
 
 unittest.main(verbosity=2)

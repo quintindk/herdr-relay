@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import socket
+import uuid
 
 PLUGIN = "quintindk.herdr-relay"
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -23,6 +25,31 @@ def herdr(*args):
     if "error" in response:
         raise RuntimeError(response["error"].get("code", "herdr_error"))
     return response["result"]
+
+
+def focus(pane_id):
+    """Protocol 22 pane.focus targets an exact pane, unlike directional CLI focus."""
+    request_id = str(uuid.uuid4())
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(15)
+        connection.connect(os.environ["HERDR_SOCKET_PATH"])
+        connection.sendall((json.dumps({"id": request_id, "method": "pane.focus",
+                                        "params": {"pane_id": pane_id}}) + "\n").encode())
+        with connection.makefile("rb") as stream:
+            line = stream.readline(1024 * 1024)
+        response = json.loads(line)
+        if response.get("id") != request_id or "error" in response or "result" not in response:
+            raise RuntimeError("Herdr focus was not confirmed")
+
+
+def restore(return_to, board=None):
+    panes = herdr("pane", "list")["panes"]
+    if board and not any(p["pane_id"] == board and p.get("focused") for p in panes):
+        return  # Do not steal focus if the human has already moved elsewhere.
+    target = next((p for p in panes if all(p.get(k) == return_to.get(k)
+                  for k in ("pane_id", "terminal_id", "tab_id"))), None)
+    if target:
+        focus(target["pane_id"])
 
 
 def toggle():
@@ -46,11 +73,16 @@ def toggle():
             item["pane_id"] == pane["pane_id"] and item["terminal_id"] == pane["terminal_id"]
             for item in saved
         )]
+        for pane in live:
+            record = next(item for item in saved if item["pane_id"] == pane["pane_id"] and item["terminal_id"] == pane["terminal_id"])
+            if record.get("return_to"):
+                pane["return_to"] = record["return_to"]
 
         def save():
             temporary = path.with_suffix(".tmp")
             temporary.write_text(json.dumps([
-                {"pane_id": pane["pane_id"], "terminal_id": pane["terminal_id"]}
+                {"pane_id": pane["pane_id"], "terminal_id": pane["terminal_id"],
+                 **({"return_to": pane["return_to"]} if pane.get("return_to") else {})}
                 for pane in live
             ]))
             temporary.replace(path)
@@ -58,6 +90,8 @@ def toggle():
         existing = [pane for pane in live if pane["tab_id"] == anchor["tab_id"]]
         if existing:
             for pane in existing:
+                if pane.get("return_to"):
+                    restore(pane["return_to"], pane["pane_id"])
                 herdr("plugin", "pane", "close", pane["pane_id"])
                 live.remove(pane)
                 save()
@@ -67,11 +101,13 @@ def toggle():
             raise RuntimeError("Unzoom the pane before opening Relay tasks.")
         rect = next(pane["rect"] for pane in layout["panes"] if pane["pane_id"] == target)
         direction = "right" if rect["width"] >= 160 else "down"
+        return_to = {key: anchor[key] for key in ("pane_id", "terminal_id", "tab_id")}
         opened = herdr(
-            "plugin", "pane", "open", "--plugin", PLUGIN, "--entrypoint", "work",
+            "plugin", "pane", "open", "--plugin", PLUGIN, "--entrypoint", "native-work",
             "--placement", "split", "--target-pane", target, "--direction", direction,
-            "--cwd", str(PLUGIN_ROOT), "--no-focus",
+            "--cwd", str(PLUGIN_ROOT), "--focus", "--env", "RELAY_RETURN_PANE=" + json.dumps(return_to),
         )["plugin_pane"]["pane"]
+        opened["return_to"] = return_to
         live.append(opened)
         try:
             save()
@@ -82,7 +118,13 @@ def toggle():
 
 if __name__ == "__main__":
     try:
-        toggle()
+        if sys.argv[1:] == ["--restore"]:
+            if os.environ.get("HERDR_ENV") == "1" and os.environ.get("RELAY_RETURN_PANE"):
+                restore(json.loads(os.environ["RELAY_RETURN_PANE"]), os.environ.get("HERDR_PANE_ID"))
+        elif not sys.argv[1:]:
+            toggle()
+        else:
+            raise RuntimeError("Use no arguments or --restore")
     except (RuntimeError, OSError, ValueError, KeyError, StopIteration, subprocess.TimeoutExpired) as error:
         print(f"Relay tasks: {error}", file=sys.stderr)
         sys.exit(1)

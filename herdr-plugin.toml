@@ -1,42 +1,36 @@
 id = "quintindk.herdr-relay"
 name = "Herdr Relay"
-version = "0.1.0-dev.0"
+version = "0.2.1"
 min_herdr_version = "0.9.3"
 platforms = ["linux", "macos"]
-description = "Connect Paperclip work to persistent agents in herdr."
+description = "Native tasks, agent messaging and durable node services for Herdr."
 
 [[actions]]
 id = "toggle"
-title = "Toggle Relay task hierarchy"
+title = "Toggle Relay TUI"
 contexts = ["pane"]
 command = ["python3", "scripts/toggle-board.py"]
 
 [[actions]]
 id = "status"
-title = "Relay: service status"
+title = "Relay: node health"
 contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "status"]
+command = ["bash", "scripts/plugin-launch.sh", "doctor"]
 
 [[actions]]
-id = "work"
-title = "Relay: task hierarchy by owner"
+id = "native-work"
+title = "Relay: native task board"
 contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "board"]
-
-[[actions]]
-id = "agents"
-title = "Relay: discover agents"
-contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "agent", "discover"]
+command = ["node", "scripts/native-board-launch.mjs", "--json"]
 
 [[panes]]
-id = "work"
-title = "Relay tasks"
+id = "native-work"
+title = "Relay"
 placement = "split"
-command = ["bash", "scripts/plugin-launch.sh", "board", "--watch"]
+command = ["node", "scripts/native-board-launch.mjs"]
 
-[[actions]]
-id = "observed"
-title = "Relay: Herdr agent registrations"
-contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "agent", "observed"]
+[[panes]]
+id = "native-agent"
+title = "Relay agent: new receiving chat"
+placement = "split"
+command = ["node", "scripts/native-agent-launch.mjs"]

@@ -5,7 +5,8 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync, renameSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { Store } from '../src/store.mjs';
+import { NodeJournal } from '../src/node-journal.mjs';
+import { nodeResourceStore } from '../src/node-resources.mjs';
 import { candidate } from '../src/candidate.mjs';
 import { provisionWorktree, finaliseWorktree, retireWorktree, reconcileWorktree } from '../src/resources.mjs';
 
@@ -17,9 +18,10 @@ test('owned worktree finalisation and accepted cleanup survive retries and refus
   writeFileSync(join(repository, 'graph.json'), '{}\n');
   execFileSync('git', ['-C', repository, 'add', '.']);
   execFileSync('git', ['-C', repository, 'commit', '-qm', 'Initial fixture']);
-  const store = new Store(join(root, 'relay.sqlite'));
-  t.after(() => store.close());
-  store.register({ id: 'worker', companyId: 'company', agentId: 'worker', harness: 'opencode', instanceId: 'instance', conversationId: 'worker' });
+  const journal = new NodeJournal(join(root, 'node.sqlite'), { nodeId: 'node', instanceId: 'backend' });
+  t.after(() => journal.close());
+  journal.save({ id: 'execution', bindingId: 'worker', state: 'pending', execution: { id: 'execution', runId: 'run', taskId: 'task', state: 'accepted' } });
+  const store = nodeResourceStore(journal);
   const config = { key: 'graph-worker', repository, path: join(root, 'worker'), branch: 'graph-worker', bindingId: 'worker' };
   provisionWorktree(store, config);
   provisionWorktree(store, config);
@@ -31,11 +33,9 @@ test('owned worktree finalisation and accepted cleanup survive retries and refus
   assert.ok(reconcileWorktree(store, { key: config.key }).gitDirectory);
   writeFileSync(join(config.path, 'graph.json'), '{"node":"updated"}\n');
   const snapshot = candidate(config.path);
-  const run = store.dispatch({ bindingId: 'worker', bindingRevision: 1, companyId: 'company', agentId: 'worker', taskId: 'task', runId: 'backend' });
-  store.acknowledge(run.id);
-  store.submit(run.id, { key: 'one', summary: 'Updated graph', candidate: snapshot.id });
-  store.settle(run.id, { outcome: 'completed', evidence: 'Fixture execution ended' });
-  const input = { key: config.key, runId: run.id, candidate: snapshot.id, message: 'Update graph fixture' };
+  journal.save({ ...journal.work('execution'), state: 'native_finished', observation: { outcome: 'succeeded' },
+    execution: { ...journal.work('execution').execution, state: 'completed', result: { candidate: snapshot.id, summary: 'Updated graph' } } });
+  const input = { key: config.key, runId: 'run', candidate: snapshot.id, message: 'Update graph fixture' };
   const saved = join(root, 'saved-worker');
   renameSync(config.path, saved);
   execFileSync('git', ['clone', '-q', repository, config.path]);

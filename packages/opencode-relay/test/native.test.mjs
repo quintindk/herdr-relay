@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { NativeOpenCodeV2, observeV2, checkV2Version } from '../native.mjs';
+
+const invocation = { messageId: 'owned', prompt: 'work', priorMessageIds: ['prior'] };
+const user = { id: 'owned', type: 'user', text: 'work' };
+const terminal = { id: 'terminal', type: 'idle', outcome: 'succeeded' };
+const snapshot = messages => ({ messages, idle: true, inbox: [] });
+
+test('native version admission accepts 2.x without admitting other majors or malformed versions', () => {
+  for (const version of ['2.0.0', '2.1.0', '2.1.2', '2.2.0', '2.99.10', '2.2.0-beta.1', '2.2.0+build.3', '2.2.0-beta.1+build.3']) assert.equal(checkV2Version(version), version);
+  for (const version of ['1.18.29', '3.0.0', '12.1.2', '2', '2.x', '2.1', 'v2.1.2', '2.01.2', '2.1.2extra', '2.1.2-', '2.1.2+..', '2.1.2\n', undefined]) {
+    assert.throws(() => checkV2Version(version), { code: 'unsupported_native_version' });
+  }
+});
+
+test('v2 observation requires owned prompt and correlated idle evidence, not global idle alone', () => {
+  assert.equal(observeV2(snapshot([terminal]), invocation).state, 'uncertain');
+  assert.equal(observeV2(snapshot([user]), invocation).state, 'observed');
+  assert.equal(observeV2(snapshot([{ ...user, text: 'different' }, terminal]), invocation).state, 'conflict');
+  assert.deepEqual(observeV2(snapshot([user, terminal]), invocation), { state: 'finished', messageId: 'terminal', outcome: 'succeeded' });
+  for (const outcome of ['failed', 'interrupted']) {
+    assert.equal(observeV2(snapshot([user, { ...terminal, outcome }]), invocation).outcome, outcome);
+  }
+});
+
+test('foreign input fences a turn but later input cannot erase its original terminal receipt', () => {
+  const foreign = { id: 'foreign', type: 'user', text: 'other work' };
+  assert.equal(observeV2(snapshot([user, foreign, terminal]), invocation).reason, 'concurrent_native_input');
+  assert.equal(observeV2(snapshot([user, terminal, foreign]), invocation).state, 'finished');
+  assert.equal(observeV2({ ...snapshot([user, terminal]), inbox: [{ id: 'queued' }] }, invocation).state, 'observed');
+  assert.equal(observeV2({ ...snapshot([user, terminal]), idle: false }, invocation).state, 'observed');
+});
+
+test('automatic instruction loading and correlated completions do not falsely conflict a native run', () => {
+  const instruction = { id: 'instruction', type: 'synthetic', metadata: { instruction: { paths: ['/work/nested/AGENTS.md'] } } };
+  const tool = { id: 'tool', type: 'assistant', content: [{ type: 'tool', name: 'shell', state: { status: 'completed', content: 'shell ID sh_exact' } }] };
+  const completion = { id: 'completion', type: 'synthetic', metadata: { source: 'shell', shellID: 'sh_exact', state: 'completed' } };
+  assert.equal(observeV2(snapshot([user, instruction, tool, completion, terminal]), invocation).state, 'finished');
+  assert.equal(observeV2(snapshot([user, instruction, { ...completion, metadata: { ...completion.metadata, shellID: 'other' } }, terminal]), invocation).state, 'conflict');
+  assert.equal(observeV2(snapshot([user, { id: 'peer', type: 'synthetic', text: 'Instructions from /work/AGENTS.md' }, terminal]), invocation).state, 'conflict');
+});
+
+test('native failure diagnostics retain useful stage/code without exposing provider bodies or credentials', () => {
+  const missing = observeV2(snapshot([user, { ...terminal, outcome: 'failed', error: { type: 'unknown', message: 'Unknown execution' } }]), invocation);
+  assert.equal(missing.failure.code, 'scheduled_execution_missing'); assert.equal(missing.failure.stage, 'context');
+  const provider = observeV2(snapshot([user, { ...terminal, outcome: 'failed', error: { type: 'provider', message: 'secret-token and private response' } }]), invocation);
+  assert.equal(provider.failure.code, 'provider'); assert.doesNotMatch(JSON.stringify(provider), /secret-token|private response/);
+});
+
+test('versioned snapshot traverses native pages and rejects changed identity', async () => {
+  let pages = 0;
+  const session = { id: 'session', projectID: 'project', location: { directory: '/workspace' }, time: { created: 1 } };
+  const client = {
+    session: { get: async () => session, active: async () => ({}), inbox: { list: async () => [] } },
+    message: { list: async input => {
+      pages++;
+      return input.cursor ? { data: [terminal], cursor: {} } : { data: [user], cursor: { next: 'page-2' } };
+    } },
+  };
+  const native = new NativeOpenCodeV2(client, { sessionId: 'session', projectId: 'project', directory: '/workspace', createdAt: 1 });
+  assert.deepEqual((await native.snapshot()).messages, [user, terminal]);
+  assert.equal(pages, 2);
+  session.location.directory = '/replacement';
+  await assert.rejects(native.snapshot(), { code: 'native_identity_mismatch' });
+});
+
+test('snapshot rejects looping native cursors instead of silently truncating', async () => {
+  let page = 0;
+  const native = new NativeOpenCodeV2({
+    session: { get: async () => ({ id: 's', projectID: 'p', location: { directory: '/work' }, time: { created: 1 } }) },
+    message: { list: async () => ({ data: [{ id: `m-${page++}` }], cursor: { next: 'loop' } }) },
+  }, { sessionId: 's', projectId: 'p', directory: '/work', createdAt: 1 });
+  await assert.rejects(native.snapshot(), { code: 'invalid_native_cursor' });
+});

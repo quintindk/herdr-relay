@@ -5,7 +5,7 @@ const DAY = 24 * 60 * MINUTE;
 const FIELDS = [[0, 59, 'minute'], [0, 23, 'hour'], [1, 31, 'day of month'],
   [1, 12, 'month'], [0, 6, 'day of week']];
 
-/** Preview Paperclip's numeric cron semantics without creating a schedule. */
+/** Preview numeric five-field cron semantics without creating a schedule. */
 export function previewCron(cron, timezone = 'Africa/Johannesburg', now = Date.now()) {
   requireValue(typeof cron === 'string' && cron.length <= 65536 && cron.trim().split(/\s+/).length === 5,
     'invalid_cron', 'Cron must contain exactly five numeric fields: minute hour day-of-month month day-of-week');
@@ -38,7 +38,7 @@ export function previewCron(cron, timezone = 'Africa/Johannesburg', now = Date.n
   } catch {
     throw new RelayError('invalid_timezone', `Invalid IANA timezone: ${timezone}`, 400);
   }
-  // Paperclip searches 5 * 366 days from the next UTC minute, not five calendar anniversaries.
+  // Bound the search to 5 * 366 days from the next UTC minute.
   requireValue(typeof now === 'number' && Number.isFinite(now) && Number.isFinite(new Date(now).getTime()),
     'invalid_now', 'now must be a finite epoch-millisecond timestamp');
   const first = Math.floor(now / MINUTE) * MINUTE + MINUTE;

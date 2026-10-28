@@ -9,7 +9,56 @@ const h = React.createElement;
 const tick = () => new Promise(resolve => setTimeout(resolve, 40));
 const board = { companies: [{ id: 'company', name: 'Acme' }], agents: [], projects: [], routines: [], warnings: [], fetchedAt: new Date().toISOString(),
   tasks: [{ id: 'task', companyId: 'company', identifier: 'DEF-1', title: 'Review costs', status: 'todo', priority: 'medium',
-    assigneeUserId: 'local-board', assigneeAgentId: null, parentId: null, projectId: null }] };
+      assigneeUserId: 'local-board', assigneeAgentId: null, parentId: null, projectId: null }] };
+
+test('Schedule exposes two independent run result toggles and requires confirmation before a revisioned settings write', async t => {
+  const routine = { id: 'inbox-sweep', companyId: 'company', title: 'inbox-sweep', state: 'active', revision: 3, cron: '0 * * * *', timezone: 'Africa/Johannesburg',
+    runResultNotifications: { inbox: false, requester: false } };
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [], routines: [routine] }),
+    updateRunResultNotifications: async input => { writes.push(input); return { state: 'recorded', message: 'Run result notifications saved' }; },
+    interval: 60000, width: 100, height: 28 }));
+  t.after(() => instance.unmount()); await tick();
+  for (let view = 0; view < 4; view++) { instance.stdin.write('\t'); await tick(); }
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /RELAY \/ SCHEDULE/);
+  instance.stdin.write('n'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /Run result notifications/);
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /\[ \] Save run results to Inbox/);
+  instance.stdin.write(' '); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /\[x\] Save run results to Inbox/);
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /\[ \] Message requester when online/);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 0);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 1);
+  assert.equal(writes[0].scheduleId, 'inbox-sweep'); assert.equal(writes[0].expectedRevision, 3);
+  assert.deepEqual(writes[0].policy, { inbox: true, requester: false }); assert.ok(writes[0].key);
+});
+
+test('Inbox run results are labelled informational and marked read, never approved as execution reviews', async t => {
+  const item = { id: 'result-one', kind: 'run_result', title: 'Run result · inbox-sweep', stateLabel: 'completed · Unread result',
+    summary: 'Partial coverage. Two comments verified. Teams enumeration failed.', effect: 'Mark this result read. This does not approve the work.',
+    action: 'notification.acknowledge', from: 'Relay' };
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [item] }), detailInbox: async () => item,
+    decideInbox: async input => { writes.push(input); return { state: 'recorded', message: 'Result marked read' }; }, interval: 60000, width: 100, height: 28 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('\t'); await tick(); instance.stdin.write('\t'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /1 run results/);
+  instance.stdin.write('\r'); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  assert.match(frame, /Mark result read/); assert.doesNotMatch(frame, /Accept result|Request changes|Acknowledge reminder/);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 0);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 1);
+  assert.equal(writes[0].item.action, 'notification.acknowledge');
+});
+
+for (const width of [100, 60, 40, 24]) test(`native Ink rows retain complete primary references at width ${width}`, async t => {
+  const reference = 'ABCDEFGHIJKLMNOP-9007199254740991';
+  const task = { ...board.tasks[0], reference, identifier: reference, title: 'Numbered task', attentionLabel: 'Long attention text that must not hide identity' };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [], tasks: [task] }), interval: 60000, width, height: 26 }));
+  t.after(() => instance.unmount()); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  assert.ok(frame.replace(/[\s│]/g, '').includes(reference), frame);
+  assert.doesNotMatch(frame, /DEF-1/);
+});
 
 test('Ink board permanently deletes a blocked agent-owned occurrence after explicit confirmation', async t => {
   const task = { ...board.tasks[0], status: 'blocked', assigneeUserId: null, assigneeAgentId: 'sweep-agent' };
@@ -95,12 +144,12 @@ test('Ink status comment stays inside a fixed scrolling text box', async t => {
     statusTask: async () => assert.fail('No submission in viewport test'), interval: 60000, width: 70, height: 24 }));
   t.after(() => instance.unmount());
   await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('s'); await tick(); instance.stdin.write('\t'); await tick();
-  const comment = Array.from({ length: 40 }, (_, index) => `comment-${String(index + 1).padStart(2, '0')}`).join(' ');
+  const comment = Array.from({ length: 120 }, (_, index) => `comment-${String(index + 1).padStart(2, '0')}`).join(' ');
   instance.stdin.write(comment); await tick();
   const frame = stripVTControlCharacters(instance.lastFrame()), lines = frame.split('\n');
   assert.ok(lines.length <= 24);
   assert.match(frame, /Comment \(optional\)/); assert.match(frame, /\d+\/4000 · \d+ lines/);
-  assert.doesNotMatch(frame, /comment-01/); assert.match(frame, /comment-40/);
+  assert.doesNotMatch(frame, /comment-01/); assert.match(frame, /comment-120/);
   assert.match(frame, /┌|└/); assert.match(frame, /Enter review · Esc cancel/);
 });
 
@@ -175,6 +224,49 @@ test('Ink task rows colour active and review states and dim terminal states', as
   assert.deepEqual(taskRowStyle(tasks[0], false, true), { color: undefined, dimColor: true });
 });
 
+test('Ink native cron detail shows paused taskless completion receipts and sanitises summaries', async t => {
+  const routine = { id: 'native-job', companyId: 'native', title: 'native-job', state: 'paused', cron: '* * * * *',
+    timezone: 'Africa/Johannesburg', executionMode: 'interactive_exact', backendStatus: 'applied', nextRunAt: null,
+    nextRunIsEstimate: true, targetAgentId: 'chat', delivery: { state: 'paused', reason: 'Requested revision 2, applied 2' },
+    runs: [{ id: 'occurrence', status: 'completed', triggeredAt: '2026-10-21T07:38:00Z', nativeOccurrence: true,
+      linkedIssueId: null, summary: 'Cron completed\n\u001b[31m\u202e safely' }] };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ companies: [{ id: 'native', name: 'Relay' }],
+    agents: [], projects: [], tasks: [], routines: [routine], warnings: [] }),
+  detailRoutine: async () => routine, detailTask: async () => assert.fail('Taskless occurrence must not open a task'),
+  interval: 60000, width: 120, height: 26 }));
+  t.after(() => instance.unmount()); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /native-job.*paused/);
+  instance.stdin.write('\r'); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  assert.match(frame, /CRON · native-job/); assert.match(frame, /clock preview/);
+  assert.match(frame, /completed[\s\S]*taskless[\s\S]*Cron completed/);
+  assert.doesNotMatch(frame, /identity mismatch|not on board|\u202e/);
+});
+
+test('narrow cron reports scroll through full paragraphs and occurrence selection opens the exact linked task', async t => {
+  const tasks = ['one', 'two'].map((id, i) => ({ id, companyId: 'native', identifier: `REL-${i + 1}`, title: id, status: 'todo' }));
+  const routine = { id: 'sweep', title: 'sweep', companyId: 'native', state: 'active', backendStatus: 'applied', cron: '* * * * *', timezone: 'Africa/Johannesburg',
+    runs: tasks.map((task, i) => ({ id: `run-${task.id}`, nativeOccurrence: true, nativeTaskId: task.id, linkedIssueId: task.id, status: 'completed',
+      triggeredAt: '2026-10-28T09:00:00Z', summary: i === 0 ? `${'Source paragraph with retained evidence.\n\n'.repeat(10)}FIRST_REPORT_TAIL` : 'SECOND_REPORT' })) };
+  const opened = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ companies: [{ id: 'native', name: 'Relay' }], tasks, agents: [], projects: [], inbox: [], routines: [routine] }),
+    detailRoutine: async () => routine, detailTask: async input => { opened.push(input.taskId); return { task: tasks.find(t => t.id === input.taskId), comments: [] }; },
+    interval: 60000, width: 40, height: 24 }));
+  t.after(() => instance.unmount()); await tick();
+  for (let i = 0; i < 4; i++) { instance.stdin.write('\t'); await tick(); }
+  instance.stdin.write('\r'); await tick();
+  let tail = false;
+  for (let i = 0; i < 18; i++) {
+    const frame = stripVTControlCharacters(instance.lastFrame());
+    assert.ok(frame.split('\n').length <= 24); assert.ok(frame.split('\n').every(line => line.length <= 40));
+    if (frame.includes('FIRST_REPORT_TAIL')) { tail = true; break; }
+    instance.stdin.write('\x1b[6~'); await tick();
+  }
+  assert.ok(tail, 'Full first result must remain reachable by line-based paging');
+  instance.stdin.write(']'); await tick(); assert.match(stripVTControlCharacters(instance.lastFrame()), /SECOND_REPORT/);
+  instance.stdin.write('o'); await tick(); assert.deepEqual(opened, ['two']);
+});
+
 test('Ink task detail clips long content and scrolls inside a fixed modal viewport', async t => {
   const description = Array.from({ length: 40 }, (_, index) => `Evidence line ${String(index + 1).padStart(2, '0')} with enough text to render.`).join('\n');
   const instance = render(h(TaskBoardInkApp, { read: async () => board,
@@ -189,7 +281,7 @@ test('Ink task detail clips long content and scrolls inside a fixed modal viewpo
   for (let i = 0; i < 30; i++) { instance.stdin.write('j'); await tick(); }
   frame = stripVTControlCharacters(instance.lastFrame());
   assert.doesNotMatch(frame, /Evidence line 01/); assert.match(frame, /Evidence line 2\d|Evidence line 3\d/);
-  assert.match(frame, /Tab section · j\/k · PgUp\/PgDn · Home\/End/);
+  assert.match(frame, /↑↓ scroll · PgUp\/PgDn · Home\/End/);
   instance.stdin.write('\t'); await tick(); instance.stdin.write('\t'); await tick();
   frame = stripVTControlCharacters(instance.lastFrame()); assert.match(frame, /Latest note/); assert.match(frame, /1-2\/2/);
   instance.stdin.write('\t'); await tick(); frame = stripVTControlCharacters(instance.lastFrame());
@@ -208,6 +300,24 @@ test('Ink detail viewport stays inside a narrow terminal and keeps controls visi
   assert.ok(lines.every(line => line.length <= 54));
   assert.match(lines.join('\n'), /PgUp\/PgDn/);
   assert.match(lines.join('\n'), /1-\d+\/\d+/);
+});
+
+test('Ink task details wrap unbroken text and reach its tail with End, then return to the title with Home', async t => {
+  const title = 'A complete task title that is deliberately longer than its narrow modal header';
+  const description = `START-${'x'.repeat(1400)}-END-OF-CONTENT`;
+  const instance = render(h(TaskBoardInkApp, { read: async () => board,
+    detailTask: async () => ({ task: { ...board.tasks[0], title, description }, result: null, comments: [], revision: 'revision' }),
+    interval: 60000, width: 60, height: 20 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('\r'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /START-/);
+  instance.stdin.write('\x1b[F'); await tick();
+  let output = stripVTControlCharacters(instance.lastFrame());
+  assert.match(output, /END-OF-CONTENT/);
+  assert.ok(output.split('\n').length <= 20);
+  assert.ok(output.split('\n').every(line => line.length <= 60));
+  instance.stdin.write('\x1b[H'); await tick();
+  output = stripVTControlCharacters(instance.lastFrame());
+  assert.match(output, /A complete task title/); assert.match(output, /1-\d+\/\d+/);
 });
 
 test('Ink assignment picker submits one freshly inspected assignment', async t => {

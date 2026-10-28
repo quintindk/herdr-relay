@@ -1,40 +1,69 @@
 {
   "name": "herdr-relay",
-  "version": "0.1.0-dev.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
-  "description": "Connect Paperclip work to agents in herdr",
+  "description": "Durable native tasks, agent collaboration and node services for Herdr and OpenCode",
   "type": "module",
-  "exports": {
-    ".": "./src/adapter.mjs",
-    "./server": "./src/adapter.mjs"
-  },
   "bin": {
-    "herdr-relay": "./src/cli.mjs",
-    "herdr-relay-remote": "./src/remote.mjs"
+    "herdr-relay": "./src/cli.mjs"
   },
   "files": [
     "src",
+    "packages/opencode-relay/*.mjs",
+    "packages/opencode-relay/*.tsx",
+    "packages/opencode-relay/package.json",
+    "packages/opencode-relay/package-lock.json",
     "skills",
     "scripts/plugin-launch.sh",
     "scripts/toggle-board.py",
+    "scripts/install-herdr-shortcut.py",
+    "scripts/native-board-launch.mjs",
+    "scripts/native-agent-launch.mjs",
+    "scripts/install-native-node.mjs",
+    "scripts/install-native-backend.mjs",
+    "scripts/verify-backend-ingress.mjs",
     "herdr-plugin.toml",
+    "CHANGELOG.md",
     "docs/*.md"
   ],
   "engines": {
     "node": ">=24.0.0"
   },
+  "relayCompatibility": {
+    "protocol": "relay/0.2",
+    "backendSchema": 2,
+    "nodeSchema": 1
+  },
   "scripts": {
-    "start": "node src/cli.mjs service",
+    "build:tui": "node scripts/build-tui.mjs",
+    "prepack": "npm run build:tui",
+    "board": "node src/cli.mjs native board",
+    "start": "node src/cli.mjs native backend run",
     "check": "node scripts/check.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:v2": "npm --prefix packages/opencode-relay test",
+    "smoke:v2": "npm --prefix packages/opencode-relay run smoke -- --tui"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.27",
+    "@opencode/client": "2.1.0",
+    "@opencode/plugin": "2.1.0",
     "ink": "^8.0.0",
-    "react": "^19.3.0"
+    "jsonc-parser": "3.3.1",
+    "react": "^19.3.0",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
+    "@babel/core": "7.29.7",
+    "babel-preset-solid": "1.9.12",
     "ink-testing-library": "^4.0.0"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.6.6 <0.7.0",
+    "@opentui/solid": ">=0.6.6 <0.7.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": { "optional": true },
+    "@opentui/solid": { "optional": true }
   }
 }

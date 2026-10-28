@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  test:
+    name: Node 24 / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GIT_AUTHOR_NAME: Relay CI
+      GIT_AUTHOR_EMAIL: relay-ci@example.invalid
+      GIT_COMMITTER_NAME: Relay CI
+      GIT_COMMITTER_EMAIL: relay-ci@example.invalid
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/opencode-relay/package-lock.json
+      - name: Prepare isolated test scratch directory
+        run: mkdir -p /tmp/opencode
+      - name: Validate GitHub workflow syntax and shell steps
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix packages/opencode-relay --no-audit --no-fund
+      - run: npm run check
+      - name: Root regression tests (serial)
+        run: node --test --test-concurrency=1 test/*.test.mjs
+      - run: npm run test:v2
+      - name: Interactive plugin to actual node CLI task hand-off
+        run: node scripts/verify-cli-bridge.mjs
+      - name: Interactive self-capture records a todo without self-dispatch
+        run: node scripts/verify-cli-bridge.mjs --self-capture
+      - name: Approval-notice CLI reads without an active execution or operator context
+        run: node scripts/verify-cli-bridge.mjs --notice-read
+      - name: Never-prompted receiving chat, instruction load and execution-scoped CLI
+        run: node packages/opencode-relay/smoke-receivers.mjs --first-message
+      - name: Human steering, explicit historical recovery and independent human operations
+        run: node packages/opencode-relay/smoke-receivers.mjs --legacy-recovery
+      - name: Native task-independent message smoke
+        run: npm --prefix packages/opencode-relay run smoke:messages
+      - name: Native reusable headless provisioning and schedule smoke
+        run: node scripts/verify-headless.mjs
+      - name: Authenticated coordinator headless setup and revocation smoke
+        run: node scripts/verify-headless-setup.mjs
+      - name: Coordinator-issued grant without owner context, idempotent retry and revocation
+        run: node scripts/verify-headless-setup.mjs --agent-grant --capabilities --shell
+      - name: Approved headless task and artifact capability canaries
+        run: node scripts/verify-headless-setup.mjs --capabilities
+      - name: Exact instruction revision approval, idle activation and refreshed native context
+        run: node scripts/verify-headless-setup.mjs --contract-update --capabilities --legacy-contract-refusal
+      - name: Actual headless cron admission, granted effects and result publication
+        run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell --run-result-notifications
+      - name: Headless MCP denied without connector permissions
+        run: node scripts/verify-headless-setup.mjs --mcp-denied
+      - name: Headless shell allowed with harmless outside-workspace write
+        run: node scripts/verify-headless-setup.mjs --shell
+      - name: Headless shell denied without effect
+        run: node scripts/verify-headless-setup.mjs --shell-denied --mcp-denied
+      - name: Installed RC4 compatible upgrade, rollback and chat-continuity smoke
+        run: node scripts/verify-upgrade.mjs
+      - name: Compatible upgrade with active owned model and retained publication conflicts
+        run: node scripts/verify-upgrade.mjs --active-work
+
+  package:
+    name: Verify installed release package
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Prepare scratch directory
+        run: mkdir -p /tmp/opencode
+      - run: npm ci --no-audit --no-fund
+      - name: Install exact production TUI host
+        run: npm install --prefix "$RUNNER_TEMP/tui-host" --no-audit --no-fund @opencode/cli@2.1.2
+      - name: Install supported baseline TUI host
+        run: npm install --prefix "$RUNNER_TEMP/tui-baseline" --no-audit --no-fund @opencode/cli@2.1.0
+      - name: Verify version metadata and release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: node scripts/check-release.mjs
+      - name: Clean installation, onboarding and fresh production audit
+        env:
+          RELAY_V2_BINARY: ${{ runner.temp }}/tui-host/node_modules/.bin/opencode2
+          RELAY_V2_BASELINE_BINARY: ${{ runner.temp }}/tui-baseline/node_modules/.bin/opencode2
+        run: node scripts/verify-package.mjs --release --output "$RUNNER_TEMP/release"
+      - name: Stage release notes
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json')).version")
+          cp "docs/release-$VERSION.md" "$RUNNER_TEMP/release/RELEASE-NOTES.md"
+      - name: Retain downloadable package and verification evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 30

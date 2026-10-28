@@ -11,9 +11,10 @@ import { fileURLToPath } from 'node:url';
 const quit = String.raw`
 import os, pty, select, subprocess, sys, time
 master, slave = pty.openpty()
-command = [sys.argv[1], sys.argv[2], "--context", sys.argv[3], "board", "--watch"]
+command = [sys.argv[1], sys.argv[2], "tui", "--context", sys.argv[3]]
 process = subprocess.Popen(command,
-                           stdin=slave, stdout=slave, stderr=slave)
+                           stdin=slave, stdout=slave, stderr=slave,
+                           env={**os.environ, "CI": "false", "CONTINUOUS_INTEGRATION": "false", "FORCE_COLOR": "1"})
 os.close(slave)
 try:
     data = b""
@@ -36,34 +37,34 @@ finally:
 for (const mode of ['ready', 'hung']) test(`real board CLI exits on q with ${mode} refresh`, async t => {
   if (process.platform === 'win32') { t.skip('PTY regression requires POSIX'); return; }
   const directory = mkdtempSync(join(tmpdir(), 'relay-board-exit-'));
-  const socketPath = join(directory, 'relay.sock');
   const context = join(directory, 'context.json');
-  writeFileSync(context, JSON.stringify({ socketPath, token: 'fixture' }), { mode: 0o600 });
   let requests = 0;
   const server = createServer((request, response) => {
-    assert.equal(request.url, '/task-board'); requests++;
-    if (mode === 'ready') response.end(JSON.stringify({ companies: [], agents: [], projects: [], tasks: [], fetchedAt: null }));
+    assert.equal(request.method, 'GET'); requests++;
+    if (mode === 'ready') { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(request.url === '/v1/info'
+      ? { userId: 'owner', instanceId: 'fixture' } : { items: [], nextCursor: null })); }
   });
   t.after(async () => {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
     rmSync(directory, { recursive: true, force: true });
   });
-  await new Promise(resolve => server.listen(socketPath, resolve));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  writeFileSync(context, JSON.stringify({ url: `http://127.0.0.1:${server.address().port}`, token: 'fixture' }), { mode: 0o600 });
   const { stdout } = await promisify(execFile)('python3', ['-c', quit, process.execPath,
     fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), context, mode, 'ink'], { timeout: 15000 });
   assert.equal(stdout, '');
-  assert.equal(requests, 1);
+  assert.ok(requests >= 1);
 });
 
 test('board watch refuses non-TTY launch without a React stack trace', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'relay-board-ink-no-tty-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const context = join(directory, 'context.json');
-  writeFileSync(context, JSON.stringify({ socketPath: join(directory, 'missing.sock'), token: 'fixture' }), { mode: 0o600 });
+  writeFileSync(context, JSON.stringify({ url: 'http://127.0.0.1:1', token: 'fixture' }), { mode: 0o600 });
   const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
-  await assert.rejects(promisify(execFile)(process.execPath, [cli, '--context', context, 'board', '--watch'], { timeout: 5000 }), error => {
-    assert.match(error.stderr, /Task board watch mode requires an interactive terminal/);
+  await assert.rejects(promisify(execFile)(process.execPath, [cli, 'tui', '--context', context], { timeout: 5000 }), error => {
+    assert.match(error.stderr, /Interactive board requires a TTY/);
     assert.doesNotMatch(error.stderr, /react-reconciler|node_modules\/ink\/build\/components\/App/);
     return true;
   });

@@ -34,6 +34,39 @@ function widthOf(text) {
   return [...segmenter.segment(text)].reduce((sum, { segment }) => sum + cellWidth(segment), 0);
 }
 
+/** Size the status column to its content, without taking space from long titles. */
+export function taskBoardColumns(columns, statusLabels = []) {
+  const available = Math.max(0, Math.floor(columns) - 4); // Borders and horizontal padding.
+  const longest = Math.max(0, ...statusLabels.map(label => widthOf(clean(label))));
+  const status = Math.min(longest, 48, Math.floor(available / 3));
+  const gap = status && available > status ? 1 : 0;
+  return { title: available - status - gap, status, gap };
+}
+
+/** Lossless cell-aware lines for scrollable decision editors and previews. */
+export function wrapBoardText(value, columns) {
+  columns = Math.max(1, Math.floor(columns) || 1);
+  const lines = [];
+  for (const paragraph of String(value ?? '').split(/\r?\n/)) {
+    let segments = [], used = 0;
+    for (const { segment } of segmenter.segment(clean(paragraph))) {
+      const cells = cellWidth(segment);
+      if (segments.length && used + cells > columns) {
+        // Keep exact whitespace/text. Prefer the last word boundary, hard-break
+        // only an unbroken token. Width is terminal cells, not UTF-16 length.
+        const boundary = segments.findLastIndex(s => /\s/u.test(s)) + 1;
+        const split = boundary || segments.length;
+        lines.push(segments.slice(0, split).join(''));
+        segments = segments.slice(split); used = segments.reduce((n, s) => n + cellWidth(s), 0);
+        if (segments.length && used + cells > columns) { lines.push(segments.join('')); segments = []; used = 0; }
+      }
+      segments.push(segment); used += cells;
+    }
+    lines.push(segments.join(''));
+  }
+  return lines;
+}
+
 function fit(value, width, unicode = false) {
   const text = clean(value);
   if (width <= 0) return '';
@@ -79,7 +112,7 @@ function validate(value) {
   if (value.routines !== undefined && (!Array.isArray(value.routines) || value.routines.some(item => !item ||
     typeof item.id !== 'string' || typeof item.companyId !== 'string' || typeof item.title !== 'string' ||
     typeof item.state !== 'string' || (item.executionMode !== undefined &&
-      !['headless', 'interactive_exact', 'interactive_folder'].includes(item.executionMode)) ||
+      !['headless', 'interactive_exact', 'interactive_folder', 'interactive_agent'].includes(item.executionMode)) ||
     typeof item.cron !== 'string' || typeof item.timezone !== 'string'))) {
     throw new TypeError('Invalid task board routines: expected safe routine projections');
   }
@@ -122,26 +155,30 @@ export function buildBoardRows(value, options = {}) {
   };
   const companies = new Set([...companyNames.keys(), ...value.agents.map(agent => agent.companyId),
     ...value.tasks.map(task => task.companyId)]);
-  for (const company of companies) ensureGroup(company, 'human', 'local-board', 'Human: Board (local-board)');
+  if (value.showEmptyLocalBoard !== false) {
+    for (const company of companies) ensureGroup(company, 'human', 'local-board', 'Human: Board (local-board)');
+  }
   for (const agent of value.agents) ensureGroup(agent.companyId, 'agent', agent.id, agent.name || agent.id, agent);
   const owners = new Map();
   for (const [id, task] of tasks) {
     let group;
-    if (task.assigneeAgentId) {
-      const agent = agents.get(keyOf(task.companyId, task.assigneeAgentId));
-      group = ensureGroup(task.companyId, 'agent', task.assigneeAgentId,
-        agent?.name || `Agent: ${task.assigneeAgentId} (missing)`, agent);
+    const executionAgentId = task.executionAgentId || task.assigneeAgentId;
+    if (executionAgentId) {
+      const agent = agents.get(keyOf(task.companyId, executionAgentId));
+      group = ensureGroup(task.companyId, 'agent', executionAgentId,
+        agent?.name || `Agent: ${executionAgentId} (missing)`, agent);
     } else if (task.assigneeUserId) {
       group = ensureGroup(task.companyId, 'human', task.assigneeUserId,
         task.assigneeUserId === 'local-board' ? 'Human: Board (local-board)' : `Human: ${task.assigneeUserId}`);
     } else group = ensureGroup(task.companyId, 'unassigned', '', 'Unassigned');
     owners.set(id, group);
-    const searchable = [task.identifier, task.title, task.descriptionPreview, task.status,
-      projects.get(keyOf(task.companyId, task.projectId))?.name, group.name, group.companyName].map(clean).join(' ').toLocaleLowerCase();
+    const searchable = [task.reference, task.identifier, task.source?.metadata?.identifier, task.title, task.descriptionPreview, task.status,
+      task.attentionLabel, task.responsibleUserId, projects.get(keyOf(task.companyId, task.projectId))?.name, group.name, group.companyName].map(clean).join(' ').toLocaleLowerCase();
     if ((showDone || !done(task)) && (!filter || searchable.includes(filter))) group.assigned.push(id);
   }
   const rows = [];
-  for (const group of groups.values()) {
+  const groupPriority = group => group.kind === 'human' ? group.id === keyOf('group', group.companyId, 'human', 'local-board') ? 0 : 1 : 2;
+  for (const group of [...groups.values()].sort((a, b) => groupPriority(a) - groupPriority(b))) {
     const busy = [group.agent?.availability, group.agent?.nativeState].some(state => /^(busy|working|running|active)$/i.test(state ?? ''));
     const present = group.agent?.availability === 'present';
     if (!group.assigned.length && !present && (filter || (!showIdle && !busy && group.kind !== 'human'))) continue;
@@ -201,6 +238,34 @@ export function buildBoardRows(value, options = {}) {
         expandable, expanded: isExpanded, ...subtree.get(id) });
       if (expandable && !isExpanded) collapsedDepth = depth;
     }
+  }
+  return rows;
+}
+
+/** Agent trees use durable node identity, never hostname/name/path similarity. */
+export function buildAgentRows(value, { filter = '', collapsed = new Set() } = {}) {
+  const groups = new Map(), query = clean(filter).toLocaleLowerCase().trim();
+  for (const agent of value.agents) {
+    const nodeId = agent.nodeId || null, id = keyOf('machine', agent.companyId, nodeId);
+    if (!groups.has(id)) groups.set(id, { id, type: 'machine', nodeId, companyId: agent.companyId,
+      name: clean(nodeId ? agent.nodeName || agent.machineName || 'Unnamed node' : 'Unknown machine'), machineName: nodeId ? clean(agent.machineName) : '',
+      local: Boolean(nodeId && nodeId === value.localNode?.id), agents: [] });
+    groups.get(id).agents.push(agent);
+  }
+  const compare = (a, b) => clean(a).localeCompare(clean(b), 'en', { numeric: true });
+  const ordered = [...groups.values()].sort((a, b) => Number(b.local) - Number(a.local) || Number(!a.nodeId) - Number(!b.nodeId) ||
+    compare(a.name, b.name) || compare(a.id, b.id));
+  const rows = [];
+  for (const group of ordered) {
+    if (group.local) group.name = clean(value.localNode.name || group.name);
+    const agents = group.agents.filter(agent => !query || clean([agent.displayName || agent.name, agent.mode, group.name, group.machineName,
+      agent.directory, agent.availabilityLabel, agent.locality ?? 'unknown'].join(' ')).toLocaleLowerCase().includes(query))
+      .sort((a, b) => compare(a.displayName || a.name || a.id, b.displayName || b.name || b.id) || compare(a.id, b.id));
+    if (!agents.length) continue;
+    const { agents: all, ...parent } = group;
+    rows.push({ ...parent, count: agents.length, total: all.length, expandable: true, expanded: !collapsed.has(group.id) });
+    if (!collapsed.has(group.id)) for (const [index, agent] of agents.entries()) rows.push({ id: keyOf('agent', agent.companyId, agent.id),
+      type: 'agent', agent, groupId: group.id, depth: 1, last: index === agents.length - 1 });
   }
   return rows;
 }

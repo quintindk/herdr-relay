@@ -1,14 +1,24 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { buildBoardRows } from './task-board-view.mjs';
+import { buildBoardRows, buildAgentRows, wrapBoardText } from './task-board-view.mjs';
+import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
+import { GrantsPanel, nativeBoardTabs, nativeBoardViews } from './grants-panel.mjs';
+import { NativeDispatchModal } from './task-board-dispatch.mjs';
+import { RunResultNotificationsPanel } from './run-result-notifications-panel.mjs';
+import { BoardText, modalSize, appendBoardInput } from './board-text.mjs';
+import { routineDetailLayout } from './board-detail-layout.mjs';
+import { layoutBoardRows, boardRowViewport } from './board-row-layout.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
 const labels = { backlog: 'Backlog', todo: 'Todo', in_progress: 'Active', blocked: 'Blocked',
   in_review: 'In review', done: 'Done', cancelled: 'Cancelled', delete: 'Delete permanently' };
 const terminal = status => ['done', 'cancelled'].includes(status);
-const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').trim();
+const clean = value => decisionText(value).trim();
+const lastSeenLabel = value => Number.isFinite(Date.parse(value)) ? `${new Date(value).toLocaleString('en-GB', {
+  timeZone: 'Africa/Johannesburg', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+})} SAST` : 'Not yet reported';
 const taskCounts = tasks => ({ open: tasks.filter(task => !terminal(task.status)).length,
   active: tasks.filter(task => task.status === 'in_progress').length,
   blocked: tasks.filter(task => task.status === 'blocked').length,
@@ -22,77 +32,58 @@ export const taskRowStyle = (task, overlay = false, context = false) => ({
 function StatusModal({ modal, setModal, submit, width, height }) {
   const status = modal.options[modal.index];
   const fields = ['status', ...(status === 'blocked' && modal.needsDescriptor ? ['owner', 'action'] : []), ...(status === 'delete' ? [] : ['comment'])];
-  const modalWidth = Math.max(44, Math.min(72, width - 4));
-  const contentWidth = Math.max(1, modalWidth - 8);
-  const commentBoxHeight = Math.min(6, Math.max(3, height - (status === 'blocked' && modal.needsDescriptor ? 19 : 17)));
-  const commentLines = [];
-  for (const paragraph of String(modal.comment ?? '').split(/\r?\n/)) {
-    if (!paragraph) { commentLines.push(''); continue; }
-    let line = '';
-    for (const character of paragraph) {
-      if (line.length >= contentWidth) { commentLines.push(line); line = ''; }
-      line += character;
-    }
-    commentLines.push(line);
+  const { width: modalWidth, height: modalHeight } = modalSize(width, height, 72, 24);
+  const contentWidth = Math.max(1, modalWidth - 6), viewport = Math.max(1, modalHeight - 8);
+  const content = [];
+  const add = (text, field, option) => wrapBoardText(text, contentWidth).forEach(line => content.push({ text: line, field, option }));
+  if (modal.confirm) add(status === 'delete' ? `Confirm permanent deletion of ${modal.task.identifier || modal.task.id}. This cannot be undone.`
+    : `Confirm ${labels[modal.task.status] || modal.task.status} → ${labels[status]}`, 'confirm');
+  else modal.options.forEach((value, index) => add(`${modal.index === index ? '●' : '○'} ${labels[value]}`, 'status', index));
+  if (status === 'blocked' && modal.needsDescriptor) {
+    add(`Waiting on ${modal.owner === 'board' ? 'Board' : 'Me'}`, 'owner');
+    add(`Required action\n${modal.action}${!modal.confirm && modal.field === 'action' ? '▏' : ''}`, 'action');
   }
-  const visibleCommentLines = commentLines.slice(-Math.max(1, commentBoxHeight - 2));
-  if (modal.field === 'comment' && visibleCommentLines.length) visibleCommentLines[visibleCommentLines.length - 1] += '▏';
+  if (status !== 'delete') add(`Comment (optional) · ${modal.comment.length}/4000 · ${wrapBoardText(modal.comment, contentWidth).length} lines\n${modal.comment}${!modal.confirm && modal.field === 'comment' ? '▏' : ''}`, 'comment');
+  const focused = content.findLastIndex(line => line.field === modal.field && (line.option === undefined || line.option === modal.index));
+  const maxScroll = Math.max(0, content.length - viewport);
+  const start = modal.scroll === undefined ? modal.confirm ? 0 : Math.max(0, Math.min(maxScroll, focused - viewport + 1)) : Math.min(modal.scroll, maxScroll);
   useInput((input, key) => {
     if (modal.busy) return;
     if (key.escape) {
-      if (modal.confirm) setModal(value => ({ ...value, confirm: false })); else setModal(null);
+      if (modal.confirm) setModal(value => ({ ...value, confirm: false, scroll: undefined })); else setModal(null);
       return;
     }
+    if (key.pageDown || key.pageUp) { setModal(value => ({ ...value, scroll: Math.max(0, Math.min(maxScroll, start + (key.pageDown ? viewport : -viewport))) })); return; }
     if (modal.confirm) { if (key.return || input === '\r' || input === '\n') void submit(modal); return; }
-    if (key.tab) { setModal(value => ({ ...value, field: fields[(fields.indexOf(value.field) + 1) % fields.length] })); return; }
+    if (key.tab) { setModal(value => ({ ...value, field: fields[(fields.indexOf(value.field) + (key.shift ? fields.length - 1 : 1)) % fields.length], scroll: undefined })); return; }
     if (modal.field === 'status' && (key.upArrow || key.downArrow || input === 'j' || input === 'k')) {
       const delta = key.downArrow || input === 'j' ? 1 : -1;
-      setModal(value => ({ ...value, index: Math.max(0, Math.min(modal.options.length - 1, value.index + delta)) })); return;
+      setModal(value => ({ ...value, index: Math.max(0, Math.min(modal.options.length - 1, value.index + delta)), scroll: undefined })); return;
     }
     if (modal.field === 'owner' && (key.upArrow || key.downArrow || input === 'j' || input === 'k' || input === ' ')) {
       setModal(value => ({ ...value, owner: value.owner === 'board' ? 'me' : 'board' })); return;
     }
-    if (key.return || input === '\r' || input === '\n') {
+    if ((key.return || input === '\r' || input === '\n') && !key.shift) {
       if (status === 'blocked' && modal.needsDescriptor && !modal.action.trim()) {
         setModal(value => ({ ...value, error: 'Required action is needed for Blocked' }));
-      } else setModal(value => ({ ...value, confirm: true, error: '' }));
+      } else setModal(value => ({ ...value, confirm: true, error: '', scroll: 0 }));
       return;
     }
     if (['action', 'comment'].includes(modal.field)) {
       const field = modal.field, limit = field === 'action' ? 2000 : 4000;
-      const next = key.backspace || key.delete ? [...modal[field]].slice(0, -1).join('')
-        : input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input) && modal[field].length < limit
-          ? modal[field] + input : modal[field];
-      if (next !== modal[field]) setModal(value => ({ ...value, [field]: next }));
+      const next = appendBoardInput(modal[field], input, key, limit);
+      if (next !== modal[field]) setModal(value => ({ ...value, [field]: next, scroll: undefined }));
     }
   });
-  const modalHeight = Math.min(height - 2, 15 + commentBoxHeight + Math.max(0, modal.options.length - statuses.length) + (status === 'blocked' && modal.needsDescriptor ? 2 : 0));
-  const selected = (active, text) => h(Text, { inverse: active, color: active ? 'cyan' : undefined, bold: active }, text);
   return h(Box, { position: 'absolute', width: modalWidth, height: modalHeight,
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
     borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
-  h(Text, { bold: true, color: 'cyan' }, `Change status · ${modal.task.identifier || modal.task.id}`),
-  h(Box, { height: 1 }),
-  ...modal.options.map((value, index) => selected(modal.field === 'status' && modal.index === index,
-    `${modal.index === index ? '●' : '○'} ${labels[value]}`)),
-  h(Box, { height: 1 }),
-  ...(status === 'blocked' && modal.needsDescriptor ? [
-    selected(modal.field === 'owner', `Waiting on  ${modal.owner === 'board' ? 'Board' : 'Me'}`),
-    selected(modal.field === 'action', `Required action  ${modal.action}${modal.field === 'action' ? '▏' : ''}`),
-  ] : []),
-  status === 'delete' ? h(Text, { color: 'red' }, 'Permanently remove this task. This cannot be undone.') : h(Box, { flexDirection: 'column' },
-  h(Box, { justifyContent: 'space-between' },
-    h(Text, { bold: modal.field === 'comment', color: modal.field === 'comment' ? 'cyan' : undefined }, 'Comment (optional)'),
-    h(Text, { dimColor: true }, `${modal.comment.length}/4000 · ${commentLines.length} line${commentLines.length === 1 ? '' : 's'}`)),
-  h(Box, { height: commentBoxHeight, borderStyle: 'single', borderColor: modal.field === 'comment' ? 'cyan' : 'gray',
-    paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
-  ...visibleCommentLines.map((line, index) => h(Text, { key: `${commentLines.length}:${index}`, wrap: 'truncate-end' }, line || ' ')))),
-  modal.error ? h(Text, { color: 'red' }, modal.error)
-    : modal.confirm ? h(Text, { bold: true, color: status === 'delete' ? 'red' : 'cyan' }, status === 'delete'
-      ? `Confirm permanent deletion of ${modal.task.identifier || modal.task.id}` : `Confirm ${labels[modal.task.status] ?? modal.task.status} -> ${labels[status]}`)
-      : h(Text, null, ' '),
-  h(Box, { flexGrow: 1 }),
-  h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : '↑↓ select · Tab next · Enter review · Esc cancel'));
+  h(BoardText, { text: `Change status · ${modal.task.identifier || modal.task.id}\n${modal.field === 'comment' ? `Comment (optional) · ${modal.comment.length}/4000 · ${wrapBoardText(modal.comment, contentWidth).length} lines` : ''}`,
+    columns: contentWidth, rows: 2, bold: true, color: 'cyan' }),
+  h(Box, { height: viewport, flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }, ...content.slice(start, start + viewport).map((line, index) =>
+    h(Text, { key: index, wrap: 'truncate-end', inverse: !modal.confirm && line.field === modal.field && (line.option === undefined || line.option === modal.index) }, line.text || ' '))),
+  h(BoardText, { text: modal.error || `${start + 1}-${Math.min(content.length, start + viewport)}/${content.length}`, columns: contentWidth, rows: 1, color: modal.error ? 'red' : 'gray' }),
+  h(Text, { dimColor: true, wrap: 'wrap' }, modal.confirm ? 'PgUp/Dn inspect · Enter apply · Esc back' : '↑↓ select · Tab field · PgUp/Dn · Enter review · Esc cancel'));
 }
 
 function AssignmentModal({ modal, setModal, submit, width, height }) {
@@ -103,7 +94,7 @@ function AssignmentModal({ modal, setModal, submit, width, height }) {
     if (key.upArrow || input === 'k') setModal(value => ({ ...value, index: Math.max(0, value.index - 1) }));
     if (key.return || input === '\r' || input === '\n') void submit(modal);
   });
-  const modalWidth = Math.max(44, Math.min(72, width - 4));
+  const modalWidth = Math.max(8, Math.min(72, width - 2));
   return h(Box, { position: 'absolute', width: modalWidth, height: Math.min(height - 2, Math.max(9, modal.agents.length + 6)),
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - Math.max(9, modal.agents.length + 6)) / 2)),
     borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column' },
@@ -117,97 +108,140 @@ function AssignmentModal({ modal, setModal, submit, width, height }) {
 }
 
 function ReviewModal({ modal, setModal, submit, width, height }) {
+  const { width: modalWidth, height: modalHeight } = modalSize(width, height, 72, 24);
+  const columns = Math.max(1, modalWidth - 6), viewport = Math.max(1, modalHeight - 8);
   useInput((input, key) => {
     if (modal.busy) return;
     if (key.escape) {
       if (modal.confirm) setModal(value => ({ ...value, confirm: false })); else setModal(null);
       return;
     }
+    if (key.pageDown || key.pageUp) { setModal(value => ({ ...value, scroll: Math.max(0, (value.scroll || 0) + (key.pageDown ? viewport : -viewport)) })); return; }
     if (modal.confirm) { if (key.return || input === '\r' || input === '\n') void submit(modal); return; }
     if (modal.decision === 'reject') {
-      if (key.return || input === '\r' || input === '\n') {
+      if ((key.return || input === '\r' || input === '\n') && !key.shift) {
         if (modal.reason.trim()) setModal(value => ({ ...value, confirm: true, error: '' }));
         else setModal(value => ({ ...value, error: 'Rejection feedback is required' }));
         return;
       }
-      const reason = key.backspace || key.delete ? [...modal.reason].slice(0, -1).join('')
-        : input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input) && modal.reason.length < 4000
-          ? modal.reason + input : modal.reason;
-      if (reason !== modal.reason) setModal(value => ({ ...value, reason }));
+      const reason = appendBoardInput(modal.reason, input, key, 4000);
+      if (reason !== modal.reason) setModal(value => ({ ...value, reason, scroll: 0 }));
       return;
     }
     if (key.return || input === '\r' || input === '\n') setModal(value => ({ ...value, confirm: true }));
   });
-  const modalWidth = Math.max(44, Math.min(72, width - 4));
-  return h(Box, { position: 'absolute', width: modalWidth, height: Math.min(height - 2, 12),
-    left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - 12) / 2)),
-    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column' },
-  h(Text, { bold: true, color: 'magenta' }, `${modal.decision === 'accept' ? 'Approve' : 'Reject'} · ${modal.identifier}`),
-  h(Text, { dimColor: true }, `Candidate ${modal.candidate}`), h(Box, { height: 1 }),
-  modal.decision === 'reject' ? h(Text, { inverse: !modal.confirm }, `Feedback  ${modal.reason}${!modal.confirm ? '▏' : ''}`) : null,
+  return h(Box, { position: 'absolute', width: modalWidth, height: modalHeight,
+    left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
+    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
+  h(BoardText, { text: `${modal.decision === 'accept' ? 'Approve' : 'Reject'} · ${modal.identifier}`, columns, rows: 2, bold: true, color: 'magenta' }),
+  h(BoardText, { text: `Candidate ${modal.candidate}\n\nFeedback\n${modal.reason}${!modal.confirm ? '▏' : ''}${modal.error ? `\nError: ${modal.error}` : ''}`,
+    columns, rows: viewport, scroll: modal.scroll || 0, tail: !modal.confirm && !modal.scroll }),
   modal.confirm ? h(Text, { bold: true, color: 'magenta' }, `Confirm ${modal.decision}`) : null,
-  modal.error ? h(Text, { color: 'red' }, modal.error) : null,
   h(Box, { flexGrow: 1 }),
   h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : modal.decision === 'reject' ? 'Type feedback · Enter review · Esc cancel' : 'Enter review · Esc cancel'));
 }
 
-function DetailModal({ detail, close, openOccurrence, review, width, height }) {
-  const taskTabs = ['Overview', 'Result', 'Comments'];
+function AgentDetailModal({ detail, close, width, height }) {
+  const [scroll, setScroll] = useState(0), [technical, setTechnical] = useState(false);
+  const { width: w, height: size } = modalSize(width, height, 100, 26), viewport = Math.max(1, size - 8);
+  const agent = detail.data?.agent;
+  const lines = (agent ? [
+    `Agent: ${agent.displayName || agent.name || 'Unknown agent'}`,
+    `Mode: ${agent.mode || 'Unknown'}`, `Availability: ${agent.availabilityLabel || 'Unknown or stale'}`,
+    `Node: ${agent.nodeName || 'Unknown node'}${agent.locality === 'local' ? ' (local node)' : agent.locality === 'remote' ? ' (remote node)' : ''}`, `Workspace: ${agent.directory || 'Not advertised'}`,
+    `Machine: ${agent.machineName || 'Not advertised'}${agent.machinePlatform ? ` (${agent.machinePlatform})` : ''}`,
+    `Agent last seen: ${lastSeenLabel(agent.lastSeenAt)}`, `Node last seen: ${lastSeenLabel(agent.nodeLastSeenAt)}`,
+    `Capabilities: ${agent.capabilities?.length ? agent.capabilities.join(', ') : 'None advertised'}`,
+    ...(agent.standingGrant ? [`Receiving chat: ${agent.conversationId || 'Not attached'}`, `Receiver generation: ${agent.bindingRevision ?? 0}`,
+      `Persistent schedules: ${detail.data.persistentSchedules ?? 0}`,
+      ...(detail.data.historicalAttempts?.length ? [`Historical pinned attempts: ${detail.data.historicalAttempts.length}. Attachment does not move or replay them.`] : [])] : []),
+    '', 'Directory availability is advisory. It does not grant dispatch authority.', '',
+    `Outstanding tasks (${detail.data.tasks.length})`,
+    ...(detail.data.tasks.length ? detail.data.tasks.flatMap(t => [t.title, `  ${t.attentionLabel || 'State unavailable'}`]) : ['No outstanding tasks reported.']),
+    ...(technical ? ['', `Agent identity: ${agent.id}`, `Node identity: ${agent.nodeId}`, `Conversation identity: ${agent.conversationId || 'None advertised'}`,
+      `Binding revision: ${agent.bindingRevision ?? 'Unknown'}`, `Last reported availability: ${agent.reportedAvailability || 'unknown'}`] : []),
+  ] : [detail.error ? `Agent detail unavailable: ${detail.error}` : 'Loading agent…']).flatMap(line => wrapBoardText(line, w - 6));
+  const start = Math.min(scroll, Math.max(0, lines.length - viewport));
+  useInput((input, key) => {
+    if (key.escape || key.return || input === 'q') { close(); return; }
+    if (input === 't') { setTechnical(value => !value); setScroll(0); return; }
+    if (key.downArrow || input === 'j') setScroll(value => Math.min(Math.max(0, lines.length - viewport), value + 1));
+    if (key.upArrow || input === 'k') setScroll(value => Math.max(0, value - 1));
+    if (key.pageDown) setScroll(value => Math.min(Math.max(0, lines.length - viewport), value + viewport));
+    if (key.pageUp) setScroll(value => Math.max(0, value - viewport));
+  });
+  return h(Box, { position: 'absolute', width: w, height: size, left: Math.max(0, Math.floor((width - w) / 2)), top: Math.max(0, Math.floor((height - size) / 2)),
+    borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
+  h(Text, { bold: true, color: 'cyan' }, 'Agent details'),
+  h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' }, ...lines.slice(start, start + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line || ' '))),
+  h(Box, { flexGrow: 1 }), h(Text, { dimColor: true }, `${start + 1}-${Math.min(lines.length, start + viewport)}/${lines.length}`),
+  h(Text, { dimColor: true, wrap: 'truncate-end' }, 'j/k · PgUp/PgDn · t details · Esc close'));
+}
+
+function DetailModal({ detail, close, openOccurrence, openAction, review, openRunResultNotifications, width, height }) {
+  const actions = detail.data?.actions ?? [];
+  const taskTabs = [...(actions.length ? ['Actions'] : []), 'Overview', 'Result', 'Comments', ...(detail.data?.activity ? ['Activity'] : [])];
   const [tab, setTab] = useState(0);
+  const [actionIndex, setActionIndex] = useState(0);
+  const [technical, setTechnical] = useState(false);
   const [scrolls, setScrolls] = useState({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
   const detailId = detail.row?.taskId ?? detail.row?.routine?.id ?? detail.data?.task?.id ?? detail.data?.scheduleId;
   useEffect(() => {
-    setTab(0); setScrolls({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
+    setTab(0); setActionIndex(0); setTechnical(false); setScrolls({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
   }, [detail.kind, detailId]);
-  const modalWidth = Math.max(52, Math.min(100, width - 4)), modalHeight = Math.max(12, Math.min(height - 2, 24));
-  const contentWidth = Math.max(20, modalWidth - 6);
-  const viewportHeight = Math.max(3, modalHeight - (detail.kind === 'task' ? 8 : 7));
-  const wrapLines = value => {
-    const paragraphs = String(value ?? '').split(/\r?\n/); const lines = [];
-    for (const paragraph of paragraphs) {
-      if (!paragraph) { lines.push(''); continue; }
-      let current = '';
-      for (const word of clean(paragraph).split(/\s+/).filter(Boolean)) {
-        const next = current ? `${current} ${word}` : word;
-        if (next.length <= contentWidth) current = next;
-        else { if (current) lines.push(current); current = word; }
-      }
-      if (current) lines.push(current);
-    }
-    return lines;
-  };
+  const { width: modalWidth, height: modalHeight } = modalSize(width, height, 100, 26);
+  const contentWidth = Math.max(1, modalWidth - 6);
+  const title = detail.kind === 'task' ? detail.data?.actions !== undefined ? decisionText(detail.data?.task?.title) : `${detail.data?.task?.identifier || detail.data?.task?.id || 'Task'} · ${detail.data?.task?.title || ''}`
+    : `CRON · ${detail.data?.title || ''}`;
+  const titleRows = Math.min(3, wrapBoardText(title, contentWidth).length);
+  const tabsText = taskTabs.map((name, i) => tab === i ? `[${name}]` : name).join(' · ');
+  const tabsRows = wrapBoardText(tabsText, contentWidth).length;
+  const footerText = detail.kind === 'task' ? `${actions.length && taskTabs[tab] === 'Actions' ? 'Enter act · ' : detail.data?.review ? 'A approve · F/R reject · ' : ''}↑↓ scroll · PgUp/PgDn · Home/End · Tab section · Esc close`
+    : '↑↓ scroll · PgUp/PgDn · [/] occurrences · n notices · o task · Esc close';
+  const footerRows = wrapBoardText(footerText, contentWidth).length;
+  const viewportHeight = Math.max(1, modalHeight - 2 - titleRows - footerRows - 2 - (detail.kind === 'task' ? tabsRows + 1 : 0));
+  const wrapLines = value => wrapBoardText(value, contentWidth);
   let content = [], taskSections;
   if (!detail.loading && !detail.error && detail.kind === 'task') {
     const task = detail.data.task;
     const result = detail.data.result;
     taskSections = {
-      Overview: [...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
-        'Summary', '', ...wrapLines(task.description || 'No description.')],
-      Result: result ? ['Submitted result', '', ...wrapLines(result.summary), '', `Candidate  ${result.candidate}`,
+      Actions: [task.attentionLabel || 'Needs your attention', '', ...actions.flatMap((item, i) => [
+        `${i === actionIndex ? '›' : ' '} ${item.kind === 'question' ? 'Answer question' : item.kind === 'review' ? 'Review result' : 'Acknowledge reminder'}`,
+        ...wrapLines(item.summary), ''])],
+      Overview: [...(task.reference ? [`Reference: ${task.reference}`, ...(task.source?.metadata?.identifier ? [`Imported alias: ${task.source.metadata.identifier}`] : []), ''] : []),
+        'Title', ...wrapLines(task.title), '', ...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
+        ...(task.attentionLabel ? [task.attentionLabel, `Responsible: ${task.responsibleName || task.responsibleUserId || 'Not set'}`, `Worker: ${task.executionAgentName || 'None'}`, ''] : []),
+        ...(task.executionNodeName ? [`Node: ${task.executionNodeName}`, `Machine: ${task.executionMachineName || 'Not advertised'}`, ''] : []),
+        'Summary', '', ...wrapLines(task.description || 'No description.'), ...(technical ? ['', `Task identity: ${task.id}`] : [])],
+      Result: result ? ['Submitted result', '', ...wrapLines(result.summary), '',
+        ...(detail.data.actions !== undefined && !technical ? ['Exact candidate identity: press t for technical details'] : [`Candidate  ${result.candidate}`]),
         ...(result.deliverables ? ['', 'Deliverables', ...wrapLines(JSON.stringify(result.deliverables))] : []),
         ...(result.checks ? ['', 'Checks', ...wrapLines(JSON.stringify(result.checks))] : [])] : ['No Relay result.'],
       Comments: detail.data.comments?.length ? detail.data.comments.flatMap((comment, index) => [
         `${comment.authorUserId || comment.authorAgentId || 'system'}${comment.createdAt ? ` · ${comment.createdAt}` : ''}`,
         ...wrapLines(comment.body), ...(index < detail.data.comments.length - 1 ? [''] : [])]) : ['No comments.'],
+      Activity: detail.data.activity?.length ? detail.data.activity.flatMap(wrapLines) : ['No recorded interactions.'],
     };
     content = taskSections[taskTabs[tab]];
   }
-  if (!detail.loading && !detail.error && detail.kind === 'routine') {
-    const routine = detail.data;
-    content = [`${routine.state} / backend ${routine.backendStatus} / ${routine.executionMode}`,
-      `${routine.cron} · ${routine.timezone}`,
-      `Next ${routine.nextRunAt || 'none'} · target ${routine.targetAgentId || routine.targetBindingId || routine.targetDirectory || 'unresolved'}`,
-      ...(routine.delivery ? [`Delivery ${routine.delivery.state}${routine.delivery.reason ? ` · ${routine.delivery.reason}` : ''}`] : []),
-      '', `Recent occurrences (${routine.runs.length}${routine.runs.length === 50 ? '+' : ''})`,
-      ...detail.occurrences.map(entry => `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.task?.identifier || entry.run.linkedIssueId || 'unlinked'}  ${entry.task ? entry.task.status : entry.mismatch ? 'identity mismatch' : 'not on board'}`)];
-  }
+  const routineLayout = detail.kind === 'routine' && detail.data && !detail.loading && !detail.error
+    ? routineDetailLayout(detail.data, detail.occurrences, contentWidth) : null;
+  content = routineLayout ? routineLayout.lines.map(line => line.text) : content.flatMap(wrapLines);
+  if (detail.error) content = wrapLines(`Detail failed: ${detail.error}`);
   const scrollKey = detail.kind === 'task' ? taskTabs[tab] : 'Routine';
-  const scroll = scrolls[scrollKey] ?? 0;
+  const scroll = Math.min(scrolls[scrollKey] ?? 0, Math.max(0, content.length - viewportHeight));
   const setScroll = update => setScrolls(value => ({ ...value,
     [scrollKey]: typeof update === 'function' ? update(value[scrollKey] ?? 0) : update }));
-  const occurrenceStart = detail.kind === 'routine' && detail.data ? 5 + (detail.data.delivery ? 1 : 0) : -1;
   const maxScroll = Math.max(0, content.length - viewportHeight);
   useInput((input, key) => {
+    if (detail.kind === 'routine' && input === 'n') { openRunResultNotifications?.(detail.data); return; }
+    if (detail.kind === 'task' && input === 't') { setTechnical(value => !value); return; }
+    if (detail.kind === 'task' && taskTabs[tab] === 'Actions') {
+      if (key.return) { void openAction(actions[actionIndex]); return; }
+      if (key.downArrow || input === 'j') { setActionIndex(value => Math.min(actions.length - 1, value + 1)); return; }
+      if (key.upArrow || input === 'k') { setActionIndex(value => Math.max(0, value - 1)); return; }
+    }
     if (detail.kind === 'task' && ['A', 'F', 'R'].includes(input)) { review(input); return; }
     if (key.escape || input === 'q' || input === '\r' || input === '\n') close();
     if (detail.kind === 'task' && (key.tab || input === '\t')) {
@@ -215,16 +249,16 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
       return;
     }
     const move = delta => {
-      if (detail.kind === 'routine') {
-        detail.setOccurrence(value => {
-          const next = Math.max(0, Math.min(detail.occurrences.length - 1, value + delta));
-          setScroll(offset => next + occurrenceStart < offset ? Math.max(0, next + occurrenceStart)
-            : next + occurrenceStart >= offset + viewportHeight
-              ? Math.min(maxScroll, next + occurrenceStart + 1 - viewportHeight) : offset);
-          return next;
-        });
-      } else setScroll(value => Math.max(0, Math.min(maxScroll, value + delta)));
+      const next = Math.max(0, Math.min(maxScroll, scroll + delta)); setScroll(next);
+      if (routineLayout) {
+        const index = routineLayout.lines.slice(next, next + viewportHeight).find(line => line.occurrenceIndex !== undefined)?.occurrenceIndex;
+        if (index !== undefined) detail.setOccurrence(index);
+      }
     };
+    if (routineLayout && (input === '[' || input === ']')) {
+      const next = Math.max(0, Math.min(detail.occurrences.length - 1, detail.occurrence + (input === ']' ? 1 : -1)));
+      detail.setOccurrence(next); setScroll(Math.min(maxScroll, routineLayout.ranges[next]?.start ?? 0)); return;
+    }
     if (key.downArrow || input === 'j') move(1);
     if (key.upArrow || input === 'k') move(-1);
     if (key.pageDown) move(viewportHeight);
@@ -235,45 +269,54 @@ function DetailModal({ detail, close, openOccurrence, review, width, height }) {
   });
   const box = { position: 'absolute', width: modalWidth, height: modalHeight,
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
-    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column' };
+    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' };
   if (detail.loading) return h(Box, box, h(Text, { color: 'magenta' }, 'Loading detail...'));
-  if (detail.error) return h(Box, box, h(Text, { color: 'red' }, `Detail failed: ${detail.error}`), h(Box, { flexGrow: 1 }), h(Text, { dimColor: true }, 'Esc close'));
+  if (detail.error) return h(Box, box, h(Text, { color: 'red' }, 'Detail unavailable'),
+    h(BoardText, { text: `Detail failed: ${detail.error}`, columns: contentWidth, rows: viewportHeight, scroll, color: 'red' }),
+    h(Text, { dimColor: true }, 'PgUp/PgDn · Esc close'));
   if (detail.kind === 'task') {
     const task = detail.data.task;
     return h(Box, box,
-      h(Text, { bold: true, color: 'magenta' }, `${task.identifier || task.id} · ${task.title}`),
-      h(Text, { dimColor: true }, `${task.status} · ${task.assigneeUserId || task.assigneeAgentId || 'unassigned'}`),
-      h(Box, { gap: 2 }, ...taskTabs.map((name, index) => h(Text, { key: name, inverse: tab === index,
-        bold: tab === index, color: tab === index ? 'cyan' : undefined }, ` ${name} `))),
+      h(BoardText, { text: title, columns: contentWidth, rows: titleRows, bold: true, color: 'magenta' }),
+      h(Text, { dimColor: true }, `${task.status} · ${task.responsibleName || 'Human responsibility'}`),
+      h(BoardText, { text: tabsText, columns: contentWidth, rows: tabsRows, color: 'cyan' }),
       h(Box, { height: viewportHeight, flexDirection: 'column', overflow: 'hidden', marginTop: 1 },
         ...content.slice(scroll, scroll + viewportHeight).map((line, index) => h(Text, { key: `${scroll}:${index}`,
           bold: ['Summary', 'Submitted result', 'Deliverables', 'Checks'].includes(line),
           color: line.startsWith('Routine occurrence ') ? 'cyan' : undefined,
           dimColor: ['No comments.', 'No Relay result.'].includes(line) }, line || ' '))),
-      h(Box, { justifyContent: 'space-between' },
-        h(Text, { dimColor: true }, `${detail.data.review ? 'A approve · F/R reject · ' : ''}Tab section · j/k · PgUp/PgDn · Home/End · Esc close`),
-        h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
+      h(BoardText, { text: footerText, columns: contentWidth, rows: footerRows, dimColor: true }),
+      h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`));
   }
-  const routine = detail.data, occurrences = detail.occurrences;
+  const occurrences = detail.occurrences;
   return h(Box, box,
-    h(Text, { bold: true, color: 'magenta' }, `CRON · ${routine.title}`),
+    h(BoardText, { text: title, columns: contentWidth, rows: titleRows, bold: true, color: 'magenta' }),
     h(Box, { height: viewportHeight, flexDirection: 'column', overflow: 'hidden', marginTop: 1 },
       ...content.slice(scroll, scroll + viewportHeight).map((line, index) => {
-        const absolute = scroll + index, occurrenceIndex = absolute - occurrenceStart, entry = occurrenceIndex >= 0 ? occurrences[occurrenceIndex] : null;
-        return h(Text, { key: `${scroll}:${index}`, bold: absolute === occurrenceStart - 1, inverse: occurrenceIndex === detail.occurrence,
+        const meta = routineLayout.lines[scroll + index], occurrenceIndex = meta.occurrenceIndex, entry = occurrences[occurrenceIndex];
+        return h(Text, { key: `${scroll}:${index}`, wrap: 'truncate-end', bold: meta.heading, inverse: occurrenceIndex !== undefined && occurrenceIndex === detail.occurrence,
           color: entry?.task ? 'cyan' : entry?.mismatch ? 'red' : undefined }, line || ' ');
       })),
-    h(Box, { justifyContent: 'space-between' },
-      h(Text, { dimColor: true }, 'j/k · PgUp/PgDn · Home/End scroll · o open task · Enter/Esc close'),
-      h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
+    h(BoardText, { text: footerText, columns: contentWidth, rows: footerRows, dimColor: true }),
+    h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`));
 }
 
-export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, reviewTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
+  detailGrant, decideGrant, createGrant, pendingGrantDecisions, updateRunResultNotifications, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
-  const [board, setBoard] = useState({ companies: [], agents: [], projects: [], tasks: [], routines: [], fetchedAt: null, warnings: [] });
+  const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
+    ...(pendingDecisions ? { inbox: pendingDecisions() } : {}), grants: { pending: [], active: [], history: [] }, nodes: [], fetchedAt: null, warnings: [] }));
+  const native = Array.isArray(board.inbox);
+  const [view, setView] = useState('tasks');
+  const [selectedNativeId, setSelectedNativeId] = useState(null);
+  const [decisionModal, setDecisionModal] = useState(null);
+  const [settingsModal, setSettingsModal] = useState(null);
+  const [decisionReceipt, setDecisionReceipt] = useState(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
+  const [rowScroll, setRowScroll] = useState(0);
+  useEffect(() => { setRowScroll(0); }, [selected, selectedNativeId, view, width, height]);
   const [assignment, setAssignment] = useState(null); const [reviewModal, setReviewModal] = useState(null);
   const [reviewFeedback, setReviewFeedback] = useState('');
   const [quitting, setQuitting] = useState(false);
@@ -294,32 +337,89 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
         active = new AbortController(); const value = await read(active.signal);
         if (!disposed) { setBoard({ ...value, routines: value.routines ?? [], warnings: value.warnings ?? [] }); setOffline(''); setLoaded(true); }
       }
-      catch (error) { if (!disposed) setOffline(clean(error.message || error.code || 'offline')); }
+      catch (error) { if (!disposed) {
+        setOffline(clean(error.message || error.code || 'offline'));
+        if (pendingDecisions) setBoard(value => ({ ...value, inbox: [...pendingDecisions(), ...(value.inbox ?? []).filter(i => i.kind !== 'publication')] }));
+        if (pendingGrantDecisions) setBoard(value => ({ ...value, grants: { ...value.grants,
+          pending: [...pendingGrantDecisions(), ...(value.grants?.pending ?? []).filter(i => i.kind !== 'publication')] } }));
+      } }
       if (!disposed) timer = setTimeout(refresh, interval);
     };
     void refresh();
     return () => { disposed = true; clearTimeout(timer); active?.abort(); };
-  }, [read, interval, refreshGeneration]);
+  }, [read, interval, refreshGeneration, pendingDecisions, pendingGrantDecisions]);
   const taskRows = useMemo(() => {
     const all = buildBoardRows(board, { showDone, showIdle, filter });
     const expanded = new Set(all.filter(row => row.expandable && !collapsed.has(row.id)).map(row => row.id));
-    return buildBoardRows(board, { showDone, showIdle, filter, expanded });
+    const rows = buildBoardRows(board, { showDone, showIdle, filter, expanded });
+    return native ? rows.filter(row => row.type !== 'group' || row.counts.total > 0) : rows;
   }, [board, showDone, showIdle, filter, collapsed]);
   const routineRows = useMemo(() => board.routines.filter(routine => showDone || routine.state !== 'cancelled')
     .map(routine => ({ id: `cron:${routine.id}`, type: 'routine', routine })), [board.routines, showDone]);
-  const rows = useMemo(() => [
+  const inboxRows = useMemo(() => (board.inbox ?? []).filter(item => !filter || decisionText(`${item.title} ${item.summary} ${item.from} ${item.stateLabel}`).toLowerCase().includes(filter.toLowerCase()))
+    .map(item => ({ id: item.id, type: 'inbox', item })), [board.inbox, filter]);
+  const agentRows = useMemo(() => buildAgentRows(board, { filter, collapsed }), [board.agents, board.localNode, filter, collapsed]);
+  const rows = useMemo(() => native ? view === 'inbox' ? inboxRows : view === 'agents' ? agentRows : view === 'schedules' ? routineRows : taskRows : [
     ...(routineRows.length ? [{ id: 'section:cron', type: 'section', label: `CRON · ${routineRows.length}` }, ...routineRows] : []),
     { id: 'section:tasks', type: 'section', label: `TASKS · ${taskRows.filter(row => row.type === 'task').length}` },
     ...taskRows,
-  ], [routineRows, taskRows]);
-  const selectedIndex = rows[selected]?.type === 'section'
+  ], [native, view, inboxRows, agentRows, routineRows, taskRows]);
+  const nativeIndex = selectedNativeId ? rows.findIndex(row => row.id === selectedNativeId) : -1;
+  const selectedIndex = native ? nativeIndex >= 0 ? nativeIndex : Math.min(selected, Math.max(0, rows.length - 1)) : rows[selected]?.type === 'section'
     ? Math.max(0, rows.findIndex((row, index) => index >= selected && row.type !== 'section')) : selected;
+  useEffect(() => {
+    if (native && nativeIndex < 0 && rows[selectedIndex]) setSelectedNativeId(rows[selectedIndex].id);
+  }, [native, nativeIndex, rows, selectedIndex]);
   useEffect(() => { setSelected(value => {
     value = Math.max(0, Math.min(rows.length - 1, value));
     if (rows[value]?.type !== 'section') return value;
     const next = rows.findIndex((row, index) => index >= value && row.type !== 'section');
     return next >= 0 ? next : Math.max(0, rows.findLastIndex(row => row.type !== 'section'));
   }); }, [rows]);
+  const openInbox = async item => {
+    if (!item || !detailInbox || !decideInbox) { setNotice('Decision interface unavailable'); return; }
+    const requestId = randomUUID();
+    setDecisionModal({ item: { ...item, summary: 'Loading current decision…', disabled: true }, requestId, stage: 'inspect', index: 0,
+      text: '', scroll: 0, technical: false, key: `human-board:${randomUUID()}`, error: '', busy: true });
+    try {
+      const fresh = await detailInbox({ id: item.id });
+      setDecisionModal(value => value?.requestId === requestId ? { ...value, item: fresh, busy: false,
+        stage: !fresh.disabled && ['question', 'review'].includes(fresh.kind) ? 'edit' : 'inspect', field: fresh.kind === 'review' ? 'decision' : 'text' } : value);
+    } catch (error) {
+      setDecisionModal(value => value?.requestId === requestId ? { ...value, busy: false, error: decisionText(error.message) } : value);
+    }
+  };
+  const submitDecision = async current => {
+    setDecisionModal({ ...current, busy: true, locked: true, error: '' });
+    try {
+      const result = await decideInbox({ item: current.item, key: current.key, body: current.text,
+        decision: current.index === 0 ? 'accept' : 'reject', reason: current.text });
+      if (result.state !== 'recorded') throw Error('Decision is not confirmed');
+      setDecisionModal(null); setDetail(null); setNotice('');
+      setDecisionReceipt({ message: result.message || 'Decision recorded', title: current.item.title, kind: current.item.kind });
+      setView('inbox'); setFilter(''); setSearching(false); setSelected(0); setSelectedNativeId(null);
+      setBoard(value => ({ ...value, inbox: (value.inbox ?? []).filter(item => item.id !== current.item.id) }));
+      setRefreshGeneration(value => value + 1);
+    } catch (error) {
+      setDecisionModal({ ...current, busy: false, locked: true, error: decisionText(error.message || 'Publication is not confirmed. Inspect Inbox.') });
+      if (pendingDecisions) setBoard(value => ({ ...value, inbox: [...pendingDecisions(), ...(value.inbox ?? []).filter(i => i.kind !== 'publication')] }));
+    }
+  };
+  const openRunResultNotifications = routine => {
+    if (!updateRunResultNotifications || !routine || routine.intent === 'reminder' || routine.state === 'cancelled') { setNotice('Run result settings unavailable'); return; }
+    setSettingsModal({ scheduleId: routine.id, expectedRevision: routine.revision,
+      policy: { inbox: !!routine.runResultNotifications?.inbox, requester: !!routine.runResultNotifications?.requester },
+      index: 0, confirm: false, key: `run-result-settings:${randomUUID()}`, busy: false, error: '' });
+    setDetail(null);
+  };
+  const submitRunResultNotifications = async current => {
+    setSettingsModal({ ...current, busy: true, error: '' });
+    try {
+      const result = await updateRunResultNotifications(current);
+      if (result.state !== 'recorded') throw Error('Settings publication is not confirmed');
+      setSettingsModal(null); setNotice(result.message); setRefreshGeneration(value => value + 1);
+    } catch (error) { setSettingsModal({ ...current, busy: false, locked: true, error: clean(error.message || 'Inspect the original settings publication in Inbox') }); }
+  };
   const submit = async current => {
     const status = current.options[current.index]; setModal({ ...current, busy: true, error: '' });
     try {
@@ -348,6 +448,17 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
   const submitAssignment = async current => {
     const agent = current.agents[current.index]; setAssignment({ ...current, busy: true, error: '' });
     try {
+      if (current.native) {
+        if (agent.kind === 'human') {
+          const result = await handbackTask({ ...current.preview, key: current.key, reason: current.text });
+          if (result.state !== 'recorded') throw Error('Handback is not confirmed');
+          setNotice(result.message); setAssignment(null); setRefreshGeneration(value => value + 1); return;
+        }
+        const result = await dispatchTask({ taskId: current.task.id, expectedRevision: current.task.revision, instanceId: current.task.instanceId, key: current.key,
+          payload: { targetAgentId: agent.id, instructions: current.text } });
+        if (result.state !== 'recorded' || result.execution?.targetAgentId !== agent.id || result.execution?.taskId !== current.task.id) throw Error('Execution request is not confirmed');
+        setNotice(result.message); setAssignment(null); setRefreshGeneration(value => value + 1); return;
+      }
       const snapshot = await inspectTask({ companyId: current.task.companyId, taskId: current.task.id });
       if (snapshot.task?.id !== current.task.id || snapshot.task.companyId !== current.task.companyId || !snapshot.revision) throw Error('Assignment preview identity is not confirmed');
       const result = await assignTask({ companyId: current.task.companyId, taskId: current.task.id,
@@ -356,9 +467,25 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
       setBoard(value => ({ ...value, tasks: value.tasks.map(task => task.id === current.task.id && task.companyId === current.task.companyId
         ? { ...task, assigneeAgentId: agent.id, assigneeUserId: null } : task) }));
       setNotice(`Assigned ${current.task.identifier || current.task.id} to ${agent.name || agent.id}`); setAssignment(null);
-    } catch (error) { setAssignment({ ...current, busy: false, error: clean(error.message || error.code || 'assignment failed') }); }
+    } catch (error) {
+      const publications = current.native ? pendingDecisions?.() : null;
+      const retained = current.native && (publications ? publications.some(item => item.key === current.key) : true);
+      setAssignment({ ...current, busy: false, locked: retained, error: clean(error.message || error.code || 'assignment failed') });
+      if (publications) setBoard(value => ({ ...value, inbox: [...publications, ...(value.inbox ?? []).filter(item => item.kind !== 'publication')] }));
+      if (current.native) setRefreshGeneration(value => value + 1);
+    }
+  };
+  const prepareHuman = async current => {
+    setAssignment({ ...current, busy: true, error: '' });
+    try {
+      if (!prepareHandback || !handbackTask) throw Error('Human handback is unavailable on this board');
+      const preview = await prepareHandback({ taskId: current.task.id });
+      setAssignment({ ...current, task: preview.task || current.task, busy: false, stage: 'handback', preview, text: '', scroll: 0 });
+    } catch (error) { setAssignment({ ...current, busy: false, error: clean(error.message) }); }
   };
   const prepareReview = key => {
+    const nativeReview = detail?.data?.actions?.find(item => item.kind === 'review');
+    if (nativeReview) { void openInbox(nativeReview); return; }
     const candidate = detail?.data?.review, task = detail?.data?.task;
     if (!candidate || !task || !reviewTask) { setNotice('No pending candidate'); return; }
     if (key === 'R' && !reviewFeedback.trim()) { setNotice('Rejection feedback is required; press F'); return; }
@@ -380,29 +507,44 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     } catch (error) { setReviewModal({ ...current, busy: false, error: clean(error.message || error.code || 'review failed') }); }
   };
   useInput((input, key) => {
-    if (modal || assignment || reviewModal || detail) return;
+    if (native && view === 'grants') return;
+    if (modal || assignment || reviewModal || detail || decisionModal || settingsModal) return;
     if (searching) {
       if (key.escape) { setSearching(false); setFilter(''); }
       else if (key.return) setSearching(false);
       else if (key.backspace || key.delete) setFilter(value => [...value].slice(0, -1).join(''));
       else if (input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input)) setFilter(value => value + input);
-      setSelected(0); return;
+      setSelected(0); setSelectedNativeId(null); return;
     }
+    if (key.escape && decisionReceipt) { setDecisionReceipt(null); return; }
     if (input === 'q' || key.escape) { setQuitting(true); (onQuit ?? exit)(); return; }
     if (input === 'h') { setShowDone(value => !value); return; }
-    if (input === 'i') { setShowIdle(value => !value); return; }
+    if (input === 'i') { if (native) setNotice('All enrolled agents, including stale reports, are listed in Agents'); else setShowIdle(value => !value); return; }
     if (input === '/') { setSearching(true); return; }
     if (input === 'r') { setRefreshGeneration(value => value + 1); return; }
+    if (native && key.tab) {
+      const views = nativeBoardViews;
+      setView(value => views[(views.indexOf(value) + (key.shift ? views.length - 1 : 1)) % views.length]);
+      setSelected(0); setSelectedNativeId(null); return;
+    }
     const move = delta => setSelected(() => {
       let next = selectedIndex;
       do { next = Math.max(0, Math.min(rows.length - 1, next + delta)); }
       while (rows[next]?.type === 'section' && next > 0 && next < rows.length - 1);
+      if (native) setSelectedNativeId(rows[next]?.id ?? null);
       return next;
     });
     if (key.upArrow || input === 'k') move(-1);
     if (key.downArrow || input === 'j') move(1);
+    if (key.pageDown || key.pageUp) {
+      setRowScroll(value => Math.max(0, Math.min(Math.max(0, (rowBlocks[selectedIndex]?.length || 0) - bodyHeight),
+        value + (key.pageDown ? 1 : -1) * Math.max(1, bodyHeight - 1)))); return;
+    }
     if (input === ' ' || key.leftArrow || key.rightArrow) {
-      const row = rows[selected];
+      const row = rows[selectedIndex];
+      if (key.leftArrow && row?.type === 'agent' && row.groupId) {
+        setSelectedNativeId(row.groupId); setSelected(rows.findIndex(parent => parent.id === row.groupId)); return;
+      }
       if (row?.expandable) setCollapsed(value => {
         const next = new Set(value);
         if (key.rightArrow) next.delete(row.id);
@@ -428,30 +570,44 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
           confirm: false, busy: false, error: '' }); setNotice('');
       }).catch(error => setNotice(`Status unavailable: ${clean(error.message)}`));
     }
+    if (native && view === 'schedules' && input === 'n') {
+      const row = rows[selectedIndex]; if (row?.type === 'routine') openRunResultNotifications(row.routine); return;
+    }
     if (input === 'a') {
+      if (native && !dispatchTask) { setNotice('Native execution handover is unavailable'); return; }
       const row = rows[selectedIndex];
       if (row?.type !== 'task') { setNotice('Select a task'); return; }
-      const agents = board.agents.filter(agent => agent.companyId === row.companyId && agent.availability === 'present')
-        .sort((left, right) => clean(left.name || left.id).localeCompare(clean(right.name || right.id)) || left.id.localeCompare(right.id));
+      let agents = board.agents.filter(agent => agent.companyId === row.companyId && (native
+        ? !agent.capabilities?.includes('observation_only') : agent.availability === 'present'))
+        .sort((left, right) => (left.locality === 'local' ? 0 : 1) - (right.locality === 'local' ? 0 : 1) ||
+          clean(left.nodeName || left.nodeId).localeCompare(clean(right.nodeName || right.nodeId)) ||
+          (left.nodeId || '').localeCompare(right.nodeId || '') || clean(left.name || left.id).localeCompare(clean(right.name || right.id)) || left.id.localeCompare(right.id));
+      if (native) agents = [{ id: 'human', kind: 'human', displayName: 'You (human)' }, ...agents];
       if (!agents.length) { setNotice('Assignment unavailable: no present agents in this company'); return; }
-      setAssignment({ task: row.task, agents, index: Math.max(0, agents.findIndex(agent => agent.id === row.task.assigneeAgentId)), busy: false, error: '' });
+      setAssignment({ task: row.task, agents, index: Math.max(0, agents.findIndex(agent => agent.id === row.task.assigneeAgentId)), busy: false, error: '',
+        ...(native ? { native: true, stage: 'select', text: '', key: `human-dispatch:${randomUUID()}` } : {}) });
       setNotice(''); return;
     }
     if (key.return || input === 'd' || key.tab) {
       const row = rows[selectedIndex]; if (!row || row.type === 'group') return;
+      if (row.type === 'machine') {
+        setCollapsed(value => { const next = new Set(value); if (next.has(row.id)) next.delete(row.id); else next.add(row.id); return next; }); return;
+      }
+      if (row.type === 'inbox') { void openInbox(row.item); return; }
       if (row.type === 'section') return;
-      setOccurrence(0); setDetail({ kind: row.type === 'routine' ? 'routine' : 'task', row, loading: true });
+      const requestId = randomUUID();
+      setOccurrence(0); setDetail({ kind: row.type === 'routine' ? 'routine' : row.type === 'agent' ? 'agent' : 'task', row, requestId, loading: true });
       const request = row.type === 'routine'
         ? detailRoutine({ companyId: row.routine.companyId, scheduleId: row.routine.id })
-        : detailTask({ companyId: row.companyId, taskId: row.taskId });
-      void request.then(data => setDetail(value => value ? { ...value, loading: false, data } : value))
-        .catch(error => setDetail(value => value ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
+        : row.type === 'agent' ? detailAgent ? detailAgent({ agentId: row.agent.id }) : Promise.reject(Error('Agent detail is unavailable'))
+          : detailTask({ companyId: row.companyId, taskId: row.taskId });
+      void request.then(data => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, data } : value))
+        .catch(error => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
     }
   });
-  const visibleHeight = Math.max(3, height - 6), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
-  const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
+    if (row.type === 'inbox') return `${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${decisionText(row.item.title)}  · ${decisionText(row.item.summary)}`;
     if (row.type === 'routine') return `  ◆ ${row.routine.title}  [${row.routine.state}]  ${row.routine.cron}  next ${row.routine.nextRunAt || '-'}`;
     const fold = row.expandable ? row.expanded ? '▾' : '▸' : '·';
     if (row.type === 'group') return `${fold} ${row.name}${row.agent ? ` / ${row.agent.availability || 'unknown'}` : ''}  · ${row.counts.open} open`;
@@ -460,37 +616,75 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
     const context = row.context ? ` [via ${row.owner}]` : '';
     const anomaly = row.anomaly ? ` [${row.anomaly}]` : '';
     const subtree = row.descendants ? ` [+${row.descendants}/${row.counts.open} open]` : '';
-    return `${guides}${branch}${fold} ${row.task.identifier || row.task.id}${context}  ${row.task.title}${anomaly}${subtree}`;
+    if (native && row.task.reference) {
+      const prefix = `${guides}${branch}${fold} ${row.task.reference}  `;
+      // Reference identity takes precedence over optional tree guides and status.
+      const safePrefix = prefix.length + 8 <= width - 4 ? prefix : `${row.task.reference}  `;
+      return `${safePrefix}${clean(row.task.title)}${anomaly}${subtree}`;
+    }
+    return `${guides}${branch}${fold} ${native ? '' : `${row.task.identifier || row.task.id}${context}  `}${clean(row.task.title)}${anomaly}${subtree}`;
   };
+  const statusLabel = task => native && task.attentionLabel
+    ? `${labels[task.status] ?? task.status} · ${decisionText(task.attentionLabel)}` : `[${labels[task.status] ?? task.status}]`;
+  const rowBlocks = layoutBoardRows(rows, { columns: width, native, rowText, statusLabel });
   if (quitting) return null;
+  if (native && view === 'grants') return h(GrantsPanel, { board, offline, loaded, width, height, detailGrant, decideGrant, createGrant, pendingGrantDecisions,
+    refresh: publications => { if (publications) setBoard(value => ({ ...value, grants: { ...value.grants,
+      pending: [...publications, ...(value.grants?.pending ?? []).filter(i => i.kind !== 'publication')] } })); setRefreshGeneration(value => value + 1); },
+    onView: delta => { setView(value => nativeBoardViews[(nativeBoardViews.indexOf(value) + delta + nativeBoardViews.length) % nativeBoardViews.length]); setSelected(0); setSelectedNativeId(null); },
+    onQuit: () => { setQuitting(true); (onQuit ?? exit)(); } });
   const summary = taskCounts(board.tasks);
+  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal || settingsModal);
+  const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
+  const nativeCounts = view === 'agents'
+    ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
+    : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'run_result').length ?? 0} run results   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
+      : view === 'schedules' ? `${board.routines.filter(r => r.state === 'active').length} active   ${board.routines.filter(r => r.state === 'paused').length} paused`
+        : `${summary.open} open   ${summary.active} active   ${summary.blocked} blocked   ${summary.review} in review`;
+  const emptyLabel = view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.'
+    : view === 'agents' ? 'No agents advertised.' : view === 'schedules' ? 'No schedules installed.' : showDone ? 'No matching tasks.' : 'No open tasks.';
+  const heading = native ? `RELAY / ${view === 'schedules' ? 'SCHEDULE' : view.toUpperCase()}` : 'RELAY / TASKS';
+  const live = `${offline ? 'OFFLINE' : loaded ? '● LIVE' : 'LOADING'}${board.fetchedAt ? ` · last updated ${new Date(board.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Africa/Johannesburg', hour12: false })} SAST` : ''}`;
+  const header = [heading + ' · ' + (native ? offline ? 'Inbox unavailable: showing cached state' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`),
+    ...(native ? [nativeBoardTabs(board, offline, loaded).map(([id, title]) => id === view ? `[${title}]` : title).join('  ')] : []),
+    native ? `${view === 'agents' && board.localNode ? `LOCAL ${board.localNode.name} · ${localAgentCount} ${localAgentCount === 1 ? 'agent' : 'agents'} · ` : ''}${nativeCounts} · ${live}`
+      : `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${live}`]
+    .flatMap(text => wrapBoardText(text, width));
+  const footer = (searching ? [`/${filter}▏  Enter apply · Esc clear`] : notice ? [notice.text] : native && decisionReceipt
+    ? [`✓ ${decisionReceipt.message}`, decisionReceipt.kind === 'question' ? 'Any required review will appear in this Inbox.' : decisionReceipt.title,
+      'Esc dismiss acknowledgement · Tab view · Enter open · q quit']
+    : [native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search',
+      native ? view === 'schedules' ? 'n run result notifications · PgUp/Dn · r refresh · q quit'
+        : `h done · ${dispatchTask ? 'a assign · ' : ''}PgUp/Dn · r refresh · s status · q quit` : 'h done · i idle · r refresh · a assign · s status · q quit'])
+    .flatMap(text => wrapBoardText(text, width));
+  const bodyHeight = Math.max(1, height - header.length - footer.length - (native ? 3 : 2));
+  const visible = boardRowViewport(rowBlocks, selectedIndex, bodyHeight, rowScroll);
   const background = h(Box, { width, height, flexDirection: 'column' },
-    h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: Boolean(modal || assignment || reviewModal || detail) }, 'RELAY / TASKS'),
-      h(Text, { dimColor: true }, `${board.companies.length} companies · ${board.agents.length} agents`)),
-    h(Text, { dimColor: Boolean(modal || detail) }, `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${offline ? `OFFLINE ${offline}` : loaded ? 'LIVE' : 'LOADING'}`),
-    h(Box, { borderStyle: 'single', borderColor: modal || assignment || reviewModal ? 'gray' : 'cyan', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' },
-      ...visible.map((row, index) => {
-        const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail;
+    ...header.map((line, index) => h(Text, { key: `header:${index}`, wrap: 'truncate-end', flexShrink: 0, dimColor: overlay, color: index === 0 ? 'cyan' : undefined }, line)),
+    h(Box, { borderStyle: native ? 'round' : 'single', borderColor: native || modal || assignment || reviewModal ? 'gray' : 'cyan',
+      paddingX: native ? 1 : 0, paddingTop: native ? 1 : 0, flexDirection: 'column', flexGrow: 1, overflow: 'hidden' },
+      !visible.length && native ? h(Box, { flexGrow: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
+        h(Text, { dimColor: true, wrap: 'wrap' }, emptyLabel),
+        h(Text, { dimColor: true, wrap: 'wrap' }, view === 'tasks' && !showDone ? 'Press h to include completed tasks.' : 'Tab switches views · r refreshes')) : null,
+      ...visible.map((line, index) => {
+        const row = rows[line.rowIndex], active = line.rowIndex === selectedIndex && !overlay;
         const taskStyle = row.type === 'task' ? taskRowStyle(row.task, Boolean(modal || assignment || reviewModal || detail), row.context) : null;
-        const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : row.type === 'routine' ? 'magenta' : taskStyle.color;
+        const tone = row.local ? 'green' : ['section', 'group', 'machine', 'agent'].includes(row.type) ? 'cyan' : ['routine', 'inbox'].includes(row.type) ? 'magenta' : taskStyle?.color;
         const dimmed = taskStyle?.dimColor ?? Boolean(modal || assignment || reviewModal || detail);
-        return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
-          h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, h(Text, { wrap: 'truncate-end', inverse: active,
-            bold: row.type === 'section', dimColor: dimmed, color: tone }, rowText(row))),
-          row.type === 'task' ? h(Box, { width: 13, flexShrink: 0, justifyContent: 'flex-end' },
-            h(Text, { inverse: active, dimColor: dimmed, color: tone }, `[${labels[row.task.status] ?? row.task.status}]`)) : null);
+        const style = { inverse: active, dimColor: dimmed, color: tone, bold: line.heading && ['section', 'group', 'machine', 'inbox', 'routine'].includes(row.type), wrap: 'truncate-end' };
+        return h(Box, { key: `${row.id}:${index}`, height: 1, flexShrink: 0 },
+          h(Box, { width: line.leftWidth, flexGrow: line.leftWidth ? 0 : 1 }, h(Text, style, line.text ?? line.left ?? ' ')),
+          line.rightWidth ? h(Box, { width: line.rightWidth, marginLeft: line.gap }, h(Text, style, line.right)) : null);
       })),
-    searching ? h(Text, { dimColor: Boolean(modal || detail) }, `/${filter}▏  Enter apply · Esc clear`) : notice
-      ? h(Text, { dimColor: Boolean(modal || detail) }, notice.text)
-      : h(Box, { flexDirection: 'column' },
-        h(Text, { dimColor: Boolean(modal || detail) }, 'j/k move · Enter/Tab detail · Space/←/→ fold · / search'),
-        h(Text, { dimColor: Boolean(modal || assignment || reviewModal || detail) }, 'h done · i idle · r refresh · a assign · s status · q quit')));
+    ...footer.map((line, index) => h(Text, { key: `footer:${index}`, wrap: 'truncate-end', flexShrink: 0, dimColor: overlay || !notice && !decisionReceipt,
+      color: notice || decisionReceipt ? 'cyan' : undefined }, line)));
   let detailView = detail;
   if (detail?.kind === 'routine' && detail.data) {
     const tasks = new Map(board.tasks.map(task => [`${task.companyId}:${task.id}`, task]));
     const occurrences = detail.data.runs.map(run => {
       const task = run.linkedIssueId ? tasks.get(`${detail.data.companyId}:${run.linkedIssueId}`) : null;
-      const match = task && task.origin?.kind === 'routine_execution' && task.origin.routineId === detail.data.routineId && task.origin.runId === run.id;
+      const match = task && (run.nativeOccurrence ? run.nativeTaskId === task.id
+        : task.origin?.kind === 'routine_execution' && task.origin.routineId === detail.data.routineId && task.origin.runId === run.id);
       return { run, task: match ? task : null, mismatch: Boolean(task && !match) };
     });
     detailView = { ...detail, occurrences, occurrence, setOccurrence };
@@ -504,12 +698,16 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailRoutine, 
   };
   return h(Box, { width, height }, background,
     modal ? h(StatusModal, { modal, setModal, submit, width, height }) : null,
-    assignment ? h(AssignmentModal, { modal: assignment, setModal: setAssignment, submit: submitAssignment, width, height }) : null,
+    assignment ? h(assignment.native ? NativeDispatchModal : AssignmentModal, { modal: assignment, setModal: setAssignment, submit: submitAssignment, prepareHuman, width, height }) : null,
     reviewModal ? h(ReviewModal, { modal: reviewModal, setModal: value => {
       if (typeof value === 'function') setReviewModal(current => { const next = value(current); if (next?.reason !== undefined) setReviewFeedback(next.reason); return next; });
       else { if (value?.reason !== undefined) setReviewFeedback(value.reason); setReviewModal(value); }
     }, submit: submitReview, width, height }) : null,
-    detailView && !reviewModal ? h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, review: prepareReview, width, height }) : null);
+    detailView && !reviewModal && !decisionModal ? detailView.kind === 'agent'
+      ? h(AgentDetailModal, { detail: detailView, close: () => setDetail(null), width, height })
+      : h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, openAction: openInbox, review: prepareReview, openRunResultNotifications, width, height }) : null,
+    settingsModal ? h(RunResultNotificationsPanel, { modal: settingsModal, setModal: setSettingsModal, submit: submitRunResultNotifications, width, height }) : null,
+    decisionModal ? h(BoardDecisionModal, { modal: decisionModal, setModal: setDecisionModal, submit: submitDecision, width, height }) : null);
 }
 
 export async function watchTaskBoardInk(read, options = {}) {
