@@ -6,6 +6,8 @@ Stable-release preparation of the native RC4 product:
 
 - Remove the retired Paperclip service, adapter, bridge, external-provider
   prototypes and one-off source-import commands. There is no planned integration.
+- Remove unrelated LiteLLM gateway deployment, client-configuration and verification
+  tooling. Relay does not install or manage a separate model gateway.
 - Retain existing imported source metadata, immutable references and aliases.
   Removing an integration does not rewrite task history or native state.
 - Replace development plans, captured run journals and obsolete installation

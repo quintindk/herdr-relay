@@ -68,8 +68,6 @@ Published versions and their assets are immutable.
 | Release gates and immutable publication | [Releasing](docs/releasing.md) |
 
 The repository describes the supported native product, not an integration roadmap.
-The [optional local gateway](docs/model-gateway.md) is independent repository-only
-infrastructure, not a Relay dependency or a tested release component.
 Old specifications, development ledgers, captured run reports and evaluation
 workspaces are retained in Git history and published tags, not in the current
 source/package. See [the changelog](CHANGELOG.md).

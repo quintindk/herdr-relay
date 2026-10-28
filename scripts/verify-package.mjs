@@ -49,7 +49,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
      'packages/opencode-relay/run-result-notice.mjs', 'src/board-text.mjs', 'src/board-row-layout.mjs', 'src/board-detail-layout.mjs',
      'scripts/install-herdr-shortcut.py', 'scripts/toggle-board.py', 'scripts/native-board-launch.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 assert.ok(!packed.files.some(file => ['paperclip-final.json', 'paperclip-final-plan.json'].includes(file.path)), 'Private migration exports must never ship');
-assert.ok(!packed.files.some(file => /^(?:evaluation\/|docs\/(?:archive|evidence)\/)|(?:^|\/)(?:paperclip[^/]*|adapter|service|provider-selection|provider-journal)\.mjs$/.test(file.path)),
+assert.ok(!packed.files.some(file => /^(?:evaluation\/|services\/litellm\/|\.litellm\/|docs\/model-gateway\.md$|docs\/(?:archive|evidence)\/)|(?:^|\/)(?:paperclip[^/]*|adapter|service|provider-selection|provider-journal)\.mjs$/.test(file.path)),
   'Retired integrations or development journals must not ship');
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');

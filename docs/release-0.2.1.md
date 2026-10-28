@@ -16,6 +16,8 @@ See [architecture](architecture.md) and [installation](installation-and-onboardi
   one-off source import commands. No future Paperclip integration is planned.
 - Remove old development ledgers, design roadmaps, static run reports and evaluation
   workspaces from the current source/package. Original tags and Git history remain.
+- Remove unrelated model-gateway deployment helpers and documentation. Any live
+  gateway uninstallation remains a separate explicit administration action.
 - Replace stale setup and upgrade instructions with current native workflows.
 - Guard source imports, local documentation links and package contents in checks.
 

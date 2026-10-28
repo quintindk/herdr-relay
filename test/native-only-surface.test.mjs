@@ -29,8 +29,9 @@ test('public CLI help documents only the native product and retired entrypoints 
 test('package and Herdr entrypoints cannot expose the retired service or development captures', () => {
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
   assert.equal(pkg.exports, undefined);
-  assert.equal(pkg.files.some(path => /paperclip|evaluation|evidence|archive/.test(path)), false);
+  assert.equal(pkg.files.some(path => /paperclip|evaluation|evidence|archive|litellm|model-gateway/.test(path)), false);
   const manifest = readFileSync('herdr-plugin.toml', 'utf8');
   assert.doesNotMatch(manifest, /"board"|"observed"|"discover"/);
-  for (const path of ['src/adapter.mjs', 'src/service.mjs', 'src/paperclip.mjs', 'src/provider-selection.mjs']) assert.equal(existsSync(path), false);
+  for (const path of ['src/adapter.mjs', 'src/service.mjs', 'src/paperclip.mjs', 'src/provider-selection.mjs',
+    'services/litellm/install.mjs', 'docs/model-gateway.md']) assert.equal(existsSync(path), false);
 });
