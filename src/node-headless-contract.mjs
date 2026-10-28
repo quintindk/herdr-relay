@@ -2,6 +2,8 @@ import { existsSync, readFileSync, realpathSync, statSync, lstatSync, openSync, 
 import { dirname, join } from 'node:path';
 import { digest, requireValue } from './protocol.mjs';
 import { validateContractFiles, contractDigest } from './headless-contract.mjs';
+import { definitivePublicationRefusal } from './publication-outcomes.mjs';
+import { commandWorkId } from './node-journal.mjs';
 
 const getOp = (journal, id) => {
   const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`headless-op:${id}`);
@@ -54,20 +56,31 @@ export async function tickHeadlessContractUpdates(journal, api, resolveBinding) 
     try {
       const { setup, grant } = await api('GET', `/v1/headless_setups/${cached.id}/authority`);
       op = getOp(journal, setup.id);
+      const wait = (reason, details = {}) => {
+        const contractWait = { requestId: setup.contract?.requestId, reason, ...details };
+        if (JSON.stringify(op.contractWait) !== JSON.stringify(contractWait)) {
+          op = { ...op, contractWait, contractBlocker: null }; saveOp(journal, setup.id, op);
+        }
+      };
+      if (!setup.contract) continue;
       const key = `contract-applied:${setup.id}:${setup.contract.revision}`;
       const receipt = journal.receipt(key);
-      if (receipt?.state === 'recorded') continue;
-      if (receipt?.state === 'pending') { await journal.flush(api); continue; }
+      if (receipt?.state === 'pending') { wait('activation_acknowledgement_pending', { publicationKeys: [key] }); await journal.flush(api); continue; }
+      if (setup.appliedContractRevision === setup.contract.revision) continue;
+      if (receipt?.state === 'recorded') { wait('awaiting_backend_projection', { publicationKeys: [key] }); continue; }
+      if (receipt?.state === 'conflict') { wait('activation_acknowledgement_conflict', { publicationKeys: [key] }); continue; }
       const active = journal.works().filter(w => w.state !== 'administratively_abandoned' && w.execution.targetAgentId === setup.agentId);
-      if (active.some(w => !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state) || ['conflict', 'uncertain', 'intent', 'observing'].includes(w.state))) continue;
+      const unsettled = active.filter(w => !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state) ||
+        ['conflict', 'uncertain', 'intent', 'observing', 'terminal_unresolved'].includes(w.state));
+      if (unsettled.length) { wait('unsettled_work', { executionIds: unsettled.map(w => w.id) }); continue; }
       const ids = new Set(active.map(w => w.id));
-      if (journal.db.prepare("SELECT data FROM outbox WHERE state IN ('pending','conflict')").all().some(r => {
-        const p = JSON.parse(r.data).command.payload; return ids.has(p.id ?? p.executionId);
-      })) continue;
+      const publications = journal.db.prepare("SELECT key,hash,state,data FROM outbox WHERE state IN ('pending','conflict')").all()
+        .filter(row => ids.has(commandWorkId(JSON.parse(row.data).command)) && !definitivePublicationRefusal(row));
+      if (publications.length) { wait('unresolved_publication', { publicationKeys: publications.map(row => row.key) }); continue; }
       const binding = await resolveBinding(setup.agentId);
-      if (!binding || binding.id !== setup.bindingId) continue;
+      if (!binding || binding.id !== setup.bindingId) { wait('worker_binding_unavailable', { bindingId: setup.bindingId }); continue; }
       const snapshot = await binding.native.snapshot();
-      if (!snapshot.idle || snapshot.inbox.length) continue;
+      if (!snapshot.idle || snapshot.inbox.length) { wait(snapshot.idle ? 'native_input_pending' : 'native_session_busy'); continue; }
       const request = await api('GET', `/v1/grant_requests/${setup.contract.requestId}`), p = request.operation;
       requireValue(request.state === 'approved' && request.kind === 'headless_contract' && digest(grant) === p.scopeDigest &&
         contractDigest(p.files) === setup.contract.digest && setup.contractActivation.previousDigest === p.fromDigest,
@@ -97,14 +110,15 @@ export async function tickHeadlessContractUpdates(journal, api, resolveBinding) 
         renameSync(temporary, path);
         const fd = openSync(dirname(path), 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
       }
-      op = { ...op, contractRevision: setup.contract.revision, contractManifest: setup.contract.files,
+      op = { ...op, contractWait: null, contractRevision: setup.contract.revision, contractManifest: setup.contract.files,
         contractDigest: digest(p.files.find(f => f.path === grant.contract).after), contractBlocker: null,
         contractActivation: { state: 'files_applied', requestId: request.id } };
       saveOp(journal, setup.id, op);
       journal.queue({ key, action: 'headless.contract_applied', payload: { id: setup.id, expectedRevision: setup.revision, requestId: request.id, digest: setup.contract.digest } });
       await journal.flush(api);
     } catch (error) {
-      if (op) saveOp(journal, cached.id, { ...op, contractBlocker: /^[a-z][a-z0-9_]{1,95}$/.test(error.code ?? '') ? error.code : 'contract_activation_unavailable' });
+      if (op) saveOp(journal, cached.id, { ...op, contractWait: { requestId: cached.contract?.requestId, reason: 'activation_error' },
+        contractBlocker: /^[a-z][a-z0-9_]{1,95}$/.test(error.code ?? '') ? error.code : 'contract_activation_unavailable' });
     }
   }
 }

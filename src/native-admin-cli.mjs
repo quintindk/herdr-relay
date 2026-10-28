@@ -23,6 +23,7 @@ export const adminHelp = `Installed-release administration (no checkout scripts 
   node revoke --bundle PRIVATE_BUNDLE --key KEY --context ROOT_OWNER_JSON
   plugin install [--config NODE_JSON] [--context OPERATOR_JSON] [--config-dir DIR] [--here|--session ID] [--replace-context]
   plugin uninstall [--config-dir DIR]
+  plugin shortcut [--herdr-config TOML] [--dry-run]  [explicit prefix+t binding; preserves other Herdr keys]
   skills status [--config-dir DIR]
   skills install [--config-dir DIR] [--dry-run] [--replace-modified]
   doctor [--config NODE_JSON] [--context OPERATOR_JSON] [--backend-only]
@@ -62,7 +63,7 @@ export async function nativeAdmin(args) {
   if (args.includes('--help')) { console.log(adminHelp); return true; }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     ...Object.fromEntries(['context', 'state-dir', 'port', 'output', 'key', 'name', 'url', 'bundle', 'config', 'transport', 'max-agents', 'config-dir',
-      'session', 'evidence-file', 'access', 'source', 'company', 'file', 'confirm-digest', 'token-file'].map(k => [k, { type: 'string' }])),
+      'session', 'evidence-file', 'access', 'source', 'company', 'file', 'confirm-digest', 'token-file', 'herdr-config'].map(k => [k, { type: 'string' }])),
     root: { type: 'string', multiple: true },
     ...Object.fromEntries(['dry-run', 'local-user', 'here', 'replace-context', 'replace-modified', 'backend-only', 'local-trusted', 'source-frozen', 'legacy-relay-settled'].map(k => [k, { type: 'boolean' }])),
   } });
@@ -74,6 +75,7 @@ export async function nativeAdmin(args) {
     'node:bootstrap': ['context', 'key', 'name', 'url', 'output', 'local-user', 'root', 'max-agents', 'transport', 'access'],
     'node:join': ['bundle', 'config'], 'node:revoke': ['bundle', 'key', 'context'],
     'plugin:install': ['config', 'context', 'config-dir', 'here', 'session', 'replace-context', 'evidence-file'], 'plugin:uninstall': ['config-dir'],
+    'plugin:shortcut': ['herdr-config', 'dry-run'],
     'skills:status': ['config-dir'], 'skills:install': ['config-dir', 'dry-run', 'replace-modified'],
     'tasks:source': ['url', 'output', 'local-trusted', 'token-file'], 'tasks:companies': ['source'], 'tasks:export': ['source', 'company', 'output'],
     'tasks:plan': ['file', 'output'], 'tasks:import': ['file', 'context', 'state-dir', 'confirm-digest', 'source-frozen', 'legacy-relay-settled'],
@@ -118,7 +120,9 @@ export async function nativeAdmin(args) {
     } else if (action === 'join') output(await joinNode({ bundleFile: values.bundle, configFile: values.config }));
     else output(await revokeNodeBundle({ api: ownerApi(), bundleFile: values.bundle, key: values.key }));
   } else if (group === 'plugin') {
-    if (action === 'uninstall') output(uninstallNativePlugin({ configDirectory: values['config-dir'] }));
+    if (action === 'shortcut') execFileSync('python3', [fileURLToPath(new URL('../scripts/install-herdr-shortcut.py', import.meta.url)),
+      ...(values['herdr-config'] ? ['--herdr-config', values['herdr-config']] : []), ...(values['dry-run'] ? ['--dry-run'] : [])], { stdio: 'inherit' });
+    else if (action === 'uninstall') output(uninstallNativePlugin({ configDirectory: values['config-dir'] }));
     else {
       requireValue(!(values.here && values.session), 'invalid_request', 'Choose --here or --session, not both');
       const config = values.config ?? defaultNodeConfig();

@@ -66,6 +66,14 @@ compatibility: opencode
   separate views. Grants owns security requests and permissions, not Inbox.
   The Agents local-node marker is based on the active scoped
   context's node/backend identities, not network proximity or machine names.
+- In RC4, Tasks **a** opens a node-grouped picker with **You (human)** first.
+  Human selection previews and confirms the existing assignment handback to Todo,
+  never dispatches a run or discards submitted results/child work. An unconfirmed
+  decision is reconciled from Inbox under its original key.
+- **PgUp/PgDn** inspect long wrapped cards. Cron detail scrolls by physical lines;
+  **[ / ]** select an occurrence and **o** opens only its exact linked task.
+  Herdr `prefix+t` opens/focuses the native TUI after explicit `plugin shortcut`
+  installation. Do not silently overwrite an existing key or restart OpenCode.
 
 ## Messages
 
@@ -232,6 +240,11 @@ compatibility: opencode
   the pinned bundle. Activation waits for settlement and node acknowledgement.
   It preserves the worker, grant, authentication and schedule. Capability changes
   require their own security flow. Readiness/activation is not business success.
+- Approval is not activation. Inspect `appliedContractRevision` and
+  `contractActivation.wait` for the node's exact reason and related work/publication
+  identities. Known hash-verified transactional validation refusals do not block
+  RC4 activation, but uncertain writes and revision conflicts still require inspection.
+  Do not repeat approval, replace the cron or replay a rejected write to unblock it.
 
 - CLI activation, node/plugin service changes and skill installation are distinct.
   `release install` activates a verified release. Service changes require an

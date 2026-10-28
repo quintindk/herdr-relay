@@ -54,7 +54,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     action: p.state === 'conflict' ? 'dismiss' : 'retry', error: p.error, command: p.command, instanceId: p.instance,
   }));
   const load = async () => {
-    const collections = ['tasks', 'agents', 'nodes', 'schedules', 'questions', 'executions', 'occurrences', 'notifications', 'monitor_results'];
+    const collections = ['tasks', 'agents', 'nodes', 'schedules', 'questions', 'executions', 'occurrences', 'notifications', 'monitor_results', 'headless_setups'];
     const [info, ...values] = await Promise.all([api('GET', '/v1/info'), ...collections.map(all)]);
     requireValue(info.userId && info.instanceId, 'invalid_backend_response', 'Native board requires backend and human identity');
     const data = Object.fromEntries(collections.map((name, i) => [name, values[i]]));
@@ -90,12 +90,16 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       reportedAvailability: reported, availabilityLabel: fresh && reported === 'busy' ? 'Busy (reported)' : fresh && reported === 'available'
         ? 'Available (reported)' : 'Unknown or stale', availability: fresh ? 'present' : 'unknown', nativeState: 'unknown', bridgeState: null };
   };
-  const routine = (schedule, agents = []) => {
+  const routine = (schedule, agents = [], setups = []) => {
     const d = schedule.definition;
+    const target = agents.find(a => a.id === d.targetAgentId);
+    const setup = setups.find(s => s.id === target?.headlessSetupId);
+    const contractPending = setup?.contract && setup.appliedContractRevision !== setup.contract.revision;
+    const workerBlocked = target?.headlessSetupId && (!setup || setup.state !== 'ready');
     const pending = schedule.appliedRevision !== schedule.revision;
     const expired = d.expiresAt && Date.parse(d.expiresAt) <= Date.now();
     const state = pending ? 'change_pending' : schedule.cancelled ? 'cancelled' : schedule.transfer?.state === 'requested' || schedule.transfer?.state === 'fenced' ? 'transferring'
-      : !d.enabled ? 'paused' : expired ? 'expired' : 'active';
+      : !d.enabled ? 'paused' : expired ? 'expired' : contractPending ? 'awaiting_contract_activation' : workerBlocked ? 'worker_unavailable' : 'active';
     const preview = state === 'active' ? d.cron ? previewCron(d.cron, d.timezone).nextRuns[0] : Date.parse(d.at) > Date.now() ? d.at : null : null;
     const next = preview && (!d.expiresAt || Date.parse(preview) < Date.parse(d.expiresAt)) ? preview : null;
     return { id: schedule.id, scheduleId: schedule.id, routineId: schedule.id, companyId: 'native', title: schedule.id,
@@ -106,13 +110,16 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       target: d.targetFolder ?? d.targetAgentId ?? 'human', targetAgentId: d.targetAgentId, targetConversationId: d.targetConversationId,
        targetDirectory: d.targetFolder, ownerNodeId: d.nodeId,
        runResultNotifications: runResultNotifications(d.runResultNotifications),
-      delivery: { state: pending ? 'change_pending' : state,
-        reason: `Requested revision ${schedule.revision}, applied ${schedule.appliedRevision ?? 0}. Local node owns admission and clock.` } };
+       contractRevision: setup?.contract?.revision ?? null, appliedContractRevision: setup?.appliedContractRevision ?? null,
+       delivery: { state: pending ? 'change_pending' : state,
+         reason: contractPending ? `Approved contract revision ${setup.contract.revision}, applied ${setup.appliedContractRevision ?? 0}. Admission waits for node activation. Inspect coordinator setup status for the exact local wait.`
+           : workerBlocked ? `Worker setup ${setup?.state ?? 'unavailable'}${setup?.blocker ? `: ${setup.blocker}` : ''}. No admission readiness established.`
+             : `Requested revision ${schedule.revision}, applied ${schedule.appliedRevision ?? 0}. Local node owns admission and clock.` } };
   };
-  return {
+  const board = {
     async read() {
-      const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies } = await load();
-      return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents)),
+      const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies, headless_setups } = await load();
+      return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents, headless_setups)),
         inbox, grants, grantsAvailable: !!info.features?.grantsManagement, nodePolicies,
         tasks: tasks.map(t => ({ ...scoped(t), instanceId: info.instanceId, ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
@@ -131,6 +138,40 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
           !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => ({ id: e.id, state: e.state, conversationId: e.targetConversationId })) };
     },
     pendingDecisions: publicationItems,
+    async prepareHandback({ taskId }) {
+      const { tasks, executions, agents, nodes, info } = await load();
+      requireValue(info.features?.taskRevisionHandback, 'backend_upgrade_required', 'Backend must support RC4 task-revision-fenced human handback');
+      const task = tasks.find(t => t.id === taskId);
+      requireValue(task, 'task_missing', 'Task no longer exists');
+      requireValue(!decisionJournal?.pending().some(p => p.command.action === 'execution.request' && p.command.payload.taskId === taskId),
+        'decision_pending', 'Reconcile the original pending handover in Inbox first');
+      const active = executions.filter(e => e.taskId === taskId && !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state));
+      requireValue(active.length <= 1, 'handback_ambiguous', 'Multiple assignments require individual inspection');
+      const execution = active[0];
+      requireValue(!execution || !['done', 'cancelled'].includes(task.status), 'task_terminal', 'Inspect the existing assignment separately; this task is already closed');
+      requireValue(!execution?.result && !['in_review', 'monitor_review'].includes(execution?.state), 'review_required', 'Review the submitted result instead of discarding it');
+      requireValue(!execution || !executions.some(e => e.parentExecutionId === execution.id && !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)),
+        'child_work_pending', 'Inspect and withdraw outstanding child assignments separately');
+      return { taskId, task: scoped(task), expectedRevision: task.revision, instanceId: info.instanceId, alreadyHuman: !execution,
+        workerName: execution ? nativeAgentLabel(agents.find(a => a.id === execution.targetAgentId)) : null,
+        nodeName: execution ? nodes.find(n => n.id === execution.targetNodeId)?.name ?? 'Unknown node' : null,
+        executionId: execution?.id ?? null, executionRevision: execution?.revision ?? null };
+    },
+    async handbackTask({ taskId, expectedRevision, instanceId, executionId, executionRevision, key, reason }) {
+      requireValue(decisionJournal && key && executionId && typeof reason === 'string' && reason.trim() && reason.trim().length <= 2000,
+        'invalid_handback', 'Exact human handback preview and reason required');
+      const command = { key, action: 'execution.handback', payload: { id: executionId, expectedRevision: executionRevision,
+        taskRevision: expectedRevision, reason: reason.trim() } };
+      const previous = decisionJournal.inspect(key);
+      if (!previous) {
+        const fresh = await board.prepareHandback({ taskId });
+        requireValue(fresh.instanceId === instanceId && fresh.expectedRevision === expectedRevision && fresh.executionId === executionId &&
+          fresh.executionRevision === executionRevision, 'stale_handback', 'Task or assignment changed. Inspect a fresh handback preview');
+      } else requireValue(previous.command.payload.id === executionId, 'decision_conflict', 'Original handback identity changed');
+      const execution = await decisionJournal.submit(api, command, instanceId);
+      requireValue(execution.taskId === taskId, 'invalid_decision_receipt', 'Handback task differs from the preview');
+      return { state: 'recorded', execution, message: 'With you. Task returned to Todo. Assignment withdrawn; native process termination is not claimed.' };
+    },
     async dispatchTask({ taskId, expectedRevision, instanceId, key, payload }) {
       requireValue(decisionJournal && key && payload?.targetAgentId && typeof payload.instructions === 'string' &&
         payload.instructions.trim() && payload.instructions.length <= 4000, 'invalid_handover', 'Select an agent and provide a bounded handover');
@@ -232,8 +273,8 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     },
     async detailRoutine({ scheduleId }) {
       const schedule = await api('GET', `/v1/schedules/${encodeURIComponent(scheduleId)}`);
-      const [agents, occurrences, executions] = await Promise.all([all('agents'), all('occurrences'), all('executions')]);
-      return { ...routine(schedule, agents), runs: occurrences.filter(o => o.scheduleId === scheduleId)
+      const [agents, occurrences, executions, setups] = await Promise.all([all('agents'), all('occurrences'), all('executions'), all('headless_setups')]);
+      return { ...routine(schedule, agents, setups), runs: occurrences.filter(o => o.scheduleId === scheduleId)
         .sort((a, b) => b.intendedAt.localeCompare(a.intendedAt)).slice(0, 50).map(o => {
           const execution = executions.find(e => e.id === o.id && e.localOccurrence && e.targetNodeId === o.nodeId);
           return { id: o.id, status: o.state, triggeredAt: o.intendedAt,
@@ -280,4 +321,5 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
         outcome: { confirmed: result.state === (input.action === 'accept' ? 'completed' : 'rejected') } };
     },
   };
+  return board;
 }

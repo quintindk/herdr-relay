@@ -1,6 +1,6 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.1-rc3",
+  "version": "0.2.1-rc4",
   "private": true,
   "license": "MIT",
   "description": "Durable native tasks, agent collaboration and node services for Herdr and OpenCode",
@@ -21,6 +21,7 @@
     "skills",
     "scripts/plugin-launch.sh",
     "scripts/toggle-board.py",
+    "scripts/install-herdr-shortcut.py",
     "scripts/native-board-launch.mjs",
     "scripts/native-agent-launch.mjs",
     "scripts/install-native-node.mjs",

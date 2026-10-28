@@ -19,13 +19,15 @@ import { waitHeadlessSetup } from '../src/headless-setup-wait.mjs';
 import { nativeBoard } from '../src/native-board.mjs';
 import { NativeDecisionJournal } from '../src/native-decision-journal.mjs';
 import { digest } from '../src/protocol.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 process.umask(0o077);
 const capabilityMode = process.argv.includes('--capabilities');
 const agentGrantMode = process.argv.includes('--agent-grant');
 const notificationMode = process.argv.includes('--run-result-notifications');
 const cronMode = process.argv.includes('--cron') || notificationMode;
-const contractMode = process.argv.includes('--contract-update');
+const legacyRefusalMode = process.argv.includes('--legacy-contract-refusal');
+const contractMode = process.argv.includes('--contract-update') || legacyRefusalMode;
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
@@ -208,6 +210,22 @@ try {
     assert.equal(readFileSync(join(workspace, '.opencode/skills/approved-job/SKILL.md'), 'utf8'), 'Inspect the approved fixture only. Submit a native result.');
   }
   if (contractMode) {
+    let legacyEvidence;
+    if (legacyRefusalMode) {
+      // Reproduce legacy transport evidence only in the disposable node journal.
+      const historical = backend.store.all('execution').find(e => e.targetAgentId === approvedSetup.agentId && e.state === 'completed');
+      assert.ok(historical);
+      const command = { key: 'fixture-legacy-validation-refusal', action: 'headless.task', payload: {
+        executionId: historical.id, runId: historical.runId, operation: 'comment.create', key: 'old-comment',
+        source: { namespace: 'fixture', externalId: 'old-source' }, payload: { reason: 'Unsupported legacy field' },
+      } };
+      const db = new DatabaseSync(join(state, 'node.sqlite'));
+      try {
+        const item = { command, state: 'conflict', error: 'invalid_headless_request' };
+        legacyEvidence = { key: command.key, hash: digest(command), state: item.state, data: JSON.stringify(item) };
+        db.prepare('INSERT INTO outbox VALUES (?,?,?,?)').run(legacyEvidence.key, legacyEvidence.hash, legacyEvidence.state, legacyEvidence.data);
+      } finally { db.close(); }
+    }
     const beforeGrant = await owner('GET', '/v1/headless_grants/approved-job-grant'), beforeSchedule = await owner('GET', `/v1/schedules/${result.scheduleId}`);
     contractProposal = { setupId: id, files: [
       { path: grantProposal.contract, content: 'REVISED_CONTRACT_FIXTURE: Inspect only the fixture. Follow protocol.md and submit a native result.' },
@@ -231,6 +249,11 @@ try {
     assert.deepEqual(await owner('GET', '/v1/headless_grants/approved-job-grant'), beforeGrant);
     assert.deepEqual(await owner('GET', `/v1/schedules/${result.scheduleId}`), beforeSchedule);
     assert.equal(reads, 0); assert.equal(writes, 0, 'Approval and activation must not call external tools');
+    if (legacyEvidence) {
+      const db = new DatabaseSync(join(state, 'node.sqlite'), { readOnly: true });
+      try { assert.deepEqual({ ...db.prepare('SELECT * FROM outbox WHERE key=?').get(legacyEvidence.key) }, legacyEvidence); }
+      finally { db.close(); }
+    }
   }
   // A second server is configured after approval/setup. The boolean MCP grant
   // covers newly available tools without any per-server/tool grant amendment.
@@ -316,6 +339,7 @@ try {
     nativeResultSubmission: true, actualCronFiringVerified: cronMode, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
     exactContractApprovalAndActivation: contractMode, revisedInstructionsInNativeModelContext: revisedContextSeen,
+    legacyValidationRefusalDoesNotBlockActivation: legacyRefusalMode,
     operationSpecificHeadlessSchemasVerified: capabilityMode,
     persistentRunResultInboxVerified: notificationMode, onlineOnlyRequesterResultVerified: notificationMode,
     credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));

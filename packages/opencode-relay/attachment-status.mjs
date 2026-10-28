@@ -13,7 +13,8 @@ export async function readAttachmentStatus(ctx, { sessionId }, { connection = wo
     const status = await request(worker, 'POST', '/agent/status', {});
     if (status.sessionId !== sessionId || status.agentId !== worker.agentId || typeof status.receivingHere !== 'boolean') throw Error('Attachment identity changed');
     return { ...base, state: status.receivingHere ? 'attached' : status.receiver?.state === 'pending' ? 'pending' : 'not_attached',
-      agentId: status.agentId, agentName: status.agentName ?? null, generation: status.receiver?.generation ?? null, obligations: status.obligations.length };
+      agentId: status.agentId, agentName: status.agentName ?? null, nodeName: status.nodeName ?? null,
+      generation: status.receiver?.generation ?? null, obligations: status.obligations.length };
   } catch { return { ...base, state: 'unavailable' }; }
 }
 
@@ -42,10 +43,13 @@ export function watchAttachmentStatus({ selectedSession, load, update, subscribe
 }
 
 export function attachmentView(status, sessionId) {
-  if (!sessionId || status.sessionId !== sessionId) return { title: 'Relay', label: 'Checking attachment…', detail: '' };
+  if (!sessionId || status.sessionId !== sessionId) return { title: 'Relay', label: 'Checking attachment…', detail: '', icon: '○', tone: 'info', identity: '' };
   const label = { attached: 'Attached · receiving here', not_attached: 'Not attached to this chat', pending: 'Attachment pending',
     unavailable: 'Attachment status unavailable', checking: 'Checking attachment…' }[status.state] ?? 'Attachment status unavailable';
-  const name = stripVTControlCharacters(String(status.agentName ?? '')).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, 256);
-  return { title: name ? `Relay · ${name}` : 'Relay', label,
-    detail: status.state === 'attached' ? `Generation ${status.generation ?? '?'} · ${status.obligations ?? 0} outstanding` : status.state === 'not_attached' ? 'Use /relay-attach' : '' };
+  const clean = value => stripVTControlCharacters(String(value ?? '')).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, 256);
+  const name = clean(status.agentName), node = clean(status.nodeName);
+  return { title: 'Relay', label, identity: [name, node].filter(Boolean).join(' · '),
+    icon: status.state === 'attached' ? '●' : status.state === 'unavailable' ? '!' : status.state === 'pending' ? '◷' : '○',
+    tone: status.state === 'attached' ? 'success' : status.state === 'unavailable' ? 'error' : status.state === 'pending' ? 'warning' : 'info',
+    detail: status.state === 'attached' ? `${status.obligations ?? 0} outstanding` : status.state === 'not_attached' ? 'Use /relay-attach' : '' };
 }

@@ -45,15 +45,24 @@ export function taskBoardColumns(columns, statusLabels = []) {
 
 /** Lossless cell-aware lines for scrollable decision editors and previews. */
 export function wrapBoardText(value, columns) {
+  columns = Math.max(1, Math.floor(columns) || 1);
   const lines = [];
   for (const paragraph of String(value ?? '').split(/\r?\n/)) {
-    let line = '', used = 0;
+    let segments = [], used = 0;
     for (const { segment } of segmenter.segment(clean(paragraph))) {
       const cells = cellWidth(segment);
-      if (line && used + cells > columns) { lines.push(line); line = ''; used = 0; }
-      line += segment; used += cells;
+      if (segments.length && used + cells > columns) {
+        // Keep exact whitespace/text. Prefer the last word boundary, hard-break
+        // only an unbroken token. Width is terminal cells, not UTF-16 length.
+        const boundary = segments.findLastIndex(s => /\s/u.test(s)) + 1;
+        const split = boundary || segments.length;
+        lines.push(segments.slice(0, split).join(''));
+        segments = segments.slice(split); used = segments.reduce((n, s) => n + cellWidth(s), 0);
+        if (segments.length && used + cells > columns) { lines.push(segments.join('')); segments = []; used = 0; }
+      }
+      segments.push(segment); used += cells;
     }
-    lines.push(line);
+    lines.push(segments.join(''));
   }
   return lines;
 }

@@ -49,4 +49,15 @@ test('sidebar avoids overlapping reads, shows outages, recovers and disposes lis
 test('sidebar text cannot inject terminal controls through agent names', () => {
   const view = attachmentView({ sessionId: 'a', state: 'attached', agentName: '\x1b[31mMason\n\u202eHidden', generation: 1 }, 'a');
   assert.doesNotMatch(view.title, /\x1b|\n|\u202e/);
+  assert.doesNotMatch(view.identity, /\x1b|\n|\u202e/);
+});
+
+test('compact attachment card uses semantic states, shows agent/node and hides technical generation', () => {
+  const view = attachmentView({ sessionId: 'a', state: 'attached', agentName: 'Mason', nodeName: 'Evo', generation: 42, obligations: 2 }, 'a');
+  assert.equal(view.identity, 'Mason · Evo'); assert.equal(view.icon, '●'); assert.equal(view.tone, 'success');
+  assert.equal(view.detail, '2 outstanding'); assert.doesNotMatch(view.detail, /Generation|42/);
+  for (const [state, tone] of [['pending', 'warning'], ['unavailable', 'error'], ['not_attached', 'info']]) {
+    const status = attachmentView({ sessionId: 'a', state }, 'a'); assert.equal(status.tone, tone); assert.ok(status.label); assert.ok(status.icon);
+  }
+  assert.equal(attachmentView({ sessionId: 'a', state: 'attached', agentName: 'Mason' }, 'b').identity, '');
 });

@@ -947,9 +947,13 @@ export class BackendStore {
     }
     if (action === 'execution.handback') {
       this.ownerOnly(actor);
-      fields(p, ['id', 'expectedRevision', 'reason'], ['id', 'expectedRevision', 'reason']);
+      fields(p, ['id', 'expectedRevision', 'reason', 'taskRevision'], ['id', 'expectedRevision', 'reason']);
       const e = this.get('execution', p.id); this.revision(e, p.expectedRevision); string(p.reason, 'reason', 2000);
-      requireValue(!['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(e.state) && !e.result,
+      if (p.taskRevision !== undefined) {
+        const task = this.get('task', e.taskId); this.revision(task, p.taskRevision);
+        requireValue(!terminal(task), 'task_terminal', 'A task already closed by the human is not returned to Todo');
+      }
+      requireValue(!['completed', 'cancelled', 'failed', 'rejected', 'in_review', 'monitor_review'].includes(e.state) && !e.result,
         'execution_terminal', 'Review or terminal outcomes are not discarded by administrative handback');
       requireValue(!this.all('execution').some(child => child.parentExecutionId === e.id && !['completed', 'cancelled', 'failed', 'rejected'].includes(child.state)),
         'child_work_pending', 'Inspect and withdraw outstanding child assignments separately');

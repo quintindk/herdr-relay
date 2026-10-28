@@ -195,7 +195,11 @@ export async function startNodeService({ journal, socketPath, workers, api, task
             blocker, revision: schedule?.revision ?? null, appliedRevision: schedule?.appliedRevision ?? null,
             runResultNotifications: runResultNotifications(schedule?.definition.runResultNotifications ?? setup.runResultNotifications),
             contract: setup.contract ?? null, appliedContractRevision: setup.appliedContractRevision ?? 0,
-            contractActivation: setup.contractActivation ? { ...setup.contractActivation, localState: op?.contractActivation?.state ?? null, blocker: activationPending ? op?.contractBlocker ?? null : null } : null,
+            contractActivation: setup.contractActivation ? { ...setup.contractActivation, localState: op?.contractActivation?.state ?? null,
+              blocker: activationPending ? op?.contractBlocker ?? null : null,
+              wait: activationPending ? op?.contractWait?.requestId === setup.contract.requestId ? op.contractWait : {
+                reason: 'awaiting_node_activation_check', requestId: setup.contract.requestId,
+              } : null } : null,
             nextFiring: !blocker && !activationPending && installed?.state === 'active' ? installed.nextAt : null, runtime: 'shared-auth-headless', restartRequired: false };
         }
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
@@ -280,10 +284,12 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${worker.agentId}`);
         const receiver = row ? JSON.parse(row.value) : null;
         const enrolment = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`enrolment:${worker.agentId}`);
+        const node = journal.cached('node').find(entry => entry.entity.id === journal.nodeId)?.entity;
         const works = journal.works().filter(w => !abandonedWork(w) && w.execution.targetAgentId === worker.agentId &&
           !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state));
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ agentId: worker.agentId, agentName: enrolment ? JSON.parse(enrolment.value).name : null, sessionId: worker.sessionId, receiver,
+        res.end(JSON.stringify({ agentId: worker.agentId, agentName: enrolment ? JSON.parse(enrolment.value).name : null,
+          nodeId: journal.nodeId, nodeName: node?.name ?? null, sessionId: worker.sessionId, receiver,
           receivingHere: receiver?.state === 'active' && receiver.bindingId === worker.bindingId,
           obligations: works.map(w => ({ id: w.id, state: w.execution.state, localState: w.state, conversationId: w.nativeConversationId,
             observation: w.observation ?? null, recovery: w.recovery ?? null })) })); return;

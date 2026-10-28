@@ -7,11 +7,11 @@ import { watchTaskBoardInk } from './task-board-ink.mjs';
 import { requireValue } from './protocol.mjs';
 import { NativeDecisionJournal } from './native-decision-journal.mjs';
 import { dirname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { boardContext } from './native-onboarding.mjs';
 
 try {
   const { values } = parseArgs({ options: { context: { type: 'string' }, json: { type: 'boolean' } } });
-  const contextPath = values.context ?? process.env.RELAY_NATIVE_CONTEXT ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-backend/owner.json');
+  const contextPath = values.context ?? process.env.RELAY_NATIVE_CONTEXT ?? boardContext();
   const context = JSON.parse(readFileSync(contextPath, 'utf8'));
   const journal = new NativeDecisionJournal(join(dirname(resolve(contextPath)), 'native-board-decisions.sqlite'));
   const board = nativeBoard(nativeBackendClient({ ...context, url: context.url ?? 'http://127.0.0.1:3210' }), { decisionJournal: journal, ...boardLocalIdentity(context) });
@@ -21,7 +21,8 @@ try {
       requireValue(process.stdin.isTTY && process.stdout.isTTY, 'terminal_required', 'Interactive board requires a TTY, or use --json');
       await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask,
         statusTask: board.statusTask, reviewTask: board.reviewTask, detailRoutine: board.detailRoutine, detailAgent: board.detailAgent,
-        detailInbox: board.detailInbox, decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, updateRunResultNotifications: board.updateRunResultNotifications });
+        detailInbox: board.detailInbox, decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, updateRunResultNotifications: board.updateRunResultNotifications,
+        dispatchTask: board.dispatchTask, prepareHandback: board.prepareHandback, handbackTask: board.handbackTask });
     }
   } finally { journal.close(); }
 } catch (error) {

@@ -1,13 +1,13 @@
 id = "quintindk.herdr-relay"
 name = "Herdr Relay"
-version = "0.2.1-rc3"
+version = "0.2.1-rc4"
 min_herdr_version = "0.9.3"
 platforms = ["linux", "macos"]
 description = "Native tasks, agent messaging and durable node services for Herdr."
 
 [[actions]]
 id = "toggle"
-title = "Toggle Relay task hierarchy"
+title = "Toggle Relay TUI"
 contexts = ["pane"]
 command = ["python3", "scripts/toggle-board.py"]
 
@@ -43,13 +43,13 @@ command = ["bash", "scripts/plugin-launch.sh", "agent", "observed"]
 
 [[actions]]
 id = "native-work"
-title = "Relay: native 0.2 task board"
+title = "Relay: native task board"
 contexts = ["global"]
 command = ["node", "scripts/native-board-launch.mjs", "--json"]
 
 [[panes]]
 id = "native-work"
-title = "Relay native tasks"
+title = "Relay"
 placement = "split"
 command = ["node", "scripts/native-board-launch.mjs"]
 

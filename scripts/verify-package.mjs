@@ -45,7 +45,8 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
    'src/node-headless-contract.mjs', 'src/headless-task-schema.mjs', 'src/publication-outcomes.mjs',
     'src/node-recovery.mjs', 'src/node-recovery-cli.mjs', 'src/run-result-notifications.mjs',
     'src/node-run-result-messages.mjs', 'src/run-result-notifications-panel.mjs',
-    'packages/opencode-relay/run-result-notice.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+     'packages/opencode-relay/run-result-notice.mjs', 'src/board-text.mjs', 'src/board-row-layout.mjs', 'src/board-detail-layout.mjs',
+     'scripts/install-herdr-shortcut.py', 'scripts/toggle-board.py', 'scripts/native-board-launch.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 assert.ok(!packed.files.some(file => ['paperclip-final.json', 'paperclip-final-plan.json'].includes(file.path)), 'Private migration exports must never ship');
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');

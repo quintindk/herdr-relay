@@ -69,6 +69,7 @@ export function nativeAttention({ tasks, executions, questions, agents, nodes = 
       : e.state === 'completed' ? `Completed: ${agentName(e.targetAgentId)}`
       : e.state === 'failed' ? 'Execution failed' : e.state === 'cancelled' ? 'Execution cancelled' : 'Changes requested';
     const where = location(e.targetNodeId);
+    if (e.administrativeDisposition?.kind === 'owner_handback' && ended(e)) return { actions, attentionLabel: 'With you', executionState: e.state };
     return { actions, attentionLabel: state, executionAgentId: e.targetAgentId, executionAgentName: agentName(e.targetAgentId), executionState: e.state,
       executionNodeId: e.targetNodeId, executionNodeName: where.nodeName, executionMachineName: where.machineName };
   };

@@ -1,11 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { buildBoardRows, buildAgentRows, wrapBoardText, taskBoardColumns } from './task-board-view.mjs';
+import { buildBoardRows, buildAgentRows, wrapBoardText } from './task-board-view.mjs';
 import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
 import { GrantsPanel, nativeBoardTabs, nativeBoardViews } from './grants-panel.mjs';
 import { NativeDispatchModal } from './task-board-dispatch.mjs';
 import { RunResultNotificationsPanel } from './run-result-notifications-panel.mjs';
+import { BoardText, modalSize, appendBoardInput } from './board-text.mjs';
+import { routineDetailLayout } from './board-detail-layout.mjs';
+import { layoutBoardRows, boardRowViewport } from './board-row-layout.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
@@ -29,77 +32,58 @@ export const taskRowStyle = (task, overlay = false, context = false) => ({
 function StatusModal({ modal, setModal, submit, width, height }) {
   const status = modal.options[modal.index];
   const fields = ['status', ...(status === 'blocked' && modal.needsDescriptor ? ['owner', 'action'] : []), ...(status === 'delete' ? [] : ['comment'])];
-  const modalWidth = Math.max(44, Math.min(72, width - 4));
-  const contentWidth = Math.max(1, modalWidth - 8);
-  const commentBoxHeight = Math.min(6, Math.max(3, height - (status === 'blocked' && modal.needsDescriptor ? 19 : 17)));
-  const commentLines = [];
-  for (const paragraph of String(modal.comment ?? '').split(/\r?\n/)) {
-    if (!paragraph) { commentLines.push(''); continue; }
-    let line = '';
-    for (const character of paragraph) {
-      if (line.length >= contentWidth) { commentLines.push(line); line = ''; }
-      line += character;
-    }
-    commentLines.push(line);
+  const { width: modalWidth, height: modalHeight } = modalSize(width, height, 72, 24);
+  const contentWidth = Math.max(1, modalWidth - 6), viewport = Math.max(1, modalHeight - 8);
+  const content = [];
+  const add = (text, field, option) => wrapBoardText(text, contentWidth).forEach(line => content.push({ text: line, field, option }));
+  if (modal.confirm) add(status === 'delete' ? `Confirm permanent deletion of ${modal.task.identifier || modal.task.id}. This cannot be undone.`
+    : `Confirm ${labels[modal.task.status] || modal.task.status} → ${labels[status]}`, 'confirm');
+  else modal.options.forEach((value, index) => add(`${modal.index === index ? '●' : '○'} ${labels[value]}`, 'status', index));
+  if (status === 'blocked' && modal.needsDescriptor) {
+    add(`Waiting on ${modal.owner === 'board' ? 'Board' : 'Me'}`, 'owner');
+    add(`Required action\n${modal.action}${!modal.confirm && modal.field === 'action' ? '▏' : ''}`, 'action');
   }
-  const visibleCommentLines = commentLines.slice(-Math.max(1, commentBoxHeight - 2));
-  if (modal.field === 'comment' && visibleCommentLines.length) visibleCommentLines[visibleCommentLines.length - 1] += '▏';
+  if (status !== 'delete') add(`Comment (optional) · ${modal.comment.length}/4000 · ${wrapBoardText(modal.comment, contentWidth).length} lines\n${modal.comment}${!modal.confirm && modal.field === 'comment' ? '▏' : ''}`, 'comment');
+  const focused = content.findLastIndex(line => line.field === modal.field && (line.option === undefined || line.option === modal.index));
+  const maxScroll = Math.max(0, content.length - viewport);
+  const start = modal.scroll === undefined ? modal.confirm ? 0 : Math.max(0, Math.min(maxScroll, focused - viewport + 1)) : Math.min(modal.scroll, maxScroll);
   useInput((input, key) => {
     if (modal.busy) return;
     if (key.escape) {
-      if (modal.confirm) setModal(value => ({ ...value, confirm: false })); else setModal(null);
+      if (modal.confirm) setModal(value => ({ ...value, confirm: false, scroll: undefined })); else setModal(null);
       return;
     }
+    if (key.pageDown || key.pageUp) { setModal(value => ({ ...value, scroll: Math.max(0, Math.min(maxScroll, start + (key.pageDown ? viewport : -viewport))) })); return; }
     if (modal.confirm) { if (key.return || input === '\r' || input === '\n') void submit(modal); return; }
-    if (key.tab) { setModal(value => ({ ...value, field: fields[(fields.indexOf(value.field) + 1) % fields.length] })); return; }
+    if (key.tab) { setModal(value => ({ ...value, field: fields[(fields.indexOf(value.field) + (key.shift ? fields.length - 1 : 1)) % fields.length], scroll: undefined })); return; }
     if (modal.field === 'status' && (key.upArrow || key.downArrow || input === 'j' || input === 'k')) {
       const delta = key.downArrow || input === 'j' ? 1 : -1;
-      setModal(value => ({ ...value, index: Math.max(0, Math.min(modal.options.length - 1, value.index + delta)) })); return;
+      setModal(value => ({ ...value, index: Math.max(0, Math.min(modal.options.length - 1, value.index + delta)), scroll: undefined })); return;
     }
     if (modal.field === 'owner' && (key.upArrow || key.downArrow || input === 'j' || input === 'k' || input === ' ')) {
       setModal(value => ({ ...value, owner: value.owner === 'board' ? 'me' : 'board' })); return;
     }
-    if (key.return || input === '\r' || input === '\n') {
+    if ((key.return || input === '\r' || input === '\n') && !key.shift) {
       if (status === 'blocked' && modal.needsDescriptor && !modal.action.trim()) {
         setModal(value => ({ ...value, error: 'Required action is needed for Blocked' }));
-      } else setModal(value => ({ ...value, confirm: true, error: '' }));
+      } else setModal(value => ({ ...value, confirm: true, error: '', scroll: 0 }));
       return;
     }
     if (['action', 'comment'].includes(modal.field)) {
       const field = modal.field, limit = field === 'action' ? 2000 : 4000;
-      const next = key.backspace || key.delete ? [...modal[field]].slice(0, -1).join('')
-        : input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input) && modal[field].length < limit
-          ? modal[field] + input : modal[field];
-      if (next !== modal[field]) setModal(value => ({ ...value, [field]: next }));
+      const next = appendBoardInput(modal[field], input, key, limit);
+      if (next !== modal[field]) setModal(value => ({ ...value, [field]: next, scroll: undefined }));
     }
   });
-  const modalHeight = Math.min(height - 2, 15 + commentBoxHeight + Math.max(0, modal.options.length - statuses.length) + (status === 'blocked' && modal.needsDescriptor ? 2 : 0));
-  const selected = (active, text) => h(Text, { inverse: active, color: active ? 'cyan' : undefined, bold: active }, text);
   return h(Box, { position: 'absolute', width: modalWidth, height: modalHeight,
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
     borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
-  h(Text, { bold: true, color: 'cyan' }, `Change status · ${modal.task.identifier || modal.task.id}`),
-  h(Box, { height: 1 }),
-  ...modal.options.map((value, index) => selected(modal.field === 'status' && modal.index === index,
-    `${modal.index === index ? '●' : '○'} ${labels[value]}`)),
-  h(Box, { height: 1 }),
-  ...(status === 'blocked' && modal.needsDescriptor ? [
-    selected(modal.field === 'owner', `Waiting on  ${modal.owner === 'board' ? 'Board' : 'Me'}`),
-    selected(modal.field === 'action', `Required action  ${modal.action}${modal.field === 'action' ? '▏' : ''}`),
-  ] : []),
-  status === 'delete' ? h(Text, { color: 'red' }, 'Permanently remove this task. This cannot be undone.') : h(Box, { flexDirection: 'column' },
-  h(Box, { justifyContent: 'space-between' },
-    h(Text, { bold: modal.field === 'comment', color: modal.field === 'comment' ? 'cyan' : undefined }, 'Comment (optional)'),
-    h(Text, { dimColor: true }, `${modal.comment.length}/4000 · ${commentLines.length} line${commentLines.length === 1 ? '' : 's'}`)),
-  h(Box, { height: commentBoxHeight, borderStyle: 'single', borderColor: modal.field === 'comment' ? 'cyan' : 'gray',
-    paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
-  ...visibleCommentLines.map((line, index) => h(Text, { key: `${commentLines.length}:${index}`, wrap: 'truncate-end' }, line || ' ')))),
-  modal.error ? h(Text, { color: 'red' }, modal.error)
-    : modal.confirm ? h(Text, { bold: true, color: status === 'delete' ? 'red' : 'cyan' }, status === 'delete'
-      ? `Confirm permanent deletion of ${modal.task.identifier || modal.task.id}` : `Confirm ${labels[modal.task.status] ?? modal.task.status} -> ${labels[status]}`)
-      : h(Text, null, ' '),
-  h(Box, { flexGrow: 1 }),
-  h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : '↑↓ select · Tab next · Enter review · Esc cancel'));
+  h(BoardText, { text: `Change status · ${modal.task.identifier || modal.task.id}\n${modal.field === 'comment' ? `Comment (optional) · ${modal.comment.length}/4000 · ${wrapBoardText(modal.comment, contentWidth).length} lines` : ''}`,
+    columns: contentWidth, rows: 2, bold: true, color: 'cyan' }),
+  h(Box, { height: viewport, flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }, ...content.slice(start, start + viewport).map((line, index) =>
+    h(Text, { key: index, wrap: 'truncate-end', inverse: !modal.confirm && line.field === modal.field && (line.option === undefined || line.option === modal.index) }, line.text || ' '))),
+  h(BoardText, { text: modal.error || `${start + 1}-${Math.min(content.length, start + viewport)}/${content.length}`, columns: contentWidth, rows: 1, color: modal.error ? 'red' : 'gray' }),
+  h(Text, { dimColor: true, wrap: 'wrap' }, modal.confirm ? 'PgUp/Dn inspect · Enter apply · Esc back' : '↑↓ select · Tab field · PgUp/Dn · Enter review · Esc cancel'));
 }
 
 function AssignmentModal({ modal, setModal, submit, width, height }) {
@@ -110,7 +94,7 @@ function AssignmentModal({ modal, setModal, submit, width, height }) {
     if (key.upArrow || input === 'k') setModal(value => ({ ...value, index: Math.max(0, value.index - 1) }));
     if (key.return || input === '\r' || input === '\n') void submit(modal);
   });
-  const modalWidth = Math.max(44, Math.min(72, width - 4));
+  const modalWidth = Math.max(8, Math.min(72, width - 2));
   return h(Box, { position: 'absolute', width: modalWidth, height: Math.min(height - 2, Math.max(9, modal.agents.length + 6)),
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - Math.max(9, modal.agents.length + 6)) / 2)),
     borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column' },
@@ -124,45 +108,45 @@ function AssignmentModal({ modal, setModal, submit, width, height }) {
 }
 
 function ReviewModal({ modal, setModal, submit, width, height }) {
+  const { width: modalWidth, height: modalHeight } = modalSize(width, height, 72, 24);
+  const columns = Math.max(1, modalWidth - 6), viewport = Math.max(1, modalHeight - 8);
   useInput((input, key) => {
     if (modal.busy) return;
     if (key.escape) {
       if (modal.confirm) setModal(value => ({ ...value, confirm: false })); else setModal(null);
       return;
     }
+    if (key.pageDown || key.pageUp) { setModal(value => ({ ...value, scroll: Math.max(0, (value.scroll || 0) + (key.pageDown ? viewport : -viewport)) })); return; }
     if (modal.confirm) { if (key.return || input === '\r' || input === '\n') void submit(modal); return; }
     if (modal.decision === 'reject') {
-      if (key.return || input === '\r' || input === '\n') {
+      if ((key.return || input === '\r' || input === '\n') && !key.shift) {
         if (modal.reason.trim()) setModal(value => ({ ...value, confirm: true, error: '' }));
         else setModal(value => ({ ...value, error: 'Rejection feedback is required' }));
         return;
       }
-      const reason = key.backspace || key.delete ? [...modal.reason].slice(0, -1).join('')
-        : input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input) && modal.reason.length < 4000
-          ? modal.reason + input : modal.reason;
-      if (reason !== modal.reason) setModal(value => ({ ...value, reason }));
+      const reason = appendBoardInput(modal.reason, input, key, 4000);
+      if (reason !== modal.reason) setModal(value => ({ ...value, reason, scroll: 0 }));
       return;
     }
     if (key.return || input === '\r' || input === '\n') setModal(value => ({ ...value, confirm: true }));
   });
-  const modalWidth = Math.max(44, Math.min(72, width - 4));
-  return h(Box, { position: 'absolute', width: modalWidth, height: Math.min(height - 2, 12),
-    left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - 12) / 2)),
-    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column' },
-  h(Text, { bold: true, color: 'magenta' }, `${modal.decision === 'accept' ? 'Approve' : 'Reject'} · ${modal.identifier}`),
-  h(Text, { dimColor: true }, `Candidate ${modal.candidate}`), h(Box, { height: 1 }),
-  modal.decision === 'reject' ? h(Text, { inverse: !modal.confirm }, `Feedback  ${modal.reason}${!modal.confirm ? '▏' : ''}`) : null,
+  return h(Box, { position: 'absolute', width: modalWidth, height: modalHeight,
+    left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
+    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
+  h(BoardText, { text: `${modal.decision === 'accept' ? 'Approve' : 'Reject'} · ${modal.identifier}`, columns, rows: 2, bold: true, color: 'magenta' }),
+  h(BoardText, { text: `Candidate ${modal.candidate}\n\nFeedback\n${modal.reason}${!modal.confirm ? '▏' : ''}${modal.error ? `\nError: ${modal.error}` : ''}`,
+    columns, rows: viewport, scroll: modal.scroll || 0, tail: !modal.confirm && !modal.scroll }),
   modal.confirm ? h(Text, { bold: true, color: 'magenta' }, `Confirm ${modal.decision}`) : null,
-  modal.error ? h(Text, { color: 'red' }, modal.error) : null,
   h(Box, { flexGrow: 1 }),
   h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : modal.decision === 'reject' ? 'Type feedback · Enter review · Esc cancel' : 'Enter review · Esc cancel'));
 }
 
 function AgentDetailModal({ detail, close, width, height }) {
   const [scroll, setScroll] = useState(0), [technical, setTechnical] = useState(false);
-  const w = Math.max(32, Math.min(100, width - 2)), size = Math.max(10, Math.min(height - 2, 26)), viewport = Math.max(2, size - 6);
+  const { width: w, height: size } = modalSize(width, height, 100, 26), viewport = Math.max(1, size - 8);
   const agent = detail.data?.agent;
   const lines = (agent ? [
+    `Agent: ${agent.displayName || agent.name || 'Unknown agent'}`,
     `Mode: ${agent.mode || 'Unknown'}`, `Availability: ${agent.availabilityLabel || 'Unknown or stale'}`,
     `Node: ${agent.nodeName || 'Unknown node'}${agent.locality === 'local' ? ' (local node)' : agent.locality === 'remote' ? ' (remote node)' : ''}`, `Workspace: ${agent.directory || 'Not advertised'}`,
     `Machine: ${agent.machineName || 'Not advertised'}${agent.machinePlatform ? ` (${agent.machinePlatform})` : ''}`,
@@ -188,7 +172,7 @@ function AgentDetailModal({ detail, close, width, height }) {
   });
   return h(Box, { position: 'absolute', width: w, height: size, left: Math.max(0, Math.floor((width - w) / 2)), top: Math.max(0, Math.floor((height - size) / 2)),
     borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
-  h(Text, { bold: true, color: 'cyan', wrap: 'truncate-end' }, clean(agent?.displayName || agent?.name || 'Agent')),
+  h(Text, { bold: true, color: 'cyan' }, 'Agent details'),
   h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' }, ...lines.slice(start, start + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line || ' '))),
   h(Box, { flexGrow: 1 }), h(Text, { dimColor: true }, `${start + 1}-${Math.min(lines.length, start + viewport)}/${lines.length}`),
   h(Text, { dimColor: true, wrap: 'truncate-end' }, 'j/k · PgUp/PgDn · t details · Esc close'));
@@ -205,9 +189,17 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
   useEffect(() => {
     setTab(0); setActionIndex(0); setTechnical(false); setScrolls({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
   }, [detail.kind, detailId]);
-  const modalWidth = Math.max(52, Math.min(100, width - 4)), modalHeight = Math.max(12, Math.min(height - 2, 24));
-  const contentWidth = Math.max(20, modalWidth - 6);
-  const viewportHeight = Math.max(3, modalHeight - (detail.kind === 'task' ? 8 : 7));
+  const { width: modalWidth, height: modalHeight } = modalSize(width, height, 100, 26);
+  const contentWidth = Math.max(1, modalWidth - 6);
+  const title = detail.kind === 'task' ? detail.data?.actions !== undefined ? decisionText(detail.data?.task?.title) : `${detail.data?.task?.identifier || detail.data?.task?.id || 'Task'} · ${detail.data?.task?.title || ''}`
+    : `CRON · ${detail.data?.title || ''}`;
+  const titleRows = Math.min(3, wrapBoardText(title, contentWidth).length);
+  const tabsText = taskTabs.map((name, i) => tab === i ? `[${name}]` : name).join(' · ');
+  const tabsRows = wrapBoardText(tabsText, contentWidth).length;
+  const footerText = detail.kind === 'task' ? `${actions.length && taskTabs[tab] === 'Actions' ? 'Enter act · ' : detail.data?.review ? 'A approve · F/R reject · ' : ''}↑↓ scroll · PgUp/PgDn · Home/End · Tab section · Esc close`
+    : '↑↓ scroll · PgUp/PgDn · [/] occurrences · n notices · o task · Esc close';
+  const footerRows = wrapBoardText(footerText, contentWidth).length;
+  const viewportHeight = Math.max(1, modalHeight - 2 - titleRows - footerRows - 2 - (detail.kind === 'task' ? tabsRows + 1 : 0));
   const wrapLines = value => wrapBoardText(value, contentWidth);
   let content = [], taskSections;
   if (!detail.loading && !detail.error && detail.kind === 'task') {
@@ -233,24 +225,14 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
     };
     content = taskSections[taskTabs[tab]];
   }
-  if (!detail.loading && !detail.error && detail.kind === 'routine') {
-    const routine = detail.data;
-    content = [`${routine.state} / backend ${routine.backendStatus} / ${routine.intent === 'reminder' ? 'human reminder' : routine.executionMode}`,
-      `${routine.cron} · ${routine.timezone}`,
-      `Next${routine.nextRunIsEstimate ? ' (clock preview)' : ''} ${routine.nextRunAt || 'none'} · target ${routine.targetAgentId || routine.targetBindingId || routine.targetDirectory || 'unresolved'}`,
-      ...(routine.delivery ? [`Delivery ${routine.delivery.state}${routine.delivery.reason ? ` · ${routine.delivery.reason}` : ''}`] : []),
-      'Run result notifications', `Inbox: ${routine.runResultNotifications?.inbox ? 'on' : 'off'} · Requester (online-only): ${routine.runResultNotifications?.requester ? 'on' : 'off'}`,
-      '', `Recent occurrences (${routine.runs.length}${routine.runs.length === 50 ? '+' : ''})`,
-      ...detail.occurrences.map(entry => entry.run.nativeOccurrence
-        ? `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.run.linkedIssueId || 'taskless'}  ${clean(entry.run.summary).replace(/[\u202a-\u202e\u2066-\u2069]/g, '')}`
-        : `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.task?.identifier || entry.run.linkedIssueId || 'unlinked'}  ${entry.task ? entry.task.status : entry.mismatch ? 'identity mismatch' : 'not on board'}`)];
-  }
-  content = content.flatMap(wrapLines);
+  const routineLayout = detail.kind === 'routine' && detail.data && !detail.loading && !detail.error
+    ? routineDetailLayout(detail.data, detail.occurrences, contentWidth) : null;
+  content = routineLayout ? routineLayout.lines.map(line => line.text) : content.flatMap(wrapLines);
+  if (detail.error) content = wrapLines(`Detail failed: ${detail.error}`);
   const scrollKey = detail.kind === 'task' ? taskTabs[tab] : 'Routine';
   const scroll = Math.min(scrolls[scrollKey] ?? 0, Math.max(0, content.length - viewportHeight));
   const setScroll = update => setScrolls(value => ({ ...value,
     [scrollKey]: typeof update === 'function' ? update(value[scrollKey] ?? 0) : update }));
-  const occurrenceStart = detail.kind === 'routine' && detail.data ? 7 + (detail.data.delivery ? 1 : 0) : -1;
   const maxScroll = Math.max(0, content.length - viewportHeight);
   useInput((input, key) => {
     if (detail.kind === 'routine' && input === 'n') { openRunResultNotifications?.(detail.data); return; }
@@ -267,16 +249,16 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
       return;
     }
     const move = delta => {
-      if (detail.kind === 'routine') {
-        detail.setOccurrence(value => {
-          const next = Math.max(0, Math.min(detail.occurrences.length - 1, value + delta));
-          setScroll(offset => next + occurrenceStart < offset ? Math.max(0, next + occurrenceStart)
-            : next + occurrenceStart >= offset + viewportHeight
-              ? Math.min(maxScroll, next + occurrenceStart + 1 - viewportHeight) : offset);
-          return next;
-        });
-      } else setScroll(value => Math.max(0, Math.min(maxScroll, value + delta)));
+      const next = Math.max(0, Math.min(maxScroll, scroll + delta)); setScroll(next);
+      if (routineLayout) {
+        const index = routineLayout.lines.slice(next, next + viewportHeight).find(line => line.occurrenceIndex !== undefined)?.occurrenceIndex;
+        if (index !== undefined) detail.setOccurrence(index);
+      }
     };
+    if (routineLayout && (input === '[' || input === ']')) {
+      const next = Math.max(0, Math.min(detail.occurrences.length - 1, detail.occurrence + (input === ']' ? 1 : -1)));
+      detail.setOccurrence(next); setScroll(Math.min(maxScroll, routineLayout.ranges[next]?.start ?? 0)); return;
+    }
     if (key.downArrow || input === 'j') move(1);
     if (key.upArrow || input === 'k') move(-1);
     if (key.pageDown) move(viewportHeight);
@@ -287,41 +269,40 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
   });
   const box = { position: 'absolute', width: modalWidth, height: modalHeight,
     left: Math.max(0, Math.floor((width - modalWidth) / 2)), top: Math.max(0, Math.floor((height - modalHeight) / 2)),
-    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column' };
+    borderStyle: 'round', borderColor: 'magenta', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' };
   if (detail.loading) return h(Box, box, h(Text, { color: 'magenta' }, 'Loading detail...'));
-  if (detail.error) return h(Box, box, h(Text, { color: 'red' }, `Detail failed: ${detail.error}`), h(Box, { flexGrow: 1 }), h(Text, { dimColor: true }, 'Esc close'));
+  if (detail.error) return h(Box, box, h(Text, { color: 'red' }, 'Detail unavailable'),
+    h(BoardText, { text: `Detail failed: ${detail.error}`, columns: contentWidth, rows: viewportHeight, scroll, color: 'red' }),
+    h(Text, { dimColor: true }, 'PgUp/PgDn · Esc close'));
   if (detail.kind === 'task') {
     const task = detail.data.task;
     return h(Box, box,
-      h(Text, { bold: true, color: 'magenta', wrap: 'truncate-end' }, detail.data.actions !== undefined ? decisionText(task.title) : `${task.identifier || task.id} · ${task.title}`),
-      h(Text, { dimColor: true, wrap: 'truncate-end' }, `${task.status} · ${task.assigneeUserId || task.assigneeAgentId || 'unassigned'}`),
-      h(Box, { gap: 2 }, ...taskTabs.map((name, index) => h(Text, { key: name, inverse: tab === index,
-        bold: tab === index, color: tab === index ? 'cyan' : undefined }, ` ${name} `))),
+      h(BoardText, { text: title, columns: contentWidth, rows: titleRows, bold: true, color: 'magenta' }),
+      h(Text, { dimColor: true }, `${task.status} · ${task.responsibleName || 'Human responsibility'}`),
+      h(BoardText, { text: tabsText, columns: contentWidth, rows: tabsRows, color: 'cyan' }),
       h(Box, { height: viewportHeight, flexDirection: 'column', overflow: 'hidden', marginTop: 1 },
         ...content.slice(scroll, scroll + viewportHeight).map((line, index) => h(Text, { key: `${scroll}:${index}`,
           bold: ['Summary', 'Submitted result', 'Deliverables', 'Checks'].includes(line),
           color: line.startsWith('Routine occurrence ') ? 'cyan' : undefined,
           dimColor: ['No comments.', 'No Relay result.'].includes(line) }, line || ' '))),
-      h(Box, { justifyContent: 'space-between' },
-         h(Text, { dimColor: true, wrap: 'truncate-end' }, `${actions.length && taskTabs[tab] === 'Actions' ? 'Enter act · ' : detail.data.review ? 'A approve · F/R reject · ' : ''}↑↓ scroll · PgUp/PgDn · Home/End · Tab section · Esc close`),
-        h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
+      h(BoardText, { text: footerText, columns: contentWidth, rows: footerRows, dimColor: true }),
+      h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`));
   }
-  const routine = detail.data, occurrences = detail.occurrences;
+  const occurrences = detail.occurrences;
   return h(Box, box,
-    h(Text, { bold: true, color: 'magenta' }, `CRON · ${routine.title}`),
+    h(BoardText, { text: title, columns: contentWidth, rows: titleRows, bold: true, color: 'magenta' }),
     h(Box, { height: viewportHeight, flexDirection: 'column', overflow: 'hidden', marginTop: 1 },
       ...content.slice(scroll, scroll + viewportHeight).map((line, index) => {
-        const absolute = scroll + index, occurrenceIndex = absolute - occurrenceStart, entry = occurrenceIndex >= 0 ? occurrences[occurrenceIndex] : null;
-        return h(Text, { key: `${scroll}:${index}`, wrap: 'truncate-end', bold: absolute === occurrenceStart - 1, inverse: occurrenceIndex === detail.occurrence,
+        const meta = routineLayout.lines[scroll + index], occurrenceIndex = meta.occurrenceIndex, entry = occurrences[occurrenceIndex];
+        return h(Text, { key: `${scroll}:${index}`, wrap: 'truncate-end', bold: meta.heading, inverse: occurrenceIndex !== undefined && occurrenceIndex === detail.occurrence,
           color: entry?.task ? 'cyan' : entry?.mismatch ? 'red' : undefined }, line || ' ');
       })),
-    h(Box, { justifyContent: 'space-between' },
-      h(Text, { dimColor: true }, 'j/k · PgUp/PgDn · n result notifications · o open task · Esc close'),
-      h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
+    h(BoardText, { text: footerText, columns: contentWidth, rows: footerRows, dimColor: true }),
+    h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`));
 }
 
 export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
-  detailGrant, decideGrant, createGrant, pendingGrantDecisions, updateRunResultNotifications, dispatchTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+  detailGrant, decideGrant, createGrant, pendingGrantDecisions, updateRunResultNotifications, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
   const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
@@ -334,6 +315,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const [decisionReceipt, setDecisionReceipt] = useState(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
+  const [rowScroll, setRowScroll] = useState(0);
+  useEffect(() => { setRowScroll(0); }, [selected, selectedNativeId, view, width, height]);
   const [assignment, setAssignment] = useState(null); const [reviewModal, setReviewModal] = useState(null);
   const [reviewFeedback, setReviewFeedback] = useState('');
   const [quitting, setQuitting] = useState(false);
@@ -466,6 +449,11 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     const agent = current.agents[current.index]; setAssignment({ ...current, busy: true, error: '' });
     try {
       if (current.native) {
+        if (agent.kind === 'human') {
+          const result = await handbackTask({ ...current.preview, key: current.key, reason: current.text });
+          if (result.state !== 'recorded') throw Error('Handback is not confirmed');
+          setNotice(result.message); setAssignment(null); setRefreshGeneration(value => value + 1); return;
+        }
         const result = await dispatchTask({ taskId: current.task.id, expectedRevision: current.task.revision, instanceId: current.task.instanceId, key: current.key,
           payload: { targetAgentId: agent.id, instructions: current.text } });
         if (result.state !== 'recorded' || result.execution?.targetAgentId !== agent.id || result.execution?.taskId !== current.task.id) throw Error('Execution request is not confirmed');
@@ -486,6 +474,14 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       if (publications) setBoard(value => ({ ...value, inbox: [...publications, ...(value.inbox ?? []).filter(item => item.kind !== 'publication')] }));
       if (current.native) setRefreshGeneration(value => value + 1);
     }
+  };
+  const prepareHuman = async current => {
+    setAssignment({ ...current, busy: true, error: '' });
+    try {
+      if (!prepareHandback || !handbackTask) throw Error('Human handback is unavailable on this board');
+      const preview = await prepareHandback({ taskId: current.task.id });
+      setAssignment({ ...current, task: preview.task || current.task, busy: false, stage: 'handback', preview, text: '', scroll: 0 });
+    } catch (error) { setAssignment({ ...current, busy: false, error: clean(error.message) }); }
   };
   const prepareReview = key => {
     const nativeReview = detail?.data?.actions?.find(item => item.kind === 'review');
@@ -540,6 +536,10 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     });
     if (key.upArrow || input === 'k') move(-1);
     if (key.downArrow || input === 'j') move(1);
+    if (key.pageDown || key.pageUp) {
+      setRowScroll(value => Math.max(0, Math.min(Math.max(0, (rowBlocks[selectedIndex]?.length || 0) - bodyHeight),
+        value + (key.pageDown ? 1 : -1) * Math.max(1, bodyHeight - 1)))); return;
+    }
     if (input === ' ' || key.leftArrow || key.rightArrow) {
       const row = rows[selectedIndex];
       if (key.leftArrow && row?.type === 'agent' && row.groupId) {
@@ -577,9 +577,12 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       if (native && !dispatchTask) { setNotice('Native execution handover is unavailable'); return; }
       const row = rows[selectedIndex];
       if (row?.type !== 'task') { setNotice('Select a task'); return; }
-      const agents = board.agents.filter(agent => agent.companyId === row.companyId && (native
+      let agents = board.agents.filter(agent => agent.companyId === row.companyId && (native
         ? !agent.capabilities?.includes('observation_only') : agent.availability === 'present'))
-        .sort((left, right) => clean(left.name || left.id).localeCompare(clean(right.name || right.id)) || left.id.localeCompare(right.id));
+        .sort((left, right) => (left.locality === 'local' ? 0 : 1) - (right.locality === 'local' ? 0 : 1) ||
+          clean(left.nodeName || left.nodeId).localeCompare(clean(right.nodeName || right.nodeId)) ||
+          (left.nodeId || '').localeCompare(right.nodeId || '') || clean(left.name || left.id).localeCompare(clean(right.name || right.id)) || left.id.localeCompare(right.id));
+      if (native) agents = [{ id: 'human', kind: 'human', displayName: 'You (human)' }, ...agents];
       if (!agents.length) { setNotice('Assignment unavailable: no present agents in this company'); return; }
       setAssignment({ task: row.task, agents, index: Math.max(0, agents.findIndex(agent => agent.id === row.task.assigneeAgentId)), busy: false, error: '',
         ...(native ? { native: true, stage: 'select', text: '', key: `human-dispatch:${randomUUID()}` } : {}) });
@@ -602,10 +605,6 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         .catch(error => setDetail(value => value?.requestId === requestId ? { ...value, loading: false, error: clean(error.message || error.code || 'detail failed') } : value));
     }
   });
-  const narrowReference = native && view === 'tasks' && Math.max(0, ...board.tasks.map(task => task.reference?.length ?? 0)) > width - 4;
-  const taskRowHeight = narrowReference ? Math.ceil(Math.max(0, ...board.tasks.map(task => task.reference?.length ?? 0)) / Math.max(1, width - 4)) + 1 : 1;
-  const visibleHeight = Math.max(1, Math.floor((height - (native ? decisionReceipt ? 9 : 8 : 6)) / (native && ['inbox', 'schedules'].includes(view) ? 4 : taskRowHeight))), start = Math.max(0, Math.min(selectedIndex - Math.floor(visibleHeight / 2), Math.max(0, rows.length - visibleHeight)));
-  const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
     if (row.type === 'inbox') return `${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${decisionText(row.item.title)}  · ${decisionText(row.item.summary)}`;
@@ -625,6 +624,9 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     }
     return `${guides}${branch}${fold} ${native ? '' : `${row.task.identifier || row.task.id}${context}  `}${clean(row.task.title)}${anomaly}${subtree}`;
   };
+  const statusLabel = task => native && task.attentionLabel
+    ? `${labels[task.status] ?? task.status} · ${decisionText(task.attentionLabel)}` : `[${labels[task.status] ?? task.status}]`;
+  const rowBlocks = layoutBoardRows(rows, { columns: width, native, rowText, statusLabel });
   if (quitting) return null;
   if (native && view === 'grants') return h(GrantsPanel, { board, offline, loaded, width, height, detailGrant, decideGrant, createGrant, pendingGrantDecisions,
     refresh: publications => { if (publications) setBoard(value => ({ ...value, grants: { ...value.grants,
@@ -632,80 +634,50 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     onView: delta => { setView(value => nativeBoardViews[(nativeBoardViews.indexOf(value) + delta + nativeBoardViews.length) % nativeBoardViews.length]); setSelected(0); setSelectedNativeId(null); },
     onQuit: () => { setQuitting(true); (onQuit ?? exit)(); } });
   const summary = taskCounts(board.tasks);
-  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal);
+  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal || settingsModal);
   const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
   const nativeCounts = view === 'agents'
     ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
     : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'run_result').length ?? 0} run results   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
       : view === 'schedules' ? `${board.routines.filter(r => r.state === 'active').length} active   ${board.routines.filter(r => r.state === 'paused').length} paused`
         : `${summary.open} open   ${summary.active} active   ${summary.blocked} blocked   ${summary.review} in review`;
-  const cardTitle = (title, active, color = 'cyan', local = false) => h(Box, { height: 1, overflow: 'hidden' },
-    h(Text, { color: active ? color : 'gray' }, active ? '› ' : '  '),
-    local ? h(Text, { bold: true, inverse: true, color: 'green', dimColor: overlay }, ' LOCAL ') : null,
-    local ? h(Text, null, ' ') : null,
-    h(Text, { bold: true, inverse: active, color: active ? color : undefined, dimColor: overlay, wrap: 'truncate-end' }, title));
   const emptyLabel = view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.'
     : view === 'agents' ? 'No agents advertised.' : view === 'schedules' ? 'No schedules installed.' : showDone ? 'No matching tasks.' : 'No open tasks.';
-  const statusLabel = task => native && task.attentionLabel
-    ? `${labels[task.status] ?? task.status} · ${decisionText(task.attentionLabel)}` : `[${labels[task.status] ?? task.status}]`;
-  const taskColumns = taskBoardColumns(width, visible.filter(row => row.type === 'task').map(row => statusLabel(row.task)));
-  const referenceWidth = Math.max(0, ...visible.filter(row => row.type === 'task' && row.task.reference).map(row => rowText(row).indexOf(row.task.reference) + row.task.reference.length + 2));
-  if (native && referenceWidth > taskColumns.title) { taskColumns.status = 0; taskColumns.gap = 0; }
+  const heading = native ? `RELAY / ${view === 'schedules' ? 'SCHEDULE' : view.toUpperCase()}` : 'RELAY / TASKS';
+  const live = `${offline ? 'OFFLINE' : loaded ? '● LIVE' : 'LOADING'}${board.fetchedAt ? ` · last updated ${new Date(board.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Africa/Johannesburg', hour12: false })} SAST` : ''}`;
+  const header = [heading + ' · ' + (native ? offline ? 'Inbox unavailable: showing cached state' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`),
+    ...(native ? [nativeBoardTabs(board, offline, loaded).map(([id, title]) => id === view ? `[${title}]` : title).join('  ')] : []),
+    native ? `${view === 'agents' && board.localNode ? `LOCAL ${board.localNode.name} · ${localAgentCount} ${localAgentCount === 1 ? 'agent' : 'agents'} · ` : ''}${nativeCounts} · ${live}`
+      : `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${live}`]
+    .flatMap(text => wrapBoardText(text, width));
+  const footer = (searching ? [`/${filter}▏  Enter apply · Esc clear`] : notice ? [notice.text] : native && decisionReceipt
+    ? [`✓ ${decisionReceipt.message}`, decisionReceipt.kind === 'question' ? 'Any required review will appear in this Inbox.' : decisionReceipt.title,
+      'Esc dismiss acknowledgement · Tab view · Enter open · q quit']
+    : [native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search',
+      native ? view === 'schedules' ? 'n run result notifications · PgUp/Dn · r refresh · q quit'
+        : `h done · ${dispatchTask ? 'a assign · ' : ''}PgUp/Dn · r refresh · s status · q quit` : 'h done · i idle · r refresh · a assign · s status · q quit'])
+    .flatMap(text => wrapBoardText(text, width));
+  const bodyHeight = Math.max(1, height - header.length - footer.length - (native ? 3 : 2));
+  const visible = boardRowViewport(rowBlocks, selectedIndex, bodyHeight, rowScroll);
   const background = h(Box, { width, height, flexDirection: 'column' },
-    h(Box, { justifyContent: 'space-between' }, h(Text, { bold: true, color: 'cyan', dimColor: overlay }, native ? `RELAY / ${view === 'schedules' ? 'SCHEDULE' : view.toUpperCase()}` : 'RELAY / TASKS'),
-      h(Text, { dimColor: true }, native ? offline ? 'Inbox unavailable: showing cached state' : !loaded ? 'Loading inbox…' : `${board.agents.length} agents · ${board.inbox.length} need attention` : `${board.companies.length} companies · ${board.agents.length} agents`)),
-    native ? h(Box, { gap: 2 }, ...nativeBoardTabs(board, offline, loaded).map(([id, title]) =>
-      h(Text, { key: id, inverse: view === id, bold: view === id, color: view === id ? 'cyan' : undefined, dimColor: view !== id || overlay }, ` ${title} `))) : null,
-    native ? h(Box, { justifyContent: 'space-between', height: 1, overflow: 'hidden' },
-      view === 'agents' && board.localNode ? h(Box, { flexShrink: 1, overflow: 'hidden' },
-        h(Text, { bold: true, inverse: true, color: 'green', dimColor: overlay }, ' LOCAL '),
-        h(Text, { color: 'green', bold: true, dimColor: overlay, wrap: 'truncate-end' }, ` ${clean(board.localNode.name)} · ${localAgentCount} ${localAgentCount === 1 ? 'agent' : 'agents'}`))
-        : h(Text, { dimColor: true, wrap: 'truncate-end' }, nativeCounts),
-      h(Text, { color: offline ? 'yellow' : 'gray', wrap: 'truncate-end' }, `${offline ? 'OFFLINE' : loaded ? '● LIVE' : 'LOADING'}${board.fetchedAt ? ` · last updated ${new Date(board.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Africa/Johannesburg', hour12: false })} SAST` : ''}`))
-      : h(Text, { dimColor: Boolean(modal || detail), wrap: 'truncate-end' }, `OPEN ${summary.open}  ACTIVE ${summary.active}  BLOCKED ${summary.blocked}  REVIEW ${summary.review}  ${offline ? `OFFLINE ${offline}` : loaded ? 'LIVE' : 'LOADING'}`),
+    ...header.map((line, index) => h(Text, { key: `header:${index}`, wrap: 'truncate-end', flexShrink: 0, dimColor: overlay, color: index === 0 ? 'cyan' : undefined }, line)),
     h(Box, { borderStyle: native ? 'round' : 'single', borderColor: native || modal || assignment || reviewModal ? 'gray' : 'cyan',
       paddingX: native ? 1 : 0, paddingTop: native ? 1 : 0, flexDirection: 'column', flexGrow: 1, overflow: 'hidden' },
       !visible.length && native ? h(Box, { flexGrow: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
-        h(Text, { dimColor: true, wrap: 'truncate-end' }, emptyLabel),
-        h(Text, { dimColor: true, wrap: 'truncate-end' }, view === 'tasks' && !showDone ? 'Press h to include completed tasks.' : 'Tab switches views · r refreshes')) : null,
-      ...visible.map((row, index) => {
-        const active = start + index === selectedIndex && !modal && !assignment && !reviewModal && !detail && !decisionModal;
-        if (row.type === 'machine') return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
-          cardTitle(`${row.expanded ? '▾' : '▸'} ${row.name}${row.machineName && row.machineName !== row.name ? ` / ${row.machineName}` : ''} · ${row.count}${row.count !== row.total ? `/${row.total}` : ''} ${row.total === 1 ? 'agent' : 'agents'}`, active, row.local ? 'green' : 'cyan', row.local));
-        if (row.type === 'agent') return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
-          h(Text, { inverse: active, dimColor: overlay, color: 'cyan', wrap: 'truncate-end' },
-            `  ${row.last ? '└─' : '├─'} ${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`));
-        if (row.type === 'inbox') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
-          cardTitle(`${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`, active, row.item.kind === 'review' ? 'magenta' : 'yellow'),
-          h(Text, { wrap: 'truncate-end' }, `  ${clean(row.item.summary)}`),
-          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  ${clean(row.item.from)} · ${clean(row.item.stateLabel)}${row.item.locationLabel ? ` · ${clean(row.item.locationLabel)}` : ''}`));
-        if (native && row.type === 'routine') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
-          cardTitle(`${clean(row.routine.title)}  [${clean(row.routine.state)}]`, active, 'magenta'),
-          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  ${clean(row.routine.cron)} · ${clean(row.routine.timezone)}`),
-          h(Text, { dimColor: true, wrap: 'truncate-end' }, `  Next ${row.routine.nextRunAt ? lastSeenLabel(row.routine.nextRunAt) : '—'} · ${clean(row.routine.target || 'Unresolved target')}`));
+        h(Text, { dimColor: true, wrap: 'wrap' }, emptyLabel),
+        h(Text, { dimColor: true, wrap: 'wrap' }, view === 'tasks' && !showDone ? 'Press h to include completed tasks.' : 'Tab switches views · r refreshes')) : null,
+      ...visible.map((line, index) => {
+        const row = rows[line.rowIndex], active = line.rowIndex === selectedIndex && !overlay;
         const taskStyle = row.type === 'task' ? taskRowStyle(row.task, Boolean(modal || assignment || reviewModal || detail), row.context) : null;
-        const tone = row.type === 'section' || row.type === 'group' ? 'cyan' : ['routine', 'inbox'].includes(row.type) ? 'magenta' : taskStyle.color;
+        const tone = row.local ? 'green' : ['section', 'group', 'machine', 'agent'].includes(row.type) ? 'cyan' : ['routine', 'inbox'].includes(row.type) ? 'magenta' : taskStyle?.color;
         const dimmed = taskStyle?.dimColor ?? Boolean(modal || assignment || reviewModal || detail);
-        if (narrowReference && row.type === 'task' && row.task.reference) return h(Box, { key: row.id, height: taskRowHeight, flexDirection: 'column' },
-          h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'wrap' }, row.task.reference),
-          h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, clean(row.task.title)));
-        return h(Box, { key: row.id, height: 1, overflow: 'hidden' },
-          h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, h(Text, { wrap: 'truncate-end', inverse: active,
-            bold: row.type === 'section' || native && row.type === 'group', dimColor: dimmed || native && row.type === 'group' && !active, color: tone }, rowText(row))),
-          row.type === 'task' && (!native || taskColumns.status) ? h(Box, { width: native ? taskColumns.status : 13, marginLeft: native ? taskColumns.gap : 0,
-            flexShrink: 0, justifyContent: 'flex-end' },
-            h(Text, { inverse: active, dimColor: dimmed, color: tone, wrap: 'truncate-end' }, statusLabel(row.task))) : null);
+        const style = { inverse: active, dimColor: dimmed, color: tone, bold: line.heading && ['section', 'group', 'machine', 'inbox', 'routine'].includes(row.type), wrap: 'truncate-end' };
+        return h(Box, { key: `${row.id}:${index}`, height: 1, flexShrink: 0 },
+          h(Box, { width: line.leftWidth, flexGrow: line.leftWidth ? 0 : 1 }, h(Text, style, line.text ?? line.left ?? ' ')),
+          line.rightWidth ? h(Box, { width: line.rightWidth, marginLeft: line.gap }, h(Text, style, line.right)) : null);
       })),
-    searching ? h(Text, { dimColor: Boolean(modal || detail) }, `/${filter}▏  Enter apply · Esc clear`) : notice
-      ? h(Text, { dimColor: Boolean(modal || detail) }, notice.text)
-      : native && decisionReceipt ? h(Box, { flexDirection: 'column', height: 3, overflow: 'hidden' },
-        h(Text, { color: 'cyan', wrap: 'truncate-end' }, `✓ ${clean(decisionReceipt.message)}`),
-        h(Text, { dimColor: true, wrap: 'truncate-end' }, decisionReceipt.kind === 'question' ? 'Any required review will appear in this Inbox.' : clean(decisionReceipt.title)),
-        h(Text, { dimColor: true, wrap: 'truncate-end' }, 'Esc dismiss acknowledgement · Tab view · Enter open · q quit'))
-      : h(Box, { flexDirection: 'column' },
-        h(Text, { dimColor: Boolean(modal || detail) }, native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search'),
-        h(Text, { dimColor: Boolean(modal || assignment || reviewModal || detail) }, native && !assignTask
-          ? view === 'schedules' ? 'n run result notifications · r refresh · q quit' : 'h done · r refresh · s status · q quit' : 'h done · i idle · r refresh · a assign · s status · q quit')));
+    ...footer.map((line, index) => h(Text, { key: `footer:${index}`, wrap: 'truncate-end', flexShrink: 0, dimColor: overlay || !notice && !decisionReceipt,
+      color: notice || decisionReceipt ? 'cyan' : undefined }, line)));
   let detailView = detail;
   if (detail?.kind === 'routine' && detail.data) {
     const tasks = new Map(board.tasks.map(task => [`${task.companyId}:${task.id}`, task]));
@@ -726,7 +698,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   };
   return h(Box, { width, height }, background,
     modal ? h(StatusModal, { modal, setModal, submit, width, height }) : null,
-    assignment ? h(assignment.native ? NativeDispatchModal : AssignmentModal, { modal: assignment, setModal: setAssignment, submit: submitAssignment, width, height }) : null,
+    assignment ? h(assignment.native ? NativeDispatchModal : AssignmentModal, { modal: assignment, setModal: setAssignment, submit: submitAssignment, prepareHuman, width, height }) : null,
     reviewModal ? h(ReviewModal, { modal: reviewModal, setModal: value => {
       if (typeof value === 'function') setReviewModal(current => { const next = value(current); if (next?.reason !== undefined) setReviewFeedback(next.reason); return next; });
       else { if (value?.reason !== undefined) setReviewFeedback(value.reason); setReviewModal(value); }

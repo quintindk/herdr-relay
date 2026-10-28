@@ -37,7 +37,7 @@ try:
     for label in [b"Agents", b"Inbox", b"Grants", b"Schedule"]:
         data.clear()
         os.write(master, b"\t")
-        until(lambda current: re.search(rb"\x1b\[7m(?:\x1b\[[0-9;]*m)* " + label, current))
+        until(lambda current: re.search(rb"\[" + label + rb"[^\]]*\]", re.sub(rb"\x1b\[[0-9;]*m", b"", current)))
     until(sys.argv[4].encode())
     assert b"Schedule" in data
     time.sleep(0.2)

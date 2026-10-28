@@ -65,7 +65,7 @@ jobs:
       - name: Approved headless task and artifact capability canaries
         run: node scripts/verify-headless-setup.mjs --capabilities
       - name: Exact instruction revision approval, idle activation and refreshed native context
-        run: node scripts/verify-headless-setup.mjs --contract-update --capabilities
+        run: node scripts/verify-headless-setup.mjs --contract-update --capabilities --legacy-contract-refusal
       - name: Actual headless cron admission, granted effects and result publication
         run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell --run-result-notifications
       - name: Headless MCP denied without connector permissions

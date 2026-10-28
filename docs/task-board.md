@@ -1,5 +1,25 @@
 # Task Board
 
+## Native RC4 candidate
+
+Use `herdr-relay tui` for native Tasks, Agents, Inbox, Grants and Schedule. The
+Herdr toggle now opens that native board and focuses it immediately. Configure
+the explicit `prefix+t` binding with `herdr-relay plugin shortcut --dry-run`,
+then `herdr-relay plugin shortcut` and `herdr server reload-config` after linking
+the installed plugin. A conflicting key is not overwritten. Closing returns
+focus to the identity-verified original pane when it still exists.
+
+**a** offers **You (human)** followed by agents grouped by node. Human selection
+previews a guarded handback to Todo, not another agent execution. Existing result
+reviews and child assignments must be resolved separately. **PgUp/PgDn** scroll
+long list cards. Detail text is wrapped without losing paragraph/occurrence
+identity. In cron detail, **[ / ]** select an occurrence and **o** opens its exact
+linked task. Setup contract activation can hold admission even when the schedule
+revision itself is applied; that state is now shown explicitly.
+
+The remaining sections describe the historical Paperclip board, not the native
+RC4 launch path. See [RC4 scope](release-0.2.1-rc4.md) for the candidate boundary.
+
 ## Shortcut
 
 The local shortcut is **Ctrl+B, then T** (lowercase `t`): show/hide the task

@@ -10,6 +10,7 @@ import { startNodeService } from '../src/node-service.mjs';
 import { call } from '../src/client.mjs';
 import { inspectContract, tickHeadlessContractUpdates } from '../src/node-headless-contract.mjs';
 import { buildGrantsView } from '../src/grants-view.mjs';
+import { nativeBoard } from '../src/native-board.mjs';
 
 async function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/contract-revisions-'), store = new BackendStore(':memory:');
@@ -168,4 +169,58 @@ test('work requested before approval drains under its old revision instead of de
   assert.equal(readFileSync(join(f.root, f.contract), 'utf8'), 'Approved instructions');
   f.command('settle-existing', 'execution.settle', { id: admitted.id, expectedRevision: admitted.revision, outcome: 'failed', evidence: 'Isolated fixture terminal only' }, f.node);
   await f.tick(); assert.equal(f.store.get('headless_setup', f.setup.id).appliedContractRevision, 1);
+});
+
+for (const mode of ['legacy_refusal', 'uncertain', 'revision_conflict', 'tampered_hash', 'unrelated']) test(`contract activation classifies historical publications without deleting evidence: ${mode}`, async t => {
+  const f = await fixture(t), { request } = await f.request(); f.approve(request);
+  f.journal.save({ id: 'old-sweep', state: 'settled', execution: { id: 'old-sweep', state: 'completed', targetAgentId: f.setup.agentId } });
+  const command = { key: 'old-publication', action: 'headless.task', payload: { executionId: mode === 'unrelated' ? 'other-agent-run' : 'old-sweep',
+    id: 'not-an-execution', operation: 'comment.create', payload: { reason: 'Unsupported legacy field' } } };
+  const item = { ...f.journal.queue(command), state: 'conflict', error: mode === 'revision_conflict' ? 'stale_revision' : 'invalid_headless_request',
+    ...(mode === 'uncertain' ? { outcome: 'uncertain', effectsUncertain: true } : {}) };
+  f.journal.db.prepare('UPDATE outbox SET state=?,data=? WHERE key=?').run(item.state, JSON.stringify(item), command.key);
+  if (mode === 'tampered_hash') f.journal.db.prepare('UPDATE outbox SET hash=? WHERE key=?').run('changed', command.key);
+  const before = f.journal.db.prepare('SELECT * FROM outbox WHERE key=?').get(command.key);
+  await f.tick();
+  const allowed = ['legacy_refusal', 'unrelated'].includes(mode);
+  assert.equal(f.store.get('headless_setup', f.setup.id).appliedContractRevision, allowed ? 1 : 0);
+  assert.deepEqual(f.journal.db.prepare('SELECT * FROM outbox WHERE key=?').get(command.key), before);
+  if (!allowed) {
+    const status = await call(f.worker, 'POST', '/agent/headless-status', { id: f.setup.id });
+    assert.equal(status.contractActivation.wait.reason, 'unresolved_publication');
+    assert.deepEqual(status.contractActivation.wait.publicationKeys, ['old-publication']);
+  }
+});
+
+test('activation reports the exact work, binding and native-input waits and clears them after success', async t => {
+  const f = await fixture(t), { request } = await f.request(); f.approve(request);
+  f.journal.save({ id: 'old-run', state: 'terminal_unresolved', execution: { id: 'old-run', state: 'completed', targetAgentId: f.setup.agentId } });
+  await f.tick();
+  const status = () => call(f.worker, 'POST', '/agent/headless-status', { id: f.setup.id });
+  assert.deepEqual((await status()).contractActivation.wait.executionIds, ['old-run']);
+  f.journal.save({ ...f.journal.work('old-run'), state: 'settled' });
+  await tickHeadlessContractUpdates(f.journal, f.api, async () => null);
+  assert.equal((await status()).contractActivation.wait.reason, 'worker_binding_unavailable');
+  await tickHeadlessContractUpdates(f.journal, f.api, async () => ({ id: f.setup.bindingId, native: { snapshot: async () => ({ idle: true, inbox: [{}] }) } }));
+  assert.equal((await status()).contractActivation.wait.reason, 'native_input_pending');
+  f.idle = false; await f.tick();
+  assert.equal((await status()).contractActivation.wait.reason, 'native_session_busy');
+  f.idle = true; await f.tick();
+  assert.equal((await status()).contractActivation.wait, null);
+});
+
+test('Schedule exposes approved/unapplied contract state rather than a false active next-run preview', async t => {
+  const f = await fixture(t), { request } = await f.request(); f.approve(request);
+  const board = nativeBoard(async (method, path) => {
+    assert.equal(method, 'GET');
+    if (path === '/v1/info') return { userId: 'owner', instanceId: f.store.instance };
+    const [, , collection, id] = path.split('?')[0].split('/'), kind = collection.slice(0, -1);
+    return id ? f.store.get(kind, id) : { items: f.store.all(kind) };
+  });
+  const state = (await board.read()).routines[0];
+  assert.equal(state.state, 'awaiting_contract_activation'); assert.equal(state.nextRunAt, null);
+  assert.match(state.delivery.reason, /revision 1, applied 0/);
+  assert.equal((await board.detailRoutine({ scheduleId: 'sweep' })).state, state.state);
+  await f.tick();
+  assert.equal((await board.read()).routines[0].state, 'active');
 });

@@ -37,7 +37,8 @@ try {
   assert.equal(events.some(event => event.type === 'attachment_sidebar_unavailable'), false);
   const log = readFileSync(join(clientHome, '.local/share/opencode/log/opencode.log'), 'utf8');
   assert.equal(log.includes('plugin operation failed'), false, log.split('\n').filter(line => line.includes('plugin operation failed')).join('\n'));
-  const screen = stripVTControlCharacters(readFileSync(outputFile, 'utf8'));
+   const screen = stripVTControlCharacters(readFileSync(outputFile, 'utf8'));
+  assert.ok(screen.includes('◆') && screen.includes('○'), 'Installed sidebar did not render the compact status icons');
   assert.ok(screen.includes('Relay'), 'Installed sidebar did not render Relay text');
   assert.ok(screen.includes('Not attached to this chat') && screen.includes('Use /relay-attach'), 'Installed sidebar did not render the resolved attachment label and command');
   console.log(JSON.stringify({ passed: true, package: installed, runtime: info.version, productionPackageTuiLoaded: true,

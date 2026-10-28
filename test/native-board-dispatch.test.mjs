@@ -64,3 +64,71 @@ test('Schedule detail displays safe failure diagnostics instead of hiding them b
   assert.match(detail.runs[0].summary, /Backend execution admission was missing/);
   assert.deepEqual(detail.runs[0].failure, failure);
 });
+
+test('human handback previews and withdraws the exact assignment, returns Todo and preserves human ownership', async t => {
+  const f = await fixture(t);
+  const run = await f.board.dispatchTask({ taskId: 'task', expectedRevision: 1, key: 'send', payload: { targetAgentId: 'agent', instructions: 'Bounded task' } });
+  const preview = await f.board.prepareHandback({ taskId: 'task' });
+  assert.equal(preview.executionId, run.execution.id); assert.equal(preview.alreadyHuman, false);
+  const handback = f.board.handbackTask;
+  const input = { ...preview, key: 'take-back', reason: 'I will finish this myself' };
+  const result = await handback(input);
+  assert.equal(result.execution.state, 'cancelled'); assert.equal(result.execution.administrativeDisposition.nativeProcessTerminationClaimed, false);
+  const task = f.backend.store.get('task', 'task'); assert.equal(task.status, 'todo'); assert.equal(task.responsibleUserId, 'owner');
+  const snapshot = await f.board.read(); assert.equal(snapshot.tasks[0].attentionLabel, 'With you'); assert.equal(snapshot.tasks[0].executionAgentId, undefined);
+  assert.deepEqual(await handback(input), result); assert.equal(f.backend.store.all('execution').length, 1);
+  assert.equal((await f.board.prepareHandback({ taskId: 'task' })).alreadyHuman, true);
+});
+
+test('lost human handback reply reconciles the original key without withdrawing a later assignment', async t => {
+  const f = await fixture(t);
+  await f.board.dispatchTask({ taskId: 'task', expectedRevision: 1, key: 'send', payload: { targetAgentId: 'agent', instructions: 'Check' } });
+  let lose = true;
+  const board = nativeBoard(async (method, path, body) => {
+    const result = await f.api(method, path, body);
+    if (body?.action === 'execution.handback' && lose) { lose = false; throw Error('Lost handback reply'); }
+    return result;
+  }, { decisionJournal: f.journal });
+  const input = { ...await board.prepareHandback({ taskId: 'task' }), key: 'take-back', reason: 'Human takeover' };
+  await assert.rejects(board.handbackTask(input), /Lost handback reply/);
+  assert.equal(f.journal.pending().length, 1);
+  const task = f.backend.store.get('task', 'task');
+  await f.board.dispatchTask({ taskId: 'task', expectedRevision: task.revision, key: 'later-run', payload: { targetAgentId: 'agent', instructions: 'Another explicit task turn' } });
+  await board.handbackTask(input);
+  assert.equal(f.journal.pending().length, 0);
+  assert.equal(f.backend.store.all('execution').filter(e => e.state === 'requested').length, 1);
+  await assert.rejects(board.handbackTask({ ...input, reason: 'Changed confirmation' }), { code: 'decision_conflict' });
+});
+
+test('handback refuses submitted results and outstanding children and fences task revisions atomically', async t => {
+  const f = await fixture(t);
+  const { execution } = await f.board.dispatchTask({ taskId: 'task', expectedRevision: 1, key: 'send', payload: { targetAgentId: 'agent', instructions: 'Check' } });
+  const preview = await f.board.prepareHandback({ taskId: 'task' });
+  f.backend.store.save('execution', { ...execution, state: 'in_review', result: { candidate: 'submitted' } });
+  await assert.rejects(f.board.prepareHandback({ taskId: 'task' }), { code: 'review_required' });
+  f.backend.store.save('execution', execution);
+  f.backend.store.save('execution', { id: 'child', revision: 1, parentExecutionId: execution.id, state: 'requested' });
+  await assert.rejects(f.board.prepareHandback({ taskId: 'task' }), { code: 'child_work_pending' });
+  f.backend.store.save('execution', { id: 'child', revision: 2, parentExecutionId: execution.id, state: 'completed' });
+  const task = f.backend.store.get('task', 'task'); f.backend.store.save('task', { ...task, revision: task.revision + 1 });
+  await assert.rejects(f.board.handbackTask({ ...preview, key: 'stale', reason: 'Take back' }), { code: 'stale_handback' });
+  await assert.rejects(f.command('atomic-fence', 'execution.handback', { id: execution.id, expectedRevision: execution.revision, taskRevision: preview.expectedRevision, reason: 'Old preview' }), { code: 'stale_revision' });
+  f.backend.store.save('task', { ...task, revision: task.revision + 2, status: 'done' });
+  await assert.rejects(f.board.prepareHandback({ taskId: 'task' }), { code: 'task_terminal' });
+  await assert.rejects(f.command('closed-task', 'execution.handback', { id: execution.id, expectedRevision: execution.revision, taskRevision: task.revision + 2, reason: 'Do not reopen' }), { code: 'task_terminal' });
+  assert.equal(f.backend.store.get('task', 'task').status, 'done');
+});
+
+test('human handback supersedes unanswered questions without answering them or claiming native success', async t => {
+  const f = await fixture(t);
+  await f.command('attach', 'agent.attach', { id: 'agent', expectedBindingRevision: 0, conversationId: 'session', directory: '/work', bindingId: 'binding' });
+  const { execution } = await f.board.dispatchTask({ taskId: 'task', expectedRevision: 1, key: 'send', payload: { targetAgentId: 'agent', instructions: 'Check' } });
+  const credential = await f.api('POST', '/v1/node-credentials', { nodeId: 'node', key: 'handback-node' }), node = f.api.withToken(credential.token);
+  const admitted = await node('POST', '/v1/commands', { key: 'admit', action: 'execution.admit', payload: { id: execution.id, expectedRevision: execution.revision, bindingId: 'binding', runId: 'run' } });
+  await node('POST', '/v1/commands', { key: 'question', action: 'question.ask', payload: { id: 'question', executionId: admitted.id, expectedRevision: admitted.revision, prompt: 'Which region?', humanRequired: true } });
+  await f.board.handbackTask({ ...await f.board.prepareHandback({ taskId: 'task' }), key: 'take-back', reason: 'I am handling it' });
+  const question = f.backend.store.get('question', 'question');
+  assert.equal(question.status, 'superseded'); assert.equal(question.answer, undefined);
+  const result = f.backend.store.get('execution', execution.id);
+  assert.equal(result.result, undefined); assert.equal(result.administrativeDisposition.successfulCompletionClaimed, false);
+});

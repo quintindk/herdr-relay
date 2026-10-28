@@ -144,12 +144,12 @@ test('Ink status comment stays inside a fixed scrolling text box', async t => {
     statusTask: async () => assert.fail('No submission in viewport test'), interval: 60000, width: 70, height: 24 }));
   t.after(() => instance.unmount());
   await tick(); instance.stdin.write('j'); await tick(); instance.stdin.write('s'); await tick(); instance.stdin.write('\t'); await tick();
-  const comment = Array.from({ length: 40 }, (_, index) => `comment-${String(index + 1).padStart(2, '0')}`).join(' ');
+  const comment = Array.from({ length: 120 }, (_, index) => `comment-${String(index + 1).padStart(2, '0')}`).join(' ');
   instance.stdin.write(comment); await tick();
   const frame = stripVTControlCharacters(instance.lastFrame()), lines = frame.split('\n');
   assert.ok(lines.length <= 24);
   assert.match(frame, /Comment \(optional\)/); assert.match(frame, /\d+\/4000 · \d+ lines/);
-  assert.doesNotMatch(frame, /comment-01/); assert.match(frame, /comment-40/);
+  assert.doesNotMatch(frame, /comment-01/); assert.match(frame, /comment-120/);
   assert.match(frame, /┌|└/); assert.match(frame, /Enter review · Esc cancel/);
 });
 
@@ -239,8 +239,32 @@ test('Ink native cron detail shows paused taskless completion receipts and sanit
   instance.stdin.write('\r'); await tick();
   const frame = stripVTControlCharacters(instance.lastFrame());
   assert.match(frame, /CRON · native-job/); assert.match(frame, /clock preview/);
-  assert.match(frame, /completed.*taskless.*Cron completed/);
+  assert.match(frame, /completed[\s\S]*taskless[\s\S]*Cron completed/);
   assert.doesNotMatch(frame, /identity mismatch|not on board|\u202e/);
+});
+
+test('narrow cron reports scroll through full paragraphs and occurrence selection opens the exact linked task', async t => {
+  const tasks = ['one', 'two'].map((id, i) => ({ id, companyId: 'native', identifier: `REL-${i + 1}`, title: id, status: 'todo' }));
+  const routine = { id: 'sweep', title: 'sweep', companyId: 'native', state: 'active', backendStatus: 'applied', cron: '* * * * *', timezone: 'Africa/Johannesburg',
+    runs: tasks.map((task, i) => ({ id: `run-${task.id}`, nativeOccurrence: true, nativeTaskId: task.id, linkedIssueId: task.id, status: 'completed',
+      triggeredAt: '2026-10-28T09:00:00Z', summary: i === 0 ? `${'Source paragraph with retained evidence.\n\n'.repeat(10)}FIRST_REPORT_TAIL` : 'SECOND_REPORT' })) };
+  const opened = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ companies: [{ id: 'native', name: 'Relay' }], tasks, agents: [], projects: [], inbox: [], routines: [routine] }),
+    detailRoutine: async () => routine, detailTask: async input => { opened.push(input.taskId); return { task: tasks.find(t => t.id === input.taskId), comments: [] }; },
+    interval: 60000, width: 40, height: 24 }));
+  t.after(() => instance.unmount()); await tick();
+  for (let i = 0; i < 4; i++) { instance.stdin.write('\t'); await tick(); }
+  instance.stdin.write('\r'); await tick();
+  let tail = false;
+  for (let i = 0; i < 18; i++) {
+    const frame = stripVTControlCharacters(instance.lastFrame());
+    assert.ok(frame.split('\n').length <= 24); assert.ok(frame.split('\n').every(line => line.length <= 40));
+    if (frame.includes('FIRST_REPORT_TAIL')) { tail = true; break; }
+    instance.stdin.write('\x1b[6~'); await tick();
+  }
+  assert.ok(tail, 'Full first result must remain reachable by line-based paging');
+  instance.stdin.write(']'); await tick(); assert.match(stripVTControlCharacters(instance.lastFrame()), /SECOND_REPORT/);
+  instance.stdin.write('o'); await tick(); assert.deepEqual(opened, ['two']);
 });
 
 test('Ink task detail clips long content and scrolls inside a fixed modal viewport', async t => {

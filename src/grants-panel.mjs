@@ -5,6 +5,8 @@ import { decisionText } from './task-board-decision.mjs';
 import { wrapBoardText } from './task-board-view.mjs';
 import { grantDate } from './grants-view.mjs';
 import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
+import { BoardText, modalSize, appendBoardInput } from './board-text.mjs';
+import { boardRowViewport } from './board-row-layout.mjs';
 
 const h = React.createElement, clean = value => decisionText(value).trim();
 export const nativeBoardViews = ['tasks', 'agents', 'inbox', 'grants', 'schedules'];
@@ -37,14 +39,24 @@ function GrantDialog({ modal, setModal, submit, board, width, height }) {
       setModal({ ...modal, [name]: Math.max(0, Math.min(values.length - 1, (modal[name] ?? 0) + delta)) }); return;
     }
     if ((input === ' ' || delta) && ['directories', 'dispatch', 'replacement'].includes(modal.field)) { setModal({ ...modal, [modal.field]: !modal[modal.field] }); return; }
-    if (key.return && choices.length) { setModal({ ...modal, confirm: true, error: '' }); return; }
+    if (key.return && !key.shift && choices.length) { setModal({ ...modal, confirm: true, error: '', scroll: 0 }); return; }
     if (['root', 'profile', 'limit', 'reason'].includes(modal.field)) {
       const name = modal.field, current = modal[name] ?? '';
-      const value = key.backspace || key.delete ? [...current].slice(0, -1).join('') : input && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(input) ? current + input : current;
+      const value = appendBoardInput(current, input, key, name === 'reason' ? 4000 : 4096);
       if (value.length <= (name === 'reason' ? 4000 : 4096)) setModal({ ...modal, [name]: value, ...(name === 'root' ? { rootEdited: true } : {}) });
     }
   });
-  const w = Math.max(16, Math.min(104, width - 2)), size = Math.max(10, Math.min(height - 2, 34));
+  const { width: w, height: size } = modalSize(width, height, 104, 34);
+  const columns = Math.max(1, w - 6);
+  const title = creating ? 'New interactive provisioning permission' : item?.title ?? 'Grants';
+  const titleRows = Math.min(2, wrapBoardText(title, columns).length);
+  const choiceLines = choices.flatMap((choice, index) => wrapBoardText(`${modal.index === index ? '●' : '○'} ${choice}`, columns).map(text => ({ text, index })));
+  const hint = modal.locked ? 'Unconfirmed decision retained. Esc close; reconcile it in Grants → Pending.' : modal.confirm ? 'Enter apply · Esc back' :
+    choices.length ? 'Esc close · Enter review · Tab edit · PgUp/Dn' : 'Esc close · PgUp/Dn scroll · t details';
+  const hintRows = wrapBoardText(hint, columns).length;
+  const statusText = modal.error ? 'Error: inspect details' : modal.confirm ? `Confirm: ${choices[modal.index]}` : '';
+  const statusRows = statusText ? wrapBoardText(statusText, columns).length : 0;
+  const reasonRows = choices.length && item?.kind !== 'publication' ? 3 : 0;
   const mark = (field, value) => `${modal.field === field && !modal.confirm ? '› ' : '  '}${value}`;
   const details = creating ? [mark('agent', `Requesting agent: ${requester?.displayName ?? requester?.name ?? 'No enrolled interactive agents'}`),
     mark('node', `Destination: ${node?.name ?? 'No nodes'}`), mark('root', `Folder scope: ${modal.root}`), mark('profile', `Profile: ${modal.profile}`),
@@ -61,27 +73,29 @@ function GrantDialog({ modal, setModal, submit, board, width, height }) {
     ...(item.kind === 'publication' ? [item.context, item.summary] : []),
     ...(modal.technical ? [`Identity: ${item.entityId}`, `Revision: ${item.revision}`, `Node: ${item.nodeId ?? ''}`, `Request hash: ${item.requestHash ?? ''}`] : []),
   ] : ['Loading security item…'];
-  const lines = details.filter(Boolean).flatMap(line => wrapBoardText(clean(line), w - 6));
-  const viewport = Math.max(2, size - (choices.length ? choices.length + 9 : 6)), offset = Math.min(modal.scroll, Math.max(0, lines.length - viewport));
+  const lines = [title, ...(modal.error ? ['Error', modal.error] : []), ...details.filter(Boolean), ...(modal.confirm && modal.reason ? [`Reason\n${modal.reason}`] : [])].flatMap(line => wrapBoardText(line, columns));
+  const viewport = Math.max(1, size - 2 - titleRows - choiceLines.length - reasonRows - statusRows - hintRows), offset = Math.min(modal.scroll, Math.max(0, lines.length - viewport));
   return h(Box, { position: 'absolute', left: Math.max(0, Math.floor((width - w) / 2)), top: Math.max(0, Math.floor((height - size) / 2)),
     width: w, height: size, borderStyle: 'round', borderColor: 'yellow', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
-  h(Text, { bold: true, color: 'yellow' }, creating ? 'New interactive provisioning permission' : clean(item?.title ?? 'Grants')),
+  h(BoardText, { text: title, columns, rows: titleRows, bold: true, color: 'yellow' }),
   h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' }, ...lines.slice(offset, offset + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line))),
-  ...choices.map((choice, i) => h(Text, { key: choice, inverse: modal.index === i && modal.field === 'choice', bold: modal.index === i, color: modal.index === i ? 'yellow' : undefined }, `${modal.index === i ? '●' : '○'} ${choice}`)),
-  choices.length && item?.kind !== 'publication' ? h(Text, { inverse: modal.field === 'reason', wrap: 'truncate-end' }, mark('reason', `Reason (optional): ${modal.reason ?? ''}`)) : null,
-  modal.error ? h(Text, { color: 'red', wrap: 'wrap' }, clean(modal.error)) : modal.confirm ? h(Text, { bold: true, color: 'yellow' }, `Confirm: ${choices[modal.index]}`) : null,
-  h(Box, { flexGrow: 1 }),
-  h(Text, { dimColor: true, wrap: 'truncate-end' }, modal.locked ? 'Unconfirmed decision retained. Esc close; reconcile it in Grants → Pending.' : modal.confirm ? 'Enter apply · Esc back' :
-    choices.length ? 'Esc close · Enter review · Tab edit · PgUp/Dn' : 'Esc close · PgUp/Dn scroll · t details'));
+  ...choiceLines.map((choice, i) => h(Text, { key: i, wrap: 'truncate-end', flexShrink: 0, inverse: modal.index === choice.index && modal.field === 'choice',
+    bold: modal.index === choice.index, color: modal.index === choice.index ? 'yellow' : undefined }, choice.text)),
+  reasonRows ? h(BoardText, { text: mark('reason', `Reason (optional): ${modal.reason ?? ''}${modal.field === 'reason' && !modal.confirm ? '▏' : ''}`),
+    columns, rows: reasonRows, tail: !modal.confirm, inverse: modal.field === 'reason' }) : null,
+  statusRows ? h(BoardText, { text: statusText, columns, rows: statusRows, color: modal.error ? 'red' : 'yellow' }) : null,
+  h(BoardText, { text: hint, columns, rows: hintRows, dimColor: true }));
 }
 
 export function GrantsPanel({ board, offline, loaded, width, height, detailGrant, decideGrant, createGrant, refresh, onView, onQuit, pendingGrantDecisions }) {
   const [section, setSection] = useState(0), [selected, setSelected] = useState(0), [filter, setFilter] = useState(''), [searching, setSearching] = useState(false);
   const [modal, setModal] = useState(null), [notice, setNotice] = useState('');
+  const [rowScroll, setRowScroll] = useState(0);
   const sections = ['pending', 'active', 'history'], grants = board.grants ?? { pending: [], active: [], history: [] };
   const items = (grants[sections[section]] ?? []).filter(item => !filter || clean(`${item.title} ${item.summary} ${item.requesterName} ${item.nodeName} ${(item.folders ?? []).join(' ')}`).toLowerCase().includes(filter.toLowerCase()));
   const index = Math.min(selected, Math.max(0, items.length - 1));
   useEffect(() => { setSelected(0); }, [section, filter]);
+  useEffect(() => { setRowScroll(0); }, [selected, section, filter, width, height]);
   const open = async item => {
     setModal({ item, busy: true, index: 0, field: 'choice', scroll: 0, reason: '', key: `human-grant:${randomUUID()}` });
     try {
@@ -132,6 +146,7 @@ export function GrantsPanel({ board, offline, loaded, width, height, detailGrant
     if (key.leftArrow || key.rightArrow || ['1', '2', '3'].includes(input)) { setSection(['1', '2', '3'].includes(input) ? Number(input) - 1 : (section + (key.rightArrow ? 1 : 2)) % 3); return; }
     if (key.downArrow || input === 'j') setSelected(v => Math.max(0, Math.min(items.length - 1, v + 1)));
     if (key.upArrow || input === 'k') setSelected(v => Math.max(0, v - 1));
+    if (key.pageDown || key.pageUp) { setRowScroll(value => Math.max(0, Math.min(Math.max(0, (blocks[index]?.length || 0) - viewport), value + (key.pageDown ? viewport - 1 : 1 - viewport)))); return; }
     if (input === '/') setSearching(true);
     if (input === 'r') refresh();
     if (key.return && items[index] && detailGrant) void open(items[index]);
@@ -144,19 +159,21 @@ export function GrantsPanel({ board, offline, loaded, width, height, detailGrant
         reason: '', scroll: 0, key: `human-grant:${randomUUID()}`, entityId: `permission_${randomUUID()}` });
     }
   });
-  const count = Math.max(1, Math.floor((height - 8) / 4)), start = Math.max(0, Math.min(index - Math.floor(count / 2), items.length - count));
+  const header = ['RELAY / GRANTS', nativeBoardTabs(board, offline, loaded).map(([id, title]) => id === 'grants' ? `[${title}]` : title).join('  '),
+    sections.map((name, i) => `${section === i ? '› ' : ''}${name[0].toUpperCase() + name.slice(1)} (${!loaded ? '…' : !board.grantsAvailable ? '?' : grants[name]?.length ?? 0})`).join('  '),
+    offline ? 'OFFLINE · decisions remain retained for reconciliation' : 'Security requests and permissions. Folder scope is not an OS sandbox.'].flatMap(text => wrapBoardText(text, width));
+  const footer = [searching ? `/${filter}▏` : notice || '←/→ or 1/2/3 sections · j/k move · Enter inspect · n new permission',
+    'Tab main view · PgUp/Dn · / search · r refresh · q quit'].flatMap(text => wrapBoardText(text, width));
+  const viewport = Math.max(1, height - header.length - footer.length - 2);
+  const blocks = items.map(item => [item.title, `${item.requesterName ?? item.from ?? ''} → ${item.nodeName ?? 'This terminal'} · ${item.stateLabel}`,
+    item.folders?.join('\n') || item.summary || '', ''].flatMap((text, field) => wrapBoardText(text, Math.max(1, width - 4)).map(text => ({ text, heading: field === 0 }))));
+  const visible = boardRowViewport(blocks, index, viewport, rowScroll);
   return h(Box, { width, height, flexDirection: 'column' },
-    h(Text, { bold: true, color: 'yellow' }, 'RELAY / GRANTS'),
-    h(Box, { gap: 2 }, ...nativeBoardTabs(board, offline, loaded).map(([id, title]) => h(Text, { key: id, inverse: id === 'grants', color: id === 'grants' ? 'yellow' : undefined }, ` ${title} `))),
-    h(Box, { gap: 2 }, ...sections.map((name, i) => h(Text, { key: name, inverse: section === i, color: section === i ? 'yellow' : undefined }, ` ${name[0].toUpperCase() + name.slice(1)} (${!loaded ? '…' : !board.grantsAvailable ? '?' : grants[name]?.length ?? 0}) `))),
-    h(Text, { dimColor: true }, offline ? 'OFFLINE · decisions remain retained for reconciliation' : 'Security requests and permissions. Folder scope is not an OS sandbox.'),
+    ...header.map((line, i) => h(Text, { key: `header:${i}`, color: i === 0 ? 'yellow' : undefined, wrap: 'truncate-end', flexShrink: 0 }, line)),
     h(Box, { flexGrow: 1, borderStyle: 'round', borderColor: 'gray', paddingX: 1, flexDirection: 'column', overflow: 'hidden' },
       !loaded ? h(Text, { dimColor: true }, 'Loading Grants…') : !board.grantsAvailable ? h(Text, { color: 'yellow' }, 'Backend upgrade required for Grants management.') : !items.length ? h(Text, { dimColor: true }, `No ${sections[section]} security items.`) : null,
-      ...items.slice(start, start + count).map((item, i) => h(Box, { key: item.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
-        h(Text, { bold: true, inverse: start + i === index && !modal, color: sections[section] === 'pending' ? 'yellow' : 'cyan', wrap: 'truncate-end' }, clean(item.title)),
-        h(Text, { wrap: 'truncate-end' }, `  ${clean(item.requesterName ?? item.from ?? '')} → ${clean(item.nodeName ?? 'This terminal')} · ${clean(item.stateLabel)}`),
-        h(Text, { dimColor: true, wrap: 'truncate-end' }, `  ${clean(item.folders?.join(' · ') || item.summary || '')}`)))),
-    h(Text, { color: notice ? 'cyan' : undefined, dimColor: !notice, wrap: 'truncate-end' }, searching ? `/${filter}▏` : notice || '←/→ or 1/2/3 sections · j/k move · Enter inspect · n new permission'),
-    h(Text, { dimColor: true }, 'Tab main view · / search · r refresh · q quit'),
+      ...visible.map((line, i) => h(Text, { key: i, bold: line.heading, inverse: line.rowIndex === index && !modal,
+        color: line.heading ? sections[section] === 'pending' ? 'yellow' : 'cyan' : undefined, wrap: 'truncate-end', flexShrink: 0 }, line.text || ' '))),
+    ...footer.map((line, i) => h(Text, { key: `footer:${i}`, dimColor: !notice, color: notice ? 'cyan' : undefined, wrap: 'truncate-end', flexShrink: 0 }, line)),
     modal ? h(GrantDialog, { modal, setModal, submit, board, width, height }) : null);
 }
