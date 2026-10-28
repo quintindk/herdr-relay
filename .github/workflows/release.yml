@@ -79,9 +79,9 @@ jobs:
             echo "Release already exists. Refusing to replace it or its assets."
             exit 1
           fi
-          FLAGS=(--latest=false)
+          FLAGS=(--latest)
           if [[ "$RELEASE_TAG" == *-* ]]; then
-            FLAGS+=(--prerelease)
+            FLAGS=(--prerelease --latest=false)
           fi
           gh release create "$RELEASE_TAG" --verify-tag --title "Herdr Relay $RELEASE_TAG" \
             --notes-file RELEASE-NOTES.md "${FLAGS[@]}" \

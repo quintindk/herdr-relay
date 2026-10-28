@@ -22,8 +22,7 @@ herdr-relay doctor
 CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
-Activate the exact **published** target version first. The examples below use
-0.2.1 only after its release exists:
+Activate the exact **published** target version first:
 
 ```sh
 herdr-relay release install --version 0.2.1

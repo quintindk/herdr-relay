@@ -1,7 +1,6 @@
-# Herdr Relay 0.2.1 — unreleased
+# Herdr Relay 0.2.1
 
-First stable release preparation. This source tree is not a published stable
-package, and preparation does not upgrade services.
+First stable release of Herdr Relay. Publication does not upgrade existing services.
 
 ## Supported product
 
@@ -22,5 +21,5 @@ receipts and recovery records.
 
 Protocol remains **relay/0.2**, backend schema **2**, node journal schema **1**.
 RC4-to-0.2.1 is a compatible code switch, not a database migration.
-Publication still requires the separate clean-source, exact-tag, supported-host,
-installed-package and zero-vulnerability audit gates in [releasing](releasing.md).
+Release gates verify clean source, the exact version tag, supported hosts,
+installed-package behaviour and a zero-vulnerability production audit.

@@ -17,9 +17,8 @@ version tag. Packages are distributed through GitHub Releases, not npm.
    hosts and a fresh zero-vulnerability production audit. An unavailable audit is
    not a passed audit. Supplemental host checks do not replace this matrix.
 
-The retained older-version fixtures test native schema/adoption/rollback safety.
-They are not shipped integrations, current setup instructions or certification of
-physical second-machine/business-source coverage.
+The RC4 baseline fixture tests compatible upgrades and rollback. It is not shipped
+or certification of physical second-machine/business-source coverage.
 
 ## Package verification
 
@@ -65,8 +64,8 @@ permissions; only the final publication job gets `contents: write`.
 
 The release job takes `docs/release-VERSION.md`, checks tag/version/source evidence
 and publishes all three assets. Candidate versions are prereleases; stable 0.2.1
-has no prerelease suffix. The workflow currently uses `--latest=false`, so it does
-not silently change the repository's latest-release selection.
+has no prerelease suffix. Stable releases become the latest release. Prereleases
+use `--prerelease --latest=false` and do not replace the stable selection.
 
 Existing releases/assets are never replaced. Do not retarget published tags,
 force-push release history or reuse a published version for different bytes. A
