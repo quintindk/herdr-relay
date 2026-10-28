@@ -2,8 +2,8 @@
 
 Agents can exchange informational messages and status updates without a task,
 execution, active worker turn or delegation grant. This is a separate native Relay
-capability, not task creation disguised as messaging. It requires the updated
-backend, node and OpenCode server plugin. RC3 does not include it.
+capability, not task creation disguised as messaging. Backend, node and OpenCode
+plugins negotiate the supported messaging and reply capabilities.
 
 ## Send and inspect
 
@@ -11,11 +11,11 @@ In an enrolled agent chat, discover the exact recipient with `relay_agents`, the
 
 ```json
 {
-  "key": "localbox-connectivity-20261022T1007",
-  "recipientAgentId": "EXACT_SMAL_AGENT_ID",
+  "key": "readiness-status-v1",
+  "recipientAgentId": "EXACT_RECIPIENT_AGENT_ID",
   "kind": "status",
-  "subject": "LocalBox management connectivity recovered",
-  "body": "Outer VM running, node Arc agents connected, cluster ConnectedRecently, bridge running. Internal Kubernetes/storage/workload readiness remains unverified. No repairs or deployments performed. Compute charges remain active. Evidence: repository-relative report path. No action requested."
+  "subject": "Bounded readiness check completed",
+  "body": "The local readiness check completed. Business-source coverage and external effects were not assessed. No action requested."
 }
 ```
 
@@ -41,7 +41,7 @@ CLI transport uses the same exact worker context, without an owner token:
 
 ```bash
 herdr-relay native work message-send --context PRIVATE_WORKER_JSON \
-  --key localbox-connectivity-20261022T1007 --file MESSAGE_FIELDS_JSON
+  --key readiness-status-v1 --file MESSAGE_FIELDS_JSON
 herdr-relay native work messages --context PRIVATE_WORKER_JSON --file SENT_QUERY_JSON
 herdr-relay native work message --context PRIVATE_WORKER_JSON --file MESSAGE_ID_JSON
 ```
@@ -72,7 +72,7 @@ States are `queued`, `delivering`, `uncertain`, `delivered` or `blocked`:
   missing. Such loss remains blocked for explicit reconciliation.
 - An admitted message stays pinned to its original receiving conversation.
   Replacement does not silently redirect it into another chat.
-- RC7 senders default to a structured `replyPolicy: "once"`. It permits at most
+- Senders default to a structured `replyPolicy: "once"`. It permits at most
   one optional informational response with `replyToMessageId` identifying the
   original message and the original sender as recipient. `replyPolicy: "none"`
   explicitly disables replies. Historical envelopes without a policy remain none.

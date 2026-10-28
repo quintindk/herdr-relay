@@ -1,14 +1,10 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.1-rc4",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "description": "Durable native tasks, agent collaboration and node services for Herdr and OpenCode",
   "type": "module",
-  "exports": {
-    ".": "./src/adapter.mjs",
-    "./server": "./src/adapter.mjs"
-  },
   "bin": {
     "herdr-relay": "./src/cli.mjs"
   },
@@ -27,9 +23,9 @@
     "scripts/install-native-node.mjs",
     "scripts/install-native-backend.mjs",
     "scripts/verify-backend-ingress.mjs",
-    "scripts/migrate-paperclip-tasks.mjs",
     "scripts/migrate-task-references.mjs",
     "herdr-plugin.toml",
+    "CHANGELOG.md",
     "docs/*.md"
   ],
   "engines": {
@@ -44,7 +40,7 @@
     "build:tui": "node scripts/build-tui.mjs",
     "prepack": "npm run build:tui",
     "board": "node src/cli.mjs native board",
-    "start": "node src/cli.mjs service",
+    "start": "node src/cli.mjs native backend run",
     "check": "node scripts/check.mjs",
     "test": "node --test test/*.test.mjs",
     "test:v2": "npm --prefix packages/opencode-relay test",
@@ -56,8 +52,7 @@
     "ink": "^8.0.0",
     "jsonc-parser": "3.3.1",
     "react": "^19.3.0",
-    "solid-js": "1.9.17",
-    "zod": "4.6.6"
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
     "@babel/core": "7.29.7",

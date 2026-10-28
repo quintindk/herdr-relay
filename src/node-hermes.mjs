@@ -1,7 +1,6 @@
 import { Hermes, observeHermes, hermesConfig } from './hermes.mjs';
 
-// Reuse the verified Hermes transport and terminal correlation rather than
-// translating backend identities into invented Paperclip agents.
+// Reuse the verified Hermes transport and correlate its native terminal events.
 export function hermesNodeBinding(entry) {
   const native = new Hermes({ conversationId: entry.conversationId, hermes: hermesConfig(entry.hermes) });
   return {

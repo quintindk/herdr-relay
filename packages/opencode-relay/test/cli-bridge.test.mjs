@@ -99,7 +99,7 @@ test('CLI coverage is a transport, not a second list of permitted operations', a
     ['native', 'schedule', 'create'], ['native', 'agent', 'attach'], ['native', 'work', 'read'], ['native', 'interactive', 'dispatch'],
     ['native', 'command'], ['native', 'task', 'migrate-references'], ['headless', 'grant'], ['headless', 'setup'], ['headless', 'provision'],
     ['node', 'configure-interactive'], ['node', 'join'], ['node', 'bootstrap'], ['node', 'upgrade'], ['backend', 'backup'],
-    ['plugin', 'install'], ['skills', 'install'], ['tasks', 'export'], ['doctor'], ['release', 'install'], ['upgrade', 'rollback'], ['tui', '--json'],
+    ['plugin', 'install'], ['skills', 'install'], ['doctor'], ['release', 'install'], ['upgrade', 'rollback'], ['tui', '--json'],
     ['native', 'a-future-cli-command'],
     ...nativeAdministrationGroups.map(group => [group, 'a-future-operation']),
   ]) {

@@ -22,12 +22,12 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     try { return await approvalApi(method, path, body); }
     catch (error) { if (error.status === 401) approvalSession = null; throw error; }
   };
-  const all = async collection => {
+  const all = async (collection, signal) => {
     const items = [];
     const cursors = new Set(), ids = new Set();
     let cursor;
     do {
-      const page = await api('GET', `/v1/${collection}?${new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) })}`);
+      const page = await api('GET', `/v1/${collection}?${new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) })}`, undefined, { signal });
       requireValue(page && Array.isArray(page.items), 'invalid_backend_response', 'Native board requires a complete collection page');
       for (const item of page.items) {
         requireValue(item && typeof item.id === 'string' && !ids.has(item.id), 'invalid_backend_response', 'Native board collection contains duplicate or invalid identities');
@@ -53,22 +53,22 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     from: 'This terminal', stateLabel: p.state === 'conflict' ? 'Needs inspection' : 'Publication unconfirmed',
     action: p.state === 'conflict' ? 'dismiss' : 'retry', error: p.error, command: p.command, instanceId: p.instance,
   }));
-  const load = async () => {
+  const load = async signal => {
     const collections = ['tasks', 'agents', 'nodes', 'schedules', 'questions', 'executions', 'occurrences', 'notifications', 'monitor_results', 'headless_setups'];
-    const [info, ...values] = await Promise.all([api('GET', '/v1/info'), ...collections.map(all)]);
+    const [info, ...values] = await Promise.all([api('GET', '/v1/info', undefined, { signal }), ...collections.map(name => all(name, signal))]);
     requireValue(info.userId && info.instanceId, 'invalid_backend_response', 'Native board requires backend and human identity');
     const data = Object.fromEntries(collections.map((name, i) => [name, values[i]]));
     let grants = { pending: [], active: [], history: [] }, nodePolicies = {};
     if (info.features?.grantsManagement) {
       const names = ['provision_grants', 'headless_grants', 'task_reference_grants', 'review_grants', 'grant_requests', 'grant_decisions', 'provision_requests'];
-      const records = Object.fromEntries(await Promise.all(names.map(async name => [name, await all(name)])));
+      const records = Object.fromEntries(await Promise.all(names.map(async name => [name, await all(name, signal)])));
       grants = buildGrantsView({ requests: records.grant_requests, decisions: records.grant_decisions,
         grants: { interactive: records.provision_grants, headless: records.headless_grants, reference: records.task_reference_grants, review: records.review_grants },
         agents: data.agents, nodes: data.nodes, preparations: records.provision_requests, userId: info.userId });
       const publications = publicationItems(true), locked = new Set(publications.map(p => p.entityId));
       grants.pending = [...publications, ...grants.pending.filter(item => !locked.has(item.entityId))];
       nodePolicies = Object.fromEntries(await Promise.all(data.nodes.map(async node => {
-        try { return [node.id, await api('GET', `/v1/nodes/${encodeURIComponent(node.id)}/provisioning-policy`)]; }
+        try { return [node.id, await api('GET', `/v1/nodes/${encodeURIComponent(node.id)}/provisioning-policy`, undefined, { signal })]; }
         catch { return [node.id, null]; }
       })));
     }
@@ -117,8 +117,8 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
              : `Requested revision ${schedule.revision}, applied ${schedule.appliedRevision ?? 0}. Local node owns admission and clock.` } };
   };
   const board = {
-    async read() {
-      const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies, headless_setups } = await load();
+    async read(signal) {
+      const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies, headless_setups } = await load(signal);
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents, headless_setups)),
         inbox, grants, grantsAvailable: !!info.features?.grantsManagement, nodePolicies,
         tasks: tasks.map(t => ({ ...scoped(t), instanceId: info.instanceId, ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),

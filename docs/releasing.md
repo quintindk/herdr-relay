@@ -1,101 +1,81 @@
-# Candidate packaging and prerelease procedure
+# Release procedure
 
-Release preparation does not clear state, install services, upgrade a laptop,
-publish npm packages or create tags. An explicitly pushed version tag runs CI
-and publishes a GitHub release only after verification succeeds.
+Release preparation does not publish, upgrade services, change live configuration
+or reset state. Publication requires an explicit human instruction and an immutable
+version tag. Packages are distributed through GitHub Releases, not npm.
 
-## GitHub automation
+## Required gates
 
-- `.github/workflows/ci.yml` runs on branch pushes and pull requests. It requires
-  Node.js 24 on Ubuntu, syntax checks, serial root regression tests, v2 tests,
-  clean installed-package/onboarding verification and a zero-finding fresh audit.
-  RC5 also runs installed RC4-to-candidate backend/node upgrade, rollback, chat
-  continuity and message-delivery verification using isolated actual processes.
-- Successful runs retain a `release-assets` Actions artifact for 30 days. Releases
-  provide persistent downloads without requiring an Actions-artifact download.
-- `.github/workflows/release.yml` runs on `v[0-9]*` tag pushes, calls the same CI
-  workflow at the tagged commit and publishes only after all jobs succeed.
-- Versioned manifests, lockfiles, Herdr metadata, notes and tag must agree.
-- CI/build jobs have read-only repository access. Only the publication job gets
-  `contents: write`, consumes verified artifacts and uses `GITHUB_TOKEN`.
-- Actions are pinned to commit hashes. No private deployment credentials, model
-  provider keys or live backend access are required. Synthetic real-TUI, physical
-  Surface and live-ingress checks remain separate evidence, not implied CI coverage.
-- Existing releases/assets are refused, not replaced. Failed runs can be rerun
-  before publication. Once published, fixes require a new version and tag.
+1. Review the intended native product scope and compatibility contract.
+2. Keep root/plugin versions, both lockfiles, Herdr metadata and versioned notes
+   consistent. Run `node scripts/check-release.mjs`.
+3. Run `npm run check`, serial root regression tests and plugin tests.
+4. Run relevant isolated native model/PTY, contract, reporting, Herdr and compatible
+   upgrade checks. Keep logs outside the checkout or as CI artifacts.
+5. Commit reviewed source and notes; require a clean source tree.
+6. Verify a production-only installation, exact supported OpenCode 2.1.0/2.1.2
+   hosts and a fresh zero-vulnerability production audit. An unavailable audit is
+   not a passed audit. Supplemental host checks do not replace this matrix.
 
-No manual workflow button or default-branch change is required. `v2` may remain
-separate from the repository's current default branch. Tagging is the explicit
-publication action, not a deployment action.
+The retained older-version fixtures test native schema/adoption/rollback safety.
+They are not shipped integrations, current setup instructions or certification of
+physical second-machine/business-source coverage.
 
-## 1. Freeze a candidate
+## Package verification
 
-1. Agree its native-workflow scope and remaining acceptance gates.
-2. Update the root/plugin package versions, both lockfiles and Herdr manifest.
-3. Run syntax checks, serial root tests, v2 tests and scoped real-TUI probes.
-4. Review migration/onboarding commands and secret/configuration handling.
-5. Commit the reviewed source and release notes. Require a clean tree.
+From clean committed source, use a new versioned output directory outside the
+checkout. Configure the exact host binaries required by release verification:
 
-Do not reuse a published candidate version for changed bytes. RC2 supersedes
-RC1's checkout-oriented onboarding; the prior candidate and its evidence remain
-historical records rather than being silently overwritten.
-
-## 2. Build and verify the installed artifact
-
-From the clean committed source, use a **new versioned output directory outside
-the checkout**:
-
-```bash
-node scripts/verify-package.mjs --release --output /absolute/artifacts/0.2.0-rc.5
+```sh
+RELAY_V2_BINARY=/absolute/opencode-2.1.2 \
+RELAY_V2_BASELINE_BINARY=/absolute/opencode-2.1.0 \
+node scripts/verify-package.mjs --release --output /private/artifacts/0.2.1
 ```
 
-This verifies a production-only npm installation, executable CLI, plugin imports,
-native backend startup, scoped Evo/Surface-home onboarding, export/import retry,
-backup and unit generation. It requires a successful fresh production audit with
-zero findings. The report records the source commit and verification timestamp.
-It refuses different bytes at an existing artifact path or mismatched checksums.
+Assets are `herdr-relay-0.2.1.tgz`, `SHA256SUMS` and
+`herdr-relay-0.2.1.tgz.verification.json`. The report records the source commit,
+cleanliness, timestamp, host checks and audit result. Different bytes at an
+existing artifact path or inconsistent checksums are refused.
 
-Assets:
+The verifier exercises native backend startup, scoped two-home onboarding,
+idempotent native capture, agent messaging, plugin/skill setup, backup and unit
+generation. It rejects retired code and private/development files in the package.
+`--skip-audit` is offline preflight only and is refused with `--release`.
+Checksums establish byte integrity, not a signing-key attestation.
 
-- `herdr-relay-0.2.0-rc.5.tgz`
-- `SHA256SUMS`
-- `herdr-relay-0.2.0-rc.5.tgz.verification.json`
+## Push, CI, tag, publish
 
-`--skip-audit` is allowed for clearly marked offline **preflight** only. It is
-refused with `--release`; an unavailable audit is not a passed audit. Clean-home
-fixtures never replace physical Surface or real Paperclip-data acceptance.
+On an explicit publication request:
 
-Verify the checksum again after transfer. Checksums are integrity checks, not
-signatures. No signing-key provenance is claimed by an unsigned candidate.
+1. Push the exact release commit and wait for branch CI to pass.
+2. Create an annotated tag at that verified commit, not a moving branch.
+3. Push the tag; the release workflow verifies the exact tag again.
+4. After publication, download the assets and verify their checksums, source commit,
+   clean-source provenance, supported-host checks and zero-finding audit.
 
-## 3. Publish only after explicit approval
-
-Channel: a GitHub **prerelease** for candidate versions, not npm. The package remains
-private for npm publication. Confirm the report's source commit, zero findings,
-scope/limitations and intended asset bytes before approval.
-
-Commit/push reviewed source, let branch CI pass, then create an annotated version
-tag pointing to the exact reviewed commit and push it:
-
-```bash
-git tag -a v0.2.0-rc.5 EXACT_SOURCE_COMMIT -m "Herdr Relay 0.2.0-rc.5"
-git push origin refs/tags/v0.2.0-rc.5
+```sh
+git tag -a v0.2.1 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.1"
+git push origin refs/tags/v0.2.1
 ```
 
-The release workflow reruns tests and builds its own artifact at that tag. It uses
-`docs/release-0.2.0-rc.5.md` for notes, verifies source provenance and checksums,
-then creates the release with all three assets. It marks candidate versions as
-prerelease and never promotes them to latest. Do not tag a moving branch or upload
-artifacts from another checkout/commit.
+`.github/workflows/ci.yml` runs tests/package verification on branch pushes, pull
+requests and reusable workflow calls. `.github/workflows/release.yml` runs on
+version tags and publishes only after all gates pass. CI has read-only repository
+permissions; only the final publication job gets `contents: write`.
 
-Do not overwrite assets, retarget tags, force-push release history or equate an RC
-with full v3 certification. If a correction changes bytes, increment the RC and
-repeat verification. No publication/tag command is run by the verifier.
+The release job takes `docs/release-VERSION.md`, checks tag/version/source evidence
+and publishes all three assets. Candidate versions are prereleases; stable 0.2.1
+has no prerelease suffix. The workflow currently uses `--latest=false`, so it does
+not silently change the repository's latest-release selection.
 
-## 4. Keep installation separate from data cutover
+Existing releases/assets are never replaced. Do not retarget published tags,
+force-push release history or reuse a published version for different bytes. A
+correction after publication needs a new version. Historical notes/source remain
+available at their original tags even when removed from the current tree.
 
-Follow [installation and onboarding](installation-and-onboarding.md). Surface can
-install the CLI and perform a read-only Paperclip export before changing OpenCode
-or Evo. Backend reset/archive, node joining, plugin context replacement and task
-import each have their own checks and approvals. Publishing a candidate authorises
-none of those implicitly.
+## Deployment remains separate
+
+Publication does not authorise a service upgrade, shortcut install, credential
+change or recovery. Use [installation](installation-and-onboarding.md) for a new
+host and [upgrades](service-upgrades.md) for existing hosts. Preserve runtime state
+and unrelated preferences. Never delete a journal to make a release appear clean.

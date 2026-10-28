@@ -1,9 +1,8 @@
 # Native Relay skill installation and updates
 
-RC8 adds management of the shipped `herdr-relay` and `relay-work`
-OpenCode skills, superseding the unpublished RC7 candidate. The packaged native
-skills no longer describe legacy Paperclip commands as the native workflow.
-Legacy provisioning uses the retained historical work protocol separately.
+Relay manages the shipped `herdr-relay` and `relay-work` OpenCode skills. They
+describe the native tool/CLI authority and execution protocols, not an external
+tracker workflow. Local modifications are preserved unless explicitly replaced.
 
 ```bash
 herdr-relay skills status
@@ -35,7 +34,7 @@ No backend credentials or running node are required.
 
 ## Automatic synchronisation
 
-The RC8 `release install` CLI and `node install` synchronise skills using the safe
+The `release install` CLI and `node install` synchronise skills using the safe
 default rules. Their JSON includes the skill result. `skill_conflict` means the
 skill files were preserved, not that the installed instructions are current.
 It does not erase an otherwise successful CLI/service installation.
@@ -44,10 +43,9 @@ It does not erase an otherwise successful CLI/service installation.
 for its skill sync. Node installation uses the installing user's normal
 OpenCode configuration directory, honouring `XDG_CONFIG_HOME`.
 
-Older CLIs cannot run new installer code. On the first transition from RC6, activate
-the new CLI, then run `herdr-relay skills install` once explicitly, or install the
-node using that new CLI. Future CLI installations executed by the new installer
-perform the same sync automatically. An `npm install --ignore-scripts` alone does
+Activate the intended release's CLI before updating its skills. CLI installations
+executed by the managed installer perform the same sync automatically. An
+`npm install --ignore-scripts` alone does
 not run this installer. Service upgrade is not an implicit skill synchronisation.
 
 ## Running agent contexts

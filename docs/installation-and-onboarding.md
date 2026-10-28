@@ -1,322 +1,144 @@
-# Evo backend, Evo node and Surface node onboarding
+# Installation and onboarding
 
-Target: `0.2.0-rc.10`. Evo runs the backend and a node. Surface runs a node inside
-**WSL2 with systemd**. The source Paperclip instance is on **Surface**.
+This guide is for a **new native installation**. Existing RC4 installations must
+use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
+Examples target 0.2.1 once it is published. Until then use an actual published
+version from [GitHub releases](https://github.com/quintindk/herdr-relay/releases).
 
-This guide uses installed-release commands only. It does not require cloning a
-branch, running nested development `npm ci`, copying node_modules or manually
-assembling credential JSON. No step silently clears a database or imports tasks.
+## Requirements
 
-**Already enrolled?** Do not repeat the fresh-backend/reset steps for an upgrade.
-Use [service upgrades](service-upgrades.md) to preserve identities, data and enrolments.
+Use the intended Linux/WSL2 account, Node.js 24+, npm, Git and working user-systemd.
+Keep state in the Linux home filesystem, not `/mnt/c`. OpenCode agents need an
+installed, authenticated OpenCode V2 service. Release checks cover 2.1.0 and 2.1.2.
+Herdr 0.9.3+ is needed for interactive pane provisioning and the panel shortcut.
 
-## 0. Release and cutover gates
+Do not upgrade/restart OpenCode merely to install Relay. Follow the official
+[V2 configuration guide](https://opencode.ai/v2/docs/config) for its own setup.
+Credential, agent, model, MCP and permission configuration remain independent.
 
-Before a live reset:
+## 1. Activate the same release on each host
 
-- Verify the artifact and checksums, clean production installation and test reports.
-- Complete the fresh production dependency audit. An unavailable audit is not zero findings.
-- Export/plan Surface's Paperclip data and resolve real source obligations.
-- Back up Evo's current backend, node state and configuration. Keep source backups.
-- Verify Cloudflare Access enforcement before Surface joins over the public endpoint.
-- Confirm the exact old state/service paths to archive. Never delete a journal to
-  bypass an instance mismatch. Keep the backend-root credential on Evo.
+Download the package, `SHA256SUMS` and verification report from the trusted release.
+The report must identify the exact source/tag, clean source, supported-host checks
+and a successful zero-vulnerability production audit.
 
-The current candidate can be evaluated without a live reset. Tests using separate
-Evo/Surface home directories are not physical Surface acceptance.
-
-## 1. Select the same immutable release on both machines
-
-Distribution: a [GitHub **prerelease**](https://github.com/quintindk/herdr-relay/releases)
-with these immutable assets:
-
-- `herdr-relay-0.2.0-rc.10.tgz`
-- `SHA256SUMS`
-- `herdr-relay-0.2.0-rc.10.tgz.verification.json`
-- Release notes and this guide.
-
-An explicitly pushed version tag publishes only after GitHub Actions tests,
-installed-package checks and audit pass. Download the three assets into one
-directory. This is a Node.js package with executable CLI entrypoints, not a
-standalone native binary. Verify checksums from the trusted release channel.
-Checksums detect changed bytes; they are not a signing-key attestation.
-
-```bash
+```sh
 umask 077
-# In the directory containing the release assets:
 sha256sum -c SHA256SUMS
-node --version
-npm --version
-```
-
-Require Node.js **24+**, Linux binaries inside WSL and Git. Do not use Windows
-`node.exe` for the WSL installation. Bootstrap the normal CLI in a user-owned npm
-installation, then activate the verified version store before installing services:
-
-```bash
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.0-rc.10.tgz
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.1.tgz
+herdr-relay release install --version 0.2.1
 herdr-relay --version
-herdr-relay release install --version 0.2.0-rc.10
-RELAY=herdr-relay
-"$RELAY" native --help
 ```
 
-`release install` audits/stages the versioned package and activates the recognised
-CLI symlink without restarting a service. Subsequent commands are ordinary
-`herdr-relay` commands. Services/plugins pin that release's absolute path internally.
-Retain referenced old releases for rollback. Do not remove a release while a service,
-plugin, CLI or retained upgrade operation references it. CLI activation is not data reset.
+Use a user-owned npm installation without sudo. `release install` activates the
+versioned CLI and safely synchronises managed skills. It does not upgrade existing
+services or authorise live configuration changes. A checkout/npm link is not a
+published release installation.
 
-## 2. Surface: export before upgrading or replacing the source runtime
+## 2. Install a fresh backend
 
-Installing the Relay CLI does not require OpenCode 2 or alter Paperclip. Make a
-persistent private source directory, not a temporary export or a Git checkout:
+On the backend host:
 
-```bash
-PRIVATE="$HOME/.local/state/herdr-relay-cutover"
-mkdir -p "$PRIVATE"
-chmod 700 "$PRIVATE"
-"$RELAY" native tasks source --url http://127.0.0.1:3100 \
-  --local-trusted --output "$PRIVATE/paperclip-source.json"
-"$RELAY" native tasks companies --source "$PRIVATE/paperclip-source.json"
-"$RELAY" native tasks export --source "$PRIVATE/paperclip-source.json" \
-  --company ACTUAL_COMPANY_ID --output "$PRIVATE/paperclip-initial.json"
-"$RELAY" native tasks plan --file "$PRIVATE/paperclip-initial.json" \
-  --output "$PRIVATE/paperclip-initial-plan.json"
+```sh
+herdr-relay backend install --dry-run
+herdr-relay backend install
+herdr-relay backend status
 ```
 
-For an authenticated source, replace `--local-trusted` with
-`--token-file /private/operator-token.txt`. Secret values never go in command arguments.
-`localTrusted` is literal-loopback HTTP only. Company listing is discovery, not
-proof that an export is exhaustive. The export performs its own scope/completeness checks.
+Defaults are loopback port 3210 and
+`~/.local/state/herdr-relay-backend/{backend.sqlite,owner.json}`. The user service
+is `herdr-relay-backend.service`. Existing state is reused, never silently cleared.
+Keep the root owner credential on this host. Back up existing installations before
+explicit maintenance; do not install a fresh backend over an identity mismatch.
 
-Take a recoverable backup of the actual source Paperclip database and relevant old
-Relay state. Pause legacy runtime-producing routines and new admissions; settle
-live work, checkouts, questions, publications and reviews through their original
-installation. Do this **before** changing Surface's OpenCode binary. A task status
-alone does not prove that a process stopped. Do not edit exports to conceal blockers.
+## 3. Establish authenticated ingress for remote nodes
 
-After the source is frozen, create **new** final export/plan files:
+Loopback nodes may use `http://127.0.0.1:3210`. Remote nodes need the configured
+authenticated HTTPS ingress. Do not expose unauthenticated non-loopback HTTP.
+For Cloudflare Access, verify all authentication combinations before joining:
 
-```bash
-"$RELAY" native tasks export --source "$PRIVATE/paperclip-source.json" \
-  --company ACTUAL_COMPANY_ID --output "$PRIVATE/paperclip-final.json"
-"$RELAY" native tasks plan --file "$PRIVATE/paperclip-final.json" \
-  --output "$PRIVATE/paperclip-final-plan.json"
+```sh
+herdr-relay backend ingress-check --url https://relay.example.com \
+  --context "$HOME/.local/state/herdr-relay-backend/owner.json" \
+  --access /private/existing-access.env
 ```
 
-Keep Paperclip intact and frozen. Transfer the final export and plan privately to
-Evo. Do not transfer the Paperclip source token or Evo's root owner credential.
-Record the plan's digest/counts. Export files are not ongoing synchronisation.
+Unauthenticated and actor-only calls must be blocked by Access. Access-only reaches
+Relay but is rejected there. Access plus the actor must succeed. Relay's own 401 is
+not proof that Access enforced its policy. See [security](security.md).
 
-## 3. Evo: backup, explicit archive boundary, then backend installation
+## 4. Bootstrap each node once
 
-On the existing deployment, use its valid current root context:
+On the backend host, create a private bundle for each host, including a node on the
+backend machine if wanted:
 
-```bash
-ROOT_OWNER="$HOME/.local/state/herdr-relay-backend/owner.json"
-"$RELAY" native backend inventory --context "$ROOT_OWNER"
-"$RELAY" native backend backup --output /private/new-backup-path.sqlite
-"$RELAY" native backend install --dry-run
+```sh
+herdr-relay node bootstrap \
+  --context "$HOME/.local/state/herdr-relay-backend/owner.json" \
+  --key workstation-node-v1 --name Workstation \
+  --url http://127.0.0.1:3210 --local-user \
+  --output /private/Workstation.bundle.json
 ```
 
-**Stop here for explicit cutover approval.** Inventory old schedules, native work
-and `reimportRisk`. A Surface Paperclip export does not preserve Evo-only tasks,
-native comments or later native edits. Reconcile or explicitly disposition those
-before clearing anything; a backup is not the same as importing them into the new
-store. Even an empty edit-candidate list is not a complete relationship/activity audit.
+For a remote host use its reachable HTTPS URL and the configured transport/access
+file. Select `--local-user` deliberately, or use explicit `--root /absolute/folder`
+arguments for a narrower node/workspace scope. Paths belong to the destination
+host, not necessarily the backend host.
 
-Also inventory outstanding provisioning and local runtime obligations. Stop the known Relay
-node/backend services only after obligations are handled. Human OpenCode chats
-must not be killed as a shortcut. Archive the precise backend/node state directories
-and relevant config/service files with their permissions. Never archive or remove
-Surface's Paperclip source as part of Evo's native reset.
+Each bundle contains distinct node-daemon and scoped human/operator credentials,
+the backend instance and transport settings, **not the backend-root credential**.
+Transfer only that node's bundle using an existing private mechanism. Keep it mode
+`0600`. The same key/request reconciles the original bundle; changed payloads conflict.
 
-Once that boundary is approved and the standard target state paths are clear:
+## 5. Join and start the node
 
-```bash
-"$RELAY" native backend install
-"$RELAY" native backend status --context "$ROOT_OWNER"
-"$RELAY" native backend inventory --context "$ROOT_OWNER"
+On its destination host:
+
+```sh
+herdr-relay node join --bundle /private/Workstation.bundle.json
+herdr-relay native node install \
+  --config "$HOME/.local/state/herdr-relay-native/node.json"
+herdr-relay plugin install
+herdr-relay doctor
 ```
 
-Expect a fresh backend instance, new root credential and initially empty collections.
-If old data remains, stop: installation intentionally reuses existing state rather
-than deleting it. A new backend invalidates old node credentials/journal identities.
-Do not restore old node files into the new installation.
+Join defaults to `~/.local/state/herdr-relay-native/` and writes private `node.json`
+and `operator.json` files. It refuses incompatible existing state rather than
+deleting a journal. The node service name includes the actual generated node ID.
+Plugin installation preserves unrelated preferences and retains backups.
 
-The origin binds to loopback port 3210 by default. Backend state is separate from
-node state. The default Linux user service is `herdr-relay-backend.service`.
+On WSL2, systemd and the user manager must be available. A stopped WSL instance
+cannot execute local cron ticks; schedules do not automatically fail over. User
+lingering is an explicit OS administration choice, not a Relay installation effect.
 
-## 4. Evo: verify remote ingress and issue both node bundles
+## 6. Enrol and use receiving chats
 
-Configure the existing tunnel to the loopback origin. Before remote join:
+Use `/relay-enrol` in an intended OpenCode workspace. It creates a durable
+workspace/role agent and attaches the exact receiving chat. Use `/relay-attach` for
+a replacement chat rather than creating another agent. Enrolment alone does not
+dispatch work, change model permissions or grant provisioning authority.
 
-```bash
-"$RELAY" native backend ingress-check --url https://relay.synthswarm.com \
-  --context "$ROOT_OWNER" --access "$HOME/.config/portcullis/access.env"
+```sh
+herdr-relay tui
+herdr-relay node status
+herdr-relay doctor
 ```
 
-All four checks must pass: unauthenticated and actor-only calls are blocked at
-Access; Access-only reaches Relay but is denied there; Access plus actor succeeds.
-Origin authentication denial is not proof that Cloudflare enforced Access.
-An ingress failure is a gate, not permission to disable checks.
+Verify distinct node identities, the expected shared backend instance and actual
+receiving-chat state. Directory presence is advisory, not execution admission.
+See [receiving chats](native-receivers.md) and [the board](task-board.md).
 
-```bash
-PRIVATE="$HOME/.local/state/herdr-relay-cutover"
-mkdir -p "$PRIVATE"
-chmod 700 "$PRIVATE"
-"$RELAY" native node bootstrap --context "$ROOT_OWNER" --key evo-clean-v1 \
-  --name Evo --url http://127.0.0.1:3210 --local-user \
-  --output "$PRIVATE/Evo.bundle.json"
-"$RELAY" native node bootstrap --context "$ROOT_OWNER" --key surface-clean-v1 \
-  --name Surface --url https://relay.synthswarm.com --local-user \
-  --access "$HOME/.config/portcullis/access.env" --output "$PRIVATE/Surface.bundle.json"
+## 7. Optional Herdr panel
+
+Link the **installed release directory** through Herdr, not a moving checkout:
+
+```sh
+herdr plugin link /absolute/installed/herdr-relay
+herdr-relay plugin shortcut --dry-run
+herdr-relay plugin shortcut
+herdr server reload-config
 ```
 
-`--local-user` deliberately permits human enrolment in any accessible local folder
-on that node. Use one or more `--root /absolute/node/folder` arguments instead for
-narrower scope; Surface paths are Surface's Linux paths, not Evo's. Node IDs are
-opaque, generated once and independent of these display names.
-
-Each private bundle contains **two distinct credentials**:
-
-- Daemon credential: its node's automation authority, not backend administration.
-- Human operator credential: that node's enrolments/attachments and the same human's
-  task/inbox decisions. It cannot create nodes, issue credentials, import task data
-  or create provisioning grants. It is not Evo's backend-root token.
-
-Bundles also carry the backend instance and chosen transport/Access credentials.
-Keep them mode 0600. Repeating the same bootstrap request/key reconciles the same
-credentials; changed requests are refused. `node revoke --bundle FILE --key KEY
---context "$ROOT_OWNER"` revokes both roles. Revoked bundles cannot be reused to
-restore access. A reset requires fresh bundles/identities, not journal deletion.
-
-## 5. Evo: join its own node
-
-```bash
-"$RELAY" native node join --bundle "$PRIVATE/Evo.bundle.json"
-"$RELAY" native node install --config "$HOME/.local/state/herdr-relay-native/node.json"
-"$RELAY" native plugin install --replace-context
-```
-
-Use `--replace-context` only at this explicit cutover to replace an old Relay TUI
-context. Configuration backups are private; unrelated settings/plugins are retained.
-Existing recognised Relay release paths are replaced, not duplicated. Explicitly
-disabled Relay directives and ambiguous JSON/JSONC files require reconciliation.
-
-Plugin installation can occur before any OpenCode chat exists. `/relay-enrol` from
-Home creates an empty session and asks for confirmation. Enrol the intended Evo
-workspaces. It does not silently adopt all existing chats or recreate old jobs.
-
-## 6. Surface: WSL2, OpenCode upgrade and plugin onboarding
-
-Operate inside the intended WSL distribution and Linux user account:
-
-```bash
-ps -p 1 -o comm=
-systemctl --user show-environment >/dev/null
-node --version
-command -v node
-opencode --version
-command -v opencode
-```
-
-PID 1 should be systemd and the user manager must work. Keep runtime/state files
-in the Linux home filesystem, not `/mnt/c`. A stopped WSL VM cannot run local cron
-ticks; Relay does not automatically fail over its schedules to Evo.
-
-After the source is frozen and old work settled, privately back up OpenCode config,
-data/state and provider authentication. Inventory the current installation method
-and old plugins. The verified target is **OpenCode 2.1.2**, not an untested `latest`.
-
-- For an existing installer supporting it, `opencode upgrade 2.1.2` is verified CLI
-  syntax. Select the actual installation method if necessary.
-- For package-managed V1, follow the official migration guide: remove only that
-  managed V1 package before installing V2. The npm V2 package is `@opencode/cli`;
-  in a user-owned npm/NVM installation, install `@opencode/cli@2.1.2` without sudo.
-- Do not guess a service name, delete the OpenCode database or overwrite unrelated
-  configuration. V1 plugins/server integrations are API-breaking and need review.
-- Start V2 once **before** Relay plugin installation so existing global terminal
-  preferences can migrate to `cli.json`. Verify authentication, models, skills,
-  agents, MCP servers and the actual stored model. Optional server-config conversion
-  is not a prerequisite. Do not point V1 at converted V2-only configuration.
-
-References: [official V2 migration](https://opencode.ai/v2/docs/migrate-v1),
-[CLI configuration](https://opencode.ai/v2/docs/cli/config),
-[server configuration](https://opencode.ai/v2/docs/config).
-
-Transfer **only Surface's private bundle** through your existing private transfer
-mechanism. Copy it into a private Linux-home directory before use, with mode 0600:
-
-```bash
-PRIVATE="$HOME/.local/state/herdr-relay-cutover"
-mkdir -p "$PRIVATE"
-chmod 700 "$PRIVATE"
-# Example after a private transfer; do not paste its contents into chat:
-install -m 600 /absolute/private-transfer/Surface.bundle.json "$PRIVATE/Surface.bundle.json"
-"$RELAY" native node join --bundle "$PRIVATE/Surface.bundle.json"
-"$RELAY" native node install --config "$HOME/.local/state/herdr-relay-native/node.json"
-"$RELAY" native plugin install
-"$RELAY" native doctor
-```
-
-Expect node name Surface, a distinct node ID, the same backend instance as Evo,
-private local daemon/operator files, active node service and both plugins. Doctor
-does not start/upgrade OpenCode, change permissions or certify ingress/cutover.
-Use `/relay-enrol` in Surface's intended workspaces and `/relay-attach` in manually
-opened replacement chats. Ordinary enrolment is not a provisioning grant.
-
-For services surviving user logout, inspect lingering with `loginctl show-user
-"$USER" -p Linger`. Enabling it is an explicit human/OS administration choice,
-not something Relay does automatically. It cannot keep a shut-down WSL VM alive.
-
-## 7. Evo: import Surface's final task export
-
-Privately place the final export and plan on Evo, verify their digest/counts and
-retain the source spelling/company identity. Back up the new backend too. Pause
-new node admissions while the backend is stopped for the atomic import:
-
-```bash
-"$RELAY" native tasks plan --file /private/paperclip-final.json
-"$RELAY" native backend backup --output /private/pre-import-backup.sqlite
-systemctl --user stop herdr-relay-backend.service
-"$RELAY" native tasks import --file /private/paperclip-final.json \
-  --context "$ROOT_OWNER" --state-dir "$HOME/.local/state/herdr-relay-backend" \
-  --confirm-digest EXACT_DIGEST_FROM_PLAN --source-frozen --legacy-relay-settled
-systemctl --user start herdr-relay-backend.service
-"$RELAY" native backend status --context "$ROOT_OWNER"
-```
-
-The flags attest completed source checks; they do not freeze Surface remotely.
-The importer refuses a running backend lock and requires Evo's root credential.
-Surface's operator or daemon credentials cannot import. Import creates tasks,
-comments, source mappings and history, not executions, schedules or agents.
-`in_progress` becomes owner-held `todo`; completed/cancelled states stay unchanged.
-Original assignees/project IDs remain source metadata, not runtime authority.
-
-An identical retry returns its original receipt without duplicating tasks or
-overwriting native edits. A changed export for the same source scope conflicts.
-Do not execute work until counts, representative full text/comments and both graphs
-have been reconciled. Keep Paperclip frozen and recoverable during verification.
-
-## 8. Acceptance and rollback
-
-Record both node/agent IDs and actual versions. Before calling onboarding complete:
-
-- Both nodes heartbeat to the same instance through their chosen transport.
-- Each human can enrol/attach without root-token copying; new chats retain jobs.
-- A bounded task, question/escalation and exact human review cross nodes.
-- A granted interactive agent opens visibly on the requested node; work is separate.
-- Disconnect/reconnect and restart preserve identity and publish one result only.
-- Imported counts, comments, priorities and parent/dependency links match the plan.
-
-Physical Surface checks and the real source export cannot be replaced by simulated
-homes or fixtures. If rollback is needed before new native work/edits, stop both
-paths and choose one authoritative store before restoring exact archived services,
-state and credentials. Once native work has occurred, do not restore an old database
-and resume jobs as if those external effects never happened; reconcile them first.
-
-`native plugin uninstall` removes only recognised Relay directives, preserving
-subsequent unrelated edits. It does not revoke credentials, remove tasks or stop
-services. Credential revocation and package/service rollback remain explicit.
+The installer requires Python 3.11+, refuses a conflicting `prefix+t` binding and
+preserves other keys. The shortcut opens/focuses the native board and restores the
+original pane when closed. No OpenCode restart is required.

@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode } from '@opencode/client';
-import { processGroupMembers } from '../../src/runtimes.mjs';
+import { processGroupMembers } from '../../src/process-identity.mjs';
 import { requireValue, canonical } from '../../src/protocol.mjs';
 import { checkV2Version } from './native.mjs';
 import { releaseInfo } from '../../src/release-info.mjs';

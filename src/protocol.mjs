@@ -28,11 +28,3 @@ export function canonical(value) {
 
 export const digest = value => createHash('sha256').update(canonical(value)).digest('hex');
 export const now = () => new Date().toISOString();
-
-export function resultBody(run) {
-  return `Herdr Relay submission\n\n${run.result.summary}\n\n` +
-    `Candidate: ${run.result.candidate}\n\n` +
-    (run.result.deliverables ? `Deliverables: ${JSON.stringify(run.result.deliverables)}\n\n` : '') +
-    (run.result.checks ? `Worker-reported checks: ${JSON.stringify(run.result.checks)}\n\n` : '') +
-    `<!-- herdr-relay:${run.id}:${digest(run.result)} -->`;
-}

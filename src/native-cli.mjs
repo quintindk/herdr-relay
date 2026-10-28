@@ -20,7 +20,7 @@ import { renameHerdrWorkspace } from '../packages/opencode-relay/herdr-session.m
 import { nativeWorkerApi } from './native-worker-api.mjs';
 import { executionCliInvocation, readOnlyCliInvocation, nativeCliCollections } from './native-cli-surface.mjs';
 
-export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, not Paperclip)
+export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
   headless provision|inspect --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
   agent provision --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]  [native headless, plans by default]
   agent enrol --here|--session ID --reserved [--config PRIVATE_NODE_JSON] [--directory DIR] [--name NAME] [--transport tools|cli]
@@ -61,7 +61,7 @@ Backend commands require --context or RELAY_NATIVE_CONTEXT. Node operators canno
 Board prefers the joined node's scoped operator.json, otherwise the local backend owner.json.
 Grants manages security requests, standing permissions and revocation. Inbox manages work decisions.
 Worker commands use scoped worker credentials, never an owner context.
-Payload files contain native backend fields, not legacy companyId/routine envelopes.
+Payload files contain the exact native backend fields documented by each command.
 Task-independent messaging: work message-send|messages|message uses --context PRIVATE_WORKER_JSON,
 with --key for sends and --file for message/query fields. No task/execution/run is required.
 Enrolment never starts/restarts OpenCode or grants permissions. Start the node separately.

@@ -1,14 +1,13 @@
 # Reusable native headless agents
 
 The native headless provisioning command configures a dedicated Relay-owned
-OpenCode runtime on an **existing joined node**. It does not use Paperclip, open
+OpenCode runtime on an **existing joined node**. It does not open
 a terminal client, attach a human conversation or schedule an interactive agent.
 For explicit reuse of an already authorised model connection and existing MCP transports without another
-login, use the RC7 [authenticated coordinator setup flow](headless-authenticated-setup.md).
+login, use the [authenticated coordinator setup flow](headless-authenticated-setup.md).
 The isolated-runtime provisioner below remains separate and does not inherit those connections.
 The destination node runs it under its own Linux account, including WSL2/systemd.
 
-This command is introduced in RC6. Published RC5 installations do not contain it.
 Installing or enabling a live worker is a separate operator action.
 
 ## Provision on the destination node
@@ -22,7 +21,7 @@ an email inbox or modify external systems:
 {
   "key": "inbox-sweep",
   "name": "inbox-sweep",
-  "directory": "/home/quintindekok/work/twd",
+  "directory": "/home/operator/workspace",
   "executable": "/absolute/path/to/opencode",
   "config": {
     "$schema": "https://opencode.ai/config.json",
@@ -64,8 +63,8 @@ herdr-relay headless inspect --file /private/inbox-sweep.json
 ```
 
 Use `--config /private/node.json` for a non-default node installation. The native
-alias is `herdr-relay native agent provision`; the unqualified legacy
-`agent provision` command is **not** this implementation.
+alias is `herdr-relay native agent provision`. Unqualified agent commands are not
+part of the supported CLI.
 
 Apply appends one `opencode-v2-owned` headless binding and retains the node's
 credentials, existing bindings and unrelated settings. It writes a private exact

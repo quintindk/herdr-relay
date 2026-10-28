@@ -1,167 +1,91 @@
-# Task Board
+# Native terminal board
 
-## Native RC4 candidate
+Open `herdr-relay tui`. The board uses the joined node's scoped human/operator
+context by default, otherwise the local backend owner context. `--context FILE`
+selects an explicit context. `--json` returns a non-interactive projection.
 
-Use `herdr-relay tui` for native Tasks, Agents, Inbox, Grants and Schedule. The
-Herdr toggle now opens that native board and focuses it immediately. Configure
-the explicit `prefix+t` binding with `herdr-relay plugin shortcut --dry-run`,
-then `herdr-relay plugin shortcut` and `herdr server reload-config` after linking
-the installed plugin. A conflicting key is not overwritten. Closing returns
-focus to the identity-verified original pane when it still exists.
+## Views
 
-**a** offers **You (human)** followed by agents grouped by node. Human selection
-previews a guarded handback to Todo, not another agent execution. Existing result
-reviews and child assignments must be resolved separately. **PgUp/PgDn** scroll
-long list cards. Detail text is wrapped without losing paragraph/occurrence
-identity. In cron detail, **[ / ]** select an occurrence and **o** opens its exact
-linked task. Setup contract activation can hold admission even when the schedule
-revision itself is applied; that state is now shown explicitly.
+| View | Purpose |
+| --- | --- |
+| Tasks | Human-owned work, task hierarchy, current worker state, descriptions, results and comments |
+| Agents | Durable agents grouped by node, workspace, mode, presence and receiving-chat information |
+| Inbox | Human questions, exact candidate reviews, reminders, unread run results and uncertain work decisions |
+| Grants | Security requests, standing permissions, revocation and security-decision history |
+| Schedule | Cron definitions, requested/applied revisions, activation state and published occurrence reports |
 
-The remaining sections describe the historical Paperclip board, not the native
-RC4 launch path. See [RC4 scope](release-0.2.1-rc4.md) for the candidate boundary.
+Presence is advisory, not readiness or a dispatch reservation. Published occurrence
+history is not a complete list of pending/running node-local work. Next-run times
+are clock previews, not admission receipts. Approved-but-unapplied contracts are
+shown as awaiting activation rather than Active.
 
-## Shortcut
-
-The local shortcut is **Ctrl+B, then T** (lowercase `t`): show/hide the task
-board beside the invoking pane. It preserves keyboard focus, toggles only its
-own pane in that tab, and uses a lower split on narrow terminals. Unzoom first
-if the current pane is zoomed. The shortcut-reference plugin discovers the
-binding from Herdr config automatically.
-
-```toml
-[[keys.command]]
-key = "prefix+t"
-type = "plugin_action"
-command = "quintindk.herdr-relay.toggle"
-description = "Toggle Relay task hierarchy"
-```
-
-The toggle uses Python 3 standard-library file locking, like herdr-utils. It
-tracks pane and terminal IDs per Herdr socket, refuses reused identities and
-serialises repeated key presses. Manually opened boards in other tabs are not
-closed by this shortcut. Apply key changes with `herdr server reload-config`;
-no agent restart is required.
-
-The board process starts in the plugin installation directory so its relative
-launcher resolves from any project. The invoking pane's folder is unchanged;
-task data still comes from Relay, not the board process's working directory.
-
-## Browse
-
-The Herdr plugin's **Relay tasks** pane displays Paperclip tasks grouped by owner,
-with parent/subtask trees, status, priority and project. Human-owned tasks and
-unassigned work have separate groups. Cross-owner parents are shown as context,
-not reassigned or counted twice in the header. Completed parents remain visible
-when needed to explain an open child.
-
-The pane also displays up to four active or paused Relay cron routines above the
-task hierarchy, including state, cadence, timezone, target and next run. Additional
-routines are counted. Cancelled routines follow the existing `h` completed-items
-toggle. Cron data comes from Relay's local durable schedule records and does not add
-Paperclip requests to the board refresh.
-
-```bash
-herdr-relay board --watch
-herdr-relay board --json
-herdr plugin pane open --plugin quintindk.herdr-relay --entrypoint work --placement tab
-```
-
-The existing `view` command remains the low-level Relay run/inbox diagnostic.
-The interactive board uses Ink 8: the board remains visible and dimmed beneath
-bordered assignment, status and review dialogs, with highlighted selections and
-focused text input. Cron routines are selectable and expose schedule configuration,
-next run and the latest 50 occurrence receipts. Exactly correlated visible
-occurrences can open their task details.
-
-Ink task and cron detail dialogs use a fixed internal viewport. Their header and
-controls remain visible while `j`/`k`, arrows, PageUp/PageDown, Home and End scroll
-the content. The position indicator shows the visible line range. Task detail has
-Overview, Result and Comments tabs; Tab and Shift+Tab switch tabs while preserving
-each tab's scroll position. In cron detail, `o` opens the selected occurrence when
-it exactly correlates to a visible task.
+## Keyboard controls
 
 | Key | Action |
 | --- | --- |
-| `j` / `k`, arrows | Move selection |
-| Enter / Space | Fold or expand selected owner or parent |
-| Left / Right | Collapse / expand |
-| `/` | Search titles, descriptions, owners and projects |
-| Esc | Clear search |
-| `h` | Show/hide completed tasks |
-| `i` | Show/hide idle owners with no matching tasks |
-| Tab | Load/toggle cropped details and the last three comments |
-| Enter | Open task or cron detail |
-| `r` | Refresh |
-| `a` | Assign the selected task to a present agent |
-| `s` | Open task status and deletion options |
-| `A` | Confirm approval of the displayed pending candidate |
-| `F` | Enter rejection feedback for the displayed pending candidate |
-| `R` | Confirm rejection using the saved feedback |
-| Enter / Esc | Confirm / move back or cancel while a modal is shown |
-| `q` / Ctrl+C | Exit the view |
+| Tab / Shift+Tab | Switch views; switch sections within task detail |
+| j/k or arrows | Move selection; scroll physical lines inside detail |
+| Enter | Open the selected item or advance its explicit decision flow |
+| Space / Left / Right | Fold or expand hierarchy |
+| / | Search |
+| PgUp/PgDn | Inspect a long selected card or scroll a detail viewport |
+| Home/End | Move to the beginning/end of detail content |
+| h | Include/exclude completed tasks |
+| a | Open the human/agent assignment picker for a task |
+| s | Inspect eligible human task-status changes |
+| n | Configure run result notifications from Schedule |
+| [ / ] | Select the previous/next occurrence in cron detail |
+| o | Open the exactly correlated selected occurrence's task |
+| t | Show technical details where offered |
+| Esc | Back/cancel/close the current interaction |
+| q | Exit the board; inside detail, close detail first |
 
-Refreshes run every five seconds only while the pane is open. Failed refreshes
-retain the last good snapshot with an explicit offline message and its age. This
-does not install a schedule, wake an agent or inject prompts. Non-interactive
-output is a single plain-text viewport; use JSON for the complete projection.
+Descriptive text, paragraphs, long paths/URLs and editor content wrap by terminal
+cells and graphemes. Fixed viewports retain controls while scrolling. Physical
+wrapped lines keep their logical row/occurrence identity. Shift+Enter inserts an
+explicit newline in multiline editors; Enter keeps its preview/confirmation or
+send meaning. Full text remains available through the selected item's detail.
 
-Only changed screen rows are repainted. Identical frames emit no terminal output;
-selection, scrolling, search and folded groups survive refreshes. The initial
-display and terminal size changes repaint the full viewport. Polling still reads
-the complete cached Relay projection, rather than fetching individual tasks.
-Close and reopen an existing board pane to load updated display code. No Relay
-service or agent restart is needed.
-Status-bar feedback clears after two seconds and restores the shortcut legend.
-Each new message restarts that timer, including a repeated identical error.
+## Assignment and human handback
 
-Quit restores the terminal, stops the input read started by the view and aborts
-any pending Relay refresh. A directly launched plugin pane then closes through
-Herdr's normal process-exit handling. A board launched inside an ordinary shell
-returns to that shell instead of closing its pane.
+**You (human)** is the first choice, outside the node groups. Agents show their
+node, workspace, mode and advisory availability. Selecting an agent collects a
+bounded handover and requests an execution; human responsibility is unchanged.
 
-## API Boundary
+Selecting You inspects the exact current assignment, task revision and execution
+revision. Preview and confirm its withdrawal to Todo with a reason. If already
+human-held, no operation is created. Submitted results and outstanding child work
+require their own decisions. Questions are superseded, not answered. History is
+preserved, and native process termination/success is never claimed.
 
-The pane talks only to operator-authorised Relay task-board endpoints.
-Worker and native bridge credentials cannot read this cross-agent dashboard.
-The Relay connector reads backend collections, paginates issues, and returns an
-allowlisted projection without adapter credentials or runtime configuration.
-Refreshes share a short server-side cache. Collection descriptions are previews,
-not full documents. Opening details lazily fetches the complete selected task and
-its final three comments without turning each board refresh into per-task reads.
-Agent presence is not task completion.
+## Inbox and Grants
 
-The view offers guarded assignment, status changes, deletion and candidate review through Relay.
-For human-owned tasks, the status modal exposes Backlog, Todo, Active, Blocked, In review, Done and
-Cancelled, with an optional comment for every destination. Relay sends status,
-comment and any unblock information in one durable Paperclip update. Active,
-blocked and in-review labels are not blanket refusals; execution, pending review,
-dependencies, children and ownership are checked directly.
+See [task Inbox semantics](native-task-inbox.md). Questions and reviews bind the
+exact inspected item/revision/candidate. **Mark result read** only acknowledges
+informational reporting; it does not approve work, change a cron or start a run.
+Grants owns permission decisions, not ordinary work/result decisions.
 
-Entering Blocked asks only for the evidence Paperclip lacks. If fresh inspection
-already shows an unresolved blocker or unblock descriptor, no extra fields are
-required. Otherwise the modal asks who owns the unblock (`Me` or `Board`) and a
-required action. The ordinary comment remains optional and separate.
+Confirmed decisions persist before publication and reconcile their original key
+after a lost reply. A refusal requires inspection; an uncertain result is not
+silently treated as absent. Failed refreshes retain the last snapshot with an
+explicit offline/freshness warning rather than reporting an empty successful list.
 
-Manual In review is an ordinary board status and creates no candidate. `A/F/R`
-appear only for an exact pending agent candidate. While any candidate or interaction
-is pending, modal status changes are refused until that interaction is resolved.
-Review keys appear only for an `in_review` task with a fresh exact pending candidate.
-Approval and rejection require Enter confirmation. Rejection requires non-empty
-feedback, which becomes the backend rejection reason rather than an extra comment.
-Relay persists the decision intent before POST and never blindly repeats an
-uncertain decision. Stale task revisions, candidates and interactions fail closed.
-The modal also offers **Delete permanently** regardless of task ownership,
-including blocked agent-owned routine occurrences. Select it, press Enter to
-review the exact task identifier, then Enter again to delete. Deletion uses the
-dedicated Relay delete operation, checks the inspected revision and refuses active
-execution. The board removes the task only after confirmed deletion. It does not
-delete children or the source routine.
-Paperclip 2026.1001.0 may revalidate stale recovery actions during collection GETs;
-therefore read-only describes the Relay/view operations, not a guarantee that the
-upstream backend performs no incidental maintenance writes.
+## Herdr panel
 
-The live pane was verified against the imported Today I Did project: 42 open
-human-owned items, including 15 subtasks, with completed source parents retained
-as context. Tests cover narrow/wide rendering, hostile terminal input, cycles,
-orphans, cross-owner ancestry, pagination, authentication, stale snapshots and
-terminal cleanup. Access and other running agents are not restarted by this view.
+After linking the installed Relay plugin:
+
+```sh
+herdr-relay plugin shortcut --dry-run
+herdr-relay plugin shortcut
+herdr server reload-config
+```
+
+The installer is explicit, idempotent and conflict-aware, retaining a backup and
+unrelated preferences. It requires Python 3.11+. `--herdr-config PATH` selects a
+non-default file. No OpenCode restart is needed.
+
+**prefix+t** opens/focuses the native TUI in the invoking tab, right on wide panes
+or below on narrow panes. It toggles only its own panel. Closing with the shortcut
+or q restores the identity-verified original pane if still present; quitting an
+unfocused panel does not steal focus. Unzoom first if the invoking pane is zoomed.
+Manually opened panels in other tabs and unrelated panes are not closed.

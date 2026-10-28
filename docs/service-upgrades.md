@@ -1,192 +1,115 @@
-# Safe backend and node upgrades
+# Backend and node upgrades
 
-RC5 introduces one public CLI, `herdr-relay`. A **node** is a Relay participant.
-**nodejs** is its runtime. The SSH remote CLI/adapter transport is retired.
-RC6 corrects identity checks for generated `worker-index.json`: JSON key ordering
-is ignored, but changed mappings still block maintenance. Credentials and all other
-configuration files remain byte-checked. Fingerprint versioning preserves the
-original checks for retained RC5 operations rather than reinterpreting old receipts.
-New compatible code switches use fingerprint version 3: existing identity,
-configuration and credential files remain byte-checked, while the generated worker
-index and legitimate new worker files may advance through concurrent enrolment.
-Those records are preserved, not restored from an old snapshot.
-Automatic service maintenance targets Linux user-systemd, including WSL2. Other
-process managers are not silently adopted.
+The public CLI is `herdr-relay`. A **node** is a Relay participant; nodejs is its
+runtime. Managed maintenance targets Linux user-systemd, including WSL2.
 
-Upgrades preserve the existing backend instance, node/agent IDs, credentials,
-journals, enrolments, schedules and task data. Do not bootstrap/join again for a
-compatible upgrade. No command here resets state, upgrades nodejs, stops OpenCode,
-kills human chats or restores a database automatically.
+Upgrades preserve the backend instance, node/agent identities, credentials,
+enrolments, tasks, schedules, journals, pending work and original publication keys.
+Do not bootstrap/join again or delete state to perform an upgrade.
 
-## Check the installed versions
+## 1. Inspect and activate the intended CLI
 
-RC9 → RC10 is a compatible schema-2 upgrade and does not repeat task-reference
-migration. Use `--version 0.2.0-rc.10` with the usual plan/apply sequence. The general
-MCP grant format requires RC10 backend, node and Relay plugins before setup.
-
-```bash
+```sh
 herdr-relay --version
 herdr-relay node status
 herdr-relay backend status
+herdr-relay doctor
 ```
 
-These report CLI and service versions separately. Evo has both roles. Surface
-normally has only a node service; its backend status is not a remote administration
-command. Use `herdr-relay doctor` to check the node's connection to its backend.
+CLI and service versions are separate. Backend status on a node-only machine is
+not remote backend administration. Doctor checks this node's backend connection.
 
-## Code updates are not database migrations
-
-The target database contract decides the policy. A schema-compatible update reports
-`maintenancePolicy: compatible_code_switch`. Active native turns, accepted backend
-executions, local conflicts and pending publications are not upgrade blockers.
-They remain recorded work state. Status exposes them as `unsettledWork` and
-`databaseMigrationBlockers`, not generic blockers.
-
-A real schema transition reports `maintenancePolicy: database_migration` and still
-requires explicit migration authorisation, quiescent work and verified backups.
-Identity changes, corrupt databases, incompatible contracts, changed planned
-configuration, unverified releases and concurrent maintenance remain errors for
-both policies. There is no unsafe force flag.
-
-Compatible maintenance pauses new dispatch and briefly restarts Relay supervisors,
-not OpenCode or live owned model processes. The node's process-only systemd stop
-policy is loaded before stopping the old supervisor so detached workers are not
-killed with its cgroup. The same invocation IDs, process identities, journal and
-immutable outbox keys are reused. Dead owned runtimes with unresolved history stay
-unavailable rather than being relaunched; their state does not prevent node code
-upgrading. API calls may see a service interruption; this is not a zero-disruption
-or exactly-once external-effect guarantee.
-
-Pending UI decisions, or unavailable decision inspection, defer only the plugin
-reload. An operation may be committed with `pluginReloadDeferred` set. Resolve the
-original decision normally, then use `upgrade resume OPERATION_ID --apply` to apply
-the exact saved plugin change without service restarts. Changed configuration or a
-later CLI/release switch fences stale deferred updates. Owned workers retain their
-process and immutable launch request; their plugin-only change waits for idle and
-no pending decisions. Do not call a deferred UI update fully applied.
-
-See [administrative recovery](maintenance-recovery.md) for audited handback and
-abandonment. Recovery is not a prerequisite for a compatible code update.
-
-## First transition from RC4
-
-RC4 has no upgrade command. Download RC5's package/checksums/report from its GitHub
-prerelease and verify them before replacing the bootstrap CLI:
-
-```bash
-sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts ./herdr-relay-0.2.0-rc.5.tgz
-herdr-relay --version
-herdr-relay release install --version 0.2.0-rc.5
-```
-
-Use a user-owned npm installation inside the intended Linux/WSL account, without
-sudo. npm supplies the bootstrap maintenance CLI. `release install` verifies/audits
-the release, stores it side-by-side and activates the normal CLI from that version
-store. Neither step changes existing services/plugins. Those keep their pinned RC4
-release paths until the explicit upgrade below. A development
-checkout/npm link is not a published release installation.
-
-For fresh nodes/backends, activate the versioned release **before** running the
-ordinary `node install` or `backend install`, so their initial service/plugin paths
-are pinned too. Later upgrades use the built-in upgrader rather than repeatedly
-replacing a globally installed package that a running service might reference.
-
-## Plan, then apply
-
-When upgrading from an older CLI/plugin whose guard still blocks compatible
-updates, activate the new upgrader first:
+Activate the exact **published** target version first. The examples below use
+0.2.1 only after its release exists:
 
 ```sh
-herdr-relay release install --version EXACT_NEW_VERSION
-herdr-relay upgrade --services both --version EXACT_NEW_VERSION --key upgrade-KEY
-herdr-relay upgrade --services both --version EXACT_NEW_VERSION --key upgrade-KEY --apply
+herdr-relay release install --version 0.2.1
 ```
 
-Run the public CLI from the terminal/shell, not a still-loaded older plugin's
-package-pinned CLI bridge. CLI activation does not restart services. Do not edit
-journals to bootstrap the new upgrade policy.
+Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
+Activation audits/stages the package and updates the CLI/managed skills, not
+existing services. Refresh skill context through the harness; do not restart
+OpenCode to reload skills or configuration.
+
+## 2. Plan, then apply with the same key
+
+On a host running both backend and node:
+
+```sh
+herdr-relay upgrade --services both --version 0.2.1 --key stable-021-backend-host
+herdr-relay upgrade --services both --version 0.2.1 --key stable-021-backend-host --apply
+```
 
 On a node-only host:
 
-```bash
-herdr-relay node upgrade --version 0.2.0-rc.5 --key surface-rc5
-herdr-relay node upgrade --version 0.2.0-rc.5 --key surface-rc5 --apply
+```sh
+herdr-relay upgrade --services node --version 0.2.1 --key stable-021-node-host
+herdr-relay upgrade --services node --version 0.2.1 --key stable-021-node-host --apply
 ```
 
-On Evo, upgrade both roles together:
+Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
+and `backend upgrade` commands are also supported. Use exact versions, not `latest`.
+Planning may download/install/audit a private cached release but does not switch
+live services or configuration.
 
-```bash
-herdr-relay upgrade --services both --version 0.2.0-rc.5 --key evo-rc5
-herdr-relay upgrade --services both --version 0.2.0-rc.5 --key evo-rc5 --apply
+The target database contract decides the policy:
+
+- `maintenancePolicy: compatible_code_switch`: active native turns, conflicts,
+  pending publications and backend executions remain recorded work state. They
+  do not block schema-compatible maintenance or require cancellation.
+- `maintenancePolicy: database_migration`: explicit migration authorisation,
+  settlement, verified backups and schema-specific recovery are still required.
+
+RC4-to-0.2.1 retains protocol `relay/0.2`, backend schema 2 and node schema 1.
+Removing retired source code does not migrate or rewrite imported task provenance.
+
+## 3. Deferred plugin reload
+
+Pending UI decisions, or unavailable decision inspection, defer only the plugin
+reload during a compatible upgrade. A service operation can be committed while
+`pluginReloadDeferred` is set. Resolve the original form/permission normally, then:
+
+```sh
+herdr-relay upgrade resume OPERATION_ID --apply
 ```
 
-Backend-only maintenance is `herdr-relay backend upgrade --version VERSION` and
-the same command with `--apply`. It does not restart the node. Node-only maintenance
-does not restart/administer the backend and does not require its root credential.
+This finishes the saved reload without restarting services. Do not rerun with a
+new key, answer decisions automatically or restart OpenCode. A clean preview is
+not a reservation: a later decision may defer reload during apply.
 
-Without `--apply`, the release may be downloaded, installed and audited in the
-private version cache, but no live service/configuration/CLI pointer is switched.
-The output reports the exact roles, previous/target versions, restart decisions,
-plugin reload and operation key. Use exact versions, never an implicit `latest`.
+Owned workers retain their process and immutable launch request. Their plugin-only
+change waits for idle and no pending decisions. A deferred update is not a fully
+applied UI update. Later manual configuration/CLI changes fence stale operations.
 
-For an existing verified offline artifact, substitute:
+## Maintenance safety
 
-```bash
-herdr-relay node upgrade --artifact /private/herdr-relay-VERSION.tgz \
-  --sha256 EXACT_TRUSTED_SHA256 --key node-upgrade-VERSION --apply
-```
+The updater acquires an OS-backed lock, validates managed units and identity/schema
+pins, stages the verified release and requires a fresh zero-finding production
+audit. Unavailable audit/registry access is not a successful audit.
 
-The checksum must come from a trusted channel. It is an integrity check, not a
-signing-key assertion. A successful fresh production audit is still required.
-Registry/audit failure leaves the old services running. The installer ignores
-dependency lifecycle scripts and refuses different bytes in an existing version.
+It records intended changes and original bytes, sets maintenance guards, stops
+selected nodes before selected backends and repeats identity checks. Database
+migrations repeat settlement checks. SQLite backups use the online backup API and
+are integrity-checked; a live WAL database is not copied as an ordinary file.
 
-## Upgrade sequence and disruption boundaries
+Compatible switching preserves live owned native processes. Before stopping an old
+supervisor it applies the process-only systemd stop policy, rather than killing
+workers with the supervisor cgroup. The same execution, process and invocation
+identities continue without prompt replay. Dead runtimes with unresolved history
+remain unavailable instead of being silently relaunched.
 
-1. Acquire an OS-backed per-user upgrade lock. Refuse conflicting/incomplete operations.
-2. Validate managed systemd units, existing identity pins and schema compatibility.
-3. Require settlement only for database migrations. Compatible code switches
-   preserve active/uncertain turns, notices, publications and backend work unchanged.
-   Before a plugin reload, inspect known bound/registered OpenCode services for
-   pending server-side forms/permissions. Existing decisions or inspection failure
-   defer only that reload for compatible code. Migrations retain the strict guard.
-   No decision is answered/cancelled and inspection failure is not an empty inbox.
-4. Stage the verified immutable release and require a zero-finding production audit.
-5. Save the operation, original unit/configuration bytes and intended replacements.
-6. Set maintenance guards. Stop selected node services before selected backends,
-   then repeat identity checks and, for migrations, quiescence checks. Compatible
-   switches retain work admitted by old code just before stopping.
-7. Back up databases using SQLite's backup API and verify integrity. Back up private
-   identity files. Never copy a live SQLite file as if it were an online backup.
-8. Switch only service entrypoint/plugin package paths. Preserve ports, runtime
-   executable, state paths, plugin options, comments, unrelated settings and credentials.
-9. Start selected backends before nodes, only if they were previously running.
-   New code remains in maintenance until its actual release/PID/identity is verified.
-10. Activate the normal CLI command, clear maintenance and verify service health.
+Only selected service entrypoints and plugin package paths change. Ports, runtime
+executables, state paths, unrelated preferences, comments and credentials remain
+preserved. Backends start before nodes, and only if previously running. Health is
+verified before maintenance is cleared. No general OpenCode process is restarted.
 
-No general OpenCode service/TUI is restarted. Updating its Relay plugin configuration
-can reload OpenCode locations. Pending forms/permissions are checked before the
-switch, but a late race or client-only Relay confirmation can still be invalidated
-and must be reopened. The updater does not approve, replay or weaken a decision. It does not
-claim zero disruption or conceal a required configuration reload.
-
-If a turn races a compatible code switch, it continues with that same journal,
-not a repeated prompt or replacement execution. If a candidate fails health checks, compatible
-old code/configuration is restored without replacing the current database. If safe
-recovery is blocked, the operation reports `upgrade_recovery_required`, retains its
-backups/maintenance record and requires explicit reconciliation. There is no force
-flag that bypasses identity, integrity or migration requirements. Uncertain work is
-preserved through compatible code switching, not declared completed or unapplied.
-If work has already begun after activation and then a health/recovery check fails,
-compatible code rollback preserves it too. It does not interrupt native processes,
-erase their records or restore a database. Schema-incompatible rollback is refused.
-A recovery-required record does
-not mean a running model turn was stopped or that a database was restored.
+There may be a brief Relay API interruption. This is not a zero-disruption or an
+exactly-once external-effect guarantee. There is no unsafe force flag bypassing
+identity, integrity, provenance or migration requirements.
 
 ## Status, resume and rollback
 
-```bash
+```sh
 herdr-relay upgrade status
 herdr-relay upgrade status OPERATION_ID
 herdr-relay upgrade resume OPERATION_ID --apply
@@ -194,80 +117,28 @@ herdr-relay upgrade rollback OPERATION_ID
 herdr-relay upgrade rollback OPERATION_ID --apply
 ```
 
-Keep the operation ID printed by apply. Repeating its original immutable key returns
-the existing operation instead of restarting services again. A different request
-under that key conflicts. Resume reconciles the original planned files; it does not
-select a new release or recreate state. Only one unfinished operation is permitted.
-If failure already selected rollback but recovery was interrupted/blocked, status
-shows `recoveryAction: rollback`; resume finishes that recorded rollback rather than
-silently deciding to keep the failed candidate.
+Retain the operation ID printed by apply. Reusing the exact key/request returns the
+saved operation; changing its payload conflicts. Resume reconciles the saved plan,
+not a new release. If failure selected rollback, resume finishes that recorded
+rollback rather than silently accepting the failed candidate.
 
-Rollback is a compatible **code/configuration rollback**, not database time travel.
-Post-upgrade task edits/results remain in the current database. Old backups are for
-separate explicit recovery, not silently restored after external effects occurred.
-Later manual configuration/CLI changes fence rollback instead of being overwritten.
-The previous release directory must remain available. Never remove a release while
-services, plugin entries, CLI links or retained rollback operations reference it.
+Rollback switches compatible code/configuration, **not the database**. Post-upgrade
+edits and results remain current. Old backups require separate explicit recovery.
+Keep previous releases while services, plugins, CLI links or rollback operations
+reference them. Schema-incompatible rollback is refused.
 
-RC9 supports explicit relay/0.2 backend schema 1 or 2 and node schema 1 contracts.
-RC4 remains the sole metadata-free adoption baseline. Ordinary upgrades still
-require the candidate and database schema to match. Unknown schemas fail before a switch.
+An `upgrade_recovery_required` result retains its backups and maintenance evidence.
+It does not prove a native process stopped or a database was restored. Inspect the
+saved operation rather than clearing journals. See [recovery](maintenance-recovery.md).
 
-### RC9 task-reference transition
+## Older native schema compatibility
 
-Use the verified RC9 CLI and explicitly add `--migrate-task-references` when
-upgrading a schema-1 backend:
+The updater retains explicit task-reference migration for schema-1 native backends
+using `--migrate-task-references`. This is not required for RC4 or later schema-2
+installations. It allocates immutable references under a verified backup and state
+lock, preserves original task IDs and retains its migration receipt.
 
-```sh
-herdr-relay upgrade --services both --version 0.2.0-rc.9 --key local-rc9 --migrate-task-references
-herdr-relay upgrade --services both --version 0.2.0-rc.9 --key local-rc9 --migrate-task-references --apply
-```
-
-The plan is read-only against live state. Apply stops the selected services under
-maintenance, repeats safety checks, verifies private backups and acquires the
-backend state lock before atomically backfilling task references and committing
-schema 2. Service arguments, credentials, identities and task IDs remain unchanged.
-The operation retains the migration receipt and its backup/hash. Resume reconciles
-a committed migration even after a lost local result, without allocating again.
-
-**After schema 2 commits, RC8/schema-1 backend rollback is refused.** If health or
-activation fails, the exact candidate and maintenance record are retained for
-`upgrade resume OPERATION_ID --apply`. Recovery is roll-forward, not an automatic
-database restore. Before migration commits, normal compatible rollback remains
-available. Node-only upgrades do not migrate the backend and retain compatible
-code/configuration rollback.
-
-## Public CLI versus service runtime paths
-
-Ordinary use is `herdr-relay ...`, without pasted nodejs/private script paths. The
-updater maintains the recognised CLI symlink to its verified version store. Existing
-unrelated wrappers are refused, not overwritten. `npm ls -g` may describe the bootstrap
-package, while `herdr-relay --version` reports the activated managed CLI.
-
-Systemd deliberately retains an absolute nodejs executable and release entrypoint
-because it does not use an interactive shell's NVM setup. Nodejs upgrades are a
-separate operator action. Tool-enabled agent briefings use native Relay tool names;
-explicit CLI transport uses the public `herdr-relay native work` command.
-
-Private maintenance records/backups default to `~/.local/state/herdr-relay-upgrades`.
-Private verified releases default to `~/.local/share/herdr-relay/releases`. Internal
-`nodeId`, `node.json` and existing unit names are unchanged so an upgrade preserves
-identity and compatibility rather than performing an unnecessary rename migration.
-
-## Acceptance
-
-Unit/HTTP tests cover busy refusal, compatibility, checksums/audits, maintenance gates,
-idempotency, configuration conflicts, rollback and persisted partial-switch recovery.
-`node scripts/verify-upgrade.mjs` additionally uses the installed candidate, actual
-RC4/candidate backend/node processes and existing isolated OpenCode chats. It verifies
-upgrade, delivery before/after, unchanged credentials/IDs, post-upgrade data retention,
-node-only maintenance and automatic failed-health rollback. It never controls the
-user's services. This is single-host evidence, not physical Surface certification.
-
-Implementation references: [nodejs SQLite backup API](https://nodejs.org/docs/latest-v24.x/api/sqlite.html#sqlitebackupsourcedb-path-options),
-[systemd service start/stop semantics](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html),
-and [OpenCode V2 reload API](https://opencode.ai/v2/docs/api)
-([official OpenAPI](https://opencode.ai/v2/openapi.json)). OpenCode documents that
-configuration reload cancels pending forms/permissions while running sessions continue
-with refreshed services at the next step boundary. This is why the guard and explicit
-reload warning exist rather than promising an invisible update.
+After schema 2 commits, schema-1 backend rollback is refused. Recovery is
+roll-forward with the saved operation, not an automatic database restore. The
+metadata-free 0.2.0-rc.4 adoption fixture and schema-1 fixtures remain upgrade tests,
+not current installation instructions or an external-provider integration plan.

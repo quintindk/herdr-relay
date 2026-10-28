@@ -32,3 +32,21 @@ test('historical fixture verifies immutable bytes, reports actual advisory count
   await assert.rejects(historicalUpgradeFixture({ version: '0.2.0-rc.99', directory: join(root, 'releases') }, dependencies), { code: 'invalid_fixture_baseline' });
   await assert.rejects(historicalUpgradeFixture({ version, directory: '/private/real-release-store' }, dependencies), { code: 'invalid_fixture_directory' });
 });
+
+test('historical fixture accepts only the explicitly selected canonical scratch root', async t => {
+  const scratch = mkdtempSync('/tmp/opencode/relay-fixture-scratch-');
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const root = mkdtempSync(join(scratch, 'relay-upgrade-smoke-'));
+  const input = { version: '0.2.0-rc.9', directory: join(root, 'releases') };
+  const dependencies = { fetch: async () => { throw Object.assign(Error('Fixture fetch reached'), { code: 'fixture_fetch_reached' }); } };
+  await assert.rejects(historicalUpgradeFixture(input, dependencies), { code: 'invalid_fixture_directory' });
+  const previous = process.env.RELAY_TEST_SCRATCH;
+  try {
+    process.env.RELAY_TEST_SCRATCH = scratch;
+    await assert.rejects(historicalUpgradeFixture(input, dependencies), { code: 'fixture_fetch_reached' });
+    await assert.rejects(historicalUpgradeFixture({ ...input, directory: '/private/real-release-store' }, dependencies), { code: 'invalid_fixture_directory' });
+  } finally {
+    if (previous === undefined) delete process.env.RELAY_TEST_SCRATCH;
+    else process.env.RELAY_TEST_SCRATCH = previous;
+  }
+});

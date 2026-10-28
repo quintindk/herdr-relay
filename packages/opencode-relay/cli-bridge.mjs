@@ -31,7 +31,7 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
   requireValue(Array.isArray(args) && args.length > 0 && args.every(arg => typeof arg === 'string' && !arg.includes('\0')),
     'invalid_request', 'CLI arguments must be an array of strings, not a shell command');
   requireValue(nativeCliInvocation(args),
-    'legacy_cli_not_supported', 'Use the native CLI: task/execution commands start with native. Retired Paperclip commands are not a fallback');
+    'legacy_cli_not_supported', 'Use the native CLI: task and execution commands start with native');
   requireValue(!executionSource || executionCliInvocation(args), 'execution_cli_scope',
     'Assigned work has execution scope, not human operator authority. Use ordinary reads or comment/edit on the assigned task; lifecycle, new task creation and dispatch need separate authority', 403);
   requireValue(!agentReadSource || readOnlyCliInvocation(args), 'agent_cli_read_only', 'Enrolled read-only scope cannot create tasks, dispatch work or administer services', 403);

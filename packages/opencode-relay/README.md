@@ -74,5 +74,5 @@ tests require Python 3 and Unix terminal support.
 - Readiness/fixture success is not proof of a real tenant business workflow or
   physical Surface qualification.
 
-The [initial verification record](../../docs/opencode-v2-verification.md) is retained
-as historical evidence, not a claim that the old baseline certified current releases.
+Historical verification records remain in tagged Git history. Current verification
+is described in [development](../../docs/development.md) and [releasing](../../docs/releasing.md).

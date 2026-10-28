@@ -5,11 +5,12 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { promisify } from 'node:util';
-import { createServer } from 'node:http';
 
 // A local RC artifact only. This never publishes npm packages, Git tags or a
 // GitHub release, and never uses the user's native services or credentials.
-const root = mkdtempSync('/tmp/opencode/relay-package-check-');
+const scratch = resolve(process.env.RELAY_TEST_SCRATCH ?? '/tmp/opencode');
+mkdirSync(scratch, { recursive: true, mode: 0o700 });
+const root = mkdtempSync(join(scratch, 'relay-package-check-'));
 const { values } = parseArgs({ options: { output: { type: 'string' }, 'skip-audit': { type: 'boolean' }, release: { type: 'boolean' } } });
 let sourceCommit = null, sourceTreeClean = false;
 try {
@@ -26,9 +27,9 @@ const staging = join(root, 'staging'); mkdirSync(staging);
 const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', staging], { encoding: 'utf8' }));
 assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firecrawl|\.git)(\/|$)/.test(f.path)), 'Package contains private or development files');
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
-  'scripts/install-native-node.mjs', 'scripts/migrate-paperclip-tasks.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
+  'scripts/install-native-node.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/skill-install.mjs',
-  'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md', 'docs/legacy-paperclip-work-skill.md',
+  'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
   'src/headless-permissions.mjs', 'packages/opencode-relay/headless-mcp.mjs',
@@ -48,6 +49,8 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
      'packages/opencode-relay/run-result-notice.mjs', 'src/board-text.mjs', 'src/board-row-layout.mjs', 'src/board-detail-layout.mjs',
      'scripts/install-herdr-shortcut.py', 'scripts/toggle-board.py', 'scripts/native-board-launch.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 assert.ok(!packed.files.some(file => ['paperclip-final.json', 'paperclip-final-plan.json'].includes(file.path)), 'Private migration exports must never ship');
+assert.ok(!packed.files.some(file => /^(?:evaluation\/|docs\/(?:archive|evidence)\/)|(?:^|\/)(?:paperclip[^/]*|adapter|service|provider-selection|provider-journal)\.mjs$/.test(file.path)),
+  'Retired integrations or development journals must not ship');
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
@@ -87,7 +90,7 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
 }
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
 assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
-assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, '4.6.6', 'Keep the patched Zod 4 validation contract pinned');
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, undefined, 'Retired tool validation must not retain an unused direct dependency');
 assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--version'], { encoding: 'utf8' }).trim(), packed.version);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
@@ -98,7 +101,7 @@ const skillConfig = join(root, 'installed-skills'); mkdirSync(skillConfig);
 const installedCli = join(consumer, 'node_modules/.bin/herdr-relay');
 const installedSkills = JSON.parse(execFileSync(installedCli, ['skills', 'install', '--config-dir', skillConfig], { encoding: 'utf8' }));
 assert.equal(installedSkills.state, 'skills_installed');
-assert.match(readFileSync(join(skillConfig, 'skills/herdr-relay/SKILL.md'), 'utf8'), /Native Relay does not require Paperclip/);
+assert.match(readFileSync(join(skillConfig, 'skills/herdr-relay/SKILL.md'), 'utf8'), /Relay uses its native task backend/);
 assert.equal(JSON.parse(execFileSync(installedCli, ['skills', 'install', '--config-dir', skillConfig], { encoding: 'utf8' })).state, 'skills_current');
 if (!values['skip-audit']) {
   const activationBin = join(root, 'activation-bin'); mkdirSync(activationBin);
@@ -198,18 +201,8 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
   }
   finally { journal.close(); await backend.close(); }
 `], { cwd: installed, stdio: 'pipe' });
-const sourceMethods = [], taskId = '00000000-0000-4000-8000-000000000001';
-const sourceTask = { id: taskId, companyId: 'company', title: 'Surface migration fixture', description: 'Preserved task content', priority: 'high', status: 'in_progress' };
-const paperclip = createServer((req, res) => {
-  sourceMethods.push(req.method);
-  const path = req.url;
-  const body = path === '/api/companies' ? [{ id: 'company', name: 'Surface fixture' }] : path.includes('/audit/') ? { accessTier: 'full', items: [] } :
-    path.includes('/comments?') || path.endsWith('/interactions') ? [] : path.startsWith('/api/companies/') ? [sourceTask] : sourceTask;
-  res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body));
-});
-await new Promise(resolve => paperclip.listen(0, '127.0.0.1', resolve));
 let onboarding;
-try {
+{
   const result = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs';
@@ -271,15 +264,11 @@ try {
         await tickAgentNotices(targetJournal,nativeBackendClient(evoConfig.backend),async()=>binding);
         assert.equal(sends,1);assert.equal(backend.store.get('message',sent.receipt.id).state,'delivered');
       } finally {await service.close();sourceJournal.close();targetJournal.close();}
-      const source=join(surface,'paperclip-source.json'), file=join(surface,'paperclip-export.json');
-      await nativeAdmin(['tasks','source','--url',${JSON.stringify(`http://127.0.0.1:${paperclip.address().port}`)},'--local-trusted','--output',source]);
-      await nativeAdmin(['tasks','companies','--source',source]);
-      await nativeAdmin(['tasks','export','--source',source,'--company','company','--output',file]);
-      await nativeAdmin(['tasks','plan','--file',file]);
-      await backend.close();
-      const digest=JSON.parse(readFileSync(file)).digest;
-      const args=['tasks','import','--file',file,'--context',owner,'--state-dir',state,'--confirm-digest',digest,'--source-frozen','--legacy-relay-settled'];
-      await nativeAdmin(args); await nativeAdmin(args);
+       const capture={key:'capture',action:'task.create',payload:{id:'onboarding-task',title:'Native Surface task',description:'Preserved task content'}};
+       const captured=await api('POST','/v1/commands',capture);
+       assert.deepEqual(await api('POST','/v1/commands',capture),captured);
+       assert.equal(captured.responsibleUserId,'owner');assert.equal(captured.status,'todo');
+       await backend.close();
       await nativeAdmin(['backend','backup','--state-dir',state,'--output',join(evo,'backup.sqlite')]);
       await nativeAdmin(['backend','install','--state-dir',join(root,'dry-run-only'),'--dry-run']);
       assert.equal(existsSync(join(root,'dry-run-only')),false);
@@ -287,14 +276,13 @@ try {
       try { assert.equal(store.all('task').length,1); assert.equal(store.all('task')[0].status,'todo');assert.equal(store.all('execution').length,0);assert.equal(store.all('schedule').length,0); }
       finally {store.close();}
       console.log('ONBOARDING_SMOKE='+JSON.stringify({cleanEvoAndSurfaceHomes:true,scopedBootstrapAndJoin:true,operatorEnrolAndAttach:true,
-        pluginInstallWithoutSession:true,sourceExportReadOnly:true,taskImportIdempotent:true,backendBackupPassed:true,systemdUnitDryRunPassed:true,
+         pluginInstallWithoutSession:true,nativeTaskCaptureIdempotent:true,backendBackupPassed:true,systemdUnitDryRunPassed:true,
         taskIndependentAgentMessages:true,physicalSurfaceTested:false,rootCredentialCopied:false}));
     } finally {await backend.close();}
   `], { cwd: installed, timeout: 60000, maxBuffer: 4 * 1024 * 1024,
     env: { ...process.env, HOME: join(root, 'clean-home'), XDG_STATE_HOME: join(root, 'clean-state'), XDG_CONFIG_HOME: join(root, 'clean-config'), RELAY_NATIVE_CONTEXT: '' } });
   onboarding = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('ONBOARDING_SMOKE=')).slice('ONBOARDING_SMOKE='.length));
-  assert.ok(sourceMethods.length > 0 && sourceMethods.every(method => method === 'GET'));
-} finally { await new Promise(resolve => paperclip.close(resolve)); }
+}
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),

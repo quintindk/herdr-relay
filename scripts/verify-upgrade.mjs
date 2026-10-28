@@ -23,7 +23,9 @@ import { OpenCode } from '@opencode/client';
 import { NodeJournal } from '../src/node-journal.mjs';
 
 process.umask(0o077);
-const execute = promisify(execFile), root = mkdtempSync('/tmp/opencode/relay-upgrade-smoke-');
+const scratch = resolve(process.env.RELAY_TEST_SCRATCH ?? '/tmp/opencode');
+mkdirSync(scratch, { recursive: true, mode: 0o700 });
+const execute = promisify(execFile), root = mkdtempSync(join(scratch, 'relay-upgrade-smoke-'));
 const releases = join(root, 'releases'), backendState = join(root, 'backend'), nodeState = join(root, 'node'), bin = join(root, 'bin');
 for (const path of [backendState, nodeState, bin]) mkdirSync(path);
 const wait = async (label, check, timeout = 60000) => {

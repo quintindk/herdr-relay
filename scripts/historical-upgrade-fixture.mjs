@@ -13,7 +13,8 @@ export async function historicalUpgradeFixture({ version, directory }, dependenc
   requireValue(['0.2.0-rc.4', '0.2.0-rc.5', '0.2.0-rc.6', '0.2.0-rc.8', '0.2.0-rc.9'].includes(version), 'invalid_fixture_baseline', 'Only explicit historical upgrade baselines are supported');
   directory = resolve(directory);
   const root = dirname(directory);
-  requireValue(dirname(root) === '/tmp/opencode' && basename(root).startsWith('relay-upgrade-smoke-') && basename(directory) === 'releases' && realpathSync(root) === root,
+  const scratch = resolve(process.env.RELAY_TEST_SCRATCH ?? '/tmp/opencode');
+  requireValue(dirname(root) === scratch && realpathSync(scratch) === scratch && basename(root).startsWith('relay-upgrade-smoke-') && basename(directory) === 'releases' && realpathSync(root) === root,
     'invalid_fixture_directory', 'Historical releases may only be installed in a fresh isolated upgrade-smoke directory');
   const run = dependencies.run ?? promisify(execFile), fetcher = dependencies.fetch ?? fetch;
   const read = async (url, maximum) => {

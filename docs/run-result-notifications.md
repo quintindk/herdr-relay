@@ -100,7 +100,7 @@ must acknowledge the new schedule revision before using it. Already admitted
 runs retain their original revision's policy. No old results are backfilled.
 Reusing a key with changed flags is a conflict, not a settings edit.
 
-Upgrade the backend, node and plugin to RC3 before enabling these settings.
+Use backend, node and plugin versions supporting reporting before enabling it.
 Unknown old backends fail capability checks rather than silently accepting a
 setting they cannot honour. The implementation uses existing JSON records and
 journals: backend schema stays 2, node schema stays 1. No live job is opted in by

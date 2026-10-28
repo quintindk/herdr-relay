@@ -16,12 +16,13 @@ export function nativeBackendClient({ url, token, ingressKey, cloudflareAccess, 
   requireValue(typeof token === 'string' && token.length > 0 && (!cloudflareAccess ||
     typeof cloudflareAccess.clientId === 'string' && cloudflareAccess.clientId &&
     typeof cloudflareAccess.clientSecret === 'string' && cloudflareAccess.clientSecret), 'invalid_credentials', 'Explicit actor and optional complete Access credentials required');
-  const client = async (method, path, body) => {
+  const client = async (method, path, body, { signal } = {}) => {
     requireValue(typeof path === 'string' && path.startsWith('/v1/') && !path.includes('\\'), 'invalid_request', 'Native backend route required');
     const target = new URL(path, origin);
     requireValue(target.origin === origin.origin && target.pathname.startsWith('/v1/') && !target.hash,
       'invalid_request', 'Native backend route must remain inside the configured origin');
-    const response = await request(target, { method, redirect: 'error', signal: AbortSignal.timeout(10000),
+    const timeout = AbortSignal.timeout(10000);
+    const response = await request(target, { method, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(ingressKey ? { 'X-API-Key': ingressKey } : {}),
         ...(cloudflareAccess ? { 'CF-Access-Client-Id': cloudflareAccess.clientId, 'CF-Access-Client-Secret': cloudflareAccess.clientSecret } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body) });

@@ -1,16 +1,5 @@
 import { request } from 'node:http';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { RelayError } from './protocol.mjs';
-
-export const stateDirectory = () => process.env.RELAY_STATE_DIR ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay');
-
-export function credentials(path = process.env.RELAY_CONTEXT) {
-  if (path) return JSON.parse(readFileSync(path, 'utf8'));
-  const dir = stateDirectory();
-  return { socketPath: join(dir, 'relay.sock'), token: readFileSync(join(dir, 'admin-token'), 'utf8').trim() };
-}
 
 export function call(connection, method, path, body, { signal } = {}) {
   return new Promise((resolve, reject) => {

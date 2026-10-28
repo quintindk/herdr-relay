@@ -1,12 +1,12 @@
-# Native task references (RC9)
+# Native task references
 
 Every new native task has an immutable machine `id` and an immutable readable
 `reference`. Relay automatically allocates `REL-1`, `REL-2`, etc. Consumers do not
 have to supply either identity. Existing clients supplying native IDs still work.
 
-These references are included in RC9, not RC8. Backend schema **2** is required.
-Node journals remain schema **1**. An existing backend requires the explicit
-migration described below. Reading this document never performs a live cutover.
+Backend schema **2** is required and node journals remain schema **1**. An older
+schema-1 backend requires the explicit native migration described below. RC4 and
+current schema-2 installations do not repeat it. Reading this guide changes no state.
 
 ## Create and retry
 
@@ -115,6 +115,8 @@ Imported identifiers are indexed from their preserved provider/source metadata,
 with `paperclip:<sourceScope>` for Paperclip imports. Older top-level identifiers
 are indexed in `native`. Aliases and claims are retained rather than retargeted
 when metadata changes. No private export is re-imported by this feature.
+Those stored scopes are historical provenance only. There is no live tracker
+connection, new source-import command or planned integration behind them.
 
 ## Explicit offline migration
 
@@ -161,7 +163,7 @@ reference. Their original hash, mutable fields and audit record remain unchanged
 - Missing claim registries, inconsistent coverage or counters below retained claims
   require recovery. Startup does not reconstruct issued history from live task rows.
 - Normal service upgrades require candidate and database schemas to match. They do
-  not silently migrate or restore databases. RC9 explicitly supports the managed
+  not silently migrate or restore databases. The updater explicitly supports the managed
   `--migrate-task-references` transition described in [service upgrades](service-upgrades.md).
   Rollback to a schema-1 backend
   after migration is refused before switching service pointers.
@@ -175,5 +177,4 @@ reference. Their original hash, mutable fields and audit record remain unchanged
   recovery reconciliation service. Keep it offline until explicit recovery has
   established safe counters/claims, or establish a deliberately new namespace.
 
-Labels, label filtering, broader full-text search and tag UI remain separate work.
-See [the specification](task-identity-and-labels-spec.md) for their proposed contract.
+Task labels do not change reference identity, namespace authority or alias scope.

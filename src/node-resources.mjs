@@ -2,7 +2,7 @@ import { provisionWorktree, finaliseWorktree, retireWorktree } from './resources
 import { requireValue } from './protocol.mjs';
 
 // Adapt the existing verified Git resource machinery to native node receipts.
-// This adapter owns no Paperclip identity and never infers acceptance from status.
+// It retains native identities and never infers acceptance from status alone.
 export function nodeResourceStore(journal) {
   journal.db.exec('CREATE TABLE IF NOT EXISTS resource_operations(id TEXT PRIMARY KEY,data TEXT NOT NULL)');
   const run = work => ({ id: work.execution.runId, request: { bindingId: work.bindingId, taskId: work.execution.taskId },

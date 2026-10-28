@@ -36,7 +36,7 @@ try {
   requireValue(config.nodeId && config.stateDirectory && config.backend && Array.isArray(config.bindings), 'invalid_config', 'Node, state, backend and bindings required');
   requireValue(config.bindings.length <= 100, 'invalid_config', 'At most 100 explicit bindings supported');
   requireValue(!config.tasks || config.tasks.type === 'native', 'unsupported_provider_lifecycle',
-    'Daemon execution currently requires native Tasks. External task lifecycle integration is incomplete');
+    'Node execution requires the native Relay task backend');
   const directory = resolve(config.stateDirectory);
   const maintenance = () => existsSync(join(directory, 'maintenance.json'));
   mkdirSync(directory, { recursive: true, mode: 0o700 });

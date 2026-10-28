@@ -4,8 +4,8 @@
 of its commands. `relay_cli_help` reads that CLI's current native, maintenance and
 headless help. The executable and bridge share `src/native-cli-surface.mjs` for
 native entrypoint routing. Operations beneath those entrypoints are passed through
-unchanged, including future CLI operations. Retired Paperclip commands are not a
-fallback for native work.
+unchanged. Unqualified retired commands and external trackers are not a fallback
+for native work.
 
 ## Coverage
 
@@ -21,7 +21,6 @@ fallback for native work.
 | Headless provision, inspection, connections, grants, setup and status | `relay_cli` with `headless ...` |
 | Backend installation, initialisation, run, backup, status and inventory | `relay_cli` with the corresponding native/backend command |
 | Task-reference grants and migration | `relay_cli` with `native task-reference ...` or `native task migrate-references ...` |
-| Existing explicit source/export/plan/import administration | `relay_cli` with `tasks ...` |
 | Plugin and skill install/status/uninstall, doctor | `relay_cli` with the corresponding native CLI command |
 | Release install, node/backend upgrade, upgrade status/resume/rollback | `relay_cli` with the corresponding maintenance command |
 | Board and version/help | `relay_cli` with `tui --json`, `--version` or help arguments |

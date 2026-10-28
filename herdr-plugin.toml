@@ -1,6 +1,6 @@
 id = "quintindk.herdr-relay"
 name = "Herdr Relay"
-version = "0.2.1-rc4"
+version = "0.2.1"
 min_herdr_version = "0.9.3"
 platforms = ["linux", "macos"]
 description = "Native tasks, agent messaging and durable node services for Herdr."
@@ -13,33 +13,9 @@ command = ["python3", "scripts/toggle-board.py"]
 
 [[actions]]
 id = "status"
-title = "Relay: service status"
+title = "Relay: node health"
 contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "status"]
-
-[[actions]]
-id = "work"
-title = "Relay: task hierarchy by owner"
-contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "board"]
-
-[[actions]]
-id = "agents"
-title = "Relay: discover agents"
-contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "agent", "discover"]
-
-[[panes]]
-id = "work"
-title = "Relay tasks"
-placement = "split"
-command = ["bash", "scripts/plugin-launch.sh", "board", "--watch"]
-
-[[actions]]
-id = "observed"
-title = "Relay: Herdr agent registrations"
-contexts = ["global"]
-command = ["bash", "scripts/plugin-launch.sh", "agent", "observed"]
+command = ["bash", "scripts/plugin-launch.sh", "doctor"]
 
 [[actions]]
 id = "native-work"

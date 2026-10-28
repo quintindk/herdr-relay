@@ -4,28 +4,25 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createServer } from 'node:http';
 import { startBackend } from '../src/backend-service.mjs';
-import { BackendStore } from '../src/backend-store.mjs';
 import { nativeBackendClient } from '../src/backend-client.mjs';
 import { createNodeBundle, joinNode, revokeNodeBundle } from '../src/native-onboarding.mjs';
 import { enrolInteractive, attachInteractive } from '../src/native-enrol.mjs';
-import { importPaperclipTasks } from '../src/paperclip-migration.mjs';
 import { NodeJournal } from '../src/node-journal.mjs';
 import { inventoryProjection } from '../src/native-admin-cli.mjs';
 
 const execute = promisify(execFile), cli = resolve('src/cli.mjs');
-test('cutover inventory distinguishes native-only work and post-import edits from the Paperclip source', () => {
+test('backend inventory reports native records and pending contract revisions without migration tooling', () => {
   const snapshot = { instanceId: 'backend', collections: { task: [
     { id: 'native-work', status: 'todo' },
     { id: 'imported', title: 'Edited here', description: 'body', priority: 'high', status: 'todo', source: { provider: 'paperclip',
       metadata: { title: 'Original', description: 'body', priority: 'high', status: 'in_progress' } }, migrationDisposition: { toStatus: 'todo' } },
   ], comment: [{ id: 'native-comment' }, { id: 'source-comment', source: { id: 'pc' } }], execution: [], question: [], schedule: [] } };
   const report = inventoryProjection(snapshot);
-  assert.equal(report.reimportRisk.nativeOnlyTaskCount, 1);
-  assert.deepEqual(report.reimportRisk.importedTaskEditCandidates, [{ id: 'imported', fields: ['title'] }]);
-  assert.equal(report.reimportRisk.nativeCommentCount, 1);
-  assert.match(report.reimportRisk.warning, /cannot preserve/);
+  assert.equal(report.counts.task, 2);
+  assert.deepEqual(report.outstandingExecutions, []);
+  assert.deepEqual(report.headlessSetups, []);
+  assert.equal(report.reimportRisk, undefined);
 });
 async function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/onboarding-');
@@ -69,8 +66,6 @@ test('Evo bootstrap and Surface join install distinct scoped credentials without
   await assert.rejects(opApi('POST', '/v1/commands', { key: 'new-node', action: 'node.enrol', payload: { id: 'new-node', name: 'Other' } }), { code: 'forbidden' });
   await assert.rejects(opApi('POST', '/v1/commands', { key: 'grant', action: 'interactive.grant', payload: {} }), { code: 'forbidden' });
   await assert.rejects(nodeApi('POST', '/v1/commands', { key: 'raw-enrol', action: 'agent.enrol', payload: { id: 'raw', nodeId: surface.nodeId, name: 'Raw', directory: f.surface } }), { code: 'forbidden' });
-  const actor = f.backend.store.authenticate(operator.token);
-  assert.throws(() => importPaperclipTasks(f.backend.store, actor, {}), { code: 'forbidden' });
 });
 
 test('Surface scoped human enrolment/attachment works against an Evo backend and cannot adopt an Evo agent', async t => {
@@ -164,32 +159,4 @@ test('installed-style CLI bootstraps/joins a clean Surface home and installs enr
   assert.equal(statSync(join(f.evo, 'cli-backend/owner.json')).mode & 0o777, 0o600);
   const doctor = await f.run(f.evo, ['doctor', '--context', f.ownerFile, '--backend-only']);
   assert.equal(doctor.ready, true); assert.equal(doctor.destructiveChanges, false); assert.equal(doctor.servicesStarted, false);
-});
-
-test('maintained task commands export on a simulated Surface and import on Evo without copying root credentials or launching work', async t => {
-  const f = await fixture(t), methods = [];
-  const id = '00000000-0000-4000-8000-000000000001';
-  const task = { id, companyId: 'company', title: 'Surface task', description: 'Full body', priority: 'high', status: 'in_progress' };
-  const paperclip = createServer((req, res) => {
-    methods.push(req.method);
-    const path = req.url;
-    const body = path === '/api/companies' ? [{ id: 'company', name: 'Surface company' }] : path.includes('/audit/') ? { accessTier: 'full', items: [] } : path.includes('/comments?') || path.endsWith('/interactions') ? [] : path.startsWith('/api/companies/') ? [task] : task;
-    res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body));
-  });
-  await new Promise(resolve => paperclip.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => paperclip.close(resolve)));
-  const source = join(f.surface, 'source.json'), file = join(f.surface, 'export.json');
-  await f.run(f.surface, ['tasks', 'source', '--url', `http://127.0.0.1:${paperclip.address().port}`, '--local-trusted', '--output', source]);
-  assert.equal((await f.run(f.surface, ['tasks', 'companies', '--source', source])).companies[0].id, 'company');
-  assert.equal((await f.run(f.surface, ['tasks', 'source', '--url', `http://127.0.0.1:${paperclip.address().port}`, '--local-trusted', '--output', source])).state, 'existing');
-  await f.run(f.surface, ['tasks', 'export', '--source', source, '--company', 'company', '--output', file]);
-  const plan = await f.run(f.surface, ['tasks', 'plan', '--file', file]);
-  assert.equal(plan.ready, true); assert.ok(methods.every(m => m === 'GET'));
-  await f.backend.close();
-  const args = ['tasks', 'import', '--file', file, '--context', f.ownerFile, '--state-dir', f.backendState,
-    '--confirm-digest', JSON.parse(readFileSync(file)).digest, '--source-frozen', '--legacy-relay-settled'];
-  const imported = await f.run(f.evo, args);
-  assert.deepEqual(await f.run(f.evo, args), imported);
-  const db = new BackendStore(join(f.backendState, 'backend.sqlite'));
-  try { assert.equal(db.all('task').length, 1); assert.equal(db.all('task')[0].status, 'todo'); assert.equal(db.all('execution').length, 0); assert.equal(db.all('schedule').length, 0); }
-  finally { db.close(); }
 });

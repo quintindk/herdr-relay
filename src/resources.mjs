@@ -117,7 +117,7 @@ export async function retireWorktree(store, input, verifyAcceptance) {
   requireValue(!store.runs(resource.request.bindingId).some(item => item.nativeState !== 'settled'),
     'resource_busy', 'Binding still has unsettled native work', 409);
   requireValue(run.result?.candidate === input.candidate && run.nativeState === 'settled', 'stale_candidate', 'Settled exact candidate required', 409);
-  // Refresh authority from Paperclip on every destructive retry.
+  // Refresh authoritative acceptance on every destructive retry.
   await verifyAcceptance(run);
   const finalisation = store.operation(`commit:${digest([resource.id, run.id, input.candidate])}`);
   requireValue(finalisation?.state === 'recorded', 'finalisation_required', 'Candidate must be committed before worktree removal', 409);

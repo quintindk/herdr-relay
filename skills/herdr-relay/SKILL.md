@@ -1,6 +1,6 @@
 ---
 name: herdr-relay
-description: Use native Herdr Relay for durable tasks, enrolled agents, node messaging, schedules, questions and reviewed results. Distinguish interactive enrolments from reusable headless automation. Never fall back to Paperclip or borrow backend credentials.
+description: Use native Herdr Relay for durable tasks, enrolled agents, node messaging, schedules, questions and reviewed results. Distinguish interactive enrolments from reusable headless automation. Never substitute an external tracker or borrow backend credentials.
 license: MIT
 compatibility: opencode
 ---
@@ -17,8 +17,8 @@ compatibility: opencode
 - A **node** is a Relay participant. **nodejs** is its runtime.
 - Never read owner/operator/worker credential files, invent credentials or pass a
   backend-root credential to another node. Native tools carry the scoped context.
-- Native Relay does not require Paperclip. Do not use legacy company/routine
-  commands, the retired SSH adapter, or Paperclip credentials for native work.
+- Relay uses its native task backend. Do not use retired service/company/routine
+  commands, external task-provider adapters or another actor's credentials.
 
 ## Tasks and directory
 
@@ -152,7 +152,7 @@ compatibility: opencode
   effects or stop processes already started.
 - This coordinator flow currently requires the coordinator and worker on the same
   node. Cross-node authenticated headless setup is not implemented. Do not substitute
-  interactive provisioning or Paperclip for an unsupported destination.
+  another provisioning workflow or an external tracker for an unsupported destination.
 
 ## Work, questions and review
 

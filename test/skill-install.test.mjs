@@ -79,7 +79,7 @@ test('public skills CLI uses the selected config directory and node install sync
   assert.ok(status.skills.every(s => s.state === 'missing'));
   const installed = JSON.parse(execFileSync(process.execPath, [cli, 'skills', 'install', '--config-dir', f.configDirectory], { encoding: 'utf8' }));
   assert.equal(installed.state, 'skills_installed');
-  assert.match(readFileSync(f.target('herdr-relay'), 'utf8'), /Native Relay does not require Paperclip/);
+  assert.match(readFileSync(f.target('herdr-relay'), 'utf8'), /Relay uses its native task backend/);
   const bin = join(f.root, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   const nodeConfig = join(f.root, 'node.json'); writeFileSync(nodeConfig, '{"nodeId":"fixture"}');
@@ -87,5 +87,5 @@ test('public skills CLI uses the selected config directory and node install sync
     encoding: 'utf8', env: { ...process.env, HOME: f.root, XDG_CONFIG_HOME: join(f.root, 'config'), PATH: `${bin}:${process.env.PATH}` },
   }));
   assert.equal(result.skills.state, 'skills_installed');
-  assert.match(readFileSync(join(f.root, 'config/opencode/skills/herdr-relay/SKILL.md'), 'utf8'), /Native Relay does not require Paperclip/);
+  assert.match(readFileSync(join(f.root, 'config/opencode/skills/herdr-relay/SKILL.md'), 'utf8'), /Relay uses its native task backend/);
 });

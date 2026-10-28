@@ -59,5 +59,5 @@ export async function nativeDoctor({ configFile = defaultNodeConfig(), contextFi
   return { ready: checks.every(c => c.status === 'passed'), checks, readOnly: true, servicesStarted: false, destructiveChanges: false,
     verificationLimits: ['Does not certify Cloudflare Access policy. Run backend ingress-check separately.',
       'Does not prove model-provider authentication or successful model/tool execution.',
-      'Does not certify a physical second node or Paperclip cutover. Follow the onboarding acceptance checklist.'] };
+      'Does not certify a physical second node or complete business-source coverage. Verify each enrolled host separately.'] };
 }

@@ -367,7 +367,6 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         try { result = path.endsWith('tasks') ? await tasks.listTasks(body) : await api('GET', `/v1/agents?${query}`); }
         catch (error) {
           if (error.status && error.status < 500) throw error;
-          if (path.endsWith('tasks') && tasks.type !== 'native') throw error;
           const limit = body.limit ?? 100;
           requireValue(Number.isInteger(limit) && limit > 0 && limit <= 500, 'invalid_query', 'Bounded cache limit required');
           result = { items: journal.cached(path.endsWith('tasks') ? 'task' : 'agent').slice(0, limit).map(item => ({ ...item.entity, fetchedAt: item.fetchedAt })),
