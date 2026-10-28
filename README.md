@@ -1,8 +1,8 @@
 # Herdr Relay
 
-**0.2.1-rc4 development candidate (unreleased): clearer handback, wrapped TUI text and contract-activation diagnostics.**
+**0.2.1-rc4: clearer handback, wrapped TUI text and contract-activation diagnostics.**
 Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
-and [RC4 scope and acceptance plan](docs/release-0.2.1-rc4.md). The published candidate remains RC3.
+and [RC4 scope and compatibility](docs/release-0.2.1-rc4.md).
 Per-schedule [run result notifications](docs/run-result-notifications.md) separate
 persistent Inbox results from online-only requester messages. Both default off.
 

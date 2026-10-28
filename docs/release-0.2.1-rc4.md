@@ -1,6 +1,10 @@
-# Herdr Relay 0.2.1-rc4 — unreleased candidate
+# Herdr Relay 0.2.1-rc4
 
-## Scope and acceptance plan
+This prerelease fixes contract activation blocked by rejected historical writes
+and improves native task handback, text layout and terminal integration. Publishing
+the package does not upgrade running services or change live schedules.
+
+## Changes
 
 - Fix contract activation blocked by a historical, hash-verified transactional
   validation refusal. Retain the original command and evidence without replay,
@@ -45,7 +49,7 @@ The OpenCode card uses theme colours rather than fixed RGB values. Generation
 numbers and private configuration are not part of its compact default display.
 No additional notification, model turn or messaging permission is introduced.
 
-Herdr plugin paths must point at the installed candidate, not an old release or
+Herdr plugin paths must point at the installed release, not an old release or
 unrelated checkout. After linking that plugin through Herdr's normal mechanism:
 
 ```sh
@@ -62,7 +66,15 @@ does not link/reload plugins, start services or restart OpenCode implicitly.
 ## Release boundary
 
 Protocol remains **relay/0.2**, backend schema **2**, node journal schema **1**.
-Published RC1/RC2/RC3 tags and assets remain immutable. No release, live service
-upgrade, cron change, credential change or live recovery is part of this build.
-Validate source regressions, installed-package imports/UI, real native contract
-activation and Herdr focus behaviour before publication is requested separately.
+Published RC1/RC2/RC3 tags and assets remain immutable. Live service upgrades,
+shortcut installation, cron changes and recovery remain separate explicit
+operations. No credential rotation or OpenCode restart is introduced.
+
+Local verification passed 1,807 regression tests (one skipped, zero failures),
+106 plugin tests, installed-package cron/notification and legacy-refusal activation
+checks, real isolated Herdr focus/quit checks and an active-model upgrade/rollback
+smoke. The installed sidebar also passed on OpenCode 2.2.0. That supplemental
+sidebar check does not expand the complete supported-host release matrix.
+
+Publication is gated on clean committed source, exact-tag verification, installed
+OpenCode 2.1.0/2.1.2 host checks and a fresh zero-vulnerability production audit.
