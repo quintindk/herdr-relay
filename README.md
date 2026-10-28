@@ -1,8 +1,8 @@
 # Herdr Relay
 
-**0.2.1-rc3 development candidate (unreleased): opt-in run result notifications and compatible-upgrade recovery.**
+**0.2.1-rc3: opt-in run result notifications and compatible-upgrade recovery.**
 Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
-and [RC3 scope](docs/release-0.2.1-rc3.md). The latest published candidate remains RC2.
+and [RC3 scope and compatibility](docs/release-0.2.1-rc3.md).
 Per-schedule [run result notifications](docs/run-result-notifications.md) separate
 persistent Inbox results from online-only requester messages. Both default off.
 

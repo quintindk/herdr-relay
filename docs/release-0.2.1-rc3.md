@@ -1,7 +1,8 @@
-# Herdr Relay 0.2.1-rc3 — unreleased candidate
+# Herdr Relay 0.2.1-rc3
 
-This is development source, not a published release or deployment. Published RC1
-and RC2 tags/assets remain immutable. No live schedule is changed by this work.
+This prerelease adds opt-in run result reporting and supported maintenance
+recovery. Published RC1 and RC2 tags/assets remain immutable. Publishing this
+package does not upgrade running services or change live schedules.
 
 ## Run result visibility
 
@@ -50,6 +51,7 @@ No database migration, credential rotation or re-enrolment is introduced.
 
 Validation uses disposable backend/node/OpenCode processes and fixture-only
 model/MCP effects. It does not certify complete live mailbox/Teams collection.
-Publication still requires the separate clean-tagged-source, supported-host,
-installed-package and zero-vulnerability audit release gates. This work does not
-authorise a tag, release, upload, service upgrade or OpenCode restart.
+Publication requires the clean-tagged-source, supported-host, installed-package
+and zero-vulnerability audit release gates. Supported-host package checks cover
+OpenCode 2.1.0 and 2.1.2. Service upgrades and notification opt-in remain separate
+explicit operations. No OpenCode restart is required to reload plugins or skills.
