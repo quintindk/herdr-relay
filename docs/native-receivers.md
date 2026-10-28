@@ -2,8 +2,9 @@
 
 Native Relay separates the machine installation, enrolled agent, conversation
 binding and execution attempt. A new chat replaces the agent's receiver, not the
-agent, scheduler or schedule owner. Session-derived development enrolments are
-not migrated. Use a clean stable-node configuration for the new contract.
+agent, scheduler or schedule owner. Use the persisted stable-node configuration
+for enrolment and attachment. Replacing a receiving chat does not require a new
+node configuration or re-enrolment.
 
 ## Human controls
 

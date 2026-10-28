@@ -102,7 +102,7 @@ originating agent and chat rather than fabricated identifiers.
 
 ## Verification boundaries
 
-Unit tests cover command-family routing, future operations, internal context/payload
+Unit tests cover command-family routing, operation pass-through, internal context/payload
 substitution, human input changes, headless isolation and uncertain effects. A real
 OpenCode model/tool test invokes this plugin bridge, creates a task through the
 actual CLI and requests execution by an existing peer without a parent execution.

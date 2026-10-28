@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 
-// Client-local confirmation prototype. The caller must authenticate the client
-// channel and persist intent/receipt before this can authorise backend writes.
+// Client-local confirmation evidence, not backend authority. The caller must
+// authenticate the client channel and persist intent/receipt for backend writes.
 export function decisionPresenter({ selectedSession, readSource, confirm, clientId, now = Date.now }) {
   let generation = 0;
   let disposed = false;

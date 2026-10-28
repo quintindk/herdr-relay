@@ -55,6 +55,17 @@ explicit maintenance; do not install a fresh backend over an identity mismatch.
 
 Loopback nodes may use `http://127.0.0.1:3210`. Remote nodes need the configured
 authenticated HTTPS ingress. Do not expose unauthenticated non-loopback HTTP.
+For a Cloudflare named tunnel, merge this into its ingress configuration, using
+your own hostname. Configure the Access service-token policy before routing
+traffic. Tunnel credentials remain outside Relay's repository:
+
+```yaml
+ingress:
+  - hostname: relay.example.com
+    service: http://127.0.0.1:3210
+  - service: http_status:404
+```
+
 For Cloudflare Access, verify all authentication combinations before joining:
 
 ```sh
