@@ -6,7 +6,7 @@ import { digest, requireValue } from './protocol.mjs';
 // human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
 export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'task.create', 'task.update', 'comment.create', 'reference.attach',
   'execution.request', 'execution.cancel', 'execution.handback', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
-  'occurrence.review', 'notification.acknowledge', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
+  'occurrence.review', 'notification.acknowledge', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 
 export function authoriseOperator(store, actor, action, payload) {
   if (!actor.scope) return;
@@ -23,6 +23,12 @@ export function authoriseOperator(store, actor, action, payload) {
     requireValue(grant.nodeId === scope.nodeId && canonicalDirectory(grant.directory) &&
       (scope.mode === 'localUser' || withinRoots(grant.directory, scope.roots)),
     'operator_scope_mismatch', 'Grant must stay within this node operator workspace scope', 403);
+  }
+  if (action === 'schedule.result_notifications') {
+    const schedule = store.get('schedule', payload.id);
+    const directory = schedule.definition.targetFolder ?? (schedule.definition.targetAgentId ? store.get('agent', schedule.definition.targetAgentId).directory : null);
+    requireValue(schedule.definition.nodeId === scope.nodeId && (scope.mode === 'localUser' || canonicalDirectory(directory) && withinRoots(directory, scope.roots)),
+      'operator_scope_mismatch', 'Run result settings are outside this node operator workspace scope');
   }
   if (action === 'agent.enrol' || action === 'agent.attach') {
     const nodeId = action === 'agent.enrol' ? payload.nodeId : store.get('agent', payload.id).nodeId;

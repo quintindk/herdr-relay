@@ -37,6 +37,15 @@ test('headless planning has no filesystem/network/process effects and never sele
   assert.equal(inspectHeadless(f.input).state, 'not_configured');
 });
 
+test('local headless provisioning exports Inbox preferences but cannot invent an agent requester', t => {
+  const f = fixture(t), before = readFileSync(f.configFile, 'utf8');
+  f.manifest.schedule.runResultNotifications = { inbox: true, requester: false };
+  assert.deepEqual(planHeadless(f.input).schedule.definition.runResultNotifications, { inbox: true, requester: false });
+  f.manifest.schedule.runResultNotifications.requester = true;
+  assert.throws(() => planHeadless(f.input), error => error.code === 'invalid_run_result_notifications' && /coordinator setup/.test(error.message));
+  assert.equal(readFileSync(f.configFile, 'utf8'), before);
+});
+
 test('explicit apply persists one dedicated owned binding and disabled schedule without changing node identity, credentials or human binding', t => {
   const f = fixture(t), before = readFileSync(f.configFile, 'utf8');
   const scheduleOutput = join(f.root, 'schedule.json');

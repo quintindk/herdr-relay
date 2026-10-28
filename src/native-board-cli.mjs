@@ -21,7 +21,7 @@ try {
       requireValue(process.stdin.isTTY && process.stdout.isTTY, 'terminal_required', 'Interactive board requires a TTY, or use --json');
       await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask,
         statusTask: board.statusTask, reviewTask: board.reviewTask, detailRoutine: board.detailRoutine, detailAgent: board.detailAgent,
-        detailInbox: board.detailInbox, decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions });
+        detailInbox: board.detailInbox, decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, updateRunResultNotifications: board.updateRunResultNotifications });
     }
   } finally { journal.close(); }
 } catch (error) {

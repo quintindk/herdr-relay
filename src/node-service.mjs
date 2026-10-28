@@ -12,6 +12,7 @@ import { reconcileInteractiveWork, previewInteractiveRecovery, applyInteractiveR
 import { inspectContract, previewContractUpdate } from './node-headless-contract.mjs';
 import { validateHeadlessTaskPayload } from './headless-task-schema.mjs';
 import { abandonedWork } from './node-journal.mjs';
+import { runResultNotifications } from './run-result-notifications.mjs';
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
@@ -142,6 +143,10 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           body.key.trim() && body.key.length <= 100 && body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload),
         'invalid_request', 'Stable key and exact grant payload required');
         const operation = path.endsWith('grant') ? 'grant' : 'revoke';
+        if (body.payload.schedule?.runResultNotifications !== undefined) {
+          runResultNotifications(body.payload.schedule.runResultNotifications);
+          requireValue((await getBackendFeatures?.())?.runResultNotifications, 'backend_upgrade_required', 'Backend must support run result notifications');
+        }
         const command = { key: `agent-headless:${worker.agentId}:${operation}:${body.key}`, action: `agent.headless_${operation}`,
           payload: { agentId: worker.agentId, conversationId: worker.sessionId, bindingRevision: worker.bindingRevision, payload: body.payload } };
         journal.queue(command); await journal.flush(api);
@@ -159,14 +164,19 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           } while (cursor);
           result = { items, complete: true };
         } else if (path.endsWith('setup')) {
-          requireValue(Object.keys(body).every(k => ['key', 'grantId', 'retry'].includes(k)) && typeof body.key === 'string' && body.key.trim() && body.key.length <= 100 && typeof body.grantId === 'string' && (body.retry === undefined || typeof body.retry === 'boolean'),
+          requireValue(Object.keys(body).every(k => ['key', 'grantId', 'retry', 'runResultNotifications'].includes(k)) && typeof body.key === 'string' && body.key.trim() && body.key.length <= 100 && typeof body.grantId === 'string' && (body.retry === undefined || typeof body.retry === 'boolean'),
             'invalid_request', 'Stable key and authorised grant ID required');
+          if (body.runResultNotifications !== undefined) {
+            runResultNotifications(body.runResultNotifications);
+            requireValue((await getBackendFeatures?.())?.runResultNotifications, 'backend_upgrade_required', 'Backend must support run result notifications');
+          }
           requireValue(!journal.works().some(w => !abandonedWork(w) && ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(w.execution.state)),
             'headless_human_context_required', 'Scheduled/delegated work cannot reuse human-chat setup authority', 403);
           requireValue(!journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
             .some(row => { const notice = JSON.parse(row.data); return notice.kind === 'message' && notice.bindingId === worker.bindingId; }),
             'headless_human_context_required', 'Peer messages cannot authorise headless setup', 403);
           const command = { key: `headless-source:${worker.agentId}:${body.key}`, action: 'headless.request', payload: { grantId: body.grantId, ...(body.retry ? { retry: true } : {}),
+            ...(body.runResultNotifications !== undefined ? { runResultNotifications: body.runResultNotifications } : {}),
             requesterAgentId: worker.agentId, sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision } };
           journal.queue(command); await journal.flush(api); result = journal.receipt(command.key);
         } else {
@@ -183,6 +193,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           const op = opRow ? JSON.parse(opRow.value) : null;
           result = { id: setup.id, agentId: setup.agentId, scheduleId: setup.scheduleId, state: blocker ? setup.state === 'ready' || setup.state === 'blocked' ? 'blocked' : 'waiting_for_access' : setup.contract && setup.appliedContractRevision !== setup.contract.revision ? 'awaiting_contract_activation' : setup.state === 'ready' && schedule?.appliedRevision !== schedule?.revision ? 'awaiting_schedule_ack' : setup.state,
             blocker, revision: schedule?.revision ?? null, appliedRevision: schedule?.appliedRevision ?? null,
+            runResultNotifications: runResultNotifications(schedule?.definition.runResultNotifications ?? setup.runResultNotifications),
             contract: setup.contract ?? null, appliedContractRevision: setup.appliedContractRevision ?? 0,
             contractActivation: setup.contractActivation ? { ...setup.contractActivation, localState: op?.contractActivation?.state ?? null, blocker: activationPending ? op?.contractBlocker ?? null : null } : null,
             nextFiring: !blocker && !activationPending && installed?.state === 'active' ? installed.nextAt : null, runtime: 'shared-auth-headless', restartRequired: false };
@@ -314,12 +325,20 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           .filter(s => s.definition.targetAgentId === worker.agentId && !s.definition.targetConversationId);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ items, complete: true, scope: 'locally_installed_agent_schedules' })); return;
       }
-      if (['/agent/schedule-install', '/agent/schedule-pause', '/agent/schedule-resume', '/agent/schedule-cancel'].includes(path)) {
+      if (['/agent/schedule-install', '/agent/schedule-pause', '/agent/schedule-resume', '/agent/schedule-cancel', '/agent/schedule-result-notifications'].includes(path)) {
         currentReceiver();
         requireValue(api && Object.keys(body).every(k => ['key', 'payload'].includes(k)) && typeof body.key === 'string' && body.key.trim() && body.payload,
           'invalid_request', 'Stable operation key and exact schedule payload required');
-        const operation = path.slice('/agent/schedule-'.length);
+        const operation = path.slice('/agent/schedule-'.length).replaceAll('-', '_');
         const payload = structuredClone(body.payload);
+        if (operation === 'result_notifications') requireValue(payload && typeof payload === 'object' && !Array.isArray(payload) &&
+          Object.keys(payload).every(key => ['id', 'expectedRevision', 'runResultNotifications'].includes(key)) && Object.hasOwn(payload, 'runResultNotifications') &&
+          typeof payload.id === 'string' && payload.id.trim() && payload.id.length <= 256 && Number.isSafeInteger(payload.expectedRevision) && payload.expectedRevision > 0,
+        'invalid_request', 'Run result settings require only payload.id, positive payload.expectedRevision and payload.runResultNotifications');
+        if (operation === 'result_notifications' || payload.definition?.runResultNotifications !== undefined) {
+          runResultNotifications(operation === 'result_notifications' ? payload.runResultNotifications : payload.definition.runResultNotifications);
+          requireValue((await getBackendFeatures?.())?.runResultNotifications, 'backend_upgrade_required', 'Backend must support run result notifications');
+        }
         if (operation === 'install') {
           requireValue(payload.definition && !payload.definition.nodeId && !payload.definition.targetAgentId &&
             !payload.definition.targetFolder && !payload.definition.targetConversationId, 'forbidden', 'Persistent schedules target only this agent', 403);

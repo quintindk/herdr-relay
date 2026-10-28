@@ -269,7 +269,7 @@ test('native visual layout uses a view-specific heading, contextual counters and
   await input(instance, '\t');
   assert.match(frame(instance), /RELAY \/ AGENTS/); assert.match(frame(instance), /1 interactive\s+1 headless/);
   await input(instance, '\t');
-  assert.match(frame(instance), /RELAY \/ INBOX/); assert.match(frame(instance), /0 questions\s+0 reviews\s+0 reminders/);
+  assert.match(frame(instance), /RELAY \/ INBOX/); assert.match(frame(instance), /0 questions\s+0 reviews\s+0 run results\s+0 reminders/);
   assert.match(frame(instance), /No decisions need your attention/); assert.match(frame(instance), /Tab switches views/);
 });
 

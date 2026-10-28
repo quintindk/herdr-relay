@@ -54,6 +54,7 @@ test('new grants require boolean MCP and shell permissions and reject connector-
 
 test('only successful probe evidence activates one schedule, and revocation pauses it without borrowing owner context', t => {
   const f = fixture(t), { command: c, owner, node, grant, request, store } = f;
+  grant.schedule.runResultNotifications = { inbox: true, requester: false };
   c(owner, 'grant', 'headless.grant', grant); const setup = c(node, 'request', 'headless.request', request);
   const agent = c(node, 'register', 'headless.register', { id: setup.id });
   c(node, 'advertise', 'agent.advertise', { id: agent.id, expectedRevision: agent.revision, availability: 'available', conversationId: setup.sessionId, bindingRevision: 1 });
@@ -66,9 +67,24 @@ test('only successful probe evidence activates one schedule, and revocation paus
   assert.equal(ready.state, 'ready'); const schedule = store.get('schedule', grant.schedule.id);
   assert.equal(schedule.definition.targetAgentId, setup.agentId); assert.equal(schedule.definition.enabled, true);
   assert.equal(schedule.definition.targetConversationId, undefined);
+  assert.deepEqual(schedule.definition.runResultNotifications, grant.schedule.runResultNotifications);
+  assert.equal(store.all('notification').length, 0, 'Readiness is not a cron result');
   c(owner, 'revoke', 'headless.revoke', { id: grant.id, expectedRevision: 1 });
   assert.equal(store.get('schedule', grant.schedule.id).definition.enabled, false);
   assert.throws(() => c(node, 'retry-after-revocation', 'headless.request', request), { code: 'headless_grant_inactive' });
+});
+
+test('headless request can select run result reporting without changing its grant, worker permissions or existing setup', t => {
+  const f = fixture(t), { command: c, owner, node, grant, request, store } = f;
+  c(owner, 'grant', 'headless.grant', grant);
+  const policy = { inbox: true, requester: true };
+  const setup = c(node, 'setup', 'headless.request', { ...request, runResultNotifications: policy });
+  assert.deepEqual(setup.runResultNotifications, policy);
+  assert.deepEqual(store.get('headless_grant', grant.id).permissions, grant.permissions);
+  assert.equal(store.get('headless_grant', grant.id).revision, 1);
+  assert.throws(() => c(node, 'bad-existing', 'headless.request', { ...request, runResultNotifications: { inbox: false, requester: true } }), { code: 'headless_setup_conflict' });
+  assert.throws(() => c(node, 'bad-shape', 'headless.request', { ...request, runResultNotifications: { inbox: true, onStart: true } }), { code: 'invalid_run_result_notifications' });
+  assert.equal(c(node, 'inspect-same', 'headless.request', request).id, setup.id);
 });
 
 test('connection checks pin only the model, expose no secrets and do not couple MCP permission to a particular server', async () => {

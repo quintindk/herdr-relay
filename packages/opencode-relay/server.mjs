@@ -15,6 +15,8 @@ import { readAttachmentStatus } from './attachment-status.mjs';
 import { registerCliBridge, interactiveCliSource } from './cli-bridge.mjs';
 import { registerHeadlessGrantTools } from './headless-grant-tools.mjs';
 import { headlessTaskOperationVariants } from '../../src/headless-task-schema.mjs';
+import { runResultNotificationsSchema } from '../../src/run-result-notifications.mjs';
+import { assertNotRunResultNotice } from './run-result-notice.mjs';
 
 export default Plugin.define({
   id: 'herdr.relay.server',
@@ -111,6 +113,9 @@ export default Plugin.define({
           key: { type: 'string', minLength: 1 }, payload: { type: 'object', properties, required, additionalProperties: false },
         }, required: ['key', 'payload'], additionalProperties: false }, execute: (input, context) => worker(context, action, input) });
         const agent = async (context, action, input) => {
+          if (!['questions', 'tasks', 'task', 'task-identity', 'comments', 'relations', 'agents', 'status', 'schedules', 'messages', 'message',
+            'interactive-context', 'interactive-grants', 'interactive-status', 'headless-status', 'headless-grants', 'headless-connections', 'headless-contract-preview'].includes(action))
+            await assertNotRunResultNotice(ctx, context);
           const connection = workerConnection(ctx.options, context.sessionID);
           if (connection.sessionId !== context.sessionID) throw new Error('Agent tool belongs to another exact conversation');
           return { content: JSON.stringify(await call(connection, 'POST', `/agent/${action}`, input)) };
@@ -141,10 +146,11 @@ export default Plugin.define({
         ]) editor.add({ name, description, options: { codemode: false },
           input: { type: 'object', properties: {}, additionalProperties: false }, execute: (input, context) => agent(context, action, input) });
         editor.add({ name: 'relay_headless_setup', description: 'Request one reusable headless worker and schedule under an explicit integration grant. Runs a bounded readiness probe before schedule activation. Requires human instruction.',
-          options: { codemode: false }, input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 100 }, grantId: { type: 'string', minLength: 1 }, retry: { type: 'boolean' } },
+          options: { codemode: false }, input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 100 }, grantId: { type: 'string', minLength: 1 }, retry: { type: 'boolean' }, runResultNotifications: runResultNotificationsSchema },
             required: ['key', 'grantId'], additionalProperties: false }, async execute(input, context) {
-              const connection = workerConnection(ctx.options, context.sessionID);
-              const receipt = await call(connection, 'POST', '/agent/headless-setup', input, { signal: context.signal });
+               const connection = workerConnection(ctx.options, context.sessionID);
+               await assertNotRunResultNotice(ctx, context);
+               const receipt = await call(connection, 'POST', '/agent/headless-setup', input, { signal: context.signal });
               return { content: JSON.stringify(await waitHeadlessSetup(connection, receipt, { signal: context.signal })) };
             } });
         editor.add({ name: 'relay_headless_status', description: 'Read setup blockers, durable identities, applied schedule revision and next firing without exposing credentials.',
@@ -187,8 +193,8 @@ export default Plugin.define({
               required: operation === 'prepare' ? ['id', 'nodeId'] : operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'instructions'] : ['id', 'expectedRevision', 'reason'],
               additionalProperties: false } }, required: ['key', 'payload'], additionalProperties: false }, execute: (input, context) => agent(context, `interactive-${operation}`, input) });
         }
-        for (const operation of ['install', 'pause', 'resume', 'cancel']) editor.add({
-          name: operation === 'install' ? 'relay_schedule_create' : `relay_schedule_${operation}`,
+        for (const operation of ['install', 'pause', 'resume', 'cancel', 'result-notifications']) editor.add({
+          name: operation === 'install' ? 'relay_schedule_create' : `relay_schedule_${operation.replaceAll('-', '_')}`,
           description: `Schedule ${operation} within this agent's standing grant. Requires explicit human instruction. Use an immutable retry key.`,
           options: { codemode: false }, input: { type: 'object', properties: {
             key: { type: 'string', minLength: 1 }, payload: { type: 'object', properties: {
@@ -196,9 +202,11 @@ export default Plugin.define({
               ...(operation === 'install' ? { definition: { type: 'object', properties: {
                 instructions: { type: 'string', minLength: 1 }, cron: { type: 'string' }, at: { type: 'string' },
                 timezone: { type: 'string' }, enabled: { type: 'boolean' }, reviewPolicy: { enum: ['none', 'human'] }, expiresAt: { type: 'string' },
+                runResultNotifications: runResultNotificationsSchema,
               }, required: ['instructions', 'enabled'], additionalProperties: false } } : {}),
               ...(operation === 'cancel' ? { reason: { type: 'string', minLength: 1 } } : {}),
-            }, required: operation === 'install' ? ['id', 'definition'] : ['id', 'expectedRevision', ...(operation === 'cancel' ? ['reason'] : [])],
+              ...(operation === 'result-notifications' ? { runResultNotifications: runResultNotificationsSchema } : {}),
+            }, required: operation === 'install' ? ['id', 'definition'] : ['id', 'expectedRevision', ...(operation === 'cancel' ? ['reason'] : operation === 'result-notifications' ? ['runResultNotifications'] : [])],
             additionalProperties: false },
           }, required: ['key', 'payload'], additionalProperties: false },
           execute: (input, context) => agent(context, `schedule-${operation}`, input),

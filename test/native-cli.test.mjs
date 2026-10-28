@@ -71,6 +71,12 @@ test('native CLI schedules and execution requests retain backend revisions, expl
   const paused = await f.run('schedule', 'pause', 'job', '--revision', '2', '--key', 'pause');
   assert.equal(paused.definition.enabled, false);
   assert.equal((await f.run('schedule', 'list')).items.length, 1);
+  const settingsArgs = ['schedule', 'result-notifications', 'job', '--revision', '3', '--inbox', 'true', '--requester', 'false', '--key', 'result-settings'];
+  const settings = await f.run(...settingsArgs);
+  assert.deepEqual(settings.definition.runResultNotifications, { inbox: true, requester: false });
+  assert.equal(settings.definition.enabled, false); assert.equal(settings.revision, 4);
+  assert.deepEqual(await f.run(...settingsArgs), settings);
+  await assert.rejects(f.run('schedule', 'result-notifications', 'job', '--revision', '4', '--inbox', 'true', '--requester', 'maybe', '--key', 'bad-settings'), /invalid_request/);
   const task = await f.run('task', 'create', '--key', 'task', '--file', f.file({ id: 'task', title: 'Execution task' }));
   const execution = await f.run('execution', 'request', '--key', 'request', '--file', f.file({ id: 'execution', taskId: task.id,
     taskRevision: task.revision, targetAgentId: 'agent', instructions: 'Bounded test', reviewPolicy: 'none' }));

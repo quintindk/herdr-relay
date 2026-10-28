@@ -23,7 +23,8 @@ import { digest } from '../src/protocol.mjs';
 process.umask(0o077);
 const capabilityMode = process.argv.includes('--capabilities');
 const agentGrantMode = process.argv.includes('--agent-grant');
-const cronMode = process.argv.includes('--cron');
+const notificationMode = process.argv.includes('--run-result-notifications');
+const cronMode = process.argv.includes('--cron') || notificationMode;
 const contractMode = process.argv.includes('--contract-update');
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
@@ -33,6 +34,7 @@ const shellOutput = join(root, 'outside-workspace-shell.txt');
 mkdirSync(workspace); mkdirSync(state); mkdirSync(join(workspace, '.opencode/skills/approved-job'), { recursive: true });
 writeFileSync(join(workspace, '.opencode/skills/approved-job/SKILL.md'), 'Inspect the approved fixture only. Submit a native result.');
 let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden = false, grantProposal, contractProposal, contractPreviewHash, revisedContextSeen = false;
+let runResultMessages = 0;
 const mcpSessions = [];
 const mcp = createServer(async (req, res) => {
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
@@ -55,6 +57,21 @@ const mcp = createServer(async (req, res) => {
 const model = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
   const input = JSON.parse(body), last = input.messages.findLastIndex(m => m.role === 'user');
+  if (JSON.stringify(input.messages[last]?.content).includes('Relay run result notification.')) {
+    const called = input.messages.slice(last + 1).filter(message => message.role === 'tool').length;
+    if (called === 0) runResultMessages++;
+    assert.match(JSON.stringify(input.messages[last]?.content), /Native capability and result submission verified/);
+    // Deliberately adversarial fixture: the notification must not authorise a
+    // coordinator reply, even though its normal interactive tools are present.
+    const reply = called === 0 && input.tools?.find(tool => tool.function.name.endsWith('relay_message_send'));
+    const delta = reply ? { role: 'assistant', tool_calls: [{ index: 0, id: 'notice-reply', type: 'function', function: {
+      name: reply.function.name, arguments: JSON.stringify({ key: 'must-not-send', recipientAgentId: grantProposal.requesterAgentId, body: 'Unauthorised automatic acknowledgement' }),
+    } }] } : { role: 'assistant', content: 'RUN_RESULT_VISIBLE: The recorded cron result is available. This is not a new task.' };
+    const base = { id: 'notice-model', created: 1, model: 'fixture', object: 'chat.completion.chunk' };
+    res.setHeader('content-type', 'text/event-stream');
+    res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    res.end(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: reply ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`); return;
+  }
   const called = input.messages.slice(last + 1).filter(m => m.role === 'tool').length;
   const probe = JSON.stringify(input.messages[last]?.content).includes('Bounded platform readiness');
   const grantTurn = JSON.stringify(input.messages[last]?.content).includes('Create the node-local fixture grant only');
@@ -152,7 +169,8 @@ try {
   grantProposal = { id: 'approved-job-grant', requesterAgentId: coordinator.agentId, nodeId: joined.nodeId, name: 'approved-worker', directory: workspace,
     model: { providerID: 'openai', id: 'fixture', integrationID: provider.integrationID, connectionId },
     permissions: { mcp: !mcpDenied, shell: shellAllowed }, contract: '.opencode/skills/approved-job/SKILL.md',
-    schedule: { id: 'approved-job-weekdays', cron: cronMode ? '* * * * *' : '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' },
+    schedule: { id: 'approved-job-weekdays', cron: cronMode ? '* * * * *' : '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none',
+      ...(notificationMode ? { runResultNotifications: { inbox: true, requester: true } } : {}) },
     ...(capabilityMode ? { capabilities: { sourceNamespaces: ['external:record'], taskActions: ['task.create', 'task.update', 'comment.create', 'reference.attach'],
       artifacts: { receipts: 'artifacts/receipts', state: 'artifacts/state.json', history: 'artifacts/history', runs: 'artifacts/runs', summaries: 'artifacts/summaries' } } } : {}) };
   if (!agentGrantMode) await command('grant', 'headless.grant', grantProposal);
@@ -234,6 +252,15 @@ try {
     assert.equal(execution.headlessScheduled, true); assert.equal(execution.taskId, null);
     if (contractMode) assert.equal(execution.contractRevision, 1);
     assert.equal(execution.state, 'completed'); assert.equal(execution.targetConversationId, approvedSetup.sessionId);
+    if (notificationMode) {
+      const notice = (await owner('GET', '/v1/notifications')).items.find(item => item.kind === 'run_result' && item.occurrenceId === occurrence.id);
+      assert.ok(notice); assert.equal(notice.summary, occurrence.summary); assert.equal(notice.requesterAgentId, coordinator.agentId);
+      await wait('online requester receives recorded cron report', async () => JSON.stringify(await client.session.context({ sessionID: session.id })).includes('RUN_RESULT_VISIBLE'));
+      assert.equal(runResultMessages, 1);
+      assert.match(JSON.stringify(await client.session.context({ sessionID: session.id })), /Run result notifications authorise display and reads only/);
+      assert.equal((await owner('GET', '/v1/snapshot')).collections.message.length, 0, 'No automatic reply or durable message queue');
+      assert.equal((await owner('GET', '/v1/notifications')).items.length, 1, 'No readiness notification');
+    }
     await command('pause-after-cron', 'schedule.pause', { id: result.scheduleId, expectedRevision: 1 });
     await wait('cron pause acknowledged', async () => (await owner('GET', `/v1/schedules/${result.scheduleId}`)).appliedRevision === 2);
   } else {
@@ -267,6 +294,18 @@ try {
   const retry = await call(worker, 'POST', '/agent/headless-setup', { key: 'setup-once', grantId: 'approved-job-grant' });
   assert.equal(retry.receipt.id, id);
   assert.equal((await client.server.info()).pid, runtime.descriptor.pid);
+  if (notificationMode) {
+    const decisions = new NativeDecisionJournal();
+    try {
+      const board = nativeBoard(owner, { decisionJournal: decisions });
+      const item = (await board.read()).inbox.find(item => item.kind === 'run_result');
+      assert.ok(item, 'Persistent result remains unread after node restart');
+      await board.decideInbox({ item, key: 'read-cron-result' });
+      assert.equal((await board.read()).inbox.filter(item => item.kind === 'run_result').length, 0);
+      assert.equal((await owner('GET', `/v1/occurrences/${item.occurrenceId}`)).state, 'completed');
+      assert.equal(runResultMessages, 1, 'No requester replay on node restart');
+    } finally { decisions.close(); }
+  }
   if (agentGrantMode) {
     const revoked = await call(worker, 'POST', '/agent/headless-revoke', { key: 'revoke-once', payload: { id: 'approved-job-grant', expectedRevision: 1 } });
     assert.equal(revoked.state, 'recorded'); assert.equal(revoked.receipt.state, 'revoked');
@@ -278,6 +317,7 @@ try {
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
     exactContractApprovalAndActivation: contractMode, revisedInstructionsInNativeModelContext: revisedContextSeen,
     operationSpecificHeadlessSchemasVerified: capabilityMode,
+    persistentRunResultInboxVerified: notificationMode, onlineOnlyRequesterResultVerified: notificationMode,
     credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {
   await stopNode();

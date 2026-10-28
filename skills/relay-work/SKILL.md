@@ -23,6 +23,11 @@ compatibility: opencode
 
 ## Boundaries
 
+- Submit the exact run report once. Per-schedule `runResultNotifications` controls
+  service-generated Inbox/requester reporting after publication. Do not send an
+  extra message, create a notification task or acquire coordinator credentials.
+  Execution completion is not proof of full source coverage or external delivery.
+
 - A same-schema Relay code upgrade may pause its API briefly while preserving
   this execution and original publication keys. It does not authorise a prompt
   replay, duplicate operation or invented success. Reconcile native writes using

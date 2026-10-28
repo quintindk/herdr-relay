@@ -10,6 +10,7 @@ import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
 import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
 import { applyGrantAction } from './grants.mjs';
+import { runResultNotifications, runResultReport, scheduleRequester, OnlineRunResultMessages } from './run-result-notifications.mjs';
 import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
 
 export const backendProtocol = 'relay/0.2';
@@ -30,6 +31,7 @@ const string = (value, name, max = 16000) => requireValue(typeof value === 'stri
 // append events in the same SQLite transaction. Never share this file over NFS.
 export class BackendStore {
   constructor(path, { userId = 'owner' } = {}) {
+    this.runResultMessages = new OnlineRunResultMessages();
     requireValue(validId(userId), 'invalid_user', 'Explicit user identity required');
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA busy_timeout=5000');
@@ -65,9 +67,28 @@ export class BackendStore {
     if (this.inTransaction) return fn();
     this.db.exec('BEGIN IMMEDIATE');
     this.inTransaction = true;
-    try { const result = fn(); this.db.exec('COMMIT'); return result; }
+    const effects = []; this.afterCommit = effects;
+    let result;
+    try { result = fn(); this.db.exec('COMMIT'); }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
-    finally { this.inTransaction = false; }
+    finally { this.inTransaction = false; this.afterCommit = null; }
+    for (const effect of effects) try { effect(); } catch { /* Best-effort notices cannot undo a committed result. */ }
+    return result;
+  }
+  notifyRunResult(occurrence, actor) {
+    if (!['completed', 'failed'].includes(occurrence.state)) return;
+    const policy = runResultNotifications(occurrence.definition.runResultNotifications);
+    if (!policy.inbox && !policy.requester) return;
+    const schedule = this.get('schedule', occurrence.scheduleId);
+    const execution = this.get('execution', occurrence.id, false);
+    const requesterId = execution?.originAgentId ?? scheduleRequester(this, schedule)?.id;
+    const report = runResultReport(occurrence, requesterId);
+    if (policy.inbox && !this.get('notification', report.id, false)) {
+      const notification = this.save('notification', { ...report, userId: this.owner, state: 'pending', revision: 1,
+        createdAt: now(), updatedAt: now() });
+      this.event('notification.run_result', notification, actor, occurrence.id);
+    }
+    if (policy.requester) this.afterCommit.push(() => this.runResultMessages.offer(this, report));
   }
   get(kind, id, required = true) {
     const row = this.db.prepare('SELECT data FROM entities WHERE kind=? AND id=?').get(kind, id);
@@ -198,6 +219,7 @@ export class BackendStore {
       const value = fn();
       const eventType = value?.permissionRequest && action === 'interactive.request' ? 'grant.requested' :
         value?.permissionRequest && action === 'interactive.cancel' ? 'grant.request_cancelled' :
+        action === 'schedule.result_notifications' || action === 'agent.schedule_result_notifications' ? 'schedule.install' :
         action.startsWith('agent.schedule_') ? `schedule.${action.slice('agent.schedule_'.length)}` :
         reusedSource ? 'task.reference_reused' : action;
       this.event(eventType, value, actor, key);
@@ -354,7 +376,7 @@ export class BackendStore {
       requireValue(!agent.directory || agent.directory === p.directory, 'directory_migration_required', 'Enrolled directory cannot be changed in place');
       return changed('agent', agent, { directory: p.directory });
     }
-    if (['agent.schedule_install', 'agent.schedule_pause', 'agent.schedule_resume', 'agent.schedule_cancel'].includes(action)) {
+    if (['agent.schedule_install', 'agent.schedule_pause', 'agent.schedule_resume', 'agent.schedule_cancel', 'agent.schedule_result_notifications'].includes(action)) {
       fields(p, ['agentId', 'conversationId', 'bindingRevision', 'payload'], ['agentId', 'conversationId', 'bindingRevision', 'payload']);
       const agent = this.agent(actor, p.agentId);
       this.nodeOnly(actor, agent.nodeId);
@@ -363,6 +385,12 @@ export class BackendStore {
       const operation = action.slice('agent.schedule_'.length);
       requireValue(p.payload && typeof p.payload === 'object' && !Array.isArray(p.payload), 'invalid_request', 'Exact schedule payload required');
       string(p.payload.id, 'schedule id', 256);
+      if (operation === 'result_notifications') {
+        const schedule = this.get('schedule', p.payload.id);
+        requireValue(schedule.definition.nodeId === agent.nodeId && scheduleRequester(this, schedule)?.id === agent.id &&
+          agent.mode === 'interactive' && !agent.headlessSetupId, 'forbidden', 'Only this schedule\'s enrolled requester may change run result notifications', 403);
+        return this.apply(actor, 'schedule.result_notifications', p.payload, { scheduleAgent: agent });
+      }
       const definition = operation === 'install' ? p.payload?.definition : this.get('schedule', p.payload?.id).definition;
       requireValue(definition?.nodeId === agent.nodeId && definition.targetAgentId === agent.id && !definition.targetFolder &&
         !definition.targetConversationId && definition.intent !== 'reminder', 'forbidden', 'Only this agent\'s persistent schedules are authorised', 403);
@@ -371,7 +399,7 @@ export class BackendStore {
     if (action === 'schedule.install') {
       if (!authority.scheduleAgent && !authority.headlessSetup) this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision', 'definition'], ['id', 'definition']);
-      fields(p.definition, ['nodeId', 'targetAgentId', 'targetFolder', 'targetConversationId', 'instructions', 'cron', 'timezone', 'at', 'enabled', 'reviewPolicy', 'expiresAt', 'intent'],
+      fields(p.definition, ['nodeId', 'targetAgentId', 'targetFolder', 'targetConversationId', 'instructions', 'cron', 'timezone', 'at', 'enabled', 'reviewPolicy', 'expiresAt', 'intent', 'runResultNotifications'],
         ['nodeId', 'instructions', 'enabled']);
       this.get('node', p.definition.nodeId);
       const reminder = p.definition.intent === 'reminder';
@@ -380,6 +408,10 @@ export class BackendStore {
         typeof folder === 'string' && isAbsolute(folder) && normalize(folder) === folder && folder.length <= 4096,
       'invalid_schedule', 'Folder target requires an explicit absolute directory and no agent/exact target');
       const target = reminder || folder ? null : this.get('agent', p.definition.targetAgentId);
+      const notifications = runResultNotifications(p.definition.runResultNotifications);
+      requireValue(!reminder || !notifications.inbox && !notifications.requester, 'invalid_run_result_notifications', 'Reminder schedules have no run results');
+      requireValue(!notifications.requester || scheduleRequester(this, { definition: p.definition }),
+        'invalid_run_result_notifications', 'Requester notifications require a recorded interactive requester');
       if (p.definition.targetConversationId !== undefined) {
         string(p.definition.targetConversationId, 'targetConversationId', 512);
         requireValue(!reminder && target.conversationId === p.definition.targetConversationId,
@@ -410,7 +442,19 @@ export class BackendStore {
         requireValue((previous.definition.intent ?? 'job') === (p.definition.intent ?? 'job'), 'schedule_mode_locked', 'Schedule intent cannot change in place');
         return changed('schedule', previous, { definition: p.definition, appliedRevision: previous.appliedRevision ?? 0 });
       }
-      return created('schedule', { id: p.id, definition: p.definition, appliedRevision: 0 });
+      return created('schedule', { id: p.id, definition: p.definition, appliedRevision: 0,
+        requesterAgentId: authority.headlessSetup?.requesterAgentId ?? authority.scheduleAgent?.id ?? scheduleRequester(this, { definition: p.definition })?.id ?? null });
+    }
+    if (action === 'schedule.result_notifications') {
+      if (!authority.scheduleAgent) this.ownerOnly(actor);
+      fields(p, ['id', 'expectedRevision', 'runResultNotifications'], ['id', 'expectedRevision', 'runResultNotifications']);
+      const schedule = this.get('schedule', p.id); this.revision(schedule, p.expectedRevision);
+      requireValue(!schedule.cancelled && schedule.definition.intent !== 'reminder' && (!schedule.transfer || schedule.transfer.state === 'completed'),
+        'schedule_unavailable', 'Run result settings require an existing non-reminder schedule without a pending transfer');
+      const policy = runResultNotifications(p.runResultNotifications);
+      requireValue(!policy.requester || scheduleRequester(this, schedule), 'invalid_run_result_notifications', 'No recorded interactive requester for this schedule');
+      return changed('schedule', schedule, { requesterAgentId: scheduleRequester(this, schedule)?.id ?? null,
+        definition: { ...schedule.definition, runResultNotifications: policy } });
     }
     if (action === 'schedule.cancel') {
       if (!authority.scheduleAgent) this.ownerOnly(actor);
@@ -558,6 +602,7 @@ export class BackendStore {
         occurrence.executionId = execution.id;
         this.save('occurrence', occurrence);
       }
+      this.notifyRunResult(occurrence, actor);
       return occurrence;
     }
     if (action === 'artifact.attach') {
@@ -1043,16 +1088,17 @@ export class BackendStore {
         this.event('execution.review', reviewed, actor, occurrence.id);
         return this.get('occurrence', occurrence.id);
       }
-      return changed('occurrence', occurrence, { state: p.decision === 'accept' ? 'completed' : 'rejected',
+      const reviewed = changed('occurrence', occurrence, { state: p.decision === 'accept' ? 'completed' : 'rejected',
         review: { decision: p.decision, userId: actor.id, reason: p.reason, at: now(), candidate: p.candidate,
           ...(p.source ? { source: p.source } : {}) } });
+      this.notifyRunResult(reviewed, actor); return reviewed;
     }
     if (action === 'execution.review') {
       this.ownerOnly(actor);
       fields(p, ['id', 'expectedRevision', 'candidate', 'decision', 'reason', 'source'], ['id', 'expectedRevision', 'candidate', 'decision', 'reason']);
       const e = this.get('execution', p.id); this.revision(e, p.expectedRevision);
       requireValue(e.state === 'in_review' && e.result.candidate === p.candidate && ['accept', 'reject'].includes(p.decision), 'stale_candidate', 'Exact pending candidate required');
-      requireValue(!e.cancellationRequested && !terminal(this.get('task', e.taskId)), 'review_ineligible', 'Cancelled/terminal work cannot be reviewed');
+      requireValue(!e.cancellationRequested && (!e.taskId || !terminal(this.get('task', e.taskId))), 'review_ineligible', 'Cancelled/terminal work cannot be reviewed');
       string(p.reason, 'reason', 4000);
       if (p.source !== undefined) {
         fields(p.source, ['conversationId', 'messageId', 'digest'], ['conversationId', 'messageId', 'digest']);
@@ -1065,6 +1111,7 @@ export class BackendStore {
           review: { decision: p.decision, candidate: p.candidate, reason: p.reason, userId: actor.id, at: now(),
             ...(p.source ? { source: p.source } : {}) } });
         this.event('occurrence.review', reviewed, actor, e.id);
+        this.notifyRunResult(reviewed, actor);
       }
       return changed('execution', e, { state: p.decision === 'accept' ? 'completed' : 'rejected',
         review: { decision: p.decision, candidate: p.candidate, resultDigest: e.result.digest, reason: p.reason, userId: actor.id, at: now(),

@@ -3,6 +3,7 @@ import { digest, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { nativeAgentLabel, nativeAttention } from './native-board-attention.mjs';
 import { buildGrantsView } from './grants-view.mjs';
+import { runResultNotifications } from './run-result-notifications.mjs';
 
 export function boardLocalIdentity(context) {
   return context?.scope?.kind === 'node_operator' && context.nodeId === context.scope.nodeId && context.instanceId
@@ -103,7 +104,8 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
         agents.find(a => a.id === d.targetAgentId)?.standingGrant ? 'interactive_agent' : agents.find(a => a.id === d.targetAgentId)?.mode === 'interactive' ? 'interactive_exact' : 'headless',
       cron: d.cron ?? `at ${d.at}`, timezone: d.timezone ?? 'Africa/Johannesburg', nextRunAt: next ?? null, nextRunIsEstimate: true,
       target: d.targetFolder ?? d.targetAgentId ?? 'human', targetAgentId: d.targetAgentId, targetConversationId: d.targetConversationId,
-      targetDirectory: d.targetFolder, ownerNodeId: d.nodeId,
+       targetDirectory: d.targetFolder, ownerNodeId: d.nodeId,
+       runResultNotifications: runResultNotifications(d.runResultNotifications),
       delivery: { state: pending ? 'change_pending' : state,
         reason: `Requested revision ${schedule.revision}, applied ${schedule.appliedRevision ?? 0}. Local node owns admission and clock.` } };
   };
@@ -208,7 +210,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
           'invalid_review', 'Exact decision and review reason required');
         Object.assign(payload, { candidate: item.candidate, decision, reason: reason.trim() });
       }
-      if (item.action !== 'execution.monitor_review' && item.kind !== 'reminder') payload.source = {
+      if (item.action !== 'execution.monitor_review' && item.action !== 'notification.acknowledge') payload.source = {
         conversationId: terminalId, messageId: `dialog:${key}`, digest: digest(payload),
       };
       await decisionJournal.submit(api, { key, action: item.action, payload }, item.instanceId);
@@ -216,8 +218,17 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
         ? decision === 'accept' ? 'Check accepted. Monitoring can continue within its existing window.' : 'Check rejected. Monitoring is blocked.'
         : item.action === 'occurrence.review' ? decision === 'accept' ? 'Scheduled result accepted.' : 'Scheduled result rejected. Future scheduled runs are unchanged.'
           : decision === 'accept' ? 'Result accepted. Task completed.' : 'Changes requested. Task returned to Todo; no new turn started.'
-        : item.kind === 'reminder' ? 'Reminder acknowledged. No model turn started.' : item.effect;
+        : item.kind === 'run_result' ? 'Result marked read. Outcome and future runs are unchanged.' : item.kind === 'reminder' ? 'Reminder acknowledged. No model turn started.' : item.effect;
       return { state: 'recorded', message };
+    },
+    async updateRunResultNotifications({ scheduleId, expectedRevision, policy, key }) {
+      requireValue(decisionJournal && key, 'decision_storage_required', 'Durable human settings publication required');
+      const info = await api('GET', '/v1/info');
+      requireValue(info.features?.runResultNotifications, 'backend_upgrade_required', 'Backend must support run result notifications');
+      const schedule = await decisionJournal.submit(api, { key, action: 'schedule.result_notifications', payload: {
+        id: scheduleId, expectedRevision, runResultNotifications: runResultNotifications(policy),
+      } }, info.instanceId);
+      return { state: 'recorded', schedule, message: 'Run result notifications saved. Future runs use the settings after node acknowledgement.' };
     },
     async detailRoutine({ scheduleId }) {
       const schedule = await api('GET', `/v1/schedules/${encodeURIComponent(scheduleId)}`);

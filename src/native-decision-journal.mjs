@@ -47,6 +47,8 @@ export class NativeDecisionJournal {
         command.action === 'grant.create' ? receipt.state === 'active' && receipt.grantKind === 'interactive' && receipt.scopeHash === digest(p.scope) :
         command.action === 'execution.request' ? receipt.taskId === p.taskId && receipt.taskRevision === p.taskRevision &&
           receipt.targetAgentId === p.targetAgentId && receipt.instructions === p.instructions && receipt.state === 'requested' :
+        command.action === 'schedule.result_notifications' ? receipt.revision === p.expectedRevision + 1 &&
+          canonical(receipt.definition?.runResultNotifications) === canonical(p.runResultNotifications) :
         command.action === 'question.answer'
         ? receipt.status === 'answered' && receipt.answer?.body === p.body && receipt.answer.author?.type === 'user'
         : command.action === 'notification.acknowledge' ? receipt.state === 'acknowledged'

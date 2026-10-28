@@ -43,7 +43,9 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/native-worker-api.mjs', 'src/native-observation-recovery.mjs', 'src/interactive-dispatch-reconciliation.mjs',
    'packages/opencode-relay/native-input.mjs', 'src/native-interaction.mjs', 'src/headless-contract.mjs',
    'src/node-headless-contract.mjs', 'src/headless-task-schema.mjs', 'src/publication-outcomes.mjs',
-   'src/node-recovery.mjs', 'src/node-recovery-cli.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
+    'src/node-recovery.mjs', 'src/node-recovery-cli.mjs', 'src/run-result-notifications.mjs',
+    'src/node-run-result-messages.mjs', 'src/run-result-notifications-panel.mjs',
+    'packages/opencode-relay/run-result-notice.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 assert.ok(!packed.files.some(file => ['paperclip-final.json', 'paperclip-final-plan.json'].includes(file.path)), 'Private migration exports must never ship');
 const artifact = join(artifactDirectory, packed.filename), consumer = join(root, 'consumer');
 const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -155,7 +157,10 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
   const {bootstrapNode}=await import('./src/node-bootstrap.mjs');
   const {nativeBackendClient}=await import('./src/backend-client.mjs');
   const {nativeBoard}=await import('./src/native-board.mjs');
-  const {NativeDecisionJournal}=await import('./src/native-decision-journal.mjs');
+   const {NativeDecisionJournal}=await import('./src/native-decision-journal.mjs');
+   const {digest}=await import('./src/protocol.mjs');
+   await import('./src/node-run-result-messages.mjs');
+   await import('./src/run-result-notifications-panel.mjs');
   await import('./src/grants-panel.mjs');
   const backend=await startBackend({database:':memory:'});
   const journal=new NativeDecisionJournal();
@@ -174,7 +179,21 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
     const item=await board.detailGrant({id:pending.grants.pending[0].id});
     await board.decideGrant({item,key:'approve',decision:'approve_once'});
     assert.equal(store.get('provision_request','discussion').state,'requested');
-    assert.equal(journal.pending().length,0);
+     assert.equal(journal.pending().length,0);
+     command(owner,'schedule','schedule.install',{id:'result-job',definition:{nodeId:'node',targetAgentId:'requester',
+       instructions:'Report only fixture evidence',cron:'0 7-18 * * 1-5',timezone:'Africa/Johannesburg',enabled:true}});
+     const settings=await board.updateRunResultNotifications({scheduleId:'result-job',expectedRevision:1,
+       policy:{inbox:true,requester:false},key:'result-settings'});
+     assert.equal(settings.schedule.revision,2);
+     const slot='2026-10-28T06:00:00Z', occurrenceId='occurrence_'+digest(['result-job',slot]);
+     command(node,'publish','schedule.publish',{id:occurrenceId,scheduleId:'result-job',definitionRevision:2,intendedAt:slot,
+       candidate:'fixture-only',summary:'Partial coverage. Source gaps retained, not an all-clear.',evidence:'Fixture native terminal'});
+     const report=(await board.read()).inbox.find(item=>item.kind==='run_result');
+     assert.ok(report); assert.equal(report.occurrenceId,occurrenceId); assert.match(report.summary,/Partial coverage/);
+     await board.decideInbox({item:report,key:'read-result'});
+     assert.equal((await board.read()).inbox.filter(item=>item.kind==='run_result').length,0);
+     assert.equal(store.get('occurrence',occurrenceId).state,'completed');
+     assert.equal(store.all('notification').length,1); assert.equal(store.all('message').length,0);
   }
   finally { journal.close(); await backend.close(); }
 `], { cwd: installed, stdio: 'pipe' });
@@ -279,7 +298,7 @@ const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['aud
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
   cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications, nativeBackendStarted: true,
-  installedGrantsApprovalResumed: true,
+  installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
   auditVerified: Boolean(audit), vulnerabilities: audit?.metadata.vulnerabilities ?? null, published: false, gitTagCreated: false };

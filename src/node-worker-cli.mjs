@@ -13,7 +13,7 @@ export async function main(args = process.argv.slice(2)) {
   } });
   const action = positionals[0];
   const agentAction = ['questions', 'answer', 'forward', 'tasks', 'task', 'task-identity', 'comments', 'relations', 'agents', 'status', 'schedules',
-    'schedule-install', 'schedule-pause', 'schedule-resume', 'schedule-cancel', 'interactive-context', 'interactive-grants', 'interactive-status',
+    'schedule-install', 'schedule-pause', 'schedule-resume', 'schedule-cancel', 'schedule-result-notifications', 'interactive-context', 'interactive-grants', 'interactive-status',
     'interactive-prepare', 'interactive-dispatch', 'interactive-cancel', 'interactive-reconcile-preview', 'interactive-reconcile-apply', 'message-send', 'messages', 'message'].includes(action);
   requireValue((agentAction || ['read', 'ask', 'submit', 'delegate', 'wait-children', 'delay', 'review-child', 'children'].includes(action) && values.execution && values.run) && values.context,
     'invalid_request', 'Usage: node-worker-cli read|ask|submit --context FILE --execution ID --run ID [--key KEY --file JSON]');

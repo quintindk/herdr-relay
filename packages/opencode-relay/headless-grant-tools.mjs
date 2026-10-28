@@ -1,5 +1,7 @@
 import { workerConnection } from './worker-context.mjs';
 import { call } from '../../src/client.mjs';
+import { runResultNotificationsSchema } from '../../src/run-result-notifications.mjs';
+import { assertNotRunResultNotice } from './run-result-notice.mjs';
 
 const text = { type: 'string', minLength: 1, maxLength: 256 };
 export const headlessGrantInput = { type: 'object', properties: {
@@ -8,7 +10,7 @@ export const headlessGrantInput = { type: 'object', properties: {
     required: ['providerID', 'id', 'integrationID', 'connectionId'], additionalProperties: false },
   permissions: { type: 'object', properties: { mcp: { type: 'boolean' }, shell: { type: 'boolean' } }, required: ['mcp'], additionalProperties: false },
   contract: { type: 'string', minLength: 1, maxLength: 256 }, capabilities: { type: 'object', additionalProperties: true },
-  schedule: { type: 'object', properties: { id: text, cron: text, timezone: text, reviewPolicy: { const: 'none' } },
+  schedule: { type: 'object', properties: { id: text, cron: text, timezone: text, reviewPolicy: { const: 'none' }, runResultNotifications: runResultNotificationsSchema },
     required: ['id', 'cron', 'timezone', 'reviewPolicy'], additionalProperties: false },
   expiresAt: { type: 'string', format: 'date-time' },
 }, required: ['id', 'name', 'model', 'permissions', 'contract', 'schedule'], additionalProperties: false };
@@ -21,6 +23,7 @@ export function registerHeadlessGrantTools(editor, ctx, { connection = workerCon
       payload: operation === 'grant' ? headlessGrantInput : { type: 'object', properties: { id: text, expectedRevision: { type: 'integer', minimum: 1 } }, required: ['id', 'expectedRevision'], additionalProperties: false },
     }, required: ['key', 'payload'], additionalProperties: false },
     async execute(input, context) {
+      await assertNotRunResultNotice(ctx, context);
       const worker = connection(ctx.options, context.sessionID);
       return { content: JSON.stringify(await request(worker, 'POST', `/agent/headless-${operation}`, input)) };
     } });

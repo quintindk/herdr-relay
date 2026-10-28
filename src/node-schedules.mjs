@@ -1,15 +1,17 @@
 import { canonical, digest, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { isAbsolute, normalize } from 'node:path';
+import { runResultNotifications } from './run-result-notifications.mjs';
 
 export function installLocalSchedule(journal, input, clock = Date.now()) {
-  const allowed = ['id', 'revision', 'nodeId', 'targetAgentId', 'targetFolder', 'targetConversationId', 'instructions', 'cron', 'timezone', 'at', 'enabled', 'reviewPolicy', 'expiresAt', 'intent'];
+  const allowed = ['id', 'revision', 'nodeId', 'targetAgentId', 'targetFolder', 'targetConversationId', 'instructions', 'cron', 'timezone', 'at', 'enabled', 'reviewPolicy', 'expiresAt', 'intent', 'runResultNotifications'];
   requireValue(input && Object.keys(input).every(key => allowed.includes(key)) &&
     typeof input.id === 'string' && input.id.length > 0 && input.nodeId === journal.nodeId &&
     Number.isSafeInteger(input.revision) && input.revision > 0 && (input.intent === 'reminder' || typeof input.targetAgentId === 'string' || typeof input.targetFolder === 'string') &&
     typeof input.instructions === 'string' && input.instructions.trim() && typeof input.enabled === 'boolean' &&
     ['none', 'human'].includes(input.reviewPolicy ?? 'none') && ['job', 'reminder'].includes(input.intent ?? 'job'), 'invalid_schedule', 'Invalid local schedule definition');
   requireValue(Boolean(input.cron) !== Boolean(input.at), 'invalid_schedule', 'Choose cron or one-shot time');
+  runResultNotifications(input.runResultNotifications);
   requireValue(input.targetFolder === undefined || input.intent !== 'reminder' && !input.targetAgentId && !input.targetConversationId &&
     typeof input.targetFolder === 'string' && isAbsolute(input.targetFolder) && normalize(input.targetFolder) === input.targetFolder && input.targetFolder.length <= 4096,
   'invalid_schedule', 'Folder schedules require one explicit absolute folder target');

@@ -36,7 +36,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
+        features: { runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/command-receipts\/[^/]+$/.test(url.pathname)) {
@@ -80,7 +80,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
           cursor: url.searchParams.get('cursor') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });
-      } else if (req.method === 'POST' && ['/v1/commands', '/v1/grants/ui-session', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read'].includes(url.pathname)) {
+      } else if (req.method === 'POST' && ['/v1/commands', '/v1/grants/ui-session', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read', '/v1/run-result-messages/take'].includes(url.pathname)) {
         let size = 0;
         const chunks = [];
         for await (const chunk of req) {
@@ -91,7 +91,11 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString()); }
         catch { throw new RelayError('invalid_json', 'JSON body required', 400); }
-        if (url.pathname === '/v1/grants/ui-session') result = issueGrantApprovalSession(store, actor, body);
+        if (url.pathname === '/v1/run-result-messages/take') {
+          requireValue(body && Object.keys(body).length === 1 && Object.hasOwn(body, 'consumerId'), 'invalid_request', 'Only the current ephemeral consumer is supported');
+          result = store.runResultMessages.take(store, actor, body);
+        }
+        else if (url.pathname === '/v1/grants/ui-session') result = issueGrantApprovalSession(store, actor, body);
         else if (url.pathname === '/v1/headless/read') {
           requireValue(body && ['access', 'references', 'permissions'].includes(body.operation), 'invalid_headless_request', 'Exact headless read operation required');
           const { operation, ...payload } = body;

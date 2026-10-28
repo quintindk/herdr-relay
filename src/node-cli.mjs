@@ -26,6 +26,7 @@ import { nodeAgentInstructions } from './node-agent-instructions.mjs';
 import { tickHeadlessSetups, assertHeadlessAccess } from './node-headless-setup.mjs';
 import { tickHeadlessContractUpdates } from './node-headless-contract.mjs';
 import { HeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
+import { NodeRunResultMessages } from './node-run-result-messages.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 try {
@@ -246,6 +247,7 @@ try {
       return { providerID: model.providerID, id: model.id, ...(model.variant && model.variant !== 'default' ? { variant: model.variant } : {}) };
     } });
     let lastHeartbeat = 0;
+    const runResultMessages = new NodeRunResultMessages();
     let reportedPause;
     const tick = () => {
       if (closed) return;
@@ -301,6 +303,13 @@ try {
         await tickHeadlessContractUpdates(journal, api, resolveBinding);
         await tickAutomation(journal, resolveBinding, Date.now(), api);
         await tickAgentNotices(journal, api, resolveBinding);
+        // Best-effort notices may inspect an already loaded receiver, never use
+        // the work resolver's owned-runtime recovery/provisioning path.
+        await runResultMessages.tick(journal, api, async agentId => {
+          const binding = bindings.get(agentId);
+          if (!binding || journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`retired-binding:${binding.id}`)) return null;
+          try { binding.runtime?.verify(); return binding; } catch { return null; }
+        });
         for (const [agentId, owned] of ownedDefinitions) {
           const binding = bindings.get(agentId);
           if (binding.runtime?.relayPluginUpdatePending) {

@@ -61,14 +61,15 @@ export class NativeOpenCodeV2 {
     return { messages, idle: !active[this.identity.sessionId], inbox };
   }
 
-  async send(invocation) {
+  async send(invocation, options) {
     await this.verify();
     check(typeof invocation.messageId === 'string' && invocation.messageId &&
       typeof invocation.prompt === 'string' && invocation.prompt, 'invalid_native_invocation');
-    // Caller must persist intent and enforce local admission. This method never
-    // retries a prompt and does not claim an atomic idle-and-send primitive.
+    // Durable callers persist intent; explicitly best-effort run notices do not.
+    // All callers enforce local admission. No retry or atomic idle-and-send claim.
     return this.client.session.prompt({ sessionID: this.identity.sessionId,
-      id: invocation.messageId, text: invocation.prompt, delivery: 'queue', metadata: { herdrRelayInvocation: invocation.messageId } });
+      id: invocation.messageId, text: invocation.prompt, delivery: 'queue', metadata: { herdrRelayInvocation: invocation.messageId,
+        ...(invocation.runResultNotice ? { herdrRelayRunResult: invocation.runResultNotice } : {}) } }, options);
   }
 }
 

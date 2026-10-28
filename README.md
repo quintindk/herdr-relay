@@ -1,8 +1,10 @@
 # Herdr Relay
 
-**0.2.0-rc.8: authenticated headless setup, safe skill updates and clearer local agents.**
+**0.2.1-rc3 development candidate (unreleased): opt-in run result notifications and compatible-upgrade recovery.**
 Start with the [Evo/Surface installation and onboarding guide](docs/installation-and-onboarding.md)
-and [RC8 scope/readiness](docs/release-0.2.0-rc.8.md).
+and [RC3 scope](docs/release-0.2.1-rc3.md). The latest published candidate remains RC2.
+Per-schedule [run result notifications](docs/run-result-notifications.md) separate
+persistent Inbox results from online-only requester messages. Both default off.
 
 Download the package, checksums and verification report from
 [GitHub Releases](https://github.com/quintindk/herdr-relay/releases).

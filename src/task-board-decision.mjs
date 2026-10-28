@@ -10,7 +10,7 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
   const item = modal.item;
   const accent = item.kind === 'review' ? 'magenta' : item.kind === 'question' ? 'yellow' : 'cyan';
   const actions = item.disabled || item.kind === 'question' ? [] : item.kind === 'review'
-    ? ['Accept result', 'Request changes'] : item.kind === 'reminder' ? ['Acknowledge reminder']
+    ? ['Accept result', 'Request changes'] : item.kind === 'run_result' ? ['Mark result read'] : item.kind === 'reminder' ? ['Acknowledge reminder']
       : [item.action === 'dismiss' ? 'Dismiss refused decision' : 'Retry original decision'];
   const w = Math.max(32, Math.min(100, width - 2)), size = Math.max(10, Math.min(height - 2, 27));
   const columns = Math.max(8, w - 6), viewport = Math.max(2, size - actions.length - 9);

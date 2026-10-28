@@ -52,6 +52,8 @@ export const nativeHelp = `herdr-relay native (native Tasks and Collaboration, n
   schedule create --file PAYLOAD_JSON --key KEY  [payload: {id,definition}, enabled must be explicit]
   schedule pause|resume ID --revision N --key KEY
   schedule cancel ID --revision N --reason TEXT --key KEY
+  schedule result-notifications ID --revision N --inbox true|false --requester true|false --key KEY
+    Run result notifications only: persistent Inbox and online-only requester messages. No run-start alerts.
   work read|submit|ask|... --context WORKER_JSON --execution ID --run ID [--key KEY] [--file PAYLOAD_JSON]
   board [--context OWNER_JSON] [--json]  [Tasks, Agents, Inbox, Grants, Schedules]
   command --file COMMAND_JSON  [advanced native {key,action,payload}]
@@ -88,7 +90,7 @@ export async function main(args) {
   }
   if (await nativeAdmin(args)) return;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation', 'reference', 'scope'].map(k => [k, { type: 'string' }])),
+    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation', 'reference', 'scope', 'inbox', 'requester'].map(k => [k, { type: 'string' }])),
     help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' },
   } });
   const [group, action, id] = positionals;
@@ -110,6 +112,7 @@ export async function main(args) {
     : group === 'agent' && action === 'enrolments' ? ['context', 'config', 'directory']
     : group === 'agent' && action === 'launch' ? ['context', 'config', 'directory', 'agent', 'key', 'json', 'service-registration']
     : group === 'schedule' && action === 'preview' ? ['cron', 'timezone']
+    : group === 'schedule' && action === 'result-notifications' ? ['context', 'revision', 'key', 'inbox', 'requester']
     : group === 'board' ? ['context', 'json']
     : group === 'task' && action === 'resolve' ? ['context', 'reference', 'scope']
     : group === 'interactive' && ['grant', 'request', 'dispatch'].includes(action) ? ['context', 'file', 'key']
@@ -218,7 +221,8 @@ export async function main(args) {
         await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask, detailRoutine: board.detailRoutine,
           detailAgent: board.detailAgent, statusTask: board.statusTask, reviewTask: board.reviewTask, detailInbox: board.detailInbox,
           decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
-          detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions });
+          detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions,
+          updateRunResultNotifications: board.updateRunResultNotifications });
       }
     } finally { journal.close(); }
     return;
@@ -247,6 +251,12 @@ export async function main(args) {
     'interactive:request': 'interactive.request', 'interactive:dispatch': 'interactive.dispatch' };
   let nativeAction = fileActions[`${group}:${action}`], data;
   if (nativeAction) { requireValue(!id, 'invalid_request', 'The payload file supplies the entity ID'); data = payload(); }
+  else if (group === 'schedule' && action === 'result-notifications') {
+    requireValue(id && /^[1-9]\d*$/.test(values.revision ?? '') && Number.isSafeInteger(Number(values.revision)) &&
+      ['true', 'false'].includes(values.inbox) && ['true', 'false'].includes(values.requester), 'invalid_request', 'Exact schedule revision and both explicit boolean settings required');
+    nativeAction = 'schedule.result_notifications'; data = { id, expectedRevision: Number(values.revision),
+      runResultNotifications: { inbox: values.inbox === 'true', requester: values.requester === 'true' } };
+  }
   else if ((group === 'task' && ['complete', 'cancel'].includes(action)) || (group === 'schedule' && ['pause', 'resume', 'cancel'].includes(action)) ||
     (group === 'execution' && ['cancel', 'handback'].includes(action)) || (group === 'interactive' && ['revoke', 'cancel'].includes(action))) {
     requireValue(id && values.revision && /^[1-9]\d*$/.test(values.revision) && Number.isSafeInteger(Number(values.revision)), 'invalid_request', 'Exact ID and --revision positive integer are required');
@@ -258,5 +268,7 @@ export async function main(args) {
   requireValue(nativeAction && values.key?.trim(), 'invalid_request', 'Known mutation and explicit --key required. Use native --help');
   if (nativeAction === 'execution.handback') requireValue((await api('GET', '/v1/info')).features?.administrativeHandback,
     'backend_upgrade_required', 'Backend must support audited administrative handback; do not edit execution rows manually');
+  if (nativeAction === 'schedule.result_notifications' || data?.definition?.runResultNotifications !== undefined) requireValue((await api('GET', '/v1/info')).features?.runResultNotifications,
+    'backend_upgrade_required', 'Backend must support run result notifications');
   output(await api('POST', '/v1/commands', { key: values.key, action: nativeAction, payload: data }));
 }

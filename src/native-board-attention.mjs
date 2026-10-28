@@ -41,9 +41,15 @@ export function nativeAttention({ tasks, executions, questions, agents, nodes = 
     from: o.targetAgentId ? agentName(o.targetAgentId) : 'Scheduled job', stateLabel: 'Ready for your review', summary: o.summary, candidate: o.candidate,
     action: 'occurrence.review', acceptEffect: 'Accept this scheduled result.', rejectEffect: 'Reject this result. Future scheduled runs are unchanged.' });
   for (const n of notifications.filter(n => n.state === 'pending' && n.userId === userId)) inbox.push({
-    id: `reminder:${n.id}`, kind: 'reminder', entityId: n.id, revision: n.revision, title: 'Reminder', summary: n.message,
+    id: `${n.kind === 'run_result' ? 'run-result' : 'reminder'}:${n.id}`, kind: n.kind === 'run_result' ? 'run_result' : 'reminder', entityId: n.id, revision: n.revision,
+    title: n.kind === 'run_result' ? `Run result · ${n.scheduleId}` : 'Reminder', summary: n.kind === 'run_result' ? n.summary : n.message,
     ...location(n.nodeId),
-    from: 'Relay', stateLabel: 'Needs acknowledgement', action: 'notification.acknowledge', effect: 'Acknowledge this reminder. No model turn is started.' });
+    ...(n.kind === 'run_result' ? { scheduleId: n.scheduleId, occurrenceId: n.occurrenceId, resultDigest: n.resultDigest,
+      context: `Scheduled: ${n.intendedAt}. Result recorded: ${n.completedAt}. Run: ${n.occurrenceId}. ` +
+        (n.failure ? `Failure: ${n.failure.stage}/${n.failure.code}: ${n.failure.message}. ` : '') +
+        'Execution outcome is not proof of complete business coverage.' } : {}),
+    from: 'Relay', stateLabel: n.kind === 'run_result' ? `${n.outcome} · Unread result` : 'Needs acknowledgement', action: 'notification.acknowledge',
+    effect: n.kind === 'run_result' ? 'Mark this result read. This does not approve the work, change the outcome or start a run.' : 'Acknowledge this reminder. No model turn is started.' });
   const attention = task => {
     const candidates = executions.filter(e => e.taskId === task.id).sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') ||
       (b.result?.sequence ?? 0) - (a.result?.sequence ?? 0) || b.id.localeCompare(a.id));

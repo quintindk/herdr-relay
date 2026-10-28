@@ -9,7 +9,46 @@ const h = React.createElement;
 const tick = () => new Promise(resolve => setTimeout(resolve, 40));
 const board = { companies: [{ id: 'company', name: 'Acme' }], agents: [], projects: [], routines: [], warnings: [], fetchedAt: new Date().toISOString(),
   tasks: [{ id: 'task', companyId: 'company', identifier: 'DEF-1', title: 'Review costs', status: 'todo', priority: 'medium',
-     assigneeUserId: 'local-board', assigneeAgentId: null, parentId: null, projectId: null }] };
+      assigneeUserId: 'local-board', assigneeAgentId: null, parentId: null, projectId: null }] };
+
+test('Schedule exposes two independent run result toggles and requires confirmation before a revisioned settings write', async t => {
+  const routine = { id: 'inbox-sweep', companyId: 'company', title: 'inbox-sweep', state: 'active', revision: 3, cron: '0 * * * *', timezone: 'Africa/Johannesburg',
+    runResultNotifications: { inbox: false, requester: false } };
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [], routines: [routine] }),
+    updateRunResultNotifications: async input => { writes.push(input); return { state: 'recorded', message: 'Run result notifications saved' }; },
+    interval: 60000, width: 100, height: 28 }));
+  t.after(() => instance.unmount()); await tick();
+  for (let view = 0; view < 4; view++) { instance.stdin.write('\t'); await tick(); }
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /RELAY \/ SCHEDULE/);
+  instance.stdin.write('n'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /Run result notifications/);
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /\[ \] Save run results to Inbox/);
+  instance.stdin.write(' '); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /\[x\] Save run results to Inbox/);
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /\[ \] Message requester when online/);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 0);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 1);
+  assert.equal(writes[0].scheduleId, 'inbox-sweep'); assert.equal(writes[0].expectedRevision, 3);
+  assert.deepEqual(writes[0].policy, { inbox: true, requester: false }); assert.ok(writes[0].key);
+});
+
+test('Inbox run results are labelled informational and marked read, never approved as execution reviews', async t => {
+  const item = { id: 'result-one', kind: 'run_result', title: 'Run result · inbox-sweep', stateLabel: 'completed · Unread result',
+    summary: 'Partial coverage. Two comments verified. Teams enumeration failed.', effect: 'Mark this result read. This does not approve the work.',
+    action: 'notification.acknowledge', from: 'Relay' };
+  const writes = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [item] }), detailInbox: async () => item,
+    decideInbox: async input => { writes.push(input); return { state: 'recorded', message: 'Result marked read' }; }, interval: 60000, width: 100, height: 28 }));
+  t.after(() => instance.unmount()); await tick(); instance.stdin.write('\t'); await tick(); instance.stdin.write('\t'); await tick();
+  assert.match(stripVTControlCharacters(instance.lastFrame()), /1 run results/);
+  instance.stdin.write('\r'); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  assert.match(frame, /Mark result read/); assert.doesNotMatch(frame, /Accept result|Request changes|Acknowledge reminder/);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 0);
+  instance.stdin.write('\r'); await tick(); assert.equal(writes.length, 1);
+  assert.equal(writes[0].item.action, 'notification.acknowledge');
+});
 
 for (const width of [100, 60, 40, 24]) test(`native Ink rows retain complete primary references at width ${width}`, async t => {
   const reference = 'ABCDEFGHIJKLMNOP-9007199254740991';

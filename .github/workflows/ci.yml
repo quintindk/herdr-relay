@@ -67,7 +67,7 @@ jobs:
       - name: Exact instruction revision approval, idle activation and refreshed native context
         run: node scripts/verify-headless-setup.mjs --contract-update --capabilities
       - name: Actual headless cron admission, granted effects and result publication
-        run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell
+        run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell --run-result-notifications
       - name: Headless MCP denied without connector permissions
         run: node scripts/verify-headless-setup.mjs --mcp-denied
       - name: Headless shell allowed with harmless outside-workspace write

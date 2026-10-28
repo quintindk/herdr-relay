@@ -5,6 +5,7 @@ import { buildBoardRows, buildAgentRows, wrapBoardText, taskBoardColumns } from 
 import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
 import { GrantsPanel, nativeBoardTabs, nativeBoardViews } from './grants-panel.mjs';
 import { NativeDispatchModal } from './task-board-dispatch.mjs';
+import { RunResultNotificationsPanel } from './run-result-notifications-panel.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
@@ -193,7 +194,7 @@ function AgentDetailModal({ detail, close, width, height }) {
   h(Text, { dimColor: true, wrap: 'truncate-end' }, 'j/k · PgUp/PgDn · t details · Esc close'));
 }
 
-function DetailModal({ detail, close, openOccurrence, openAction, review, width, height }) {
+function DetailModal({ detail, close, openOccurrence, openAction, review, openRunResultNotifications, width, height }) {
   const actions = detail.data?.actions ?? [];
   const taskTabs = [...(actions.length ? ['Actions'] : []), 'Overview', 'Result', 'Comments', ...(detail.data?.activity ? ['Activity'] : [])];
   const [tab, setTab] = useState(0);
@@ -238,6 +239,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
       `${routine.cron} · ${routine.timezone}`,
       `Next${routine.nextRunIsEstimate ? ' (clock preview)' : ''} ${routine.nextRunAt || 'none'} · target ${routine.targetAgentId || routine.targetBindingId || routine.targetDirectory || 'unresolved'}`,
       ...(routine.delivery ? [`Delivery ${routine.delivery.state}${routine.delivery.reason ? ` · ${routine.delivery.reason}` : ''}`] : []),
+      'Run result notifications', `Inbox: ${routine.runResultNotifications?.inbox ? 'on' : 'off'} · Requester (online-only): ${routine.runResultNotifications?.requester ? 'on' : 'off'}`,
       '', `Recent occurrences (${routine.runs.length}${routine.runs.length === 50 ? '+' : ''})`,
       ...detail.occurrences.map(entry => entry.run.nativeOccurrence
         ? `${entry.run.triggeredAt || '-'}  ${entry.run.status}  ${entry.run.linkedIssueId || 'taskless'}  ${clean(entry.run.summary).replace(/[\u202a-\u202e\u2066-\u2069]/g, '')}`
@@ -248,9 +250,10 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
   const scroll = Math.min(scrolls[scrollKey] ?? 0, Math.max(0, content.length - viewportHeight));
   const setScroll = update => setScrolls(value => ({ ...value,
     [scrollKey]: typeof update === 'function' ? update(value[scrollKey] ?? 0) : update }));
-  const occurrenceStart = detail.kind === 'routine' && detail.data ? 5 + (detail.data.delivery ? 1 : 0) : -1;
+  const occurrenceStart = detail.kind === 'routine' && detail.data ? 7 + (detail.data.delivery ? 1 : 0) : -1;
   const maxScroll = Math.max(0, content.length - viewportHeight);
   useInput((input, key) => {
+    if (detail.kind === 'routine' && input === 'n') { openRunResultNotifications?.(detail.data); return; }
     if (detail.kind === 'task' && input === 't') { setTechnical(value => !value); return; }
     if (detail.kind === 'task' && taskTabs[tab] === 'Actions') {
       if (key.return) { void openAction(actions[actionIndex]); return; }
@@ -313,12 +316,12 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, width,
           color: entry?.task ? 'cyan' : entry?.mismatch ? 'red' : undefined }, line || ' ');
       })),
     h(Box, { justifyContent: 'space-between' },
-      h(Text, { dimColor: true }, 'j/k · PgUp/PgDn · Home/End scroll · o open task · Enter/Esc close'),
+      h(Text, { dimColor: true }, 'j/k · PgUp/PgDn · n result notifications · o open task · Esc close'),
       h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`)));
 }
 
 export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
-  detailGrant, decideGrant, createGrant, pendingGrantDecisions, dispatchTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+  detailGrant, decideGrant, createGrant, pendingGrantDecisions, updateRunResultNotifications, dispatchTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
   const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
@@ -327,6 +330,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const [view, setView] = useState('tasks');
   const [selectedNativeId, setSelectedNativeId] = useState(null);
   const [decisionModal, setDecisionModal] = useState(null);
+  const [settingsModal, setSettingsModal] = useState(null);
   const [decisionReceipt, setDecisionReceipt] = useState(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
@@ -418,6 +422,21 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       if (pendingDecisions) setBoard(value => ({ ...value, inbox: [...pendingDecisions(), ...(value.inbox ?? []).filter(i => i.kind !== 'publication')] }));
     }
   };
+  const openRunResultNotifications = routine => {
+    if (!updateRunResultNotifications || !routine || routine.intent === 'reminder' || routine.state === 'cancelled') { setNotice('Run result settings unavailable'); return; }
+    setSettingsModal({ scheduleId: routine.id, expectedRevision: routine.revision,
+      policy: { inbox: !!routine.runResultNotifications?.inbox, requester: !!routine.runResultNotifications?.requester },
+      index: 0, confirm: false, key: `run-result-settings:${randomUUID()}`, busy: false, error: '' });
+    setDetail(null);
+  };
+  const submitRunResultNotifications = async current => {
+    setSettingsModal({ ...current, busy: true, error: '' });
+    try {
+      const result = await updateRunResultNotifications(current);
+      if (result.state !== 'recorded') throw Error('Settings publication is not confirmed');
+      setSettingsModal(null); setNotice(result.message); setRefreshGeneration(value => value + 1);
+    } catch (error) { setSettingsModal({ ...current, busy: false, locked: true, error: clean(error.message || 'Inspect the original settings publication in Inbox') }); }
+  };
   const submit = async current => {
     const status = current.options[current.index]; setModal({ ...current, busy: true, error: '' });
     try {
@@ -493,7 +512,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   };
   useInput((input, key) => {
     if (native && view === 'grants') return;
-    if (modal || assignment || reviewModal || detail || decisionModal) return;
+    if (modal || assignment || reviewModal || detail || decisionModal || settingsModal) return;
     if (searching) {
       if (key.escape) { setSearching(false); setFilter(''); }
       else if (key.return) setSearching(false);
@@ -551,6 +570,9 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
           confirm: false, busy: false, error: '' }); setNotice('');
       }).catch(error => setNotice(`Status unavailable: ${clean(error.message)}`));
     }
+    if (native && view === 'schedules' && input === 'n') {
+      const row = rows[selectedIndex]; if (row?.type === 'routine') openRunResultNotifications(row.routine); return;
+    }
     if (input === 'a') {
       if (native && !dispatchTask) { setNotice('Native execution handover is unavailable'); return; }
       const row = rows[selectedIndex];
@@ -586,7 +608,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const visible = rows.slice(start, start + visibleHeight);
   const rowText = row => {
     if (row.type === 'section') return row.label;
-    if (row.type === 'inbox') return `${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${decisionText(row.item.title)}  · ${decisionText(row.item.summary)}`;
+    if (row.type === 'inbox') return `${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${decisionText(row.item.title)}  · ${decisionText(row.item.summary)}`;
     if (row.type === 'routine') return `  ◆ ${row.routine.title}  [${row.routine.state}]  ${row.routine.cron}  next ${row.routine.nextRunAt || '-'}`;
     const fold = row.expandable ? row.expanded ? '▾' : '▸' : '·';
     if (row.type === 'group') return `${fold} ${row.name}${row.agent ? ` / ${row.agent.availability || 'unknown'}` : ''}  · ${row.counts.open} open`;
@@ -614,7 +636,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
   const nativeCounts = view === 'agents'
     ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
-    : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
+    : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'run_result').length ?? 0} run results   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
       : view === 'schedules' ? `${board.routines.filter(r => r.state === 'active').length} active   ${board.routines.filter(r => r.state === 'paused').length} paused`
         : `${summary.open} open   ${summary.active} active   ${summary.blocked} blocked   ${summary.review} in review`;
   const cardTitle = (title, active, color = 'cyan', local = false) => h(Box, { height: 1, overflow: 'hidden' },
@@ -654,7 +676,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
           h(Text, { inverse: active, dimColor: overlay, color: 'cyan', wrap: 'truncate-end' },
             `  ${row.last ? '└─' : '├─'} ${clean(row.agent.displayName || row.agent.name)} · ${clean(row.agent.mode || 'Unknown mode')} · ${clean(row.agent.availabilityLabel || 'Unknown or stale')}`));
         if (row.type === 'inbox') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
-          cardTitle(`${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`, active, row.item.kind === 'review' ? 'magenta' : 'yellow'),
+          cardTitle(`${row.item.kind === 'question' ? 'Question' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${clean(row.item.title)}`, active, row.item.kind === 'review' ? 'magenta' : 'yellow'),
           h(Text, { wrap: 'truncate-end' }, `  ${clean(row.item.summary)}`),
           h(Text, { dimColor: true, wrap: 'truncate-end' }, `  ${clean(row.item.from)} · ${clean(row.item.stateLabel)}${row.item.locationLabel ? ` · ${clean(row.item.locationLabel)}` : ''}`));
         if (native && row.type === 'routine') return h(Box, { key: row.id, height: 4, flexDirection: 'column', overflow: 'hidden' },
@@ -683,7 +705,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       : h(Box, { flexDirection: 'column' },
         h(Text, { dimColor: Boolean(modal || detail) }, native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search'),
         h(Text, { dimColor: Boolean(modal || assignment || reviewModal || detail) }, native && !assignTask
-          ? 'h done · r refresh · s status · q quit' : 'h done · i idle · r refresh · a assign · s status · q quit')));
+          ? view === 'schedules' ? 'n run result notifications · r refresh · q quit' : 'h done · r refresh · s status · q quit' : 'h done · i idle · r refresh · a assign · s status · q quit')));
   let detailView = detail;
   if (detail?.kind === 'routine' && detail.data) {
     const tasks = new Map(board.tasks.map(task => [`${task.companyId}:${task.id}`, task]));
@@ -711,7 +733,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     }, submit: submitReview, width, height }) : null,
     detailView && !reviewModal && !decisionModal ? detailView.kind === 'agent'
       ? h(AgentDetailModal, { detail: detailView, close: () => setDetail(null), width, height })
-      : h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, openAction: openInbox, review: prepareReview, width, height }) : null,
+      : h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, openAction: openInbox, review: prepareReview, openRunResultNotifications, width, height }) : null,
+    settingsModal ? h(RunResultNotificationsPanel, { modal: settingsModal, setModal: setSettingsModal, submit: submitRunResultNotifications, width, height }) : null,
     decisionModal ? h(BoardDecisionModal, { modal: decisionModal, setModal: setDecisionModal, submit: submitDecision, width, height }) : null);
 }
 

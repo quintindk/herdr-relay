@@ -10,6 +10,7 @@ import { contextClient, defaultOperatorContext } from './native-onboarding.mjs';
 import { workerConnection } from '../packages/opencode-relay/worker-context.mjs';
 import { call } from './client.mjs';
 import { waitHeadlessSetup } from './headless-setup-wait.mjs';
+import { runResultNotifications } from './run-result-notifications.mjs';
 
 export const headlessHelp = `herdr-relay headless provision --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
   Plan by default. --apply saves a dedicated persistent native binding, never starts a runtime or installs a schedule.
@@ -26,7 +27,8 @@ herdr-relay headless grant|revoke --file PAYLOAD_JSON --key KEY [--config NODE_J
   Enrolled chats use their existing agent identity. Outside a chat, the joined node operator is used by default.
   No backend-owner context is required. Agents manage only their own node/workspace grants.
   Grants require permissions:{mcp:BOOLEAN,shell:BOOLEAN}. Shell allowed is full OS-user access, not an artifact-path sandbox.
-herdr-relay headless setup --grant-id ID --key KEY [--config NODE_JSON]  [readiness then activation]
+herdr-relay headless setup --grant-id ID --key KEY [--config NODE_JSON] [--run-result-inbox true|false --run-result-requester true|false]
+  Run result notifications default off. Inbox is persistent; requester messages are online-only. No run-start alerts.
 herdr-relay headless status --id SETUP_ID [--config NODE_JSON]`;
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -66,13 +68,16 @@ export function planHeadless({ manifest, configFile = nativeNodeConfig() }) {
   let schedule;
   if (manifest.schedule !== undefined) {
     const s = manifest.schedule;
-    requireValue(object(s) && Object.keys(s).every(k => ['id', 'instructions', 'cron', 'timezone', 'reviewPolicy'].includes(k)) &&
+    requireValue(object(s) && Object.keys(s).every(k => ['id', 'instructions', 'cron', 'timezone', 'reviewPolicy', 'runResultNotifications'].includes(k)) &&
       typeof s.id === 'string' && /^[A-Za-z0-9:_-]{1,128}$/.test(s.id) && text(s.instructions, 32768) &&
       text(s.cron) && text(s.timezone) && ['none', 'human'].includes(s.reviewPolicy),
     'invalid_schedule', 'Explicit schedule ID, instructions, cron, timezone and review policy required');
     previewCron(s.cron, s.timezone);
+    const reporting = runResultNotifications(s.runResultNotifications);
+    requireValue(!reporting.requester, 'invalid_run_result_notifications', 'Requester reporting requires authenticated coordinator setup; local provisioning has no requester agent. Inbox reporting is available');
     schedule = { id: s.id, definition: { nodeId: config.nodeId, targetAgentId: agentId, instructions: s.instructions,
-      cron: s.cron, timezone: s.timezone, reviewPolicy: s.reviewPolicy, enabled: false } };
+      cron: s.cron, timezone: s.timezone, reviewPolicy: s.reviewPolicy, enabled: false,
+      ...(s.runResultNotifications !== undefined ? { runResultNotifications: s.runResultNotifications } : {}) } };
   }
   return { configFile, source, config, binding, schedule, existing: matching.length === 1 };
 }
@@ -125,6 +130,7 @@ export async function headlessCli(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     file: { type: 'string' }, config: { type: 'string' }, apply: { type: 'boolean' }, 'schedule-output': { type: 'string' },
     context: { type: 'string' }, key: { type: 'string' }, 'grant-id': { type: 'string' }, id: { type: 'string' }, retry: { type: 'boolean' },
+    'run-result-inbox': { type: 'string' }, 'run-result-requester': { type: 'string' },
   } });
   if (['contract-preview', 'contract-request'].includes(positionals[1])) {
     requireValue(positionals.length === 2 && values.file && Object.keys(values).every(k => ['file', 'config'].includes(k)), 'invalid_request', 'Use headless contract-preview|contract-request --file JSON from the original enrolled coordinator');
@@ -135,7 +141,7 @@ export async function headlessCli(args) {
   }
   if (['grant', 'revoke', 'setup', 'status', 'grants', 'connections'].includes(positionals[1])) {
     const action = positionals[1];
-    const permitted = ['grant', 'revoke'].includes(action) ? ['file', 'context', 'key', 'config'] : ['config', ...(action === 'setup' ? ['key', 'grant-id', 'retry'] : action === 'status' ? ['id'] : [])];
+    const permitted = ['grant', 'revoke'].includes(action) ? ['file', 'context', 'key', 'config'] : ['config', ...(action === 'setup' ? ['key', 'grant-id', 'retry', 'run-result-inbox', 'run-result-requester'] : action === 'status' ? ['id'] : [])];
     requireValue(Object.keys(values).every(k => permitted.includes(k)), 'invalid_request', 'Unsupported setup/grant option');
     requireValue(positionals.length === 2 && !values.apply && !values['schedule-output'], 'invalid_request', 'Setup/grant commands do not accept provisioning options');
     let result;
@@ -153,13 +159,19 @@ export async function headlessCli(args) {
           'backend_upgrade_required', 'Backend must support general headless tool permissions');
         if (action === 'grant' && payload.capabilities) requireValue(info.features?.headlessCapabilities,
           'backend_upgrade_required', 'Backend must support approved headless task/artifact capabilities');
+        if (action === 'grant' && payload.schedule?.runResultNotifications !== undefined) requireValue(info.features?.runResultNotifications,
+          'backend_upgrade_required', 'Backend must support run result notifications');
         result = await api('POST', '/v1/commands', { key: values.key, action: `headless.${action}`, payload });
       }
     } else {
       const sessionId = process.env.OPENCODE_SESSION_ID;
       requireValue(sessionId, 'human_coordinator_required', 'Use an enrolled coordinator chat; this command does not borrow operator credentials');
       const connection = workerConnection({ workerDirectory: dirname(resolve(values.config ?? nativeNodeConfig())) }, sessionId);
-      const body = action === 'setup' ? { key: values.key, grantId: values['grant-id'], ...(values.retry ? { retry: true } : {}) } : action === 'status' ? { id: values.id } : {};
+      const selected = ['run-result-inbox', 'run-result-requester'].some(key => values[key] !== undefined);
+      if (selected) requireValue(['run-result-inbox', 'run-result-requester'].every(key => values[key] === undefined || ['true', 'false'].includes(values[key])),
+        'invalid_run_result_notifications', 'Run result options accept true or false');
+      const body = action === 'setup' ? { key: values.key, grantId: values['grant-id'], ...(values.retry ? { retry: true } : {}),
+        ...(selected ? { runResultNotifications: { inbox: values['run-result-inbox'] === 'true', requester: values['run-result-requester'] === 'true' } } : {}) } : action === 'status' ? { id: values.id } : {};
       result = await call(connection, 'POST', `/agent/headless-${action}`, body);
       if (action === 'setup') result = await waitHeadlessSetup(connection, result);
     }
