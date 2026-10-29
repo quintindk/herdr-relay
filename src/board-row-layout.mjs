@@ -1,4 +1,4 @@
-import { wrapBoardText, taskBoardColumns } from './task-board-view.mjs';
+import { wrapBoardText, truncateBoardText, taskBoardColumns } from './task-board-view.mjs';
 
 export function layoutBoardRows(rows, { columns, native, rowText, statusLabel }) {
   const width = Math.max(1, columns - (native ? 4 : 2));
@@ -12,12 +12,15 @@ export function layoutBoardRows(rows, { columns, native, rowText, statusLabel })
     else if (row.type === 'routine' && native) fields = [`${row.routine.title}  [${row.routine.state}]`, `${row.routine.cron} · ${row.routine.timezone}`,
       `Next (clock preview) ${row.routine.nextRunAt || 'none'} · ${row.routine.target || 'Unresolved target'}`, ''];
     else if (row.type === 'task') {
-      if (table.title >= 22 && (row.task.reference?.length || 0) <= table.title) {
-        const left = wrapBoardText(rowText(row), table.title), right = wrapBoardText(statusLabel(row.task), Math.max(1, table.status));
-        return Array.from({ length: Math.max(left.length, right.length) }, (_, i) => ({ left: left[i] || '', right: right[i] || '',
-          leftWidth: table.title, rightWidth: table.status, gap: table.gap }));
+      const text = rowText(row), reference = row.task.reference;
+      // Prefer a complete reference over the separate status column when narrow.
+      if (table.title >= 22 && (!reference || text.indexOf(reference) + reference.length + 3 <= table.title)) {
+        return [{ left: truncateBoardText(text, table.title), right: truncateBoardText(statusLabel(row.task), table.status),
+          leftWidth: table.title, rightWidth: table.status, gap: table.gap }];
       }
-      fields = [rowText(row), statusLabel(row.task)];
+      return [{ text: truncateBoardText(`${text} ${statusLabel(row.task)}`, width), heading: true }];
+    } else if (row.type === 'group' || row.type === 'section') {
+      return [{ text: truncateBoardText(rowText(row), width), heading: true }];
     } else fields = [rowText(row)];
     return fields.flatMap((field, fieldIndex) => wrapBoardText(field, width).map(text => ({ text, heading: fieldIndex === 0 })));
   });

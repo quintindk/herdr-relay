@@ -67,6 +67,21 @@ export function wrapBoardText(value, columns) {
   return lines;
 }
 
+/** One sanitised line, truncated at a grapheme boundary with literal dots. */
+export function truncateBoardText(value, columns) {
+  columns = Math.max(0, Math.floor(columns) || 0);
+  const text = clean(value);
+  if (widthOf(text) <= columns) return text;
+  const suffix = '.'.repeat(Math.min(3, columns));
+  let result = '', used = 0;
+  for (const { segment } of segmenter.segment(text)) {
+    const cells = cellWidth(segment);
+    if (used + cells > columns - suffix.length) break;
+    result += segment; used += cells;
+  }
+  return result + suffix;
+}
+
 function fit(value, width, unicode = false) {
   const text = clean(value);
   if (width <= 0) return '';

@@ -50,14 +50,41 @@ test('Inbox run results are labelled informational and marked read, never approv
   assert.equal(writes[0].item.action, 'notification.acknowledge');
 });
 
-for (const width of [100, 60, 40, 24]) test(`native Ink rows retain complete primary references at width ${width}`, async t => {
+for (const width of [100, 60, 40, 24]) test(`native Tasks keeps one row and exposes the full reference in details at width ${width}`, async t => {
   const reference = 'ABCDEFGHIJKLMNOP-9007199254740991';
   const task = { ...board.tasks[0], reference, identifier: reference, title: 'Numbered task', attentionLabel: 'Long attention text that must not hide identity' };
-  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [], tasks: [task] }), interval: 60000, width, height: 26 }));
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [], tasks: [task] }),
+    detailTask: async () => ({ task, actions: [], comments: [] }), interval: 60000, width, height: 26 }));
   t.after(() => instance.unmount()); await tick();
   const frame = stripVTControlCharacters(instance.lastFrame());
-  assert.ok(frame.replace(/[\s│]/g, '').includes(reference), frame);
+  const taskLines = frame.split('\n').filter(line => /ABCD/.test(line));
+  assert.equal(taskLines.length, 1, frame);
+  if (width >= 40) assert.ok(taskLines[0].includes(reference), frame);
+  else { assert.match(taskLines[0], /\.\.\./); assert.ok(!frame.includes(reference), frame); }
   assert.doesNotMatch(frame, /DEF-1/);
+  instance.stdin.write('j'); await tick(); instance.stdin.write('\r'); await tick();
+  const detail = stripVTControlCharacters(instance.lastFrame());
+  assert.ok(detail.replace(/[\s\u2500-\u257f]/g, '').includes(reference), detail);
+});
+
+test('native Tasks truncates long titles and statuses without hiding the next task or changing its selection', async t => {
+  const title = 'FIRST_TITLE '.repeat(30) + 'TITLE_TAIL';
+  const first = { ...board.tasks[0], reference: 'REL-1', title, attentionLabel: 'WAITING_FOR '.repeat(20) + 'STATUS_TAIL' };
+  const second = { ...first, id: 'second', reference: 'REL-2', title: 'Second task', attentionLabel: '' };
+  const opened = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...board, inbox: [], tasks: [first, second] }),
+    detailTask: async ({ taskId }) => { opened.push(taskId); return { task: second, actions: [], comments: [] }; },
+    interval: 60000, width: 80, height: 20 }));
+  t.after(() => instance.unmount()); await tick();
+  const frame = stripVTControlCharacters(instance.lastFrame());
+  const taskLines = frame.split('\n').filter(line => /REL-[12]/.test(line));
+  assert.equal(taskLines.length, 2, frame);
+  assert.match(taskLines.find(line => line.includes('REL-1')), /REL-1.*FIRST_TITLE.*\.\.\..*Todo.*\.\.\./);
+  assert.match(taskLines.find(line => line.includes('REL-2')), /REL-2.*Second task/);
+  assert.doesNotMatch(frame, /TITLE_TAIL|STATUS_TAIL/);
+  assert.equal(frame.split('\n').filter(line => /FIRST_TITLE/.test(line)).length, 1);
+  instance.stdin.write('j'); await tick(); instance.stdin.write('\r'); await tick();
+  assert.deepEqual(opened, ['second']);
 });
 
 test('Ink board permanently deletes a blocked agent-owned occurrence after explicit confirmation', async t => {

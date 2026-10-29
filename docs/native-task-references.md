@@ -106,8 +106,9 @@ case-insensitive. Imported alias equality retains the original case and scope.
 - Multiple tasks matching a token return `ambiguous`, never a selected task.
 - Explicit `reference` lookup considers only the primary-reference registry.
 - TUI rows/details prefer the full primary reference. `/` filtering also recognises
-  the currently retained imported identifier. Very narrow Ink rows wrap references
-  instead of shortening them. Machine IDs remain available in technical details.
+  the currently retained imported identifier. Task-list rows truncate with `...`
+  on narrow terminals. Open task details to read the full reference. Machine IDs
+  remain available in technical details.
 - Mutations and relationships still use native IDs and inspected revisions. Lookup
   confers no mutation or execution authority.
 

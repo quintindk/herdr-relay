@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import stringWidth from 'string-width';
-import { wrapBoardText } from '../src/task-board-view.mjs';
+import { wrapBoardText, truncateBoardText } from '../src/task-board-view.mjs';
 import { appendBoardInput } from '../src/board-text.mjs';
 import { routineDetailLayout } from '../src/board-detail-layout.mjs';
 import { layoutBoardRows, boardRowViewport } from '../src/board-row-layout.mjs';
@@ -45,6 +45,50 @@ test('wrapped list rows retain text and selection through long cards and resize'
       assert.equal(line.rowIndex, 0); assert.ok(stringWidth(line.text) <= columns - 4); collected.add(line.text);
     }
     assert.ok(blocks[0].every(line => collected.has(line.text)));
+  }
+});
+
+test('single-line truncation uses literal dots and never splits wide or joined graphemes', () => {
+  const text = '界界 e\u0301 🙂 👨‍👩‍👧‍👦 suffix';
+  const boundaries = new Set(['']);
+  let prefix = '';
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+    prefix += segment; boundaries.add(prefix);
+  }
+  for (const columns of [0, 1, 2, 3, 4, 8, 12, 18, 40]) {
+    const result = truncateBoardText(text, columns);
+    assert.ok(stringWidth(result) <= columns, result);
+    if (stringWidth(text) <= columns) assert.equal(result, text);
+    else {
+      const suffix = '.'.repeat(Math.min(3, columns));
+      assert.ok(result.endsWith(suffix));
+      assert.ok(boundaries.has(suffix ? result.slice(0, -suffix.length) : result));
+    }
+  }
+  assert.equal(truncateBoardText('exact', 5), 'exact');
+  assert.equal(truncateBoardText('first\nsecond\x1b[31m', 30), 'first second');
+});
+
+for (const native of [true, false]) test(`Tasks rows and group headings stay single-line through resize (${native ? 'native' : 'combined'} board)`, () => {
+  const rows = [{ type: 'group', name: 'Owner '.repeat(30) },
+    { type: 'task', task: { reference: 'REL-32', title: 'Long title '.repeat(40) } },
+    { type: 'task', task: { reference: 'ABCDEFGHIJKLMNOP-9007199254740991', title: '界👨‍👩‍👧‍👦'.repeat(30) } }];
+  for (const columns of [4, 18, 24, 40, 74, 120]) {
+    const blocks = layoutBoardRows(rows, { columns, native,
+      rowText: row => row.type === 'group' ? row.name : `${row.task.reference} ${row.task.title}`,
+      statusLabel: () => 'Blocked · '.repeat(20) });
+    assert.ok(blocks.every(block => block.length === 1));
+    for (const [line] of blocks) {
+      if (line.text !== undefined) {
+        assert.ok(line.text.endsWith('...') || columns < 7);
+        assert.ok(stringWidth(line.text) <= Math.max(1, columns - (native ? 4 : 2)));
+      } else {
+        assert.ok(line.left.endsWith('...')); assert.ok(line.right.endsWith('...'));
+        assert.ok(stringWidth(line.left) <= line.leftWidth); assert.ok(stringWidth(line.right) <= line.rightWidth);
+        assert.ok(line.leftWidth + line.gap + line.rightWidth <= columns - 4);
+      }
+    }
+    assert.deepEqual(boardRowViewport(blocks, 2, 2).map(line => line.rowIndex), [1, 2]);
   }
 });
 
