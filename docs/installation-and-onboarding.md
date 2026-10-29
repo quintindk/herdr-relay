@@ -2,8 +2,8 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target the stable **0.2.1** package from
-[GitHub releases](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.1).
+Examples target the stable **0.2.2** package from
+[GitHub releases](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.2).
 
 ## Requirements
 
@@ -25,8 +25,8 @@ and a successful zero-vulnerability production audit.
 ```sh
 umask 077
 sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.1.tgz
-herdr-relay release install --version 0.2.1
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.2.tgz
+herdr-relay release install --version 0.2.2
 herdr-relay --version
 ```
 

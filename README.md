@@ -3,7 +3,7 @@
 Native tasks, agent collaboration and durable node services for **Herdr and
 OpenCode**. Relay owns its task backend. No external task tracker is required.
 
-**[0.2.1](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.1)** is the first
+**[0.2.2](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.2)** is the current
 stable release. Existing installations must be on **0.2.1-rc4 or later** to upgrade.
 
 ## What it does
@@ -39,7 +39,7 @@ plugin configuration and skill installation are separate operations.
 - **Daily use:** `herdr-relay tui` and [terminal controls](docs/task-board.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
-- **Release details:** [0.2.1 release notes](docs/release-0.2.1.md).
+- **Release details:** [0.2.2 release notes](docs/release-0.2.2.md).
 
 Do not reset a backend, delete a journal or repeat bootstrap to perform an upgrade.
 Published versions and their assets are immutable.

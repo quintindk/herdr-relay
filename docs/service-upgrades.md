@@ -25,7 +25,7 @@ not remote backend administration. Doctor checks this node's backend connection.
 Activate the exact **published** target version first:
 
 ```sh
-herdr-relay release install --version 0.2.1
+herdr-relay release install --version 0.2.2
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -38,15 +38,15 @@ OpenCode to reload skills or configuration.
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.2.1 --key stable-021-backend-host
-herdr-relay upgrade --services both --version 0.2.1 --key stable-021-backend-host --apply
+herdr-relay upgrade --services both --version 0.2.2 --key stable-022-backend-host
+herdr-relay upgrade --services both --version 0.2.2 --key stable-022-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.2.1 --key stable-021-node-host
-herdr-relay upgrade --services node --version 0.2.1 --key stable-021-node-host --apply
+herdr-relay upgrade --services node --version 0.2.2 --key stable-022-node-host
+herdr-relay upgrade --services node --version 0.2.2 --key stable-022-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -59,8 +59,12 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4-to-0.2.1 retains protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4/0.2.1-to-0.2.2 retains protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
+
+Upgrading enables the supported connection-rebind and workspace-relocation
+operations. It does not apply either recovery automatically. Preview and confirm
+those changes separately after the required Relay components are upgraded.
 
 ## 3. Deferred plugin reload
 

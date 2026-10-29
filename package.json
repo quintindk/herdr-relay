@@ -1,6 +1,6 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "license": "MIT",
   "description": "Durable native tasks, agent collaboration and node services for Herdr and OpenCode",

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 — 29 October 2026
 
 - Add explicit, previewed relocation for an enrolled root chat moved to another
   workspace. Preserve its agent, session, model, permissions and schedule definitions.
