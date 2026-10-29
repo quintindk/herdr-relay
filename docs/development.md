@@ -24,6 +24,7 @@ from checkout imports; a successful plain Node.js import does not prove renderin
 
 ```sh
 node scripts/verify-cli-bridge.mjs
+node scripts/verify-agent-relocation.mjs
 node scripts/verify-headless-setup.mjs --legacy-contract-refusal --capabilities
 node scripts/verify-headless-setup.mjs --connection-rebind --contract-update --capabilities
 node scripts/verify-headless-setup.mjs --run-result-notifications --capabilities --shell

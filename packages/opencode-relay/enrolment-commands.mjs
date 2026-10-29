@@ -68,17 +68,18 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     createEffect(() => track(selectedSession()));
     return dispose;
   });
-  const location = ctx.location ?? ctx.data.location.default();
+  const defaultLocation = () => ctx.location ?? ctx.data.location.default();
   const toast = (message, variant = 'info') => ctx.ui.toast.show({ message, variant, sessionID: selectedSession() });
-  const runtimeGeneration = async () => (await ctx.client.rpc(RelayRuntime).inspect({}, { location })).generation;
+  const runtimeGeneration = async location => (await ctx.client.rpc(RelayRuntime).inspect({}, { location })).generation;
   const check = origin => {
     if (closed || origin.session !== selectedSession() || origin.generation !== generation) throw new Error('Relay attachment context changed');
   };
   const refresh = async () => {
-    enrolments = await runCli(['agent', 'enrolments', ...common, '--directory', location.directory]);
+    enrolments = await runCli(['agent', 'enrolments', ...common]);
     captureOrigin(selectedSession());
   };
   const openLandingSession = async origin => {
+    const location = origin.location;
     let input = outbox.sessionCreation ? JSON.parse(JSON.stringify(outbox.sessionCreation)) : null;
     if (!input) {
       const selectedModel = ctx.ui.model?.current();
@@ -101,7 +102,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     check(origin);
     if (session.id !== input.id || session.location?.directory !== location.directory || session.parentID || session.time?.archived ||
       session.metadata?.relayLandingSession !== input.id) throw new Error('Created session does not match the original landing-screen request');
-    if (origin.runtime !== await runtimeGeneration()) throw new Error('Relay reloaded during session creation');
+    if (origin.runtime !== await runtimeGeneration(origin.location)) throw new Error('Relay reloaded during session creation');
     check(origin);
     ctx.ui.router.navigate({ type: 'session', sessionID: session.id });
     track(selectedSession());
@@ -122,7 +123,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     let renameUnconfirmed = false;
     if (!closed && generation === origin.generation && result.sessionId === selectedSession() && enrolment?.name) {
       try {
-        const rename = await renameWorkspace(ctx, { ...result, agentName: enrolment.name, directory: location.directory },
+        const rename = await renameWorkspace(ctx, { ...result, agentName: enrolment.name, directory: result.directory ?? origin.location.directory },
           { current: () => !closed && generation === origin.generation && selectedSession() === result.sessionId });
         record({ type: 'workspace_name_synced', sessionId: result.sessionId, state: rename.state });
       } catch {
@@ -140,7 +141,9 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     busy = true;
     const origin = { session: selectedSession(), generation };
     try {
-      origin.runtime = await runtimeGeneration();
+      const selected = origin.session && !outbox.pending ? await ctx.client.session.get({ sessionID: origin.session }) : null;
+      origin.location = { ...(selected?.location ?? defaultLocation()) };
+      origin.runtime = await runtimeGeneration(origin.location);
       check(origin);
       if (outbox.pending) {
         if (automatic) return;
@@ -149,24 +152,31 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
         await publish(JSON.parse(JSON.stringify(outbox.pending)), origin); return;
       }
       await refresh(); check(origin);
-      if (kind === 'attach' && !enrolments.length) { toast('No standing enrolment for this workspace. Use /relay-enrol first.'); return; }
+      const scoped = enrolments.filter(e => e.directory === origin.location.directory || e.receiver?.conversationId === origin.session);
+      if (kind === 'attach' && !scoped.length) { toast('No standing enrolment for this workspace. Use /relay-enrol first.'); return; }
       const session = origin.session ? await ctx.client.session.get({ sessionID: origin.session }) : await openLandingSession(origin);
       check(origin);
-      if (session.parentID || session.location?.directory !== location.directory) throw new Error('Attach from a root chat in this exact workspace');
+      if (session.parentID) throw new Error('Attach from a root chat, not a fork');
+      if (session.location?.directory !== origin.location.directory) throw new Error('Workspace changed during attachment. Retry in the current workspace');
       let enrolment = automatic;
-      let name;
+      let name, relocationArgs, relocationPreview;
+      const moved = scoped.filter(e => e.receiver?.conversationId === session.id && e.directory !== session.location.directory);
+      if (!automatic && moved.length) {
+        if (moved.length !== 1) throw new Error('This chat has ambiguous enrolment ownership. Inspect before moving it');
+        enrolment = moved[0]; kind = 'relocate';
+      }
       if (kind === 'enrol') {
         record({ type: 'enrolment_name', sessionId: origin.session });
         name = await ctx.ui.dialog.prompt({ title: 'Enrol durable Relay agent', description: `Workspace: ${session.location.directory}. Choose its stable agent name.` });
         check(origin);
         if (!name?.trim()) return;
         name = name.trim();
-        const existing = enrolments.find(e => e.name === name);
+        const existing = scoped.find(e => e.directory === session.location.directory && e.name === name);
         if (existing) { enrolment = existing; kind = 'attach'; }
       } else if (!enrolment) {
-        if (!enrolments.length) { toast('No standing enrolment for this workspace. Use /relay-enrol first.'); return; }
-        const id = enrolments.length === 1 ? enrolments[0].id : await ctx.ui.dialog.select({ title: 'Attach to Relay enrolment',
-          options: enrolments.map(e => ({ value: e.id, title: e.name, description: `Receiving chat: ${e.receiver?.conversationId ?? 'none'}` })) });
+        if (!scoped.length) { toast('No standing enrolment for this workspace. Use /relay-enrol first.'); return; }
+        const id = scoped.length === 1 ? scoped[0].id : await ctx.ui.dialog.select({ title: 'Attach to Relay enrolment',
+          options: scoped.map(e => ({ value: e.id, title: e.name, description: `Receiving chat: ${e.receiver?.conversationId ?? 'none'}` })) });
         check(origin);
         if (!id) return;
         enrolment = enrolments.find(e => e.id === id);
@@ -175,16 +185,24 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
         const current = enrolments.find(e => e.id === automatic.id);
         if (current?.receiver?.generation !== automatic.receiver.generation || current.receiver.conversationId !== automatic.receiver.conversationId) throw new Error('Automatic attachment lost its original receiver claim');
       } else {
+        if (kind === 'relocate') {
+          relocationArgs = ['agent', 'relocate', ...common, '--session', session.id, '--agent', enrolment.id,
+            '--generation', String(enrolment.receiver.generation), '--from-directory', enrolment.directory, '--directory', session.location.directory,
+            ...(ctx.options.nativeServiceRegistration ? ['--service-registration', ctx.options.nativeServiceRegistration] : [])];
+          relocationPreview = await runCli(relocationArgs); check(origin);
+        }
         record({ type: 'enrolment_confirm', sessionId: origin.session });
-        const confirmed = await ctx.ui.dialog.confirm({ title: kind === 'enrol' ? 'Enrol and attach Relay agent' : 'Replace receiving conversation',
-          message: `Agent: ${name ?? enrolment.name}\nMachine: ${hostname()}\nWorkspace: ${session.location.directory}\nReceiving here: ${session.id}\nPrevious receiver: ${enrolment?.receiver?.conversationId ?? 'none'}\n\nStanding grant: attach replacement chats and manage this agent's persistent schedules. New admissions move here. Existing attempts remain pinned and review rights are not transferred.` });
+        const confirmed = await ctx.ui.dialog.confirm({ title: kind === 'relocate' ? 'Move existing Relay enrolment' : kind === 'enrol' ? 'Enrol and attach Relay agent' : 'Replace receiving conversation',
+          message: `Agent: ${name ?? enrolment.name}\nMachine: ${hostname()}\n${kind === 'relocate' ? `Previous workspace: ${enrolment.directory}\nNew workspace: ` : 'Workspace: '}${session.location.directory}\nReceiving here: ${session.id}\nPrevious receiver: ${enrolment?.receiver?.conversationId ?? 'none'}\n\n${kind === 'relocate' ? 'Preserve this agent and chat. Agent-targeted schedules follow the new workspace without changing their definitions. Other workspace grants stay pinned. No work is moved, cancelled or replayed.' : 'Standing grant: attach replacement chats and manage this agent\'s persistent schedules. New admissions move here. Existing attempts remain pinned and review rights are not transferred.'}` });
         check(origin);
         if (!confirmed) return;
       }
-      if (origin.runtime !== await runtimeGeneration()) throw new Error('Relay reloaded during attachment confirmation');
+      if (origin.runtime !== await runtimeGeneration(origin.location)) throw new Error('Relay reloaded during attachment confirmation');
       check(origin);
+      const fresh = await ctx.client.session.get({ sessionID: session.id }); check(origin);
+      if (fresh.parentID || fresh.location?.directory !== origin.location.directory) throw new Error('Workspace changed during confirmation. Review the current workspace again');
       const key = randomUUID();
-      const args = ['agent', kind, ...common, '--session', session.id, '--directory', session.location.directory, '--key', key,
+      const args = kind === 'relocate' ? [...relocationArgs, '--apply', '--preview-hash', relocationPreview.previewHash, '--key', key] : ['agent', kind, ...common, '--session', session.id, '--directory', session.location.directory, '--key', key,
         ...(ctx.options.nativeServiceRegistration ? ['--service-registration', ctx.options.nativeServiceRegistration] : []),
         ...(kind === 'enrol' ? ['--reserved', '--name', name, '--transport', 'tools'] : ['--agent', enrolment.id, '--generation', String(enrolment.receiver?.generation ?? 0)])];
       const pending = { key, args };
@@ -203,7 +221,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
   const stopConnection = ctx.data.on('server.connected', () => { generation++; created.clear(); continuity = null; });
   const stopCreated = ctx.data.on('session.created', event => {
     if (manualSessions.has(event.data.sessionID)) return;
-    if (event.data.parentID || event.data.location?.directory !== location.directory || !continuity || event.created < loadedAt) return;
+    if (event.data.parentID || !continuity || !continuity.enrolments.some(e => e.directory === event.data.location?.directory) || event.created < loadedAt) return;
     created.set(event.data.sessionID, { session: event.data, ...structuredClone(continuity) });
     if (created.size > 32) created.delete(created.keys().next().value);
   });
@@ -223,9 +241,17 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
   timer.unref?.();
   void refresh().then(() => {
     if (closed || !enrolments.length || !selectedSession()) return;
-    const attached = enrolments.find(e => e.receiver?.conversationId === selectedSession());
-    toast(attached ? `${attached.name}: receiving here. ${attached.installedSchedules} installed schedules.` :
-      'This chat is not a designated Relay receiver. Use /relay-attach.');
+    const selected = selectedSession();
+    return ctx.client.session.get({ sessionID: selected }).then(session => {
+      if (closed || selectedSession() !== selected) return;
+      const scoped = enrolments.filter(e => e.directory === session.location?.directory || e.receiver?.conversationId === selected);
+      if (!scoped.length) return;
+      const attached = scoped.find(e => e.receiver?.conversationId === selected);
+      toast(attached?.directory !== session.location?.directory && attached ?
+        `${attached.name}: workspace moved. Use /relay-attach to review moving the existing enrolment.` :
+        attached ? `${attached.name}: receiving here. ${attached.installedSchedules} installed schedules.` :
+          'This chat is not a designated Relay receiver. Use /relay-attach.');
+    });
   }).catch(() => {});
   ctx.keymap.layer(() => ({ mode: 'global', commands: [
     { id: 'herdr.relay.enrol', title: 'Relay: enrol durable agent', palette: true, slash: { name: 'relay-enrol' }, run: () => run('enrol') },

@@ -62,6 +62,15 @@ compatibility: opencode
 - Enrolment and attachment are human actions through `/relay-enrol` and
   `/relay-attach`. Existing durable agents survive new human conversations.
   Reattach rather than creating another agent or deleting a journal.
+- A root chat moved by OpenCode retains its session ID but does not silently move
+  Relay's enrolled workspace. In that chat, `/relay-attach` or `/relay-enrol` offers
+  **Move existing Relay enrolment** with both paths. Human CLI: `native agent relocate
+  --agent ID --session ID --generation N --from-directory OLD --directory NEW
+  --context OPERATOR_JSON`, then apply with the exact preview hash and stable key.
+  Requires backend `agentWorkspaceRelocation` support. Preserve the existing agent,
+  chat and schedules. Never bypass directory checks or create a duplicate agent.
+  Active work and uncertain effects require settlement first. No work is replayed,
+  native policy changed or unrelated workspace grant retargeted.
 - The native task board is `herdr-relay tui`. Tasks, Agents, Inbox, Grants and Schedule are
   separate views. Grants owns security requests and permissions, not Inbox.
   The Agents local-node marker is based on the active scoped

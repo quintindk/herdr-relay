@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add explicit, previewed relocation for an enrolled root chat moved to another
+  workspace. Preserve its agent, session, model, permissions and schedule definitions.
+  Use the chat's current native directory in TUI attachment and prevent duplicate
+  enrolment after a move.
 - Keep Tasks list rows and group headings on one line, truncating overflow with
   `...`. Task details and the other terminal panes retain their wrapping.
 - Add previewed, revision-checked recovery for a stale headless model sign-in.

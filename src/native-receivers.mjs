@@ -30,12 +30,12 @@ export class NativeReceivers {
     });
   }
   receiver(agentId) { return this.get(`receiver:${agentId}`); }
-  prepare({ agentId, identity, url, authFile, expectedGeneration, key }) {
+  prepare({ agentId, identity, url, authFile, expectedGeneration, key, relocation }) {
     return this.journal.transaction(() => {
       const enrolment = this.get(`enrolment:${agentId}`);
-      requireValue(enrolment && enrolment.directory === identity.directory, 'enrolment_scope_mismatch', 'Select an enrolment for this exact workspace');
+      requireValue(enrolment && enrolment.directory === (relocation?.previousDirectory ?? identity.directory), 'enrolment_scope_mismatch', 'Select an enrolment for this exact workspace');
       const previous = this.get(`attachment:${key}`);
-      const request = { agentId, identity, url, authFile, expectedGeneration };
+      const request = { agentId, identity, url, authFile, expectedGeneration, ...(relocation ? { relocation } : {}) };
       if (previous) {
         requireValue(previous.digest === digest(request), 'operation_conflict', 'Attachment key has a different scope');
         return previous;
@@ -44,6 +44,9 @@ export class NativeReceivers {
       requireValue((current?.generation ?? 0) === expectedGeneration && current?.state !== 'pending',
         'stale_binding', 'Receiving chat changed or an attachment needs reconciliation', 409);
       const currentBinding = current && this.get(`native-binding:${current.bindingId}`);
+      if (relocation) requireValue(current?.state === 'active' && currentBinding?.id === relocation.previousBindingId &&
+        currentBinding.identity.sessionId === identity.sessionId && currentBinding.identity.createdAt === identity.createdAt && identity.directory !== enrolment.directory,
+      'invalid_relocation', 'Only this agent\'s unchanged designated chat can relocate');
       if (current?.state === 'active' && currentBinding?.url === url && currentBinding.authFile === authFile &&
         digest(currentBinding.identity) === digest(identity)) {
         return this.put(`attachment:${key}`, { key, digest: digest(request), expectedGeneration, state: 'existing', binding: currentBinding });
@@ -56,9 +59,10 @@ export class NativeReceivers {
         name: enrolment.name, mode: 'interactive', harness: 'opencode-v2', reserved: true,
         workerTransport: enrolment.transport, url, authFile, identity, receiverGeneration: generation };
       const operation = { key, digest: digest(request), expectedGeneration, state: 'pending', binding, previousBindingId: current?.bindingId ?? null,
+        ...(relocation ? { relocation } : {}),
         previousReceiver: current ?? null,
-        command: { key: `attach:${key}`, action: 'agent.attach', payload: { id: agentId, expectedBindingRevision: expectedGeneration,
-          conversationId: identity.sessionId, directory: identity.directory, bindingId: binding.id } } };
+        command: { key: `attach:${key}`, action: relocation ? 'agent.relocate' : 'agent.attach', payload: { id: agentId, expectedBindingRevision: expectedGeneration,
+          conversationId: identity.sessionId, directory: identity.directory, bindingId: binding.id, ...(relocation ?? {}) } } };
       this.put(`native-binding:${binding.id}`, binding);
       this.put(`receiver:${agentId}`, { generation, bindingId: binding.id, state: 'pending', key });
       return this.put(`attachment:${key}`, operation);
@@ -69,6 +73,12 @@ export class NativeReceivers {
       const current = this.receiver(operation.binding.agentId);
       requireValue(current?.key === operation.key && receipt.bindingId === operation.binding.id &&
         receipt.bindingRevision === current.generation, 'attachment_conflict', 'Attachment receipt does not match local intent');
+      if (operation.relocation) {
+        const enrolment = this.get(`enrolment:${receipt.id}`);
+        requireValue(enrolment?.directory === operation.relocation.previousDirectory && receipt.directory === operation.binding.identity.directory,
+          'attachment_conflict', 'Relocation acknowledgement must match the original enrolment and destination');
+        this.put(`enrolment:${receipt.id}`, { ...enrolment, directory: receipt.directory });
+      }
       this.put(`receiver:${receipt.id}`, { ...current, state: 'active' });
       return this.put(`attachment:${operation.key}`, { ...operation, state: 'recorded', receipt });
     });

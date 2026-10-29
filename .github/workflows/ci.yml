@@ -56,6 +56,8 @@ jobs:
         run: node packages/opencode-relay/smoke-receivers.mjs --legacy-recovery
       - name: Native task-independent message smoke
         run: npm --prefix packages/opencode-relay run smoke:messages
+      - name: Existing root chats relocate between workspaces without duplicate agents or policy changes
+        run: node scripts/verify-agent-relocation.mjs
       - name: Native reusable headless provisioning and schedule smoke
         run: node scripts/verify-headless.mjs
       - name: Authenticated coordinator headless setup and revocation smoke

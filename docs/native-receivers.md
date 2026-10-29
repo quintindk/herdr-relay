@@ -99,6 +99,42 @@ folder discovery or an idle observation.
   existing installed schedules retain their last authorised receiver and offline
   policy. An attachment is not reported as applied without confirmation.
 
+## Moving an enrolled chat to another workspace
+
+OpenCode can move an existing root chat without changing its session ID. Relay
+does not infer permission to move the agent's enrolled workspace from that event.
+The old binding fails its exact-directory check until the move is explicitly
+confirmed. Re-enrolling must not create another agent for that same moved chat.
+
+In the moved chat, `/relay-attach` or `/relay-enrol` recognises its existing
+enrolment and offers **Move existing Relay enrolment**. The preview shows the old
+and new workspaces and retains the agent and chat. It uses the chat's current
+native location, not the TUI's original launch directory. Forks are not eligible.
+
+The human CLI equivalent previews by default:
+
+```sh
+herdr-relay native agent relocate --agent EXISTING_AGENT --session EXISTING_CHAT \
+  --generation CURRENT_GENERATION --from-directory /work/shared \
+  --directory /work/dedicated --context OPERATOR_JSON
+```
+
+Repeat the exact request with `--apply --key MOVE_KEY --preview-hash PREVIEW_HASH`
+after reviewing it. The backend must advertise `agentWorkspaceRelocation`, and
+the CLI/TUI must support the operation. Older installations require a Relay
+upgrade, not manual journal edits or weakening the root-chat check.
+
+Relocation advances the receiver generation and records a new binding. Original
+bindings, credentials and work history remain intact. Unsettled Relay work,
+uncertain effects or an active native turn block relocation. No execution is
+moved, cancelled or replayed. A lost reply keeps admission fenced until the same
+operation key is reconciled. Native model selection and permissions are unchanged.
+
+Agent-targeted schedules keep their IDs, definitions, revisions and reporting
+settings, and resolve this agent in its new workspace for subsequent admissions.
+Exact-folder targets and other workspace grants are not retargeted or expanded.
+Scoped operators require authority over both the original and destination folders.
+
 ## Persistent schedules
 
 A persistent schedule uses `{nodeId, targetAgentId}`. It does not contain a

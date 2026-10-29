@@ -28,7 +28,7 @@ const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-desti
 assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firecrawl|\.git)(\/|$)/.test(f.path)), 'Package contains private or development files');
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
-  'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/skill-install.mjs',
+  'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/native-agent-relocation.mjs', 'src/skill-install.mjs',
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
