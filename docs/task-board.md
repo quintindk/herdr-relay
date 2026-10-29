@@ -40,6 +40,10 @@ shown as awaiting activation rather than Active.
 | Esc | Back/cancel/close the current interaction |
 | q | Exit the board; inside detail, close detail first |
 
+Task-list rows and group headings stay on one line and end with `...` when they
+do not fit. Open a task to read its full title and reference. Other panes retain
+their wrapping.
+
 Descriptive text, paragraphs, long paths/URLs and editor content wrap by terminal
 cells and graphemes. Fixed viewports retain controls while scrolling. Physical
 wrapped lines keep their logical row/occurrence identity. Shift+Enter inserts an

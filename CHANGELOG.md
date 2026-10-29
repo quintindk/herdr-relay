@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep Tasks list rows and group headings on one line, truncating overflow with
+  `...`. Task details and the other terminal panes retain their wrapping.
+
 ## 0.2.1 — 28 October 2026
 
 First stable release of the native product:
