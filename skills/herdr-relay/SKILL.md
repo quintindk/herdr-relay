@@ -139,6 +139,17 @@ compatibility: opencode
   OpenCode service. No credential store is copied and no second login is needed.
   Model, native permission inspection and result submission must actually pass before
   activation. A request receipt or `awaiting_schedule_ack` is not successful setup.
+- A stale model sign-in is not model unavailability. `model_connection_changed`
+  means the current active credential identity differs from the pinned connection.
+  Under explicit human instruction, the original destination-local coordinator
+  uses `relay_headless_connection` to preview, then apply with `setupId`, an immutable
+  `key` and the exact `previewHash`. CLI: `headless connection-preview|connection-rebind
+  --file JSON`. The backend must advertise `headlessConnectionRebind`; older nodes
+  require a Relay upgrade, not a credential workaround or OpenCode restart.
+  This changes only the connection pin for the same provider/integration/model,
+  preserving worker, session, permissions, instructions, cron and notifications.
+  Inspect status for fresh readiness and the next firing. Readiness is not a sweep.
+  Never replace the setup, replay failed business work or clear uncertain evidence.
 - Headless grants explicitly allow or deny MCP as a capability. Use
   `relay_headless_permissions`, `relay_mcp_tools` and `relay_mcp_call`, not a connector-specific bridge. MCP allowed
   includes write-capable and subsequently configured tools. It grants no native

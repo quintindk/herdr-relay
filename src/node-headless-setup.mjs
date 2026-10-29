@@ -7,6 +7,7 @@ import { writePrivateJson } from './private-files.mjs';
 import { HeadlessAccess, accessReferences } from '../packages/opencode-relay/headless-access.mjs';
 import { setupTerminal, headlessProbeId } from './headless-setup-contract.mjs';
 import { headlessSessionPermissions } from './headless-permissions.mjs';
+import { inspectContract } from './node-headless-contract.mjs';
 
 export async function assertHeadlessAccess(api, client, setupId, directory) {
   const authority = await api('GET', `/v1/headless_setups/${encodeURIComponent(setupId)}/authority`);
@@ -35,6 +36,7 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
       requireValue(realpathSync(setup.directory) === setup.directory && statSync(setup.directory).isDirectory(), 'headless_directory_changed', 'Workspace must remain canonical');
       const connection = await native();
       const { grant, check } = await assertHeadlessAccess(api, connection.client, setup.id, setup.directory);
+      if (setup.connectionRebind) inspectContract(journal, setup, grant);
       const contract = join(setup.directory, grant.contract);
       requireValue(existsSync(contract) && realpathSync(contract) === contract && statSync(contract).isFile(), 'job_contract_missing', 'Exact workspace job skill must exist without symlink redirection');
       const contractDigest = digest(readFileSync(contract, 'utf8'));

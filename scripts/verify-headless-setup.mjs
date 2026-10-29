@@ -28,6 +28,7 @@ const notificationMode = process.argv.includes('--run-result-notifications');
 const cronMode = process.argv.includes('--cron') || notificationMode;
 const legacyRefusalMode = process.argv.includes('--legacy-contract-refusal');
 const contractMode = process.argv.includes('--contract-update') || legacyRefusalMode;
+const rebindMode = process.argv.includes('--connection-rebind');
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
@@ -82,7 +83,7 @@ const model = createServer(async (req, res) => {
     assert.match(JSON.stringify(input.messages.filter(m => m.role === 'system')), /REVISED_CONTRACT_FIXTURE/);
     assert.match(JSON.stringify(input.messages.filter(m => m.role === 'system')), /PINNED_PROTOCOL_FIXTURE/); revisedContextSeen = true;
   }
-  if (agentGrantMode && !grantTurn && !contractTurn) assert.equal(Boolean(input.tools?.some(t => ['relay_headless_grant', 'relay_headless_revoke'].includes(t.function.name))), false,
+  if (agentGrantMode && !grantTurn && !contractTurn) assert.equal(Boolean(input.tools?.some(t => ['relay_headless_grant', 'relay_headless_revoke', 'relay_headless_connection'].includes(t.function.name))), false,
     'Headless workers must not acquire coordinator grant-management tools');
   if (!grantTurn && shellMode && !shellAllowed) {
     assert.equal(input.tools?.some(t => ['shell', 'relay_shell_call'].includes(t.function.name)), false, 'Denied shell must not be advertised');
@@ -255,6 +256,40 @@ try {
       finally { db.close(); }
     }
   }
+  if (rebindMode) {
+    const beforeGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
+    const beforeSetup = await owner('GET', `/v1/headless_setups/${id}`);
+    const beforeSchedule = await owner('GET', `/v1/schedules/${result.scheduleId}`);
+    const nodePid = daemon.pid, nativePid = (await client.server.info()).pid;
+    // Replace only a disposable fixture sign-in through the native API. Never
+    // enumerate secret credentials or change the user's authentication.
+    await client.integration.connect.key({ integrationID: provider.integrationID, key: 'replacement-fixture-key', label: 'Replacement fixture sign-in', location: { directory: workspace } });
+    const current = await wait('replacement sign-in identity', async () => {
+      const { models } = await call(worker, 'POST', '/agent/headless-connections', {});
+      return models.find(m => m.providerID === 'openai' && m.id === 'fixture' && m.connectionId !== connectionId);
+    });
+    const blocked = await call(worker, 'POST', '/agent/headless-status', { id });
+    assert.equal(blocked.state, 'blocked'); assert.equal(blocked.blocker, 'model_connection_changed');
+    const preview = await call(worker, 'POST', '/agent/headless-connection-preview', { setupId: id });
+    assert.equal(preview.fromConnectionId, connectionId); assert.equal(preview.toConnectionId, current.connectionId);
+    const payload = { setupId: id, previewHash: preview.previewHash, key: 'connection-once' };
+    const applied = await call(worker, 'POST', '/agent/headless-connection-rebind', payload);
+    assert.equal(applied.state, 'recorded');
+    const ready = await waitHeadlessSetup(worker, applied);
+    assert.equal(ready.state, 'ready', JSON.stringify(ready)); assert.ok(ready.nextFiring);
+    assert.equal(ready.connectionRebind.state, 'ready');
+    const afterGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
+    const afterSetup = await owner('GET', `/v1/headless_setups/${id}`);
+    assert.equal(afterGrant.model.connectionId, current.connectionId); assert.equal(afterGrant.revision, beforeGrant.revision + 1);
+    for (const field of ['permissions', 'capabilities', 'contract', 'schedule', 'expiresAt']) assert.deepEqual(afterGrant[field], beforeGrant[field]);
+    for (const field of ['agentId', 'sessionId', 'bindingId', 'grantId', 'scheduleId', 'contract', 'appliedContractRevision']) assert.deepEqual(afterSetup[field], beforeSetup[field]);
+    assert.deepEqual(await owner('GET', `/v1/schedules/${result.scheduleId}`), beforeSchedule);
+    await call(worker, 'POST', '/agent/headless-connection-rebind', payload);
+    assert.equal((await owner('GET', `/v1/headless_setups/${id}`)).attempt, afterSetup.attempt);
+    assert.equal(daemon.pid, nodePid); assert.equal((await client.server.info()).pid, nativePid);
+    assert.equal(reads, 0); assert.equal(writes, 0, 'Connection readiness must not execute business tools');
+    assert.equal(existsSync(shellOutput), false);
+  }
   // A second server is configured after approval/setup. The boolean MCP grant
   // covers newly available tools without any per-server/tool grant amendment.
   if (!cronMode) {
@@ -309,7 +344,7 @@ try {
     assert.equal(rejected.length, 1); assert.equal(rejected[0].state.status, 'error');
   }
   const unchangedGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
-  assert.equal(unchangedGrant.revision, 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
+  assert.equal(unchangedGrant.revision, rebindMode ? 2 : 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
   if (contractMode) assert.equal(revisedContextSeen, true);
   await stopNode(); await startNode(joined.configFile);
   const restored = await call(worker, 'POST', '/agent/headless-status', { id });
@@ -330,15 +365,16 @@ try {
     } finally { decisions.close(); }
   }
   if (agentGrantMode) {
-    const revoked = await call(worker, 'POST', '/agent/headless-revoke', { key: 'revoke-once', payload: { id: 'approved-job-grant', expectedRevision: 1 } });
+    const revoked = await call(worker, 'POST', '/agent/headless-revoke', { key: 'revoke-once', payload: { id: 'approved-job-grant', expectedRevision: unchangedGrant.revision } });
     assert.equal(revoked.state, 'recorded'); assert.equal(revoked.receipt.state, 'revoked');
-  } else await command('revoke', 'headless.revoke', { id: 'approved-job-grant', expectedRevision: 1 });
+  } else await command('revoke', 'headless.revoke', { id: 'approved-job-grant', expectedRevision: unchangedGrant.revision });
   assert.equal((await owner('GET', '/v1/schedules/approved-job-weekdays')).definition.enabled, false);
   console.log(JSON.stringify({ passed: true, runtimeVersion: (await client.server.info()).version, singleCoordinatorSetup: true, existingAuthenticatedServiceReused: true, mcpAllowed: !mcpDenied,
     readCalls: reads, writeCalls: writes, shellAllowed, shellAttempted: shellAllowed, shellDeniedHidden, outsideWorkspaceShellWrite: existsSync(shellOutput), readinessHadNoExternalEffects: true, toolsAddedAfterSetupCovered: !cronMode,
     nativeResultSubmission: true, actualCronFiringVerified: cronMode, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
     exactContractApprovalAndActivation: contractMode, revisedInstructionsInNativeModelContext: revisedContextSeen,
+    connectionRebindReadinessAndNextFiring: rebindMode, connectionRebindPreservedWorkerSessionScopeAndSchedule: rebindMode,
     legacyValidationRefusalDoesNotBlockActivation: legacyRefusalMode,
     operationSpecificHeadlessSchemasVerified: capabilityMode,
     persistentRunResultInboxVerified: notificationMode, onlineOnlyRequesterResultVerified: notificationMode,

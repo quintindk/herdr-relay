@@ -20,6 +20,10 @@ herdr-relay headless inspect --file MANIFEST_JSON [--config NODE_JSON]
   Inspect configuration only. Node readiness and schedule acknowledgement must be checked separately.
 Also available as herdr-relay native agent provision with the same provisioning options.
 herdr-relay headless connections|grants [--config NODE_JSON]  [enrolled coordinator; no secrets]
+herdr-relay headless connection-preview|connection-rebind --file JSON [--config NODE_JSON]
+  Original coordinator only. Preview {setupId}; rebind also needs key and previewHash under explicit human instruction.
+  Rebinds only the active sign-in identity for the same provider/integration/model. Preserves worker/session/scope/cron.
+  Runs bounded readiness before new ticks. Failed business work is never replayed.
 herdr-relay headless contract-preview|contract-request --file JSON [--config NODE_JSON]
   Original coordinator only. Preview {setupId,files:[{path,content}]}; request also needs key and previewHash.
   Human approves the exact instruction revision in Grants. Idle-boundary activation preserves worker/grant/schedule.
@@ -132,8 +136,8 @@ export async function headlessCli(args) {
     context: { type: 'string' }, key: { type: 'string' }, 'grant-id': { type: 'string' }, id: { type: 'string' }, retry: { type: 'boolean' },
     'run-result-inbox': { type: 'string' }, 'run-result-requester': { type: 'string' },
   } });
-  if (['contract-preview', 'contract-request'].includes(positionals[1])) {
-    requireValue(positionals.length === 2 && values.file && Object.keys(values).every(k => ['file', 'config'].includes(k)), 'invalid_request', 'Use headless contract-preview|contract-request --file JSON from the original enrolled coordinator');
+  if (['contract-preview', 'contract-request', 'connection-preview', 'connection-rebind'].includes(positionals[1])) {
+    requireValue(positionals.length === 2 && values.file && Object.keys(values).every(k => ['file', 'config'].includes(k)), 'invalid_request', 'Use headless contract/connection operations with --file JSON from the original enrolled coordinator');
     const sessionId = process.env.OPENCODE_SESSION_ID;
     requireValue(sessionId, 'human_coordinator_required', 'Use the original enrolled coordinator, not an operator credential workaround');
     const connection = workerConnection({ workerDirectory: dirname(resolve(values.config ?? nativeNodeConfig())) }, sessionId);

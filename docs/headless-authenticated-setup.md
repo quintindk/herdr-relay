@@ -149,6 +149,49 @@ step, not merely inspection. Await the destination's applied schedule revision;
 
 ## Runtime tools and enforcement
 
+### Rebinding a stale model sign-in
+
+`model_connection_changed` means the provider has a healthy active sign-in whose
+identity differs from the grant's pinned connection. It is not proof that the
+model is missing. `model_connection_unavailable` means no healthy active sign-in
+was found. `model_unavailable` is a separate model-catalogue failure.
+
+Do not retry setup, resume cron or restart OpenCode to change this pin. Under an
+explicit human recovery request, use the **original coordinator on the destination
+node**:
+
+```text
+relay_headless_connection({operation:"preview", setupId:"EXISTING_SETUP_ID"})
+relay_headless_connection({operation:"apply", setupId:"EXISTING_SETUP_ID",
+  key:"sign-in-rebind-v1", previewHash:"EXACT_PREVIEW_HASH"})
+relay_headless_status({id:"EXISTING_SETUP_ID"})
+```
+
+CLI equivalents are `headless connection-preview --file JSON` and `headless
+connection-rebind --file JSON`. Preview takes `{setupId}`. Apply also takes `key`
+and `previewHash`. Both require the original enrolled coordinator connector, not
+an operator-context override. The backend must advertise `headlessConnectionRebind`
+and the destination node/plugin must support the operation. Upgrade those Relay
+components first when unavailable. Never borrow another machine's connection.
+
+Preview inspects the original authenticated native service and its exact idle
+session, the current active connection for the **unchanged provider, integration
+and model**, instructions and unsettled work. It exposes no credential values.
+Apply checks the exact setup/grant/schedule revisions and preview hash. Only the
+grant's connection identity changes. The worker, session, permissions, capability
+paths, approved instructions, expiry, cron and notification settings remain intact.
+
+Fresh bounded readiness must pass before new business admissions. It performs
+permission inspection, approved isolated canaries and native result submission,
+not a sweep or an external MCP/shell effect. The existing schedule is not
+reinstalled or automatically resumed if paused. Inspect `state`, `connectionRebind`
+and `nextFiring` after readiness. A next-firing preview is not proof of an actual run.
+Earlier pending ticks are retained as skipped records. Failed business runs,
+uncertain effects and recovery evidence are never replayed or erased. Unsettled
+work must be reconciled separately, not cancelled implicitly to force a rebind.
+After an uncertain reply, reconcile the same key and payload instead of issuing
+a replacement grant or another recovery operation.
+
 ### Updating approved instructions
 
 Use the existing coordinator and setup, not a replacement grant or worker:

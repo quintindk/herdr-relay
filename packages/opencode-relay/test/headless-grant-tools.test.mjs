@@ -17,3 +17,17 @@ test('plugin grant methods use the existing agent connector, not CLI or owner co
   await tools.find(tool => tool.name === 'relay_headless_revoke').execute({ key: 'revoke', payload: { id: 'grant', expectedRevision: 1 } }, { sessionID: 'session' });
   assert.equal(calls[1][2], '/agent/headless-revoke');
 });
+
+test('connection recovery uses exact preview/apply payloads through the current coordinator connector', async () => {
+  const tools = [], calls = [], worker = { agentId: 'coordinator' };
+  registerHeadlessGrantTools({ add: tool => tools.push(tool) }, { options: {} }, {
+    connection: () => worker, request: async (...args) => { calls.push(args); return { previewHash: 'a'.repeat(64) }; },
+  });
+  const tool = tools.find(tool => tool.name === 'relay_headless_connection');
+  assert.equal(tool.input.additionalProperties, false);
+  assert.equal(tool.input.properties.model, undefined); assert.equal(tool.input.properties.permissions, undefined);
+  await tool.execute({ operation: 'preview', setupId: 'setup' }, { sessionID: 'session' });
+  await tool.execute({ operation: 'apply', setupId: 'setup', key: 'rebind-once', previewHash: 'a'.repeat(64) }, { sessionID: 'session' });
+  assert.deepEqual(calls, [[worker, 'POST', '/agent/headless-connection-preview', { setupId: 'setup' }],
+    [worker, 'POST', '/agent/headless-connection-rebind', { setupId: 'setup', key: 'rebind-once', previewHash: 'a'.repeat(64) }]]);
+});

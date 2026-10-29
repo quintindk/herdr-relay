@@ -4,6 +4,12 @@
 
 - Keep Tasks list rows and group headings on one line, truncating overflow with
   `...`. Task details and the other terminal panes retain their wrapping.
+- Add previewed, revision-checked recovery for a stale headless model sign-in.
+  Preserve the existing worker, session, scope, approved instructions and schedule.
+  Require fresh readiness and admit only subsequent cron ticks, without replaying
+  failed business work or clearing uncertain effects.
+- Distinguish a changed connection identity from unavailable authentication or a
+  missing model.
 
 ## 0.2.1 — 28 October 2026
 
