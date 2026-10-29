@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
 import { isAbsolute, normalize } from 'node:path';
-import { applyInteractive } from './interactive-contract.mjs';
+import { applyInteractive, canonicalDirectory } from './interactive-contract.mjs';
 import { applyHeadlessSetup, headlessAuthority } from './headless-setup-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
@@ -309,19 +309,32 @@ export class BackendStore {
         standingGrant: { autoAttach: true, scheduleManagement: true, userId: this.owner, at: now(),
           ...(authority.interactiveRequest ? { provisioningRequestId: authority.interactiveRequest.id } : {}) } });
     }
-    if (action === 'agent.attach') {
+    if (action === 'agent.attach' || action === 'agent.relocate') {
       if (!authority.interactiveRequest) this.ownerOnly(actor);
-      fields(p, ['id', 'expectedBindingRevision', 'conversationId', 'directory', 'bindingId'],
-        ['id', 'expectedBindingRevision', 'conversationId', 'directory', 'bindingId']);
+      const relocation = action === 'agent.relocate';
+      const required = ['id', 'expectedBindingRevision', 'conversationId', 'directory', 'bindingId',
+        ...(relocation ? ['previousDirectory', 'previousBindingId', 'previewHash'] : [])];
+      fields(p, required, required);
       const agent = this.get('agent', p.id);
-      requireValue(agent.standingGrant && agent.directory === p.directory, 'enrolment_scope_mismatch', 'Standing workspace enrolment required');
+      requireValue(agent.standingGrant && agent.directory === (relocation ? p.previousDirectory : p.directory), 'enrolment_scope_mismatch', 'Standing workspace enrolment required');
       requireValue(Number.isSafeInteger(p.expectedBindingRevision) && p.expectedBindingRevision === agent.bindingRevision,
         'stale_binding', 'Receiving chat changed. Inspect before attaching', 409);
       string(p.conversationId, 'conversationId', 512);
       requireValue(validId(p.bindingId), 'invalid_binding', 'Exact binding identity required');
+      if (relocation) {
+        requireValue(agent.mode === 'interactive' && !agent.headlessSetupId && agent.bindingId === p.previousBindingId && p.bindingId !== agent.bindingId &&
+          agent.conversationId === p.conversationId && canonicalDirectory(p.directory) && p.directory !== agent.directory && /^[a-f0-9]{64}$/.test(p.previewHash),
+        'invalid_relocation', 'Relocation requires the same designated root chat and an exact new workspace preview');
+        requireValue(!this.all('agent').some(a => a.id !== agent.id && a.nodeId === agent.nodeId && a.directory === p.directory && a.name === agent.name && a.standingGrant),
+          'enrolment_exists', 'The destination already has an enrolment with this name', 409);
+        requireValue(!this.all('execution').some(e => (e.targetAgentId === agent.id || e.originAgentId === agent.id) && !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)),
+          'agent_busy', 'Settle existing work before relocating its workspace. No execution is moved or replayed', 409);
+      }
       requireValue(!this.all('agent').some(a => a.id !== agent.id && a.nodeId === agent.nodeId && a.conversationId === p.conversationId),
         'conversation_alias', 'Conversation already receives work for another agent');
       return changed('agent', agent, { bindingId: p.bindingId, bindingRevision: agent.bindingRevision + 1,
+        ...(relocation ? { directory: p.directory, relocation: { previousDirectory: agent.directory, previousBindingId: agent.bindingId,
+          previewHash: p.previewHash, userId: actor.id, at: now() } } : {}),
         conversationId: p.conversationId, availability: 'unknown',
         attachment: { userId: this.owner, previousConversationId: agent.conversationId ?? null, at: now(),
           ...(authority.interactiveRequest ? { provisioningRequestId: authority.interactiveRequest.id } : {}) } });

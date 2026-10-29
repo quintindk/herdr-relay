@@ -54,11 +54,12 @@ export async function nativeConnection(input, dependencies = {}) {
   return { client, url: origin.origin, password: endpoint.auth.password };
 }
 
-async function nativeSession(input, dependencies) {
+export async function nativeSession(input, dependencies) {
   const directory = realpathSync(input.directory);
   const connection = await nativeConnection(input, dependencies);
   const { client } = connection;
   const session = await client.session.get({ sessionID: input.sessionId });
+  requireValue(!input.requireRoot || !session.parentID, 'root_session_required', 'Workspace relocation requires the existing root chat, not a fork');
   requireValue(session.id === input.sessionId && session.location?.directory === directory, 'native_identity_mismatch', 'Exact session must belong to the selected canonical directory');
   const identity = { sessionId: session.id, projectId: session.projectID, directory, createdAt: session.time.created };
   await new NativeOpenCodeV2(client, identity).verify();
@@ -122,6 +123,12 @@ export async function enrolInteractive(input, dependencies = {}) {
   const { journal, receivers } = openRegistry(config, info.instanceId);
   let enrolment, existed;
   try {
+    const moved = receivers.list('enrolment').find(entry => {
+      const current = receivers.receiver(entry.id);
+      return entry.directory !== native.identity.directory && current?.state === 'active' &&
+        receivers.get(`native-binding:${current.bindingId}`)?.identity.sessionId === native.identity.sessionId;
+    });
+    requireValue(!moved, 'workspace_relocation_required', 'This chat already belongs to an enrolled agent in another workspace. Use explicit relocation instead of creating another agent');
     const name = input.name ?? basename(native.identity.directory);
     requireValue(typeof name === 'string' && name.trim() && name.length <= 256, 'invalid_enrolment', 'Bounded agent name required');
     existed = receivers.list('enrolment').some(e => e.directory === native.identity.directory && e.name === name);

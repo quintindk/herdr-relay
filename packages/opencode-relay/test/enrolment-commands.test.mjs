@@ -6,7 +6,7 @@ import { autoAttachmentCandidate, registerEnrolmentCommands } from '../enrolment
 function fixture(t) {
   const f = { session: 'ses_current', runtime: 'one', commands: [], calls: [], events: new Map(), toasts: [], records: [],
     createdSessions: new Map(), creates: [], navigations: [], model: { providerID: 'fixture', modelID: 'selected', variant: 'high' },
-    outbox: { pending: null }, enrolments: [{ id: 'wright', name: 'Wright', directory: '/workspace', autoAttach: true,
+    sessionDirectory: '/workspace', outbox: { pending: null }, enrolments: [{ id: 'wright', name: 'Wright', directory: '/workspace', autoAttach: true,
       installedSchedules: 2, obligations: [], receiver: { state: 'active', conversationId: 'ses_old', generation: 1 } }] };
   f.confirm = async () => true;
   f.renames = [];
@@ -14,9 +14,11 @@ function fixture(t) {
   f.runCli = async args => {
     f.calls.push(args);
     if (args[1] === 'enrolments') return structuredClone(f.enrolments);
+    if (args[1] === 'relocate' && !args.includes('--apply')) return { state: 'relocation_preview', previewHash: 'a'.repeat(64) };
     if (args[0] === 'node') return { state: 'installed' };
     if (f.failure) throw Error('lost child-process reply');
     const sessionId = args[args.indexOf('--session') + 1];
+    if (args[1] === 'relocate') f.enrolments[0].directory = args[args.indexOf('--directory') + 1];
     f.enrolments[0].receiver = { state: 'active', conversationId: sessionId, generation: 2 };
     return { configFile: '/private/node.json', agentId: 'wright', sessionId, generation: 2 };
   };
@@ -32,7 +34,7 @@ function fixture(t) {
       session: { get: async ({ sessionID }) => {
         if (f.createdSessions.has(sessionID)) return f.createdSessions.get(sessionID);
         if (sessionID === f.outbox.sessionCreation?.id) throw Object.assign(Error('Session not found'), { status: 404 });
-        return { id: sessionID, location: { directory: '/workspace' } };
+        return { id: sessionID, location: { directory: f.sessionDirectory }, ...(f.parentID ? { parentID: f.parentID } : {}) };
       }, create: input => f.createSession(input) } },
     data: { on: (name, callback) => { f.events.set(name, callback); return () => f.events.delete(name); } },
     storage: { store: () => [f.outbox, async update => update(f.outbox)] },
@@ -64,6 +66,37 @@ test('human-only attach command confirms exact receiver, persists immutable inte
   assert.ok(f.calls.some(args => args[0] === 'node' && args[1] === 'ensure'));
   assert.equal(f.records.at(-1).type, 'receiver_attached');
   assert.equal(f.renames[0].agentName, 'Wright'); assert.equal(f.renames[0].sessionId, 'ses_current');
+});
+
+for (const command of ['relay-enrol', 'relay-attach']) test(`${command} offers an explicit move for its own chat instead of duplicating an enrolment`, async t => {
+  const f = fixture(t); f.sessionDirectory = '/new-workspace';
+  f.enrolments[0].receiver.conversationId = f.session;
+  let confirmation;
+  f.confirm = async value => { confirmation = value; return true; };
+  await f.run(command);
+  assert.equal(confirmation.title, 'Move existing Relay enrolment');
+  assert.match(confirmation.message, /Previous workspace: \/workspace/); assert.match(confirmation.message, /New workspace: \/new-workspace/);
+  const calls = f.calls.filter(args => args[1] === 'relocate');
+  assert.equal(calls.length, 2); assert.equal(calls[0].includes('--apply'), false); assert.ok(calls[1].includes('--apply'));
+  assert.equal(calls[1][calls[1].indexOf('--preview-hash') + 1], 'a'.repeat(64));
+  assert.equal(f.calls.some(args => args[1] === 'enrol' || args[1] === 'attach'), false);
+  assert.equal(f.renames[0].directory, '/new-workspace');
+});
+
+test('declined relocation and another same-chat workspace move during confirmation publish nothing', async t => {
+  for (const change of ['decline', 'move']) {
+    const f = fixture(t); f.sessionDirectory = '/new-workspace'; f.enrolments[0].receiver.conversationId = f.session;
+    f.confirm = async () => { if (change === 'move') f.sessionDirectory = '/third-workspace'; return change !== 'decline'; };
+    await f.run('relay-attach');
+    assert.equal(f.calls.some(args => args[1] === 'relocate' && args.includes('--apply')), false);
+    assert.equal(f.outbox.pending, null);
+  }
+});
+
+test('same-name enrolments in another workspace are not selected by a new enrol command', async t => {
+  const f = fixture(t); f.enrolments[0].directory = '/another-workspace';
+  await f.run('relay-enrol');
+  assert.ok(f.calls.some(args => args[1] === 'enrol')); assert.equal(f.calls.some(args => args[1] === 'attach'), false);
 });
 
 test('workspace rename failure never replays or rolls back a confirmed attachment', async t => {

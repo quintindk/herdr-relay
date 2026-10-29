@@ -4,7 +4,7 @@ import { digest, requireValue } from './protocol.mjs';
 // A human credential is separate from both the backend-root credential and the
 // node daemon credential. It may manage this node's enrolments and the same
 // human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
-export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'task.create', 'task.update', 'comment.create', 'reference.attach',
+export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'task.create', 'task.update', 'comment.create', 'reference.attach',
   'execution.request', 'execution.cancel', 'execution.handback', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
   'occurrence.review', 'notification.acknowledge', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 
@@ -30,10 +30,12 @@ export function authoriseOperator(store, actor, action, payload) {
     requireValue(schedule.definition.nodeId === scope.nodeId && (scope.mode === 'localUser' || canonicalDirectory(directory) && withinRoots(directory, scope.roots)),
       'operator_scope_mismatch', 'Run result settings are outside this node operator workspace scope');
   }
-  if (action === 'agent.enrol' || action === 'agent.attach') {
+  if (['agent.enrol', 'agent.attach', 'agent.relocate'].includes(action)) {
     const nodeId = action === 'agent.enrol' ? payload.nodeId : store.get('agent', payload.id).nodeId;
     requireValue(nodeId === scope.nodeId && canonicalDirectory(payload.directory) &&
       (scope.mode === 'localUser' || withinRoots(payload.directory, scope.roots)), 'operator_scope_mismatch', 'Enrolment is outside this operator\'s node/workspace scope', 403);
+    if (action === 'agent.relocate') requireValue(scope.mode === 'localUser' || withinRoots(store.get('agent', payload.id).directory, scope.roots),
+      'operator_scope_mismatch', 'Relocation requires authority over both the original and destination workspaces', 403);
     if (action === 'agent.enrol' && !store.get('agent', payload.id, false)) requireValue(store.all('agent').filter(a => a.nodeId === nodeId && a.standingGrant).length < scope.maxAgents,
       'agent_limit', 'Node enrolment limit reached');
   }

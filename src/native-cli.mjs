@@ -18,6 +18,7 @@ import { readPrivateJson } from './private-files.mjs';
 import { maintenanceCli } from './upgrade-cli.mjs';
 import { renameHerdrWorkspace } from '../packages/opencode-relay/herdr-session.mjs';
 import { nativeWorkerApi } from './native-worker-api.mjs';
+import { relocateInteractive } from './native-agent-relocation.mjs';
 import { executionCliInvocation, readOnlyCliInvocation, nativeCliCollections } from './native-cli-surface.mjs';
 
 export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
@@ -28,6 +29,8 @@ export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
   agent enrolments [--directory DIR] [--config PRIVATE_NODE_JSON] --context OWNER_JSON
   agent attach --here|--session ID --agent ID --generation N --key KEY [--config PRIVATE_NODE_JSON] [--directory DIR] --context OWNER_JSON
   agent launch [--agent ID] [--directory DIR] [--config PRIVATE_NODE_JSON] [--key KEY] [--json] --context OWNER_JSON
+  agent relocate --agent ID --session ID --generation N --from-directory OLD --directory NEW --context OWNER_JSON
+    [--config NODE_JSON] [--apply --key KEY --preview-hash HASH]  [same root chat; preview first, no replay]
   interactive grant|request|dispatch --file PAYLOAD_JSON --key KEY --context OWNER_JSON
   interactive list|inspect [ID] --context OWNER_JSON
   interactive revoke|cancel ID --revision N --key KEY [--reason TEXT] --context OWNER_JSON
@@ -86,8 +89,8 @@ export async function main(args) {
   }
   if (await nativeAdmin(args)) return;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation', 'reference', 'scope', 'inbox', 'requester'].map(k => [k, { type: 'string' }])),
-    help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' },
+    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation', 'reference', 'scope', 'inbox', 'requester', 'from-directory', 'preview-hash'].map(k => [k, { type: 'string' }])),
+    help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' }, apply: { type: 'boolean' },
   } });
   const [group, action, id] = positionals;
   if (values.help || !group) { console.log(`${nativeHelp}\n\n${adminHelp}`); return; }
@@ -106,6 +109,7 @@ export async function main(args) {
     : group === 'agent' && action === 'enrol' ? ['context', 'here', 'session', 'config', 'reserved', 'directory', 'transport', 'service-registration', 'name', 'key']
     : group === 'agent' && action === 'attach' ? ['context', 'here', 'session', 'config', 'directory', 'service-registration', 'agent', 'generation', 'key']
     : group === 'agent' && action === 'enrolments' ? ['context', 'config', 'directory']
+    : group === 'agent' && action === 'relocate' ? ['context', 'session', 'agent', 'generation', 'from-directory', 'directory', 'config', 'service-registration', 'apply', 'key', 'preview-hash']
     : group === 'agent' && action === 'launch' ? ['context', 'config', 'directory', 'agent', 'key', 'json', 'service-registration']
     : group === 'schedule' && action === 'preview' ? ['cron', 'timezone']
     : group === 'schedule' && action === 'result-notifications' ? ['context', 'revision', 'key', 'inbox', 'requester']
@@ -189,6 +193,14 @@ export async function main(args) {
     await presentAttachment(await attachInteractive({ configFile: values.config, sessionId: values.here ? process.env.OPENCODE_SESSION_ID : values.session,
       directory: values.directory ?? process.cwd(), agentId: values.agent, expectedGeneration: Number(values.generation),
       key: values.key, serviceRegistration: values['service-registration'], backend, api })); return;
+  }
+  if (group === 'agent' && action === 'relocate') {
+    requireValue(!id && /^\d+$/.test(values.generation ?? ''), 'invalid_request', 'Supply the inspected receiver generation');
+    const result = await relocateInteractive({ configFile: values.config, sessionId: values.session, directory: values.directory,
+      previousDirectory: values['from-directory'], agentId: values.agent, expectedGeneration: Number(values.generation), key: values.key,
+      previewHash: values['preview-hash'], apply: values.apply === true, serviceRegistration: values['service-registration'], backend, api });
+    if (values.apply) await presentAttachment(result); else output(result);
+    return;
   }
   if (group === 'agent' && action === 'launch') {
     requireValue(!id, 'invalid_request', 'Launch takes no positional ID');
