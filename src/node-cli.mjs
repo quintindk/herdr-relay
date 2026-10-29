@@ -24,6 +24,7 @@ import { releaseVersion } from './release-info.mjs';
 import { writePrivateJson } from './private-files.mjs';
 import { nodeAgentInstructions } from './node-agent-instructions.mjs';
 import { tickHeadlessSetups, assertHeadlessAccess } from './node-headless-setup.mjs';
+import { nativeConnection } from './native-enrol.mjs';
 import { tickHeadlessContractUpdates } from './node-headless-contract.mjs';
 import { HeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
 import { NodeRunResultMessages } from './node-run-result-messages.mjs';
@@ -235,6 +236,7 @@ try {
     service = await startNodeService({ journal, socketPath, workers, api, tasks, maintenance,
       resolveBinding: async (agentId, pinned) => { const binding = historicalBindings.get(pinned.bindingId); return binding?.agentId === agentId ? binding : null; },
       getBackendFeatures: async () => (await api('GET', '/v1/info')).features,
+      getHeadlessRecoveryConnection: () => nativeConnection({ serviceRegistration: config.headless?.serviceRegistration }),
       getHeadlessConnections: async worker => {
         const binding = coordinatorClient(worker); return binding.native.client.rpc(HeadlessAccess).inspect({}, { location: { directory: binding.identity.directory } });
       },

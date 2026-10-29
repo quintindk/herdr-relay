@@ -166,6 +166,14 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
         }
         if (info.features.headlessContractRevisions) {
           const { setup } = await api('GET', `/v1/headless_setups/${binding.headlessSetupId}/authority`);
+          if (setup.connectionRebind) {
+            if (setup.state !== 'ready') {
+              saveOccurrence('pending', { admission: { state: 'deferred', reason: 'connection_readiness_pending' } }); continue;
+            }
+            if (Date.parse(occurrence.intendedAt) <= Date.parse(setup.connectionRebind.readyAt)) {
+              saveOccurrence('skipped', { admission: { state: 'skipped', reason: 'connection_rebind_no_backfill' } }); continue;
+            }
+          }
           if (setup.contract && setup.appliedContractRevision !== setup.contract.revision) {
             saveOccurrence('pending', { admission: { state: 'deferred', reason: 'contract_activation_pending' } }); continue;
           }

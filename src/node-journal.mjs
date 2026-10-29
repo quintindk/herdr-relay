@@ -82,7 +82,7 @@ export class NodeJournal {
         const previous = this.db.prepare('SELECT data FROM inbox WHERE id=?').get(event.id);
         if (previous) { requireValue(previous.data === JSON.stringify(event), 'event_conflict', 'Event identity payload changed'); continue; }
         this.db.prepare('INSERT INTO inbox VALUES (?,?)').run(event.id, JSON.stringify(event));
-        if (['headless.request', 'headless.activate', 'headless.block', 'headless.contract_approved', 'headless.contract_applied'].includes(event.type) && event.data.nodeId === this.nodeId) {
+        if (['headless.request', 'headless.activate', 'headless.block', 'headless.connection_rebind', 'headless.contract_approved', 'headless.contract_applied'].includes(event.type) && event.data.nodeId === this.nodeId) {
           const key = `headless-setup:${event.entityId}`;
           const old = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
           if (!old || JSON.parse(old.value).revision < event.revision) this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')

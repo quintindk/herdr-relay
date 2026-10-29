@@ -65,7 +65,8 @@ export async function checkHeadlessAccess(ctx, refs) {
     const provider = (await ctx.provider.get({ providerID: refs.model.providerID })).data;
     if (provider?.integrationID !== refs.model.integrationID) return blocked('model_integration_mismatch');
     const active = await ctx.integration.connection.active(refs.model.integrationID);
-    if (!active || active.type !== 'credential' || active.status || active.id !== refs.model.connectionId) return blocked('model_connection_unavailable');
+    if (!active || active.type !== 'credential' || active.status) return blocked('model_connection_unavailable');
+    if (active.id !== refs.model.connectionId) return blocked('model_connection_changed');
     const models = (await ctx.model.list()).data;
     if (!models.some(model => model.providerID === refs.model.providerID && model.id === refs.model.id)) return blocked('model_unavailable');
     const catalog = policy.mcp ? await nativeMcpTools(ctx) : { tools: [] };

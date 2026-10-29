@@ -262,7 +262,7 @@ export class BackendStore {
     }
     if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed, grantResume: authority.grantResume });
     if (action.startsWith('grant.')) return applyGrantAction(this, actor, action, p, { created, changed });
-    if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
+    if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke', 'agent.headless_connection_rebind'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     const taskDisposition = (taskId, status, causation) => {
       if (!taskId) return;
@@ -545,6 +545,8 @@ export class BackendStore {
         setup.bindingId === p.bindingId && setup.sessionId === p.conversationId && agent.conversationId === p.conversationId,
       'headless_scope_mismatch', 'Schedule, grant, worker, binding and native session must match', 403);
       requireValue(!this.get('occurrence', p.id, false), 'occurrence_terminal', 'An already published occurrence cannot be restarted', 409);
+      requireValue(!setup.connectionRebind?.readyAt || Date.parse(p.intendedAt) > Date.parse(setup.connectionRebind.readyAt),
+        'headless_occurrence_stale', 'Connection recovery admits only new cron ticks after readiness, never earlier business work', 409);
       const previous = this.get('execution', p.id, false);
       if (previous) {
         requireValue(previous.headlessScheduled && previous.scheduleId === p.scheduleId && previous.definitionRevision === p.definitionRevision &&
@@ -752,6 +754,8 @@ export class BackendStore {
       const target = this.get('agent', p.targetAgentId);
       if (target.headlessSetupId) {
         const setup = this.get('headless_setup', target.headlessSetupId);
+        requireValue(!setup.connectionRebind || setup.state === 'ready' || authority.headlessSetup?.id === setup.id,
+          'headless_not_ready', 'Finish connection readiness before requesting new business work');
         requireValue(!setup.contract || setup.contract.revision === setup.appliedContractRevision,
           'contract_activation_pending', 'Finish instruction activation before requesting new headless work');
       }

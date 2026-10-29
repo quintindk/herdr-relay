@@ -66,6 +66,8 @@ jobs:
         run: node scripts/verify-headless-setup.mjs --capabilities
       - name: Exact instruction revision approval, idle activation and refreshed native context
         run: node scripts/verify-headless-setup.mjs --contract-update --capabilities --legacy-contract-refusal
+      - name: Stale sign-in rebind with preserved worker, instructions and cron
+        run: node scripts/verify-headless-setup.mjs --connection-rebind --contract-update --capabilities
       - name: Actual headless cron admission, granted effects and result publication
         run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell --run-result-notifications
       - name: Headless MCP denied without connector permissions

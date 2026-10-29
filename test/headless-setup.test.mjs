@@ -95,7 +95,7 @@ test('connection checks pin only the model, expose no secrets and do not couple 
     credential: { list: () => assert.fail('Credential list includes secrets') }, model: { list: async () => ({ data: [{ providerID: 'provider', id: 'model' }] }) },
     mcp: { list: async () => ({ data: [{ name: 'arbitrary', status: { status } }] }) }, tool: { hook() {}, list: async () => [{ id: 'arbitrary_read', options: { namespace: 'arbitrary' } }] } };
   const result = await checkHeadlessAccess(ctx, refs); assert.equal(result.allowed, true); assert.doesNotMatch(JSON.stringify(result), /NEVER-EXPOSE/);
-  active = 'other'; assert.equal((await checkHeadlessAccess(ctx, refs)).blocker, 'model_connection_unavailable');
+  active = 'other'; assert.equal((await checkHeadlessAccess(ctx, refs)).blocker, 'model_connection_changed');
   active = 'selected'; status = 'needs_auth'; const unavailable = await checkHeadlessAccess(ctx, refs);
   assert.equal(unavailable.allowed, true); assert.deepEqual(unavailable.mcpToolIds, []);
 });

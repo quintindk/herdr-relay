@@ -5,6 +5,7 @@ import { validateHeadlessCapabilities } from './headless-capabilities.mjs';
 import { validateHeadlessPermissions } from './headless-permissions.mjs';
 import { requestContractUpdate, acknowledgeContractUpdate } from './headless-contract.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
+import { applyConnectionRebind } from './headless-connection.mjs';
 
 const fields = (p, keys, required = keys) => requireValue(p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).every(k => keys.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_headless_setup', 'Missing or unsupported headless setup fields');
 const text = (s, max = 256) => requireValue(typeof s === 'string' && s.trim() && s.length <= max && !/[\x00-\x1f]/.test(s), 'invalid_headless_setup', 'Bounded text required');
@@ -52,7 +53,7 @@ export function headlessRunAuthority(store, actor, p) {
 export function applyHeadlessSetup(store, actor, action, p, { created, changed, requester: source }) {
   if (action === 'headless.contract_request') return requestContractUpdate(store, actor, p, { created });
   if (action === 'headless.contract_applied') return acknowledgeContractUpdate(store, actor, p, changed);
-  if (action === 'agent.headless_grant' || action === 'agent.headless_revoke') {
+  if (['agent.headless_grant', 'agent.headless_revoke', 'agent.headless_connection_rebind'].includes(action)) {
     fields(p, ['agentId', 'conversationId', 'bindingRevision', 'payload']);
     const requester = store.agent(actor, p.agentId);
     store.nodeOnly(actor, requester.nodeId);
@@ -67,10 +68,15 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed, 
       'headless_requester_scope', 'Agent grants stay with this coordinator, node and enrolled workspace', 403);
       payload = { ...payload, requesterAgentId: requester.id, nodeId: requester.nodeId, directory: requester.directory };
     }
-    const operation = action === 'agent.headless_grant' ? 'headless.grant' : 'headless.revoke';
+    const operation = `headless.${action.slice('agent.headless_'.length)}`;
     const result = applyHeadlessSetup(store, actor, operation, payload, { created, changed, requester });
     store.event(operation, result, actor, result.id);
     return result;
+  }
+  if (action === 'headless.connection_rebind') {
+    const { setup, grant } = headlessAuthority(store, actor, p.setupId);
+    grantActor(store, actor, grant, source);
+    return applyConnectionRebind(store, actor, p, setup, grant, changed);
   }
   if (action === 'headless.grant') {
     fields(p, ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'permissions', 'contract', 'schedule', 'expiresAt', 'capabilities'], ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'permissions', 'contract', 'schedule']);
@@ -184,6 +190,13 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed, 
         supplied.taskDigest === proof.digest && /^[a-f0-9]{64}$/.test(supplied.fileDigest) && supplied.digest === digest({ task: proof.digest, files: supplied.fileDigest }),
       'headless_capabilities_unverified', 'Confirmed proof for the exact granted task/artifact capabilities required');
     } else requireValue(!p.receipt.capabilities, 'headless_capability_not_authorised', 'Grants without native capabilities do not authorise task/artifact writes');
+    if (setup.connectionRebind) {
+      const schedule = store.get('schedule', setup.scheduleId);
+      requireValue(!schedule.cancelled && schedule.definition.nodeId === setup.nodeId && schedule.definition.targetAgentId === setup.agentId,
+        'headless_scope_mismatch', 'Connection recovery cannot replace or retarget the original schedule');
+      return changed('headless_setup', setup, { state: 'ready', blocker: null, readiness: p.receipt,
+        connectionRebind: { ...setup.connectionRebind, state: 'ready', readyAt: new Date().toISOString() } });
+    }
     const schedule = store.apply(actor, 'schedule.install', { id: setup.scheduleId, definition: { nodeId: setup.nodeId, targetAgentId: setup.agentId,
       instructions: `Perform the authorised job contract at ${grant.directory}/${grant.contract}. Read that exact skill and submit the native Relay result. Inspect relay_headless_permissions.${grant.permissions.mcp ? ' MCP is allowed: use relay_mcp_tools and relay_mcp_call, including write-capable tools. Follow provider idempotency rules and never automatically repeat uncertain effects.' : ' MCP is denied.'}${grant.permissions.shell ? ' Native shell is allowed through relay_shell_call with the native shell input schema. This is full OS-user access, including file writes outside artifact paths. It is not a sandbox. Never inspect/copy credentials or use an owner context as an authentication workaround.' : ' Native shell is denied.'}${grant.capabilities ? ' Use native task/artifact capabilities only in their explicit scopes. Business policy belongs to the job contract.' : ''} Generic execute and native file-write tools remain denied.`,
       cron: grant.schedule.cron, timezone: grant.schedule.timezone, reviewPolicy: 'none', enabled: true,
