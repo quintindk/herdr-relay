@@ -99,10 +99,12 @@ jobs:
       - name: Prepare scratch directory
         run: mkdir -p /tmp/opencode
       - run: npm ci --no-audit --no-fund
-      - name: Install exact production TUI host
+      - name: Install OpenCode 2.1.2 host
         run: npm install --prefix "$RUNNER_TEMP/tui-host" --no-audit --no-fund @opencode/cli@2.1.2
-      - name: Install supported baseline TUI host
+      - name: Install baseline OpenCode 2.1.0 host
         run: npm install --prefix "$RUNNER_TEMP/tui-baseline" --no-audit --no-fund @opencode/cli@2.1.0
+      - name: Install OpenCode 2.2.5 host
+        run: npm install --prefix "$RUNNER_TEMP/tui-latest" --no-audit --no-fund @opencode/cli@2.2.5
       - name: Verify version metadata and release notes
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
@@ -111,6 +113,7 @@ jobs:
         env:
           RELAY_V2_BINARY: ${{ runner.temp }}/tui-host/node_modules/.bin/opencode2
           RELAY_V2_BASELINE_BINARY: ${{ runner.temp }}/tui-baseline/node_modules/.bin/opencode2
+          RELAY_V2_LATEST_BINARY: ${{ runner.temp }}/tui-latest/node_modules/.bin/opencode2
         run: node scripts/verify-package.mjs --release --output "$RUNNER_TEMP/release"
       - name: Stage release notes
         run: |

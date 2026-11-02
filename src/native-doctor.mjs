@@ -43,7 +43,8 @@ export async function nativeDoctor({ configFile = defaultNodeConfig(), contextFi
   } catch (error) { check('backend', 'failed', { code: error.code ?? 'backend_or_context_unavailable', action: 'Check the private context, endpoint, ingress credentials and backend service.' }); }
   if (!backendOnly) {
     try { const native = await (dependencies.native ?? (() => nativeConnection({})))(); const version = (await native.client.server.info()).version;
-      check('opencode', 'passed', { version, releaseCertified: ['2.1.0', '2.1.2'].includes(version), ...( !['2.1.0', '2.1.2'].includes(version) ? { warning: 'Supported major version, not a certified patch release.' } : {}) }); }
+      const releaseCertified = ['2.1.0', '2.1.2', '2.2.5'].includes(version);
+      check('opencode', 'passed', { version, releaseCertified, ...(!releaseCertified ? { warning: 'Supported major version, not a certified patch release.' } : {}) }); }
     catch (error) { check('opencode', 'failed', { code: error.code ?? 'native_service_unavailable', action: 'Install/authenticate OpenCode 2 and start it once. Doctor never starts or upgrades it.' }); }
     try { check('herdr', 'passed', { version: run('herdr', ['--version']) }); } catch { check('herdr', 'failed', { action: 'Install Herdr inside the same WSL distribution and user account.' }); }
     const directory = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'opencode');

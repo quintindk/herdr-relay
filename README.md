@@ -25,7 +25,7 @@ renaming and actionable provisioning errors. See the [0.2.3 release notes](docs/
 - Node.js **24+**, npm and Git.
 - Linux, including WSL2. Managed services use user-systemd.
 - An installed, authenticated OpenCode V2 service for OpenCode agents. Release
-  checks cover **2.1.0 and 2.1.2**.
+  checks cover **2.1.0, 2.1.2 and 2.2.5**.
 - Herdr **0.9.3+** for interactive pane provisioning and the panel shortcut.
 - Python **3.11+** for shortcut installation; Python is also used by PTY tests.
 

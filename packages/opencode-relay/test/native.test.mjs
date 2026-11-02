@@ -8,7 +8,7 @@ const terminal = { id: 'terminal', type: 'idle', outcome: 'succeeded' };
 const snapshot = messages => ({ messages, idle: true, inbox: [] });
 
 test('native version admission accepts 2.x without admitting other majors or malformed versions', () => {
-  for (const version of ['2.0.0', '2.1.0', '2.1.2', '2.2.0', '2.99.10', '2.2.0-beta.1', '2.2.0+build.3', '2.2.0-beta.1+build.3']) assert.equal(checkV2Version(version), version);
+  for (const version of ['2.0.0', '2.1.0', '2.1.2', '2.2.0', '2.2.5', '2.99.10', '2.2.0-beta.1', '2.2.0+build.3', '2.2.0-beta.1+build.3']) assert.equal(checkV2Version(version), version);
   for (const version of ['1.18.29', '3.0.0', '12.1.2', '2', '2.x', '2.1', 'v2.1.2', '2.01.2', '2.1.2extra', '2.1.2-', '2.1.2+..', '2.1.2\n', undefined]) {
     assert.throws(() => checkV2Version(version), { code: 'unsupported_native_version' });
   }

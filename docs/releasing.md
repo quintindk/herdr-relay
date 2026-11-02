@@ -13,7 +13,7 @@ version tag. Packages are distributed through GitHub Releases, not npm.
 4. Run relevant isolated native model/PTY, contract, reporting, Herdr and compatible
    upgrade checks. Keep logs outside the checkout or as CI artifacts.
 5. Commit reviewed source and notes; require a clean source tree.
-6. Verify a production-only installation, exact supported OpenCode 2.1.0/2.1.2
+6. Verify a production-only installation, exact supported OpenCode 2.1.0/2.1.2/2.2.5
    hosts and a fresh zero-vulnerability production audit. An unavailable audit is
    not a passed audit. Supplemental host checks do not replace this matrix.
 
@@ -28,6 +28,7 @@ checkout. Configure the exact host binaries required by release verification:
 ```sh
 RELAY_V2_BINARY=/absolute/opencode-2.1.2 \
 RELAY_V2_BASELINE_BINARY=/absolute/opencode-2.1.0 \
+RELAY_V2_LATEST_BINARY=/absolute/opencode-2.2.5 \
 node scripts/verify-package.mjs --release --output /private/artifacts/0.2.3
 ```
 

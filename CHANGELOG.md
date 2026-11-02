@@ -23,6 +23,9 @@
   contract tests. Clean installations no longer pull in its unused provider and
   npm-tooling dependencies, including the vulnerable glob/minimatch chain.
   Keep the fresh zero-vulnerability production audit enforced.
+- Add exact OpenCode 2.2.5 installed-package CI checks alongside 2.1.0 and 2.1.2.
+  Require all three hosts in release evidence and keep `doctor` certification in
+  sync without upgrading the pinned SDK contracts or any running service.
 
 ## 0.2.2 — 29 October 2026
 

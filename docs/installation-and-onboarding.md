@@ -11,7 +11,8 @@ step 7.
 
 Use the intended Linux/WSL2 account, Node.js 24+, npm, Git and working user-systemd.
 Keep state in the Linux home filesystem, not `/mnt/c`. OpenCode agents need an
-installed, authenticated OpenCode V2 service. Release checks cover 2.1.0 and 2.1.2.
+installed, authenticated OpenCode V2 service. Release checks cover 2.1.0, 2.1.2 and
+2.2.5.
 Herdr 0.9.3+ is needed for interactive pane provisioning and the panel shortcut.
 
 Do not upgrade/restart OpenCode merely to install Relay. Follow the official

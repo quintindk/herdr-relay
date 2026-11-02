@@ -42,6 +42,10 @@ Publication does not install the release on any host or upgrade running services
   unused provider/npm-tooling tree or its vulnerable glob/minimatch dependencies.
   No dependency overrides, bundled SDK, audit exemptions or host upgrades are
   required. Development SDK dependencies remain separate from the production audit.
+- **OpenCode 2.2.5 checks:** add this exact host to CI alongside 2.1.0 and 2.1.2.
+  Require installed TUI, CLI task hand-off and headless grant/capability checks on
+  all three hosts before release. Publication rejects incomplete host evidence,
+  and `doctor` recognises the same certified versions. SDK contracts stay at 2.1.0.
 
 ## Installation and upgrades
 
@@ -58,5 +62,5 @@ required. See [installation](installation-and-onboarding.md) and
 [service upgrades](service-upgrades.md).
 
 Release gates require clean source, matching version/tag metadata, supported
-OpenCode **2.1.0 and 2.1.2** host checks, installed-package behaviour and a fresh
-zero-vulnerability production audit. Functional tests do not waive the audit.
+OpenCode **2.1.0, 2.1.2 and 2.2.5** host checks, installed-package behaviour and a
+fresh zero-vulnerability production audit. Functional tests do not waive the audit.

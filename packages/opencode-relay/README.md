@@ -58,8 +58,8 @@ npm --prefix packages/opencode-relay run smoke -- --decision
 
 Fixtures create their own HOME/XDG directories, deterministic model and authenticated
 loopback service. They never copy a human credential store or modify the active
-service. Real OpenCode 2.1.0 and 2.1.2 are tested separately where available. PTY
-tests require Python 3 and Unix terminal support.
+service. Release verification tests real OpenCode 2.1.0, 2.1.2 and 2.2.5 as separate
+hosts. PTY tests require Python 3 and Unix terminal support.
 
 ## Authority boundaries
 
