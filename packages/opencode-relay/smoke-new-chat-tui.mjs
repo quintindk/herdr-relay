@@ -1,9 +1,8 @@
 // Disposable smoke-only navigation driver. Production attachment logic is not
 // bypassed: normal native creation events and the selected TUI route drive it.
-import { Plugin } from '@opencode/plugin/tui';
 import { existsSync } from 'node:fs';
 
-export default Plugin.define({
+export default {
   id: 'herdr.relay.smoke.new-chat',
   async setup(ctx) {
     let used = false;
@@ -17,4 +16,4 @@ export default Plugin.define({
     }, 100);
     return () => clearInterval(timer);
   },
-});
+};

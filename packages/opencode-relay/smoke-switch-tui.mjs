@@ -1,8 +1,7 @@
 // Disposable smoke-only plugin. Never included in normal runtime configuration.
-import { Plugin } from '@opencode/plugin/tui';
 import { existsSync, writeFileSync } from 'node:fs';
 
-export default Plugin.define({
+export default {
   id: 'herdr.relay.smoke.switch',
   async setup(ctx) {
     let busy = false;
@@ -16,4 +15,4 @@ export default Plugin.define({
     }, 100);
     return () => clearInterval(timer);
   },
-});
+};

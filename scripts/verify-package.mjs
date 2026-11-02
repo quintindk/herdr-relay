@@ -93,6 +93,11 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
 assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
 assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, undefined, 'Retired tool validation must not retain an unused direct dependency');
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies['@opencode/plugin'], undefined,
+  'The development SDK must not become a runtime dependency');
+const productionLock = JSON.parse(readFileSync(join(consumer, 'package-lock.json'), 'utf8'));
+assert.ok(!Object.keys(productionLock.packages).some(path => /(?:^|\/)node_modules\/@opencode\/(?:plugin|util|ai)$/.test(path)),
+  'Clean production installation must not pull the development SDK or its unused provider/tooling tree');
 assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--version'], { encoding: 'utf8' }).trim(), packed.version);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Rpc } from '@opencode/plugin/rpc';
+import { Rpc } from '@opencode/schema/rpc';
 import { readFileSync } from 'node:fs';
 import { humanInput } from './native-input.mjs';
 

@@ -18,6 +18,11 @@
   mismatches. Interactive preparation errors retain their code and explain the
   human-confirmed `/relay-attach` recovery, existing-worktree reuse and original-key
   retry. Never refresh identity pins or retry provisioning automatically.
+- Remove the unused OpenCode plugin SDK wrappers from production. Use the same
+  pinned public RPC schema helpers directly and retain the SDK for development
+  contract tests. Clean installations no longer pull in its unused provider and
+  npm-tooling dependencies, including the vulnerable glob/minimatch chain.
+  Keep the fresh zero-vulnerability production audit enforced.
 
 ## 0.2.2 — 29 October 2026
 

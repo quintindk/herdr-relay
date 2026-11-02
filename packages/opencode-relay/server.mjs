@@ -1,4 +1,3 @@
-import { Plugin } from '@opencode/plugin';
 import { RelayRuntime } from './rpc.mjs';
 import { workerConnection } from './worker-context.mjs';
 import { call } from '../../src/client.mjs';
@@ -18,7 +17,10 @@ import { headlessTaskOperationVariants } from '../../src/headless-task-schema.mj
 import { runResultNotificationsSchema } from '../../src/run-result-notifications.mjs';
 import { assertNotRunResultNotice } from './run-result-notice.mjs';
 
-export default Plugin.define({
+// Plugin.define is an identity/type helper, not a runtime requirement. Keep
+// its SDK contract for development without shipping its provider/tooling tree.
+/** @type {import('@opencode/plugin').Plugin.Plugin} */
+const plugin = {
   id: 'herdr.relay.server',
   async setup(ctx) {
     const generation = randomUUID();
@@ -313,4 +315,6 @@ export default Plugin.define({
       } }
     };
   },
-});
+};
+
+export default plugin;

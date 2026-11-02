@@ -1,6 +1,7 @@
 # Herdr Relay 0.2.3
 
-Patch release for complete local Herdr panel setup, agent renaming and actionable provisioning errors.
+Patch release for complete local Herdr panel setup, agent renaming, actionable
+provisioning errors and a clean production dependency tree.
 Publication does not install the release on any host or upgrade running services.
 
 ## Fixes
@@ -34,6 +35,13 @@ Publication does not install the release on any host or upgrade running services
   Error codes remain in the agent-visible message even if the tool host flattens
   structured errors. No identity pin is refreshed and no request is queued until
   the model/identity checks pass. Unknown private exceptions remain sanitised.
+- **Production dependencies:** remove the unused `@opencode/plugin` definition
+  wrappers and use their public `@opencode/schema/rpc` helpers directly. Keep
+  client and schema contracts pinned to **2.1.0**, with SDK contract checks as
+  development dependencies. Normal `.tgz` installations no longer include the
+  unused provider/npm-tooling tree or its vulnerable glob/minimatch dependencies.
+  No dependency overrides, bundled SDK, audit exemptions or host upgrades are
+  required. Development SDK dependencies remain separate from the production audit.
 
 ## Installation and upgrades
 
