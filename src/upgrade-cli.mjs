@@ -4,10 +4,10 @@ import { join, resolve } from 'node:path';
 import { requireValue } from './protocol.mjs';
 import { readPrivateJson } from './private-files.mjs';
 import { serviceUpgrade, installationStatus, upgradeDirectory, installCliRelease } from './service-upgrade.mjs';
-import { installSkills } from './skill-install.mjs';
 
 export const upgradeHelp = `Relay service maintenance (node means Relay node, not nodejs):
-  release install --version VERSION [--config-dir DIR]  [verified CLI and safe skill sync; no service changes]
+  release install --version VERSION [--config-dir DIR] [--herdr-config TOML] [--no-herdr]
+    Verified CLI, managed skills and local Herdr panel/shortcut; no service changes.
   node status [--config PRIVATE_NODE_JSON]
   backend status
   node upgrade --version VERSION [--apply] [--key KEY]
@@ -26,16 +26,16 @@ Local recovery: node recover list|work|publication ... (node recover --help).
 Upgrades preserve state and enrolments. Rollback switches compatible code/configuration,
 never silently restores a database. No SSH, nodejs upgrade, reset or OpenCode restart.`;
 
-export async function maintenanceCli(args) {
+export async function maintenanceCli(args, dependencies = {}) {
   const [group, action] = args;
   if (!(group === 'upgrade' || group === 'release' && action === 'install' || ['node', 'backend'].includes(group) && ['upgrade', 'status'].includes(action))) return false;
   if (args.includes('--help')) { console.log(upgradeHelp); return true; }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...Object.fromEntries(['version', 'artifact', 'sha256', 'key', 'services', 'config', 'upgrade-dir', 'releases-dir', 'config-dir', 'bin-dir'].map(name => [name, { type: 'string' }])),
-    apply: { type: 'boolean' },
+    ...Object.fromEntries(['version', 'artifact', 'sha256', 'key', 'services', 'config', 'upgrade-dir', 'releases-dir', 'config-dir', 'bin-dir', 'herdr-config'].map(name => [name, { type: 'string' }])),
+    apply: { type: 'boolean' }, 'no-herdr': { type: 'boolean' },
   } });
   const operation = group === 'upgrade' ? action : 'service';
-  const permitted = group === 'release' ? ['version', 'artifact', 'sha256', 'upgrade-dir', 'releases-dir', 'bin-dir', 'config-dir'] : group !== 'upgrade' && action === 'status' ? ['config'] :
+  const permitted = group === 'release' ? ['version', 'artifact', 'sha256', 'upgrade-dir', 'releases-dir', 'bin-dir', 'config-dir', 'herdr-config', 'no-herdr'] : group !== 'upgrade' && action === 'status' ? ['config'] :
     ['status', 'resume', 'rollback'].includes(operation) ? ['upgrade-dir', ...(operation !== 'status' ? ['apply'] : [])] :
     ['version', 'artifact', 'sha256', 'key', 'services', 'config', 'upgrade-dir', 'releases-dir', 'config-dir', 'bin-dir', 'apply'];
   for (const key of Object.keys(values)) requireValue(permitted.includes(key), 'invalid_request', `--${key} is not supported here`);
@@ -43,9 +43,13 @@ export async function maintenanceCli(args) {
   if (group === 'release') {
     requireValue(positionals.length === 2 && (values.artifact ? values.sha256 && !values.version : values.version && !values.sha256),
       'invalid_request', 'Choose exact --version or --artifact plus --sha256');
-    const result = await installCliRelease({ version: values.version, artifact: values.artifact, sha256: values.sha256,
-      directory: values['upgrade-dir'], releasesDirectory: values['releases-dir'], binDirectory: values['bin-dir'] });
-    output({ ...result, skills: installSkills({ sourceDirectory: result.installation, configDirectory: values['config-dir'] }) }); return true;
+    requireValue(!(values['no-herdr'] && values['herdr-config']), 'invalid_request', '--no-herdr cannot select a Herdr config');
+    const result = await (dependencies.installCliRelease ?? installCliRelease)({ version: values.version, artifact: values.artifact, sha256: values.sha256,
+      directory: values['upgrade-dir'], releasesDirectory: values['releases-dir'], binDirectory: values['bin-dir'],
+      configDirectory: values['config-dir'], herdrConfig: values['herdr-config'], skipHerdr: values['no-herdr'] });
+    output(result);
+    if (!result.complete) process.exitCode = 1;
+    return true;
   }
   if (group !== 'upgrade' && action === 'status') {
     requireValue(positionals.length === 2 && (group === 'node' || !values.config), 'invalid_request', 'Unexpected service status arguments');

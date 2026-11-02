@@ -5,6 +5,8 @@ OpenCode**. Relay owns its task backend. No external task tracker is required.
 
 **[0.2.2](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.2)** is the current
 stable release. Existing installations must be on **0.2.1-rc4 or later** to upgrade.
+**0.2.3 is in preparation**, adding automatic local Herdr panel setup, agent
+renaming and actionable provisioning errors. See the [0.2.3 release notes](docs/release-0.2.3.md).
 
 ## What it does
 
@@ -23,14 +25,15 @@ stable release. Existing installations must be on **0.2.1-rc4 or later** to upgr
 - Node.js **24+**, npm and Git.
 - Linux, including WSL2. Managed services use user-systemd.
 - An installed, authenticated OpenCode V2 service for OpenCode agents. Release
-  checks cover **2.1.0 and 2.1.2**.
+  checks cover **2.1.0, 2.1.2 and 2.2.5**.
 - Herdr **0.9.3+** for interactive pane provisioning and the panel shortcut.
 - Python **3.11+** for shortcut installation; Python is also used by PTY tests.
 
 The CLI is a Node.js package distributed through immutable
 [GitHub releases](https://github.com/quintindk/herdr-relay/releases), not a
-standalone binary or an npm-published service. CLI activation, service upgrades,
-plugin configuration and skill installation are separate operations.
+standalone binary or an npm-published service. Service upgrades and OpenCode plugin
+configuration remain separate from CLI activation. See [installation](docs/installation-and-onboarding.md)
+for managed skills and local Herdr panel setup.
 
 ## Start here
 

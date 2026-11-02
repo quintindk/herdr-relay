@@ -71,7 +71,7 @@ test('version downloads verify the exact GitHub checksum asset and refuse malfor
 });
 
 test('RC4 is the minimum release and older versions fail before any download or installation', async t => {
-  for (const version of ['0.2.1-rc4', '0.2.1-rc10', '0.2.1', '0.2.2', '0.3.0', '1.0.0']) assert.doesNotThrow(() => assertSupportedRelease(version));
+  for (const version of ['0.2.1-rc4', '0.2.1-rc10', '0.2.1', '0.2.2', '0.2.3', '0.3.0', '1.0.0']) assert.doesNotThrow(() => assertSupportedRelease(version));
   for (const version of ['0.1.99', '0.2.0', '0.2.1-rc1', '0.2.1-rc3', '0.2.1-rc.4', '0.2.1-beta', 'invalid']) assert.throws(() => assertSupportedRelease(version), { code: 'upgrade_incompatible' });
   const f = fixture(t);
   await assert.rejects(stageRelease({ version: '0.2.1-rc3', directory: f.input.directory }, { run: f.run, fetch: () => { throw Error('Must not download'); } }), { code: 'upgrade_incompatible' });

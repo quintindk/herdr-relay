@@ -54,6 +54,7 @@ function fixture(t) {
     reload: async () => { calls.push(['reload']); },
   };
   f.dependencies = { manager: f.manager, stageRelease: async () => ({ directory: candidate, version: '0.2.1', auditVerified: true }), healthAttempts: 1, healthDelay: 0,
+    installSkills: () => ({ state: 'skills_current' }), installHerdrPanel: async () => ({ state: 'herdr_skipped', complete: true }),
     health: async (service, unit, manager, paused, required) => {
       assert.equal((await manager.inspect(service.name)).active, service.active);
       const candidateRequired = required && unit.release.directory === candidate;
@@ -190,13 +191,54 @@ test('release install activates one verified public CLI without service changes 
   symlinkSync(join(f.previous, 'src/remote.mjs'), join(f.bin, 'herdr-relay-remote'));
   const request = { version: '0.2.1', directory: f.input.directory, binDirectory: f.bin };
   const result = await installCliRelease(request, f.dependencies);
-  assert.equal(result.servicesChanged, false); assert.equal(result.state, 'cli_activated'); assert.equal(f.calls.length, 0);
+  assert.equal(result.servicesChanged, false); assert.equal(result.state, 'cli_activated'); assert.equal(result.complete, true); assert.equal(f.calls.length, 0);
   assert.equal(existsSync(join(f.bin, 'herdr-relay-remote')), false);
   assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
   await installCliRelease(request, f.dependencies); assert.equal(f.calls.length, 0);
   writeFileSync(join(f.bin, 'herdr-relay-remote'), '# unrelated user wrapper');
   await installCliRelease(request, f.dependencies);
   assert.equal(readFileSync(join(f.bin, 'herdr-relay-remote'), 'utf8'), '# unrelated user wrapper');
+});
+
+test('release install sets up skills and Herdr from the activated verified package without editing OpenCode plugin configuration', async t => {
+  const f = fixture(t), before = readFileSync(f.serverConfig, 'utf8'), localCalls = [];
+  f.dependencies.installSkills = input => {
+    assert.deepEqual(input, { sourceDirectory: f.candidate, configDirectory: f.config });
+    assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
+    localCalls.push('skills'); return { state: 'skills_installed' };
+  };
+  f.dependencies.installHerdrPanel = async input => {
+    assert.deepEqual(input, { sourceDirectory: f.candidate, herdrConfig: '/fixture/herdr.toml', skip: false });
+    localCalls.push('herdr'); return { state: 'herdr_installed', complete: true };
+  };
+  const result = await installCliRelease({ ...f.input, herdrConfig: '/fixture/herdr.toml', skipHerdr: false }, f.dependencies);
+  assert.equal(result.complete, true); assert.deepEqual(localCalls, ['skills', 'herdr']);
+  assert.equal(readFileSync(f.serverConfig, 'utf8'), before); assert.equal(f.calls.length, 0);
+});
+
+test('release setup retains the install lock through Herdr configuration so concurrent installs cannot leave stale links', async t => {
+  const f = fixture(t);
+  let entered, finish;
+  const reachedHerdr = new Promise(resolve => { entered = resolve; }), completeHerdr = new Promise(resolve => { finish = resolve; });
+  f.dependencies.installHerdrPanel = async () => { entered(); await completeHerdr; return { state: 'herdr_installed', complete: true }; };
+  const installing = installCliRelease(f.input, f.dependencies);
+  try {
+    await reachedHerdr;
+    await assert.rejects(installCliRelease(f.input, f.dependencies), { code: 'already_running' });
+  } finally { finish(); }
+  assert.equal((await installing).complete, true); assert.equal(f.calls.length, 0);
+});
+
+test('local setup failures retain CLI activation evidence and report incomplete setup without restarting services', async t => {
+  const f = fixture(t);
+  f.dependencies.installSkills = () => { throw Object.assign(Error('Fixture config conflict'), { code: 'skill_path_conflict' }); };
+  const result = await installCliRelease(f.input, f.dependencies);
+  assert.equal(result.state, 'cli_activated'); assert.equal(result.complete, false);
+  assert.equal(result.skills.state, 'skill_setup_failed'); assert.equal(result.skills.code, 'skill_path_conflict');
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs')); assert.equal(f.calls.length, 0);
+  f.dependencies.installSkills = () => ({ state: 'skills_current' });
+  f.dependencies.installHerdrPanel = async () => ({ state: 'herdr_setup_failed', complete: false });
+  assert.equal((await installCliRelease(f.input, f.dependencies)).complete, false);
 });
 
 test('an unfinished operation fences CLI-only activation too', async t => {

@@ -4,6 +4,8 @@ import { previewCron } from './cron-schedule.mjs';
 import { nativeAgentLabel, nativeAttention } from './native-board-attention.mjs';
 import { buildGrantsView } from './grants-view.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
+import { agentName } from './agent-name.mjs';
+import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
 
 export function boardLocalIdentity(context) {
   return context?.scope?.kind === 'node_operator' && context.nodeId === context.scope.nodeId && context.instanceId
@@ -47,7 +49,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
   const publicationItems = (security = false) => (decisionJournal?.pending() ?? []).filter(p => p.command.action.startsWith('grant.') === security).map(p => ({
     id: `publication:${p.key}`, kind: 'publication', entityId: p.command.payload.id, key: p.key, section: 'pending',
     title: p.state === 'conflict' ? 'Decision refused: inspect before trying again' : 'Confirmed decision awaiting acknowledgement',
-    summary: `${p.command.action}: ${p.command.payload.body ?? p.command.payload.reason ?? 'acknowledgement'}`,
+    summary: `${p.command.action}: ${p.command.payload.body ?? p.command.payload.reason ?? p.command.payload.name ?? 'acknowledgement'}`,
     context: p.state === 'conflict' ? `Refused (${p.error}). Dismiss this refused operation, then reopen the current item for a fresh decision.`
       : 'Outcome is unconfirmed. Retry reuses your original confirmation and operation key.',
     from: 'This terminal', stateLabel: p.state === 'conflict' ? 'Needs inspection' : 'Publication unconfirmed',
@@ -82,7 +84,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     const fresh = nodeAge >= 0 && nodeAge < 15000 && agentAge >= 0 && agentAge < 15000;
     const reported = agent.availability ?? 'unknown';
     const local = localNode(nodes, info);
-    return { ...agent, companyId: 'native', displayName: nativeAgentLabel(agent),
+    return { ...agent, companyId: 'native', rawName: agent.name, displayName: nativeAgentLabel(agent),
       locality: local ? agent.nodeId === local.id ? 'local' : 'remote' : 'unknown',
       name: `${nativeAgentLabel(agent)} @ ${node?.name ?? 'Unknown node'} / ${node?.machine?.hostname ?? 'machine not advertised'}`,
       nodeName: node?.name ?? 'Unknown node', nodeLastSeenAt: node?.lastSeenAt ?? null,
@@ -120,7 +122,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     async read(signal) {
       const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies, headless_setups } = await load(signal);
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents, headless_setups)),
-        inbox, grants, grantsAvailable: !!info.features?.grantsManagement, nodePolicies,
+        inbox, grants, grantsAvailable: !!info.features?.grantsManagement, agentRenamingAvailable: !!info.features?.agentRename, nodePolicies,
         tasks: tasks.map(t => ({ ...scoped(t), instanceId: info.instanceId, ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
         localNode: localNode(nodes, info) ? { id: localNodeId, name: localNode(nodes, info).name ?? localNodeId } : null,
@@ -138,6 +140,32 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
           !['completed', 'cancelled', 'failed', 'rejected'].includes(e.state)).map(e => ({ id: e.id, state: e.state, conversationId: e.targetConversationId })) };
     },
     pendingDecisions: publicationItems,
+    async prepareAgentRename({ agentId }) {
+      const [info, agent, identity] = await Promise.all([api('GET', '/v1/info'), api('GET', `/v1/agents/${encodeURIComponent(agentId)}`), api('GET', '/v1/identity')]);
+      requireValue(info.features?.agentRename, 'backend_upgrade_required', 'Upgrade the backend to rename agents');
+      requireValue(identity.type === 'user' && identity.id === info.userId, 'forbidden', 'Human operator context required', 403);
+      if (identity.scope) requireValue(identity.scope.kind === 'node_operator' && identity.scope.nodeId === agent.nodeId &&
+        (identity.scope.mode === 'localUser' || canonicalDirectory(agent.directory) && withinRoots(agent.directory, identity.scope.roots ?? [])),
+        'operator_scope_mismatch', 'Use the operator context on this agent\'s owning node', 403);
+      requireValue(!decisionJournal?.pending().some(p => p.command.action === 'agent.rename' && p.command.payload.id === agentId),
+        'decision_pending', 'Reconcile the original confirmed rename in Inbox first');
+      return { agentId: agent.id, name: agent.name, expectedNameRevision: agent.nameRevision ?? 0, nodeId: agent.nodeId,
+        directory: agent.directory, instanceId: info.instanceId };
+    },
+    async renameAgent({ agentId, expectedNameRevision, instanceId, key, name }) {
+      requireValue(decisionJournal && key && instanceId, 'decision_storage_required', 'A durable confirmed rename is required');
+      name = agentName(name);
+      const command = { key, action: 'agent.rename', payload: { id: agentId, expectedNameRevision, name } };
+      const previous = decisionJournal.inspect(key);
+      if (!previous) {
+        const fresh = await board.prepareAgentRename({ agentId });
+        requireValue(fresh.instanceId === instanceId, 'backend_identity_changed', 'Backend changed since the rename preview');
+        requireValue(fresh.expectedNameRevision === expectedNameRevision, 'stale_agent_name', 'Agent name changed. Reopen the rename preview', 409);
+      }
+      const agent = await decisionJournal.submit(api, command, instanceId);
+      return { state: 'recorded', agent, message: previous ? 'Original rename reconciled. Refreshing the current agent name.'
+        : `Agent renamed to ${agent.name}. Identity, receiving chat and schedules are unchanged.` };
+    },
     async prepareHandback({ taskId }) {
       const { tasks, executions, agents, nodes, info } = await load();
       requireValue(info.features?.taskRevisionHandback, 'backend_upgrade_required', 'Backend must support RC4 task-revision-fenced human handback');

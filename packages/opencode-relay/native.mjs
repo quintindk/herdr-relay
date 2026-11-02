@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { supportingInput, humanInput } from './native-input.mjs';
-import { digest } from '../../src/protocol.mjs';
+import { digest, requireValue } from '../../src/protocol.mjs';
 
 function check(condition, code) {
   if (!condition) throw Object.assign(new Error(code), { code });
@@ -27,9 +27,12 @@ export class NativeOpenCodeV2 {
 
   async verify() {
     const session = await this.client.session.get({ sessionID: this.identity.sessionId });
-    check(session.id === this.identity.sessionId && session.projectID === this.identity.projectId &&
+    requireValue(session?.id === this.identity.sessionId && typeof session.projectID === 'string' && session.projectID.trim() &&
       session.location?.directory === this.identity.directory && session.time?.created === this.identity.createdAt &&
-      !session.time.archived && !session.revert, 'native_identity_mismatch');
+      !session.time.archived && !session.revert, 'native_identity_mismatch',
+      '[native_identity_mismatch] The saved OpenCode conversation identity no longer matches. Stop and ask the human or coordinator to inspect the exact chat, workspace and pinned binding. Do not automatically reattach, replace the agent or replay work.', 409);
+    requireValue(session.projectID === this.identity.projectId, 'native_project_identity_changed',
+      '[native_project_identity_changed] OpenCode reports a different project ID for the same conversation, workspace and creation time. The saved binding is no longer verified. Ask the human or coordinator to inspect and refresh that binding explicitly. Do not adopt the new project ID or replay work automatically.', 409);
     return session;
   }
 

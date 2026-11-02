@@ -8,7 +8,7 @@ const terminal = { id: 'terminal', type: 'idle', outcome: 'succeeded' };
 const snapshot = messages => ({ messages, idle: true, inbox: [] });
 
 test('native version admission accepts 2.x without admitting other majors or malformed versions', () => {
-  for (const version of ['2.0.0', '2.1.0', '2.1.2', '2.2.0', '2.99.10', '2.2.0-beta.1', '2.2.0+build.3', '2.2.0-beta.1+build.3']) assert.equal(checkV2Version(version), version);
+  for (const version of ['2.0.0', '2.1.0', '2.1.2', '2.2.0', '2.2.5', '2.99.10', '2.2.0-beta.1', '2.2.0+build.3', '2.2.0-beta.1+build.3']) assert.equal(checkV2Version(version), version);
   for (const version of ['1.18.29', '3.0.0', '12.1.2', '2', '2.x', '2.1', 'v2.1.2', '2.01.2', '2.1.2extra', '2.1.2-', '2.1.2+..', '2.1.2\n', undefined]) {
     assert.throws(() => checkV2Version(version), { code: 'unsupported_native_version' });
   }
@@ -72,4 +72,31 @@ test('snapshot rejects looping native cursors instead of silently truncating', a
     message: { list: async () => ({ data: [{ id: `m-${page++}` }], cursor: { next: 'loop' } }) },
   }, { sessionId: 's', projectId: 'p', directory: '/work', createdAt: 1 });
   await assert.rejects(native.snapshot(), { code: 'invalid_native_cursor' });
+});
+
+test('a project-only identity change has a specific safe error and never adopts the new identity', async () => {
+  const identity = { sessionId: 'session', projectId: 'old-project', directory: '/workspace', createdAt: 1 };
+  const session = { id: identity.sessionId, projectID: 'new-project', location: { directory: identity.directory }, time: { created: identity.createdAt } };
+  const native = new NativeOpenCodeV2({ session: { get: async () => session } }, identity);
+  await assert.rejects(native.verify(), error => {
+    assert.equal(error.code, 'native_project_identity_changed'); assert.equal(error.status, 409);
+    assert.match(error.message, /\[native_project_identity_changed\]/); assert.match(error.message, /explicitly/);
+    assert.doesNotMatch(error.message, /old-project|new-project|\/workspace/);
+    return true;
+  });
+  assert.deepEqual(native.identity, identity);
+});
+
+test('changed session, workspace, creation time, archive/revert or missing project ID never gets project-only recovery advice', async () => {
+  const identity = { sessionId: 'session', projectId: 'old-project', directory: '/workspace', createdAt: 1 };
+  const base = { id: identity.sessionId, projectID: 'new-project', location: { directory: identity.directory }, time: { created: identity.createdAt } };
+  for (const patch of [{ id: 'other' }, { location: { directory: '/elsewhere' } }, { time: { created: 2 } },
+    { time: { created: 1, archived: 2 } }, { revert: {} }, { projectID: '' }, { projectID: undefined }]) {
+    const native = new NativeOpenCodeV2({ session: { get: async () => ({ ...base, ...patch }) } }, identity);
+    await assert.rejects(native.verify(), error => {
+      assert.equal(error.code, 'native_identity_mismatch'); assert.equal(error.status, 409);
+      assert.match(error.message, /Do not automatically reattach/); assert.doesNotMatch(error.message, /\/relay-attach/);
+      return true;
+    });
+  }
 });

@@ -33,7 +33,7 @@ shown as awaiting activation rather than Active.
 | h | Include/exclude completed tasks |
 | a | Open the human/agent assignment picker for a task |
 | s | Inspect eligible human task-status changes |
-| n | Configure run result notifications from Schedule |
+| n | Rename the selected agent in Agents, or configure run result notifications from Schedule |
 | [ / ] | Select the previous/next occurrence in cron detail |
 | o | Open the exactly correlated selected occurrence's task |
 | t | Show technical details where offered |
@@ -62,6 +62,26 @@ human-held, no operation is created. Submitted results and outstanding child wor
 require their own decisions. Questions are superseded, not answered. History is
 preserved, and native process termination/success is never claimed.
 
+## Rename an agent
+
+In **Agents**, select an agent and press **n**. The same key works in agent detail.
+Edit the name, use **Enter** to review it and **Enter** again to confirm.
+**Ctrl+U** clears the editor. **Esc** cancels an unconfirmed edit.
+
+The name is 1–256 characters on one line. The agent ID, receiving chat, workspace,
+permissions, work and schedules do not change. Native chat titles and Herdr
+workspace labels are not renamed. An enrolled name must remain unique within its
+node/workspace. A node operator can rename only agents inside its own node and
+workspace scope. Other nodes need their own operator context, not copied backend
+credentials.
+
+Rename uses a separate name revision, so presence heartbeats do not invalidate an
+open editor. Another rename requires a new preview. A lost acknowledgement locks
+the confirmed payload and retains the original operation in **Inbox**, where it
+can be reconciled without issuing another rename. Upgrade the backend and TUI to
+enable the action, and upgrade the owning node so its local enrolment labels also
+follow confirmed backend updates. A stopped node catches up after reconnection.
+
 ## Inbox and Grants
 
 See [task Inbox semantics](native-task-inbox.md). Questions and reviews bind the
@@ -76,7 +96,15 @@ explicit offline/freshness warning rather than reporting an empty successful lis
 
 ## Herdr panel
 
-After linking the installed Relay plugin:
+The 0.2.3 installer configures the panel during `release install`: link the
+verified release, install its shortcut and reload running Herdr sessions.
+`--no-herdr` skips this setup; `--herdr-config TOML` selects a custom configuration.
+Missing Herdr and explicitly disabled plugins are preserved as reported skips.
+A conflict or failed reload reports incomplete setup and a non-zero exit, not
+a successfully updated panel. Existing panels are never restarted automatically.
+
+With the published 0.2.2 installer, or for manual repair, link the installed Relay
+plugin and run:
 
 ```sh
 herdr-relay plugin shortcut --dry-run

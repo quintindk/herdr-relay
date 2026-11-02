@@ -15,6 +15,22 @@ import { abandonedWork } from './node-journal.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
 import { previewHeadlessConnection, connectionRebindCommand } from './node-headless-connection.mjs';
 
+const preparationRecovery = Object.freeze({
+  native_project_identity_changed: 'OpenCode reports a different project ID for this same chat. Preparation stopped before a request was queued. Ask the human to run /relay-attach in this existing chat and confirm the same Relay enrolment. Wait for confirmed attachment, then retry relay_interactive_prepare with the original ID, key and payload, reusing the existing worktree. Do not recreate the agent/worktree, use the backend-admin CLI or borrow credentials.',
+  native_identity_mismatch: 'The requester\'s saved OpenCode conversation identity no longer matches. Preparation stopped before a request was queued. Ask the human to inspect the exact chat, workspace and saved attachment first. Do not automatically reattach, retry provisioning, recreate the agent/worktree or use the backend-admin CLI. After explicit recovery, retain the original preparation ID, key and payload.',
+  native_model_unavailable: 'The requester\'s native model cannot be resolved. Preparation stopped before a request was queued. Ask the human to select a valid model in this existing OpenCode chat and check its Relay attachment. After that is confirmed, retry the original preparation ID, key and payload. Do not create a replacement agent or copy provider credentials.',
+});
+
+async function preparationModel(worker, getNativeModel) {
+  try { return await getNativeModel?.(worker); }
+  catch (error) {
+    // Only fixed, known guidance is public. Native errors can contain private
+    // responses, credentials or paths and must never be echoed as instructions.
+    if (Object.hasOwn(preparationRecovery, error.code)) throw new RelayError(error.code, `[${error.code}] ${preparationRecovery[error.code]}`, 409);
+    throw error;
+  }
+}
+
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
 export async function startNodeService({ journal, socketPath, workers, api, tasks, resolveBinding, getNativeModel, getHeadlessConnections, getHeadlessAccess, getHeadlessRecoveryConnection, getBackendFeatures, maintenance = () => false }) {
@@ -296,7 +312,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           'backend_upgrade_required', 'Backend must support Grants approval requests');
         const key = `interactive-source:${worker.agentId}:${body.key}`;
         const previous = journal.receipt(key);
-        const inheritedModel = operation === 'prepare' ? previous ? previous.command.payload.model : await getNativeModel?.(worker) : undefined;
+        const inheritedModel = operation === 'prepare' ? previous ? previous.command.payload.model : await preparationModel(worker, getNativeModel) : undefined;
         const command = { key, action: `interactive.${operation === 'prepare' ? 'request' : operation}`,
           payload: { ...body.payload, ...(inheritedModel ? { model: inheritedModel } : {}), requesterAgentId: worker.agentId, sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision } };
         journal.queue(command);

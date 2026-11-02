@@ -1,6 +1,6 @@
 {
   "name": "@herdr/relay-opencode",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Herdr Relay server and terminal integration for OpenCode",
@@ -19,10 +19,11 @@
   },
   "dependencies": {
     "@opencode/client": "2.1.0",
-    "@opencode/plugin": "2.1.0"
+    "@opencode/schema": "2.1.0"
   },
   "devDependencies": {
     "@opencode/cli": "2.1.0",
+    "@opencode/plugin": "2.1.0",
     "solid-js": "1.9.17"
   },
   "peerDependencies": {

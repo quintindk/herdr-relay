@@ -2,14 +2,17 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target the stable **0.2.2** package from
-[GitHub releases](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.2).
+Examples target **0.2.3**, which is in preparation and not yet published on
+[GitHub releases](https://github.com/quintindk/herdr-relay/releases). The current
+stable release is **0.2.2**. Its installer requires the manual Herdr setup in
+step 7.
 
 ## Requirements
 
 Use the intended Linux/WSL2 account, Node.js 24+, npm, Git and working user-systemd.
 Keep state in the Linux home filesystem, not `/mnt/c`. OpenCode agents need an
-installed, authenticated OpenCode V2 service. Release checks cover 2.1.0 and 2.1.2.
+installed, authenticated OpenCode V2 service. Release checks cover 2.1.0, 2.1.2 and
+2.2.5.
 Herdr 0.9.3+ is needed for interactive pane provisioning and the panel shortcut.
 
 Do not upgrade/restart OpenCode merely to install Relay. Follow the official
@@ -25,15 +28,18 @@ and a successful zero-vulnerability production audit.
 ```sh
 umask 077
 sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.2.tgz
-herdr-relay release install --version 0.2.2
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.3.tgz
+herdr-relay release install --version 0.2.3
 herdr-relay --version
 ```
 
 Use a user-owned npm installation without sudo. `release install` activates the
 versioned CLI and safely synchronises managed skills. It does not upgrade existing
-services or authorise live configuration changes. A checkout/npm link is not a
-published release installation.
+services or change OpenCode plugin configuration. The 0.2.3 installer also
+configures the local Herdr panel when Herdr is available; see step 7 for behaviour
+and opt-out. Run the 0.2.3 CLI for this behaviour. If an older CLI activated the
+release, rerun the command through the newly activated CLI. A checkout/npm link
+is not a published release installation.
 
 ## 2. Install a fresh backend
 
@@ -141,7 +147,29 @@ See [receiving chats](native-receivers.md) and [the board](task-board.md).
 
 ## 7. Optional Herdr panel
 
-Link the **installed release directory** through Herdr, not a moving checkout:
+**Automatic setup is included in 0.2.3. The published 0.2.2 installer still
+requires the manual commands below.**
+
+The 0.2.3 installer performs this setup during `herdr-relay release install`:
+
+- Detect local Herdr and relink its Relay plugin to the **verified installed
+  release directory**, including an existing link to the old TUI.
+- Install the native `prefix+t` binding without changing unrelated keys. An
+  existing Relay binding is retained. Conflicting bindings are reported before
+  registration or key changes, never silently replaced.
+- Reload configuration in running Herdr sessions. A stopped server stays stopped;
+  existing panels and OpenCode/Relay services are not restarted.
+- Preserve an explicitly disabled Relay plugin. Missing Herdr is a reported skip.
+- Return `complete: false` and a non-zero exit if skill or Herdr setup fails. The
+  verified CLI remains activated. Resolve the reported error and rerun the same
+  install command to finish setup safely.
+
+`--no-herdr` skips panel setup on a backend-only host. `--herdr-config TOML`
+selects the same configuration for shortcut installation and Herdr commands;
+otherwise `HERDR_CONFIG_PATH` and the standard XDG location are respected.
+
+For published 0.2.2 or manual repair, link the **installed release directory**,
+not a moving checkout:
 
 ```sh
 herdr plugin link /absolute/installed/herdr-relay

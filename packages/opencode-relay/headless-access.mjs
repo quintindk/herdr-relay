@@ -1,4 +1,4 @@
-import { Rpc } from '@opencode/plugin/rpc';
+import { Rpc } from '@opencode/schema/rpc';
 import { digest } from '../../src/protocol.mjs';
 import { validateHeadlessPermissions } from '../../src/headless-permissions.mjs';
 

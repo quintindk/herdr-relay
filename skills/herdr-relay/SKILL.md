@@ -75,14 +75,22 @@ compatibility: opencode
   separate views. Grants owns security requests and permissions, not Inbox.
   The Agents local-node marker is based on the active scoped
   context's node/backend identities, not network proximity or machine names.
+- In Agents, **n** renames the selected agent, including from agent detail.
+  Edit, Enter to preview and Enter to confirm. This changes only the Relay name,
+  not agent identity, receiving chat, workspace, permissions, work or schedules.
+  A node operator is limited to its own node/workspace. Unknown publication
+  outcomes stay in Inbox under the original key, never repeat them as a new
+  rename. Native chat titles and Herdr workspace labels are not renamed.
 - In RC4, Tasks **a** opens a node-grouped picker with **You (human)** first.
   Human selection previews and confirms the existing assignment handback to Todo,
   never dispatches a run or discards submitted results/child work. An unconfirmed
   decision is reconciled from Inbox under its original key.
 - **PgUp/PgDn** inspect long wrapped cards. Cron detail scrolls by physical lines;
   **[ / ]** select an occurrence and **o** opens only its exact linked task.
-  Herdr `prefix+t` opens/focuses the native TUI after explicit `plugin shortcut`
-  installation. Do not silently overwrite an existing key or restart OpenCode.
+  Herdr `prefix+t` opens/focuses the native TUI. The 0.2.3 installer wires the
+  local panel during `release install`; published 0.2.2 needs explicit plugin
+  linking and `plugin shortcut`. Do not silently overwrite an existing key or
+  restart OpenCode. Existing panels retain their original processes until closed.
 
 ## Messages
 
@@ -206,6 +214,16 @@ compatibility: opencode
   preparation to drive progress. Inspect `relay_interactive_status` instead.
   `waiting_driver` means permission exists but a verified destination Herdr
   connection is unavailable. It does not authorise a different destination.
+- `native_project_identity_changed` during interactive preparation means this
+  same chat, directory and creation time now report a different OpenCode project
+  ID. No request was queued. Ask the human to run `/relay-attach` in this existing
+  initiating chat and confirm the same enrolment. Wait for confirmed attachment,
+  then retry the original preparation ID, key and payload using the existing
+  worktree. Do not attach automatically, create duplicates, alter identity pins,
+  borrow credentials or use a backend-admin CLI fallback. A broader
+  `native_identity_mismatch` needs exact chat/workspace inspection first, not
+  this project-only recovery. For `native_model_unavailable`, ask the human to
+  resolve the existing chat's model and verify its attachment before retrying.
 - Prepared dispatch reuses an existing task with its inspected `taskRevision`.
   Do not recreate it or change its identity. Supply `title` only for a new task.
   A `refused` dispatch with `applied: false` did not commit; retain/reconcile the
@@ -266,9 +284,18 @@ compatibility: opencode
   RC4 activation, but uncertain writes and revision conflicts still require inspection.
   Do not repeat approval, replace the cron or replay a rejected write to unblock it.
 
-- CLI activation, node/plugin service changes and skill installation are distinct.
-  `release install` activates a verified release. Service changes require an
-  explicit upgrade. Use the candidate CLI when upgrading from an older buggy CLI.
+- `release install` activates a verified release and safely synchronises managed
+  skills. The 0.2.3 installer also relinks local Herdr to that release, installs
+  the native shortcut and reloads running Herdr sessions. Missing Herdr or an
+  explicitly disabled Relay plugin is a reported skip. `--no-herdr` opts out;
+  `--herdr-config TOML` selects a custom configuration. Conflicts/failures return
+  `complete: false` and a non-zero exit while retaining CLI activation evidence.
+  Resolve the error and rerun installation, never silently replace unrelated keys.
+  Backend/node service upgrades and existing OpenCode plugin updates remain
+  separate, explicit operations. Use the candidate CLI when upgrading from an
+  older buggy CLI.
+  If a 0.2.2 CLI activated 0.2.3, rerun `release install` through the newly
+  activated CLI to execute the automatic local Herdr setup.
 - `herdr-relay skills status` compares the two shipped skills with installed files.
   `skills install` installs missing or safely managed versions. Unmanaged/local
   edits cause a conflict. Explicit `--replace-modified` retains private backups.

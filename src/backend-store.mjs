@@ -12,6 +12,7 @@ import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
 import { applyGrantAction } from './grants.mjs';
 import { runResultNotifications, runResultReport, scheduleRequester, OnlineRunResultMessages } from './run-result-notifications.mjs';
 import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
+import { agentName } from './agent-name.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -308,6 +309,18 @@ export class BackendStore {
       return created('agent', { ...p, mode: 'interactive', capabilities: [], ownerId: this.owner, bindingRevision: 0,
         standingGrant: { autoAttach: true, scheduleManagement: true, userId: this.owner, at: now(),
           ...(authority.interactiveRequest ? { provisioningRequestId: authority.interactiveRequest.id } : {}) } });
+    }
+    if (action === 'agent.rename') {
+      this.ownerOnly(actor);
+      fields(p, ['id', 'expectedNameRevision', 'name'], ['id', 'expectedNameRevision', 'name']);
+      const agent = this.get('agent', p.id), name = agentName(p.name);
+      requireValue(Number.isSafeInteger(p.expectedNameRevision) && p.expectedNameRevision >= 0 &&
+        p.expectedNameRevision === (agent.nameRevision ?? 0), 'stale_agent_name', 'Agent name changed. Reopen the rename preview before confirming', 409);
+      requireValue(name !== agent.name, 'agent_name_unchanged', 'The agent already has this name');
+      requireValue(!agent.standingGrant || !this.all('agent').some(a => a.id !== agent.id && a.standingGrant &&
+        a.nodeId === agent.nodeId && a.directory === agent.directory && a.name === name),
+      'enrolment_exists', 'This workspace already has an enrolled agent with that name', 409);
+      return changed('agent', agent, { name, nameRevision: p.expectedNameRevision + 1 });
     }
     if (action === 'agent.attach' || action === 'agent.relocate') {
       if (!authority.interactiveRequest) this.ownerOnly(actor);

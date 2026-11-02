@@ -41,7 +41,8 @@ export class NativeDecisionJournal {
       requireValue(info.instanceId === instanceId, 'backend_identity_changed', 'Backend identity changed. The confirmed decision remains pending for inspection');
       const receipt = await api('POST', '/v1/commands', command);
       const p = command.payload;
-      const valid = receipt?.id === p.id && (command.action === 'grant.request_decide' ?
+      const valid = receipt?.id === p.id && (command.action === 'agent.rename' ?
+        receipt.name === p.name && receipt.nameRevision === p.expectedNameRevision + 1 : command.action === 'grant.request_decide' ?
         receipt.state === (p.decision === 'reject' ? 'rejected' : 'approved') && receipt.decision?.decision === p.decision && receipt.decision?.requestHash === p.requestHash :
         command.action === 'grant.revoke' ? receipt.state === 'revoked' && receipt.grantKind === p.kind :
         command.action === 'grant.create' ? receipt.state === 'active' && receipt.grantKind === 'interactive' && receipt.scopeHash === digest(p.scope) :

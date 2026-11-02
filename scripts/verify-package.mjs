@@ -29,13 +29,14 @@ assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firec
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/native-agent-relocation.mjs', 'src/skill-install.mjs',
+  'src/agent-name.mjs', 'src/agent-rename-panel.mjs',
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
   'src/headless-permissions.mjs', 'src/headless-connection.mjs', 'src/node-headless-connection.mjs', 'packages/opencode-relay/headless-mcp.mjs',
   'src/task-identity.mjs',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
-  'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
+  'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
@@ -63,7 +64,7 @@ execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-sc
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
 const installed = join(consumer, 'node_modules/herdr-relay');
 const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [];
-for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0']]) {
+for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']]) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
     '--binary', process.env[variable]], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
@@ -92,6 +93,11 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
 assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
 assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies.zod, undefined, 'Retired tool validation must not retain an unused direct dependency');
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).dependencies['@opencode/plugin'], undefined,
+  'The development SDK must not become a runtime dependency');
+const productionLock = JSON.parse(readFileSync(join(consumer, 'package-lock.json'), 'utf8'));
+assert.ok(!Object.keys(productionLock.packages).some(path => /(?:^|\/)node_modules\/@opencode\/(?:plugin|util|ai)$/.test(path)),
+  'Clean production installation must not pull the development SDK or its unused provider/tooling tree');
 assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--version'], { encoding: 'utf8' }).trim(), packed.version);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
@@ -109,8 +115,9 @@ if (!values['skip-audit']) {
   symlinkSync(join(installed, 'src/cli.mjs'), join(activationBin, 'herdr-relay'));
   const activation = JSON.parse(execFileSync(installedCli, ['release', 'install', '--artifact', artifact, '--sha256', sha(artifact),
     '--upgrade-dir', join(root, 'activation-upgrades'), '--releases-dir', join(root, 'activation-releases'), '--bin-dir', activationBin,
-    '--config-dir', skillConfig], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+    '--config-dir', skillConfig, '--no-herdr'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   assert.equal(activation.servicesChanged, false); assert.equal(activation.skills.state, 'skills_current');
+  assert.equal(activation.complete, true); assert.equal(activation.herdr.reason, 'disabled_by_option');
 }
 execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';

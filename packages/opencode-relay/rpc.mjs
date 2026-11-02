@@ -1,4 +1,4 @@
-import { Rpc } from '@opencode/plugin/rpc';
+import { Rpc } from '@opencode/schema/rpc';
 
 const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const string = { type: 'string', minLength: 1, maxLength: 1024 };

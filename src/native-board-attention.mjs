@@ -1,5 +1,5 @@
 const ended = e => ['completed', 'failed', 'cancelled', 'rejected'].includes(e.state);
-export const nativeAgentLabel = agent => agent?.name === 'Interactive Relay chat' && agent.directory
+export const nativeAgentLabel = agent => agent?.name === 'Interactive Relay chat' && agent.directory && !(agent.nameRevision > 0)
   ? `${agent.directory.split('/').filter(Boolean).at(-1)} (interactive)` : agent?.name ?? 'Unknown agent';
 export function nativeAttention({ tasks, executions, questions, agents, nodes = [], occurrences, notifications, monitorResults, userId }) {
   const taskById = new Map(tasks.map(t => [t.id, t]));
