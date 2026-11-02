@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 — Unreleased
 
 - Complete local Herdr panel setup during `release install`: relink the verified
   release, install the native `prefix+t` binding and reload running Herdr sessions.

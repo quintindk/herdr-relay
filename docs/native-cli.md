@@ -17,8 +17,8 @@ JSON. Interactive TUI use requires a terminal; `tui --json` is a read-only proje
 ## Local release setup
 
 `release install` activates the verified CLI and safely synchronises managed
-skills. Installers after 0.2.2 also link the local Herdr panel, install its native
-`prefix+t` shortcut and reload running Herdr sessions. `--no-herdr` skips this;
+skills. The 0.2.3 installer also links the local Herdr panel, installs its native
+`prefix+t` shortcut and reloads running Herdr sessions. `--no-herdr` skips this;
 `--herdr-config TOML` selects a custom Herdr configuration. These options do not
 change backend/node services or OpenCode plugin configuration.
 

@@ -2,8 +2,10 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target the stable **0.2.2** package from
-[GitHub releases](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.2).
+Examples target **0.2.3**, which is in preparation and not yet published on
+[GitHub releases](https://github.com/quintindk/herdr-relay/releases). The current
+stable release is **0.2.2**. Its installer requires the manual Herdr setup in
+step 7.
 
 ## Requirements
 
@@ -25,16 +27,18 @@ and a successful zero-vulnerability production audit.
 ```sh
 umask 077
 sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.2.tgz
-herdr-relay release install --version 0.2.2
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.3.tgz
+herdr-relay release install --version 0.2.3
 herdr-relay --version
 ```
 
 Use a user-owned npm installation without sudo. `release install` activates the
 versioned CLI and safely synchronises managed skills. It does not upgrade existing
-services or change OpenCode plugin configuration. Installers after 0.2.2 also
-configure the local Herdr panel when Herdr is available; see step 7 for behaviour
-and opt-out. A checkout/npm link is not a published release installation.
+services or change OpenCode plugin configuration. The 0.2.3 installer also
+configures the local Herdr panel when Herdr is available; see step 7 for behaviour
+and opt-out. Run the 0.2.3 CLI for this behaviour. If an older CLI activated the
+release, rerun the command through the newly activated CLI. A checkout/npm link
+is not a published release installation.
 
 ## 2. Install a fresh backend
 
@@ -142,10 +146,10 @@ See [receiving chats](native-receivers.md) and [the board](task-board.md).
 
 ## 7. Optional Herdr panel
 
-**Automatic setup is an unreleased installer change. The published 0.2.2 installer
-still requires the manual commands below.**
+**Automatic setup is included in 0.2.3. The published 0.2.2 installer still
+requires the manual commands below.**
 
-New installers perform this setup during `herdr-relay release install`:
+The 0.2.3 installer performs this setup during `herdr-relay release install`:
 
 - Detect local Herdr and relink its Relay plugin to the **verified installed
   release directory**, including an existing link to the old TUI.

@@ -76,7 +76,7 @@ explicit offline/freshness warning rather than reporting an empty successful lis
 
 ## Herdr panel
 
-Installers after 0.2.2 configure the panel during `release install`: link the
+The 0.2.3 installer configures the panel during `release install`: link the
 verified release, install its shortcut and reload running Herdr sessions.
 `--no-herdr` skips this setup; `--herdr-config TOML` selects a custom configuration.
 Missing Herdr and explicitly disabled plugins are preserved as reported skips.

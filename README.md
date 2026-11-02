@@ -5,6 +5,8 @@ OpenCode**. Relay owns its task backend. No external task tracker is required.
 
 **[0.2.2](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.2)** is the current
 stable release. Existing installations must be on **0.2.1-rc4 or later** to upgrade.
+**0.2.3 is in preparation**, adding automatic local Herdr panel setup during
+release installation. See the [0.2.3 release notes](docs/release-0.2.3.md).
 
 ## What it does
 

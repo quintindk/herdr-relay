@@ -81,7 +81,7 @@ compatibility: opencode
   decision is reconciled from Inbox under its original key.
 - **PgUp/PgDn** inspect long wrapped cards. Cron detail scrolls by physical lines;
   **[ / ]** select an occurrence and **o** opens only its exact linked task.
-  Herdr `prefix+t` opens/focuses the native TUI. Installers after 0.2.2 wire the
+  Herdr `prefix+t` opens/focuses the native TUI. The 0.2.3 installer wires the
   local panel during `release install`; published 0.2.2 needs explicit plugin
   linking and `plugin shortcut`. Do not silently overwrite an existing key or
   restart OpenCode. Existing panels retain their original processes until closed.
@@ -269,8 +269,8 @@ compatibility: opencode
   Do not repeat approval, replace the cron or replay a rejected write to unblock it.
 
 - `release install` activates a verified release and safely synchronises managed
-  skills. Installers after 0.2.2 also relink local Herdr to that release, install
-  the native shortcut and reload running Herdr sessions. Missing Herdr or an
+  skills. The 0.2.3 installer also relinks local Herdr to that release, installs
+  the native shortcut and reloads running Herdr sessions. Missing Herdr or an
   explicitly disabled Relay plugin is a reported skip. `--no-herdr` opts out;
   `--herdr-config TOML` selects a custom configuration. Conflicts/failures return
   `complete: false` and a non-zero exit while retaining CLI activation evidence.
@@ -278,6 +278,8 @@ compatibility: opencode
   Backend/node service upgrades and existing OpenCode plugin updates remain
   separate, explicit operations. Use the candidate CLI when upgrading from an
   older buggy CLI.
+  If a 0.2.2 CLI activated 0.2.3, rerun `release install` through the newly
+  activated CLI to execute the automatic local Herdr setup.
 - `herdr-relay skills status` compares the two shipped skills with installed files.
   `skills install` installs missing or safely managed versions. Unmanaged/local
   edits cause a conflict. Explicit `--replace-modified` retains private backups.

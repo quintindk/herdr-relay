@@ -18,8 +18,8 @@ test('public CLI exposes native backend/node maintenance and version reporting w
 test('unsupported maintenance fields, missing checksums and attempted service override fail before network/service actions', async () => {
   for (const args of [['node', 'upgrade', '--artifact', '/private/no-read'], ['backend', 'upgrade', '--version', '0.2.1', '--services', 'node'],
     ['upgrade', 'resume', '../not-an-operation', '--apply'], ['release', 'install', '--version', '0.2.1', '--apply'],
-    ['upgrade', 'status', 'id', '--version', '0.2.1'], ['upgrade', '--version', '0.2.2', '--no-herdr'],
-    ['release', 'install', '--version', '0.2.2', '--no-herdr', '--herdr-config', '/private/no-read']]) {
+    ['upgrade', 'status', 'id', '--version', '0.2.1'], ['upgrade', '--version', '0.2.3', '--no-herdr'],
+    ['release', 'install', '--version', '0.2.3', '--no-herdr', '--herdr-config', '/private/no-read']]) {
     await assert.rejects(execute(process.execPath, ['src/cli.mjs', ...args]), error => { assert.match(error.stderr, /invalid_request/); return true; });
   }
 });
@@ -28,9 +28,9 @@ function releaseCommand({ extra = [], skills = 'skills_current', herdrComplete =
   return execute(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import { maintenanceCli } from './src/upgrade-cli.mjs';
-    await maintenanceCli(${JSON.stringify(['release', 'install', '--version', '0.2.2', '--config-dir', '/fixture/opencode', ...extra])}, {
+    await maintenanceCli(${JSON.stringify(['release', 'install', '--version', '0.2.3', '--config-dir', '/fixture/opencode', ...extra])}, {
       installCliRelease: async input => {
-        assert.equal(input.version, '0.2.2'); assert.equal(input.configDirectory, '/fixture/opencode');
+        assert.equal(input.version, '0.2.3'); assert.equal(input.configDirectory, '/fixture/opencode');
         assert.equal(input.skipHerdr, ${extra.includes('--no-herdr') ? 'true' : 'undefined'});
         assert.equal(input.herdrConfig, ${extra.includes('--herdr-config') ? JSON.stringify(extra[extra.indexOf('--herdr-config') + 1]) : 'undefined'});
         return { state: 'cli_activated', servicesChanged: false, installation: '/fixture/verified release',
