@@ -134,8 +134,10 @@ try {
   }
   const nodeName = addService('node', `herdr-relay-node-${joined.nodeId}.service`, ['--config', joined.configFile]);
   symlinkSync(join(old.directory, 'src/cli.mjs'), join(bin, 'herdr-relay'));
-  const activated = await installCliRelease({ version: candidate.version, directory: join(root, 'upgrades'), binDirectory: bin }, { stageRelease: async () => candidate });
+  const activated = await installCliRelease({ version: candidate.version, directory: join(root, 'upgrades'), binDirectory: bin,
+    configDirectory: join(root, 'activation-config'), skipHerdr: true }, { stageRelease: async () => candidate });
   assert.equal(activated.servicesChanged, false);
+  assert.equal(activated.complete, true); assert.equal(activated.herdr.reason, 'disabled_by_option');
   await manager.start(nodeName);
   await owner('POST', '/v1/commands', { key: 'keep-task', action: 'task.create', payload: { id: 'keep-task', title: 'Preserve through upgrade and rollback' } });
   const send = async key => {

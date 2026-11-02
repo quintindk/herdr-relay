@@ -16,7 +16,10 @@ node, cli, context, root = sys.argv[1:]
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 110, 0, 0))
 env = {**os.environ, "HOME": root, "XDG_STATE_HOME": root + "/state",
-       "XDG_CONFIG_HOME": root + "/config", "TERM": "xterm-256color"}
+       "XDG_CONFIG_HOME": root + "/config", "TERM": "xterm-256color",
+       # Only this disposable PTY child is interactive. The CI job and all
+       # verification gates retain their original environment and behaviour.
+       "CI": "false", "CONTINUOUS_INTEGRATION": "false", "FORCE_COLOR": "1"}
 process = subprocess.Popen([node, cli, "tui", "--context", context],
                            stdin=slave, stdout=slave, stderr=slave, env=env)
 os.close(slave)

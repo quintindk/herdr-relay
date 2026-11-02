@@ -162,7 +162,9 @@ test('the public CLI TUI renames an agent through real PTY keyboard input and ba
   const f = await fixture(t), context = join(f.root, 'fixture-context.json');
   const token = f.store.issueCredential({ type: 'user', id: 'owner' }).token;
   writeFileSync(context, JSON.stringify({ url: f.backend.origin, token }), { mode: 0o600 });
-  const result = await promisify(execFile)('python3', ['test/agent-rename-pty.py', process.execPath, 'src/cli.mjs', context, f.root], { timeout: 20000 });
+  const result = await promisify(execFile)('python3', ['test/agent-rename-pty.py', process.execPath, 'src/cli.mjs', context, f.root], {
+    timeout: 20000, env: { ...process.env, CI: 'true', CONTINUOUS_INTEGRATION: 'true', GITHUB_ACTIONS: 'true' },
+  });
   assert.equal(JSON.parse(result.stdout).confirmed, true);
   const agent = f.store.get('agent', 'agent'); assert.equal(agent.name, 'PTY Documentation'); assert.equal(agent.nameRevision, 1);
   assert.equal(agent.conversationId, 'ses_keep'); assert.equal(agent.bindingId, 'binding-keep'); assert.equal(agent.bindingRevision, 1);
