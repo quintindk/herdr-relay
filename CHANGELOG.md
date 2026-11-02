@@ -9,6 +9,10 @@
 - Report incomplete skill/Herdr setup with a non-zero exit while retaining CLI
   activation evidence. Keep installation locked through local setup so concurrent
   release installs cannot leave the panel linked to a different release.
+- Distinguish a changed OpenCode project ID from wider conversation identity
+  mismatches. Interactive preparation errors retain their code and explain the
+  human-confirmed `/relay-attach` recovery, existing-worktree reuse and original-key
+  retry. Never refresh identity pins or retry provisioning automatically.
 
 ## 0.2.2 — 29 October 2026
 

@@ -4,6 +4,27 @@ Compatible code upgrades do not depend on work settlement. Use recovery when the
 human actually wants to withdraw stale bookkeeping, not to make an upgrade pass.
 Cross-schema database migrations are unsupported.
 
+## Changed OpenCode project identity
+
+`native_project_identity_changed` means the same OpenCode conversation, directory
+and creation time now report a different project ID from Relay's pinned binding.
+Interactive preparation stops before enqueue and returns explicit recovery steps:
+
+1. Ask the human to run `/relay-attach` in the **existing initiating chat** and
+   confirm the **same Relay enrolment**. Do not enrol a duplicate agent.
+2. Wait for the attachment to be confirmed. The error does not authorise an agent
+   to update identity pins, change permissions or perform attachment itself.
+3. Retry `relay_interactive_prepare` with the original ID, key and payload, reusing
+   the existing worktree. Review any resulting permission request in Grants.
+
+A wider `native_identity_mismatch` requires inspection of the exact conversation
+and workspace first. It does not get the project-only attachment shortcut.
+`native_model_unavailable` instead asks the human to resolve the current model
+and check the existing attachment before retrying. Do not use the backend-admin
+CLI, copy credentials, create another worktree or restart OpenCode to bypass these
+checks. Managed/headless bindings require their own coordinator inspection, not
+interactive reattachment.
+
 ## Human assignment handback
 
 ```sh

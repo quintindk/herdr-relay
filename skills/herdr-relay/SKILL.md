@@ -208,6 +208,16 @@ compatibility: opencode
   preparation to drive progress. Inspect `relay_interactive_status` instead.
   `waiting_driver` means permission exists but a verified destination Herdr
   connection is unavailable. It does not authorise a different destination.
+- `native_project_identity_changed` during interactive preparation means this
+  same chat, directory and creation time now report a different OpenCode project
+  ID. No request was queued. Ask the human to run `/relay-attach` in this existing
+  initiating chat and confirm the same enrolment. Wait for confirmed attachment,
+  then retry the original preparation ID, key and payload using the existing
+  worktree. Do not attach automatically, create duplicates, alter identity pins,
+  borrow credentials or use a backend-admin CLI fallback. A broader
+  `native_identity_mismatch` needs exact chat/workspace inspection first, not
+  this project-only recovery. For `native_model_unavailable`, ask the human to
+  resolve the existing chat's model and verify its attachment before retrying.
 - Prepared dispatch reuses an existing task with its inspected `taskRevision`.
   Do not recreate it or change its identity. Supply `title` only for a new task.
   A `refused` dispatch with `applied: false` did not commit; retain/reconcile the

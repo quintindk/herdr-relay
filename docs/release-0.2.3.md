@@ -1,6 +1,6 @@
 # Herdr Relay 0.2.3
 
-Patch release for complete local Herdr panel setup during release installation.
+Patch release for complete local Herdr panel setup and actionable provisioning errors.
 Publication does not install the release on any host or upgrade running services.
 
 ## Fixes
@@ -20,6 +20,13 @@ Publication does not install the release on any host or upgrade running services
 - **Concurrent installs:** retain the installation lock through skill and Herdr
   setup so simultaneous release installs cannot leave the panel linked to a
   different release from the public CLI.
+- **Actionable provisioning errors:** distinguish a changed project ID for the
+  same OpenCode chat from a wider conversation identity mismatch. Project-only
+  failures tell the initiating agent to ask for human-confirmed `/relay-attach`,
+  then reuse the existing worktree and original preparation ID/key/payload.
+  Error codes remain in the agent-visible message even if the tool host flattens
+  structured errors. No identity pin is refreshed and no request is queued until
+  the model/identity checks pass. Unknown private exceptions remain sanitised.
 
 ## Installation and upgrades
 

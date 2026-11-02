@@ -73,3 +73,30 @@ test('snapshot rejects looping native cursors instead of silently truncating', a
   }, { sessionId: 's', projectId: 'p', directory: '/work', createdAt: 1 });
   await assert.rejects(native.snapshot(), { code: 'invalid_native_cursor' });
 });
+
+test('a project-only identity change has a specific safe error and never adopts the new identity', async () => {
+  const identity = { sessionId: 'session', projectId: 'old-project', directory: '/workspace', createdAt: 1 };
+  const session = { id: identity.sessionId, projectID: 'new-project', location: { directory: identity.directory }, time: { created: identity.createdAt } };
+  const native = new NativeOpenCodeV2({ session: { get: async () => session } }, identity);
+  await assert.rejects(native.verify(), error => {
+    assert.equal(error.code, 'native_project_identity_changed'); assert.equal(error.status, 409);
+    assert.match(error.message, /\[native_project_identity_changed\]/); assert.match(error.message, /explicitly/);
+    assert.doesNotMatch(error.message, /old-project|new-project|\/workspace/);
+    return true;
+  });
+  assert.deepEqual(native.identity, identity);
+});
+
+test('changed session, workspace, creation time, archive/revert or missing project ID never gets project-only recovery advice', async () => {
+  const identity = { sessionId: 'session', projectId: 'old-project', directory: '/workspace', createdAt: 1 };
+  const base = { id: identity.sessionId, projectID: 'new-project', location: { directory: identity.directory }, time: { created: identity.createdAt } };
+  for (const patch of [{ id: 'other' }, { location: { directory: '/elsewhere' } }, { time: { created: 2 } },
+    { time: { created: 1, archived: 2 } }, { revert: {} }, { projectID: '' }, { projectID: undefined }]) {
+    const native = new NativeOpenCodeV2({ session: { get: async () => ({ ...base, ...patch }) } }, identity);
+    await assert.rejects(native.verify(), error => {
+      assert.equal(error.code, 'native_identity_mismatch'); assert.equal(error.status, 409);
+      assert.match(error.message, /Do not automatically reattach/); assert.doesNotMatch(error.message, /\/relay-attach/);
+      return true;
+    });
+  }
+});
