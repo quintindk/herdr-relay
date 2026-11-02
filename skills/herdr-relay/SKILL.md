@@ -75,6 +75,12 @@ compatibility: opencode
   separate views. Grants owns security requests and permissions, not Inbox.
   The Agents local-node marker is based on the active scoped
   context's node/backend identities, not network proximity or machine names.
+- In Agents, **n** renames the selected agent, including from agent detail.
+  Edit, Enter to preview and Enter to confirm. This changes only the Relay name,
+  not agent identity, receiving chat, workspace, permissions, work or schedules.
+  A node operator is limited to its own node/workspace. Unknown publication
+  outcomes stay in Inbox under the original key, never repeat them as a new
+  rename. Native chat titles and Herdr workspace labels are not renamed.
 - In RC4, Tasks **a** opens a node-grouped picker with **You (human)** first.
   Human selection previews and confirms the existing assignment handback to Todo,
   never dispatches a run or discards submitted results/child work. An unconfirmed

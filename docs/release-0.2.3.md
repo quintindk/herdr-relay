@@ -1,10 +1,17 @@
 # Herdr Relay 0.2.3
 
-Patch release for complete local Herdr panel setup and actionable provisioning errors.
+Patch release for complete local Herdr panel setup, agent renaming and actionable provisioning errors.
 Publication does not install the release on any host or upgrade running services.
 
 ## Fixes
 
+- **Rename agents:** select an agent in Agents, or open its detail, and press `n`.
+  Edit its Relay name, review it and confirm. Agent identity, receiving chat,
+  workspace, permissions, work and schedules remain unchanged. Heartbeats do not
+  invalidate the name preview. Conflicting edits require a fresh preview and
+  uncertain publications reconcile their original key in Inbox. Upgraded nodes
+  synchronise local enrolment labels from backend events or restart snapshots.
+  Native chat titles and Herdr workspace labels are not renamed by this action.
 - **Automatic Herdr panel setup:** `release install` links Herdr to the verified
   installed Relay release, including a stale link to the old TUI. It installs the
   native `prefix+t` binding and reloads running Herdr sessions.

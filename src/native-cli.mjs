@@ -231,7 +231,7 @@ export async function main(args) {
            decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
            prepareHandback: board.prepareHandback, handbackTask: board.handbackTask,
           detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions,
-          updateRunResultNotifications: board.updateRunResultNotifications });
+          updateRunResultNotifications: board.updateRunResultNotifications, prepareAgentRename: board.prepareAgentRename, renameAgent: board.renameAgent });
       }
     } finally { journal.close(); }
     return;

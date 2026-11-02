@@ -107,8 +107,18 @@ export class NodeJournal {
           event.type.startsWith('question.') ? 'question' : null;
         if (cacheKind) {
           const old = this.db.prepare('SELECT data FROM cached_entities WHERE kind=? AND id=?').get(cacheKind, event.entityId);
-          if (!old || JSON.parse(old.data).entity.revision <= event.revision) this.db.prepare(`INSERT INTO cached_entities VALUES (?,?,?)
-            ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data`).run(cacheKind, event.entityId, JSON.stringify({ entity: event.data, fetchedAt: now() }));
+          if (!old || JSON.parse(old.data).entity.revision <= event.revision) {
+            this.db.prepare(`INSERT INTO cached_entities VALUES (?,?,?)
+              ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data`).run(cacheKind, event.entityId, JSON.stringify({ entity: event.data, fetchedAt: now() }));
+            // The backend owns confirmed display-name changes. Apply them to
+            // local enrolment metadata, never to receiver identity or policy.
+            if (cacheKind === 'agent' && event.data.nodeId === this.nodeId && Number.isSafeInteger(event.data.nameRevision) && event.data.nameRevision > 0) {
+              const key = `enrolment:${event.entityId}`, row = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+              const enrolment = row && JSON.parse(row.value);
+              if (enrolment && enrolment.directory === event.data.directory && (enrolment.nameRevision ?? 0) < event.data.nameRevision)
+                this.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({ ...enrolment, name: event.data.name, nameRevision: event.data.nameRevision }), key);
+            }
+          }
         }
         if (['schedule.install', 'schedule.transfer_activate', 'schedule.cancel', 'schedule.pause', 'schedule.resume'].includes(event.type) && event.data?.definition?.nodeId === this.nodeId) {
           const schedule = event.data;

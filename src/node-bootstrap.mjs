@@ -4,7 +4,7 @@ import { digest, requireValue } from './protocol.mjs';
 // A human credential is separate from both the backend-root credential and the
 // node daemon credential. It may manage this node's enrolments and the same
 // human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
-export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'task.create', 'task.update', 'comment.create', 'reference.attach',
+export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'agent.rename', 'task.create', 'task.update', 'comment.create', 'reference.attach',
   'execution.request', 'execution.cancel', 'execution.handback', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
   'occurrence.review', 'notification.acknowledge', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 
@@ -29,6 +29,11 @@ export function authoriseOperator(store, actor, action, payload) {
     const directory = schedule.definition.targetFolder ?? (schedule.definition.targetAgentId ? store.get('agent', schedule.definition.targetAgentId).directory : null);
     requireValue(schedule.definition.nodeId === scope.nodeId && (scope.mode === 'localUser' || canonicalDirectory(directory) && withinRoots(directory, scope.roots)),
       'operator_scope_mismatch', 'Run result settings are outside this node operator workspace scope');
+  }
+  if (action === 'agent.rename') {
+    const agent = store.get('agent', payload.id);
+    requireValue(agent.nodeId === scope.nodeId && (scope.mode === 'localUser' || canonicalDirectory(agent.directory) && withinRoots(agent.directory, scope.roots)),
+      'operator_scope_mismatch', 'Rename requires the operator for this agent\'s owning node and workspace', 403);
   }
   if (['agent.enrol', 'agent.attach', 'agent.relocate'].includes(action)) {
     const nodeId = action === 'agent.enrol' ? payload.nodeId : store.get('agent', payload.id).nodeId;

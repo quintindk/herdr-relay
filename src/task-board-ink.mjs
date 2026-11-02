@@ -9,6 +9,7 @@ import { RunResultNotificationsPanel } from './run-result-notifications-panel.mj
 import { BoardText, modalSize, appendBoardInput } from './board-text.mjs';
 import { routineDetailLayout } from './board-detail-layout.mjs';
 import { layoutBoardRows, boardRowViewport } from './board-row-layout.mjs';
+import { AgentRenamePanel } from './agent-rename-panel.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
@@ -141,7 +142,7 @@ function ReviewModal({ modal, setModal, submit, width, height }) {
   h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : modal.decision === 'reject' ? 'Type feedback · Enter review · Esc cancel' : 'Enter review · Esc cancel'));
 }
 
-function AgentDetailModal({ detail, close, width, height }) {
+function AgentDetailModal({ detail, close, rename, width, height }) {
   const [scroll, setScroll] = useState(0), [technical, setTechnical] = useState(false);
   const { width: w, height: size } = modalSize(width, height, 100, 26), viewport = Math.max(1, size - 8);
   const agent = detail.data?.agent;
@@ -163,6 +164,7 @@ function AgentDetailModal({ detail, close, width, height }) {
   ] : [detail.error ? `Agent detail unavailable: ${detail.error}` : 'Loading agent…']).flatMap(line => wrapBoardText(line, w - 6));
   const start = Math.min(scroll, Math.max(0, lines.length - viewport));
   useInput((input, key) => {
+    if (input === 'n' && rename && agent) { void rename(agent); return; }
     if (key.escape || key.return || input === 'q') { close(); return; }
     if (input === 't') { setTechnical(value => !value); setScroll(0); return; }
     if (key.downArrow || input === 'j') setScroll(value => Math.min(Math.max(0, lines.length - viewport), value + 1));
@@ -175,7 +177,7 @@ function AgentDetailModal({ detail, close, width, height }) {
   h(Text, { bold: true, color: 'cyan' }, 'Agent details'),
   h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' }, ...lines.slice(start, start + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line || ' '))),
   h(Box, { flexGrow: 1 }), h(Text, { dimColor: true }, `${start + 1}-${Math.min(lines.length, start + viewport)}/${lines.length}`),
-  h(Text, { dimColor: true, wrap: 'truncate-end' }, 'j/k · PgUp/PgDn · t details · Esc close'));
+  h(Text, { dimColor: true, wrap: 'truncate-end' }, `j/k · PgUp/PgDn · ${rename ? 'n rename · ' : ''}t details · Esc close`));
 }
 
 function DetailModal({ detail, close, openOccurrence, openAction, review, openRunResultNotifications, width, height }) {
@@ -302,7 +304,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
 }
 
 export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
-  detailGrant, decideGrant, createGrant, pendingGrantDecisions, updateRunResultNotifications, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+  detailGrant, decideGrant, createGrant, pendingGrantDecisions, updateRunResultNotifications, prepareAgentRename, renameAgent, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
   const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
@@ -312,6 +314,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const [selectedNativeId, setSelectedNativeId] = useState(null);
   const [decisionModal, setDecisionModal] = useState(null);
   const [settingsModal, setSettingsModal] = useState(null);
+  const [renameModal, setRenameModal] = useState(null);
   const [decisionReceipt, setDecisionReceipt] = useState(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
@@ -420,6 +423,30 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       setSettingsModal(null); setNotice(result.message); setRefreshGeneration(value => value + 1);
     } catch (error) { setSettingsModal({ ...current, busy: false, locked: true, error: clean(error.message || 'Inspect the original settings publication in Inbox') }); }
   };
+  const openAgentRename = async agent => {
+    if (offline) { setNotice('Refresh the board connection before renaming'); return; }
+    if (!board.agentRenamingAvailable || !prepareAgentRename || !renameAgent) { setNotice('Agent renaming is unavailable. Upgrade the backend and TUI'); return; }
+    const requestId = randomUUID();
+    setDetail(null); setRenameModal({ requestId, key: `agent-rename:${randomUUID()}`, name: '', busy: true, error: '', confirm: false });
+    try {
+      const preview = await prepareAgentRename({ agentId: agent.id });
+      setRenameModal(value => value?.requestId === requestId ? { ...value, preview, name: preview.name, busy: false } : value);
+    } catch (error) { setRenameModal(value => value?.requestId === requestId ? { ...value, busy: false, error: clean(error.message) } : value); }
+  };
+  const submitAgentRename = async current => {
+    setRenameModal({ ...current, busy: true, error: '' });
+    try {
+      const result = await renameAgent({ ...current.preview, key: current.key, name: current.name });
+      if (result.state !== 'recorded' || result.agent?.id !== current.preview.agentId || result.agent?.name !== current.name) throw Error('Agent rename is not confirmed');
+      setRenameModal(null); setNotice(result.message || `Agent renamed to ${current.name}`); setRefreshGeneration(value => value + 1);
+    } catch (error) {
+      const publications = pendingDecisions?.();
+      const publication = publications?.find(item => item.key === current.key);
+      setRenameModal({ ...current, busy: false, locked: publications ? !!publication : true, refused: publication?.action === 'dismiss',
+        error: clean(error.message || 'Rename is unconfirmed. Reconcile the original operation in Inbox') });
+      setRefreshGeneration(value => value + 1);
+    }
+  };
   const submit = async current => {
     const status = current.options[current.index]; setModal({ ...current, busy: true, error: '' });
     try {
@@ -508,7 +535,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   };
   useInput((input, key) => {
     if (native && view === 'grants') return;
-    if (modal || assignment || reviewModal || detail || decisionModal || settingsModal) return;
+    if (modal || assignment || reviewModal || detail || decisionModal || settingsModal || renameModal) return;
     if (searching) {
       if (key.escape) { setSearching(false); setFilter(''); }
       else if (key.return) setSearching(false);
@@ -573,6 +600,11 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     if (native && view === 'schedules' && input === 'n') {
       const row = rows[selectedIndex]; if (row?.type === 'routine') openRunResultNotifications(row.routine); return;
     }
+    if (native && view === 'agents' && input === 'n') {
+      const row = rows[selectedIndex];
+      if (row?.type !== 'agent') setNotice('Select an agent to rename'); else void openAgentRename(row.agent);
+      return;
+    }
     if (input === 'a') {
       if (native && !dispatchTask) { setNotice('Native execution handover is unavailable'); return; }
       const row = rows[selectedIndex];
@@ -634,7 +666,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     onView: delta => { setView(value => nativeBoardViews[(nativeBoardViews.indexOf(value) + delta + nativeBoardViews.length) % nativeBoardViews.length]); setSelected(0); setSelectedNativeId(null); },
     onQuit: () => { setQuitting(true); (onQuit ?? exit)(); } });
   const summary = taskCounts(board.tasks);
-  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal || settingsModal);
+  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal || settingsModal || renameModal);
   const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
   const nativeCounts = view === 'agents'
     ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
@@ -655,6 +687,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       'Esc dismiss acknowledgement · Tab view · Enter open · q quit']
     : [native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search',
       native ? view === 'schedules' ? 'n run result notifications · PgUp/Dn · r refresh · q quit'
+        : view === 'agents' ? `${board.agentRenamingAvailable && renameAgent ? 'n rename · ' : ''}PgUp/Dn · r refresh · q quit`
         : `h done · ${dispatchTask ? 'a assign · ' : ''}PgUp/Dn · r refresh · s status · q quit` : 'h done · i idle · r refresh · a assign · s status · q quit'])
     .flatMap(text => wrapBoardText(text, width));
   const bodyHeight = Math.max(1, height - header.length - footer.length - (native ? 3 : 2));
@@ -704,8 +737,12 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       else { if (value?.reason !== undefined) setReviewFeedback(value.reason); setReviewModal(value); }
     }, submit: submitReview, width, height }) : null,
     detailView && !reviewModal && !decisionModal ? detailView.kind === 'agent'
-      ? h(AgentDetailModal, { detail: detailView, close: () => setDetail(null), width, height })
+      ? h(AgentDetailModal, { detail: detailView, close: () => setDetail(null), rename: board.agentRenamingAvailable && renameAgent ? openAgentRename : undefined, width, height })
       : h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, openAction: openInbox, review: prepareReview, openRunResultNotifications, width, height }) : null,
+    renameModal ? h(AgentRenamePanel, { modal: renameModal, setModal: setRenameModal, submit: submitAgentRename, close: () => {
+      setRenameModal(null);
+      if (renameModal.locked) { setView('inbox'); setSelected(0); setSelectedNativeId(null); }
+    }, width, height }) : null,
     settingsModal ? h(RunResultNotificationsPanel, { modal: settingsModal, setModal: setSettingsModal, submit: submitRunResultNotifications, width, height }) : null,
     decisionModal ? h(BoardDecisionModal, { modal: decisionModal, setModal: setDecisionModal, submit: submitDecision, width, height }) : null);
 }

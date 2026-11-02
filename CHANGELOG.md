@@ -2,6 +2,11 @@
 
 ## 0.2.3 — Unreleased
 
+- Rename agents from the Agents list or detail with `n`, preview and explicit
+  confirmation. Preserve the agent ID, receiver, work, permissions and schedules.
+  Use a separate name revision so heartbeat updates do not invalidate edits.
+  Retain uncertain renames in Inbox and synchronise local enrolment labels from
+  confirmed backend projections without restarting the receiving chat.
 - Complete local Herdr panel setup during `release install`: relink the verified
   release, install the native `prefix+t` binding and reload running Herdr sessions.
   Preserve disabled plugins, unrelated keys and existing panel processes. Skip
