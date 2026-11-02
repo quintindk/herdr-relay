@@ -32,8 +32,9 @@ herdr-relay --version
 
 Use a user-owned npm installation without sudo. `release install` activates the
 versioned CLI and safely synchronises managed skills. It does not upgrade existing
-services or authorise live configuration changes. A checkout/npm link is not a
-published release installation.
+services or change OpenCode plugin configuration. Installers after 0.2.2 also
+configure the local Herdr panel when Herdr is available; see step 7 for behaviour
+and opt-out. A checkout/npm link is not a published release installation.
 
 ## 2. Install a fresh backend
 
@@ -141,7 +142,29 @@ See [receiving chats](native-receivers.md) and [the board](task-board.md).
 
 ## 7. Optional Herdr panel
 
-Link the **installed release directory** through Herdr, not a moving checkout:
+**Automatic setup is an unreleased installer change. The published 0.2.2 installer
+still requires the manual commands below.**
+
+New installers perform this setup during `herdr-relay release install`:
+
+- Detect local Herdr and relink its Relay plugin to the **verified installed
+  release directory**, including an existing link to the old TUI.
+- Install the native `prefix+t` binding without changing unrelated keys. An
+  existing Relay binding is retained. Conflicting bindings are reported before
+  registration or key changes, never silently replaced.
+- Reload configuration in running Herdr sessions. A stopped server stays stopped;
+  existing panels and OpenCode/Relay services are not restarted.
+- Preserve an explicitly disabled Relay plugin. Missing Herdr is a reported skip.
+- Return `complete: false` and a non-zero exit if skill or Herdr setup fails. The
+  verified CLI remains activated. Resolve the reported error and rerun the same
+  install command to finish setup safely.
+
+`--no-herdr` skips panel setup on a backend-only host. `--herdr-config TOML`
+selects the same configuration for shortcut installation and Herdr commands;
+otherwise `HERDR_CONFIG_PATH` and the standard XDG location are respected.
+
+For published 0.2.2 or manual repair, link the **installed release directory**,
+not a moving checkout:
 
 ```sh
 herdr plugin link /absolute/installed/herdr-relay

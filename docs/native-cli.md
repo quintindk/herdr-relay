@@ -14,6 +14,21 @@ herdr-relay tui
 In a checkout, `node src/cli.mjs` invokes the same router. Most commands return
 JSON. Interactive TUI use requires a terminal; `tui --json` is a read-only projection.
 
+## Local release setup
+
+`release install` activates the verified CLI and safely synchronises managed
+skills. Installers after 0.2.2 also link the local Herdr panel, install its native
+`prefix+t` shortcut and reload running Herdr sessions. `--no-herdr` skips this;
+`--herdr-config TOML` selects a custom Herdr configuration. These options do not
+change backend/node services or OpenCode plugin configuration.
+
+JSON output includes separate `skills` and `herdr` results and a `complete`
+flag. Incomplete local setup returns a non-zero exit even though the CLI was
+activated. Resolve the reported error and rerun the install command. Unrelated
+shortcuts and disabled plugins are never overwritten. See
+[panel setup](installation-and-onboarding.md#7-optional-herdr-panel) for the manual
+commands still required by the published 0.2.2 installer.
+
 ## Context and authority
 
 Backend mutations require the appropriate explicit `--context FILE` or configured

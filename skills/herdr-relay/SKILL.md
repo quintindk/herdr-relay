@@ -81,8 +81,10 @@ compatibility: opencode
   decision is reconciled from Inbox under its original key.
 - **PgUp/PgDn** inspect long wrapped cards. Cron detail scrolls by physical lines;
   **[ / ]** select an occurrence and **o** opens only its exact linked task.
-  Herdr `prefix+t` opens/focuses the native TUI after explicit `plugin shortcut`
-  installation. Do not silently overwrite an existing key or restart OpenCode.
+  Herdr `prefix+t` opens/focuses the native TUI. Installers after 0.2.2 wire the
+  local panel during `release install`; published 0.2.2 needs explicit plugin
+  linking and `plugin shortcut`. Do not silently overwrite an existing key or
+  restart OpenCode. Existing panels retain their original processes until closed.
 
 ## Messages
 
@@ -266,9 +268,16 @@ compatibility: opencode
   RC4 activation, but uncertain writes and revision conflicts still require inspection.
   Do not repeat approval, replace the cron or replay a rejected write to unblock it.
 
-- CLI activation, node/plugin service changes and skill installation are distinct.
-  `release install` activates a verified release. Service changes require an
-  explicit upgrade. Use the candidate CLI when upgrading from an older buggy CLI.
+- `release install` activates a verified release and safely synchronises managed
+  skills. Installers after 0.2.2 also relink local Herdr to that release, install
+  the native shortcut and reload running Herdr sessions. Missing Herdr or an
+  explicitly disabled Relay plugin is a reported skip. `--no-herdr` opts out;
+  `--herdr-config TOML` selects a custom configuration. Conflicts/failures return
+  `complete: false` and a non-zero exit while retaining CLI activation evidence.
+  Resolve the error and rerun installation, never silently replace unrelated keys.
+  Backend/node service upgrades and existing OpenCode plugin updates remain
+  separate, explicit operations. Use the candidate CLI when upgrading from an
+  older buggy CLI.
 - `herdr-relay skills status` compares the two shipped skills with installed files.
   `skills install` installs missing or safely managed versions. Unmanaged/local
   edits cause a conflict. Explicit `--replace-modified` retains private backups.

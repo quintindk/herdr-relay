@@ -76,7 +76,15 @@ explicit offline/freshness warning rather than reporting an empty successful lis
 
 ## Herdr panel
 
-After linking the installed Relay plugin:
+Installers after 0.2.2 configure the panel during `release install`: link the
+verified release, install its shortcut and reload running Herdr sessions.
+`--no-herdr` skips this setup; `--herdr-config TOML` selects a custom configuration.
+Missing Herdr and explicitly disabled plugins are preserved as reported skips.
+A conflict or failed reload reports incomplete setup and a non-zero exit, not
+a successfully updated panel. Existing panels are never restarted automatically.
+
+With the published 0.2.2 installer, or for manual repair, link the installed Relay
+plugin and run:
 
 ```sh
 herdr-relay plugin shortcut --dry-run

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Complete local Herdr panel setup during `release install`: relink the verified
+  release, install the native `prefix+t` binding and reload running Herdr sessions.
+  Preserve disabled plugins, unrelated keys and existing panel processes. Skip
+  missing Herdr or explicit `--no-herdr`; support `--herdr-config` for a custom file.
+- Report incomplete skill/Herdr setup with a non-zero exit while retaining CLI
+  activation evidence. Keep installation locked through local setup so concurrent
+  release installs cannot leave the panel linked to a different release.
+
 ## 0.2.2 — 29 October 2026
 
 - Add explicit, previewed relocation for an enrolled root chat moved to another

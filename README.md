@@ -29,8 +29,9 @@ stable release. Existing installations must be on **0.2.1-rc4 or later** to upgr
 
 The CLI is a Node.js package distributed through immutable
 [GitHub releases](https://github.com/quintindk/herdr-relay/releases), not a
-standalone binary or an npm-published service. CLI activation, service upgrades,
-plugin configuration and skill installation are separate operations.
+standalone binary or an npm-published service. Service upgrades and OpenCode plugin
+configuration remain separate from CLI activation. See [installation](docs/installation-and-onboarding.md)
+for managed skills and local Herdr panel setup.
 
 ## Start here
 

@@ -30,8 +30,13 @@ herdr-relay release install --version 0.2.2
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
 Activation audits/stages the package and updates the CLI/managed skills, not
-existing services. Refresh skill context through the harness; do not restart
-OpenCode to reload skills or configuration.
+existing services or OpenCode plugin configuration. Installers after 0.2.2 also
+relink the local Herdr panel, install its shortcut and reload running Herdr
+sessions. Use `--no-herdr` to skip this or `--herdr-config TOML` for a custom
+configuration. The published 0.2.2 installer still needs the manual
+[Herdr panel setup](installation-and-onboarding.md#7-optional-herdr-panel).
+Refresh skill context through the harness; do not restart OpenCode to reload
+skills or configuration.
 
 ## 2. Plan, then apply with the same key
 

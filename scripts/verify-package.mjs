@@ -35,7 +35,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/headless-permissions.mjs', 'src/headless-connection.mjs', 'src/node-headless-connection.mjs', 'packages/opencode-relay/headless-mcp.mjs',
   'src/task-identity.mjs',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
-  'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs',
+  'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
@@ -109,8 +109,9 @@ if (!values['skip-audit']) {
   symlinkSync(join(installed, 'src/cli.mjs'), join(activationBin, 'herdr-relay'));
   const activation = JSON.parse(execFileSync(installedCli, ['release', 'install', '--artifact', artifact, '--sha256', sha(artifact),
     '--upgrade-dir', join(root, 'activation-upgrades'), '--releases-dir', join(root, 'activation-releases'), '--bin-dir', activationBin,
-    '--config-dir', skillConfig], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+    '--config-dir', skillConfig, '--no-herdr'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   assert.equal(activation.servicesChanged, false); assert.equal(activation.skills.state, 'skills_current');
+  assert.equal(activation.complete, true); assert.equal(activation.herdr.reason, 'disabled_by_option');
 }
 execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';
