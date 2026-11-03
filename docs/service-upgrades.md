@@ -23,10 +23,10 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-0.2.3, which is currently in preparation and must be published before use:
+0.2.4, which is currently in preparation and must be published before use:
 
 ```sh
-herdr-relay release install --version 0.2.3
+herdr-relay release install --version 0.2.4
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -36,8 +36,14 @@ relinks the local Herdr panel, installs its shortcut and reloads running Herdr
 sessions. Use `--no-herdr` to skip this or `--herdr-config TOML` for a custom
 configuration. The published 0.2.2 installer still needs the manual
 [Herdr panel setup](installation-and-onboarding.md#7-optional-herdr-panel).
-If the 0.2.2 CLI activated 0.2.3, rerun the release install command through the
-newly activated CLI to finish automatic panel setup.
+From a handover-capable 0.2.4 CLI, setup runs in the verified candidate process and
+reports `installer.version`. Already-published old clients cannot gain that code
+retroactively. Use the [candidate-first bootstrap](installation-and-onboarding.md#upgrading-a-pre-handover-cli)
+when starting from one of those clients and needing version-owned completion.
+The published 0.2.3 caller's known setup remains compatible with a one-pass 0.2.4
+activation, but its output cannot provide the new executor receipt.
+If the 0.2.2 CLI has already activated 0.2.3 without panel setup, invoking that
+newly activated 0.2.3 installer again remains the legacy repair.
 Refresh skill context through the harness; do not restart OpenCode to reload
 skills or configuration.
 
@@ -46,15 +52,15 @@ skills or configuration.
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.2.3 --key stable-023-backend-host
-herdr-relay upgrade --services both --version 0.2.3 --key stable-023-backend-host --apply
+herdr-relay upgrade --services both --version 0.2.4 --key stable-024-backend-host
+herdr-relay upgrade --services both --version 0.2.4 --key stable-024-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.2.3 --key stable-023-node-host
-herdr-relay upgrade --services node --version 0.2.3 --key stable-023-node-host --apply
+herdr-relay upgrade --services node --version 0.2.4 --key stable-024-node-host
+herdr-relay upgrade --services node --version 0.2.4 --key stable-024-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -67,7 +73,7 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4/0.2.1/0.2.2-to-0.2.3 retains protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4/0.2.1/0.2.2/0.2.3-to-0.2.4 retains protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
 
 Upgrading enables the supported connection-rebind and workspace-relocation

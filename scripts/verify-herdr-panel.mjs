@@ -2,22 +2,26 @@
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startBackend } from '../src/backend-service.mjs';
 import { nativeBackendClient } from '../src/backend-client.mjs';
 import { createNodeBundle, joinNode } from '../src/native-onboarding.mjs';
+import { hashBytes } from '../src/release-install.mjs';
 
 const root = mkdtempSync('/tmp/opencode/relay-herdr-panel-'), home = join(root, 'home'), state = join(home, '.local/state');
 const workspace = join(root, 'workspace'), name = `rc4-panel-${process.pid}`;
 const packageDirectory = resolve(process.env.RELAY_PACKAGE_DIRECTORY || '.');
+const artifact = process.env.RELAY_PACKAGE_ARTIFACT ? resolve(process.env.RELAY_PACKAGE_ARTIFACT) : null;
 for (const path of [home, state, workspace, join(home, '.config/herdr')]) mkdirSync(path, { recursive: true });
 const env = { PATH: process.env.PATH, HOME: home, TERM: 'xterm-256color', SHELL: '/bin/sh',
   XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: state, XDG_DATA_HOME: join(home, '.local/share'),
   XDG_CACHE_HOME: join(home, '.cache'), HERDR_CONFIG_PATH: join(home, '.config/herdr/config.toml') };
 writeFileSync(env.HERDR_CONFIG_PATH, 'onboarding = false\n');
+const bin = join(root, 'bin'); mkdirSync(bin);
+symlinkSync(join(packageDirectory, 'src/cli.mjs'), join(bin, 'herdr-relay'));
 const exec = promisify(execFile);
 const herdr = async (...args) => {
   const json = ['plugin list', 'session list'].includes(args.slice(0, 2).join(' ')) ? ['--json'] : [];
@@ -26,6 +30,15 @@ const herdr = async (...args) => {
   const value = JSON.parse(stdout); assert.equal(value.error, undefined, JSON.stringify(value.error)); return value.result;
 };
 const installPanel = async () => {
+  if (artifact) {
+    const { stdout } = await exec(process.execPath, [join(packageDirectory, 'src/cli.mjs'), 'release', 'install',
+      '--artifact', artifact, '--sha256', hashBytes(readFileSync(artifact)), '--bin-dir', bin,
+      '--upgrade-dir', join(root, 'upgrades'), '--releases-dir', join(root, 'releases')], { env, timeout: 240000, maxBuffer: 4 * 1024 * 1024 });
+    const result = JSON.parse(stdout);
+    assert.equal(result.complete, true, JSON.stringify(result)); assert.equal(result.servicesChanged, false);
+    assert.equal(result.installer.mode, 'candidate'); assert.equal(result.installer.version, result.version);
+    return result.herdr;
+  }
   const { stdout } = await exec(process.execPath, ['--input-type=module', '-e', `
     import { installHerdrPanel } from ${JSON.stringify(pathToFileURL(join(packageDirectory, 'src/herdr-install.mjs')).href)};
     console.log(JSON.stringify(await installHerdrPanel({ sourceDirectory: ${JSON.stringify(packageDirectory)} })));
@@ -59,7 +72,7 @@ try {
   assert.equal(runningSetup.shortcut.state, 'existing');
   assert.deepEqual(runningSetup.configReload, { state: 'reloaded', sessions: [name] });
   const plugins = (await herdr('plugin', 'list')).plugins;
-  assert.equal(plugins.find(plugin => plugin.plugin_id === 'quintindk.herdr-relay').plugin_root, packageDirectory);
+  assert.equal(plugins.find(plugin => plugin.plugin_id === 'quintindk.herdr-relay').plugin_root, offlineSetup.installation);
   const created = await herdr('workspace', 'create', '--cwd', workspace, '--label', 'RC4 panel fixture', '--focus');
   const anchor = created.root_pane;
   assert.ok(anchor?.pane_id);
@@ -87,7 +100,8 @@ try {
     const items = await panes(); return !items.some(p => p.pane_id === third.pane_id) && items.some(p => p.pane_id === other.pane_id && p.focused);
   });
   console.log(JSON.stringify({ passed: true, realHerdrServer: true, scopedNodeOnlyBoard: true, nativeTaskDisplayed: true,
-    automaticPanelSetup: true, stalePluginRelinked: true, shortcutInstalled: true, offlineSetupStartsNoServer: true, runningConfigReloaded: true,
+    automaticPanelSetup: true, candidateInstallerHandover: Boolean(artifact), stagedPackageAuditVerified: Boolean(artifact),
+    stalePluginRelinked: true, shortcutInstalled: true, offlineSetupStartsNoServer: true, runningConfigReloaded: true,
     immediateKeyboardFocus: true, toggleRestoresOrigin: true, quitRestoresOrigin: true, quitDoesNotStealFocus: true,
     userServicesTouched: false, fixture: root }, null, 2));
 } catch (error) { console.error(serverLog); throw error; }

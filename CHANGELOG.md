@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.2.3 — Unreleased
+## 0.2.4 — Unreleased
+
+- Hand local release setup to the fingerprint-verified candidate's own Node
+  process instead of continuing to run the caller's older setup modules.
+  Retain the installation lock through skills, Herdr registration, shortcut
+  installation and running-session configuration reloads.
+- Report the caller and setup executor versions. Missing or unsupported handover
+  protocols fail before activation. Failed, malformed or lost setup responses
+  retain activation evidence but never report successful completion.
+- Preserve custom configuration paths, disabled plugins, shortcut conflicts and
+  idempotent retries without restarting services or chats. Document a verified
+  candidate-first bootstrap for already-published pre-handover installers.
+
+## 0.2.3 — 02 November 2026
 
 - Rename agents from the Agents list or detail with `n`, preview and explicit
   confirmation. Preserve the agent ID, receiver, work, permissions and schedules.

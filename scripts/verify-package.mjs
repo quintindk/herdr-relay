@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { promisify } from 'node:util';
+import { verifyInstallerHandover } from './verify-installer-handover.mjs';
 
 // A local RC artifact only. This never publishes npm packages, Git tags or a
 // GitHub release, and never uses the user's native services or credentials.
@@ -36,7 +37,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/headless-permissions.mjs', 'src/headless-connection.mjs', 'src/node-headless-connection.mjs', 'packages/opencode-relay/headless-mcp.mjs',
   'src/task-identity.mjs',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
-  'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
+  'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/release-setup.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
@@ -59,10 +60,15 @@ else copyFileSync(join(staging, packed.filename), artifact, constants.COPYFILE_E
 assert.ok(!packed.files.some(file => ['src/remote.mjs', 'src/remote-adapter.mjs'].includes(file.path)), 'Retired SSH execution is still packaged');
 assert.ok(!packed.files.some(file => ['src/task-identity-migration.mjs', 'scripts/migrate-task-references.mjs', 'src/native-board-cli.mjs'].includes(file.path)), 'Retired migration or duplicate entrypoints must never ship');
 assert.ok(!packed.files.some(file => /scripts\/(?:upgrade-baseline-fixture|historical-upgrade-fixture)\.mjs$/.test(file.path)), 'Test-only baseline installer must never ship');
+assert.ok(!packed.files.some(file => file.path === 'scripts/verify-installer-handover.mjs'), 'Synthetic future-release regression tooling must not ship');
 mkdirSync(consumer);
 execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-scripts', '--no-fund', '--no-audit',
   ...(values['skip-audit'] ? ['--offline'] : []), artifact], { stdio: 'pipe' });
 const installed = join(consumer, 'node_modules/herdr-relay');
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).relayInstaller?.protocol, 1,
+  'The production package must declare candidate-owned setup');
+const installerHandover = values['skip-audit'] ? null : await verifyInstallerHandover({ artifact, packageDirectory: installed });
+if (installerHandover) console.log(JSON.stringify({ installerHandover }, null, 2));
 const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [];
 for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']]) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
@@ -118,6 +124,7 @@ if (!values['skip-audit']) {
     '--config-dir', skillConfig, '--no-herdr'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   assert.equal(activation.servicesChanged, false); assert.equal(activation.skills.state, 'skills_current');
   assert.equal(activation.complete, true); assert.equal(activation.herdr.reason, 'disabled_by_option');
+  assert.equal(activation.installer.mode, 'candidate'); assert.equal(activation.installer.version, packed.version);
 }
 execFileSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';
@@ -294,7 +301,7 @@ let onboarding;
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications, nativeBackendStarted: true,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],

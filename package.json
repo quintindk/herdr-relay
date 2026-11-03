@@ -1,6 +1,6 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "license": "MIT",
   "description": "Durable native tasks, agent collaboration and node services for Herdr and OpenCode",
@@ -34,6 +34,9 @@
     "protocol": "relay/0.2",
     "backendSchema": 2,
     "nodeSchema": 1
+  },
+  "relayInstaller": {
+    "protocol": 1
   },
   "scripts": {
     "build:tui": "node scripts/build-tui.mjs",

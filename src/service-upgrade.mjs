@@ -17,8 +17,7 @@ import { pluginUpgradeFiles } from './upgrade-plugin.mjs';
 import { nativeBackendClient } from './backend-client.mjs';
 import { defaultNodeConfig } from './native-onboarding.mjs';
 import { assertNoOpenCodeDecisions } from './upgrade-native-decisions.mjs';
-import { installSkills } from './skill-install.mjs';
-import { installHerdrPanel } from './herdr-install.mjs';
+import { finishReleaseSetup, releaseSetupCapability } from './release-setup.mjs';
 
 const execute = promisify(execFile);
 export const upgradeDirectory = () => join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-upgrades');
@@ -131,15 +130,12 @@ export async function installCliRelease(input, dependencies = {}) {
     const release = releaseInfo(candidate.directory);
     requireValue(candidate.version === release.version && candidate.auditVerified && (!candidate.packageFingerprint || candidate.packageFingerprint === release.fingerprint),
       'invalid_release', 'Verified compatible release and fresh audit required');
-    activateCli(cliChange(candidate, input.binDirectory), true);
-    let skills;
-    try { skills = (dependencies.installSkills ?? installSkills)({ sourceDirectory: candidate.directory, configDirectory: input.configDirectory }); }
-    catch (error) { skills = { state: 'skill_setup_failed', code: error.code ?? 'skill_setup_failed', message: error.message,
-      instruction: 'Managed skill setup is incomplete. Resolve the reported error, then rerun release install. Running chats were not restarted.' }; }
-    const herdr = await (dependencies.installHerdrPanel ?? installHerdrPanel)({ sourceDirectory: candidate.directory,
-      herdrConfig: input.herdrConfig, skip: input.skipHerdr });
+    const capability = releaseSetupCapability(candidate.directory), cli = cliChange(candidate, input.binDirectory);
+    activateCli(cli, true);
+    const setup = await finishReleaseSetup({ release, capability, cliPath: cli.path,
+      configDirectory: input.configDirectory, herdrConfig: input.herdrConfig, skipHerdr: input.skipHerdr }, dependencies);
     return { state: 'cli_activated', version: candidate.version, installation: candidate.directory, servicesChanged: false,
-      complete: ['skills_installed', 'skills_current'].includes(skills.state) && herdr.complete === true, skills, herdr,
+      ...setup,
       instruction: 'The CLI now uses the versioned release. Existing backend/node services and OpenCode plugin configuration remain unchanged until an explicit upgrade.' };
   } finally { unlock(); }
 }

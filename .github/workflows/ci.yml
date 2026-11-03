@@ -109,7 +109,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: node scripts/check-release.mjs
-      - name: Clean installation, onboarding and fresh production audit
+      - name: Installed release handover, supported hosts, onboarding and production audit
         env:
           RELAY_V2_BINARY: ${{ runner.temp }}/tui-host/node_modules/.bin/opencode2
           RELAY_V2_BASELINE_BINARY: ${{ runner.temp }}/tui-baseline/node_modules/.bin/opencode2
