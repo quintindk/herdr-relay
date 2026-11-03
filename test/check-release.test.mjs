@@ -34,8 +34,12 @@ function evidenceFixture(t) {
   assert.ok(script, 'Exercise the actual publication evidence gate without running publication');
   const versions = ['2.1.0', '2.1.2', '2.2.5'];
   const report = {
-    version: '0.2.3', sourceCommit: 'fixture-commit', sourceTreeClean: true, releaseVerified: true,
+    version: '0.2.4', sourceCommit: 'fixture-commit', sourceTreeClean: true, releaseVerified: true,
     auditVerified: true, vulnerabilities: { total: 0 },
+    installerHandover: { version: '0.2.4', passed: true, candidateProcessVerified: true, candidateOnlySetupExecuted: true,
+      legacyBootstrapVerified: true, immutable022LimitationVerified: true, released023SinglePass: true,
+      retryIdempotent: true, conflictRefused: true, allCandidateAuditsVerified: true, candidateAuditChecks: 6,
+      legacyProductionActivationAllowed: false, syntheticFutureRelease: true, userServicesTouched: false, credentialsCopied: false },
     installedTuiVerifications: versions.map(runtime => ({ runtime, passed: true, productionPackageTuiLoaded: true,
       sidebarMounted: true, scopedStatusReceived: true, runtimeCommandAndNotification: true, pluginLoadErrors: 0 })),
     installedCliBridgeVerifications: versions.map(runtime => ({ runtime, passed: true, realModelToolTurn: true,
@@ -44,9 +48,9 @@ function evidenceFixture(t) {
       agentGrantRetryIdempotent: true, revocationPausedSchedule: true, readinessHadNoExternalEffects: true })),
   };
   const validate = value => {
-    writeFileSync(join(root, 'herdr-relay-0.2.3.tgz.verification.json'), JSON.stringify(value));
+    writeFileSync(join(root, 'herdr-relay-0.2.4.tgz.verification.json'), JSON.stringify(value));
     return execute(process.execPath, ['--input-type=module', '-e', script], { cwd: root, timeout: 10000,
-      env: { ...process.env, RELEASE_TAG: 'v0.2.3', SOURCE_COMMIT: 'fixture-commit' } });
+      env: { ...process.env, RELEASE_TAG: 'v0.2.4', SOURCE_COMMIT: 'fixture-commit' } });
   };
   return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications'] };
 }
@@ -76,5 +80,15 @@ test('publication evidence refuses a failed 2.2.5 check even when every host is 
     const failed = structuredClone(report);
     failed[field].find(check => check.runtime === '2.2.5').passed = false;
     await assert.rejects(validate(failed), /AssertionError/);
+  }
+});
+
+test('publication refuses missing, failed or mismatched installer-process evidence', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.installerHandover;
+  await assert.rejects(validate(missing), /AssertionError/);
+  for (const update of [{ candidateProcessVerified: false }, { legacyBootstrapVerified: false }, { version: '0.2.3' },
+    { allCandidateAuditsVerified: false }, { userServicesTouched: true }, { legacyProductionActivationAllowed: true }]) {
+    await assert.rejects(validate({ ...report, installerHandover: { ...report.installerHandover, ...update } }), /AssertionError/);
   }
 });

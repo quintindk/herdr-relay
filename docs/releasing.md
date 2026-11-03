@@ -16,6 +16,9 @@ version tag. Packages are distributed through GitHub Releases, not npm.
 6. Verify a production-only installation, exact supported OpenCode 2.1.0/2.1.2/2.2.5
    hosts and a fresh zero-vulnerability production audit. An unavailable audit is
    not a passed audit. Supplemental host checks do not replace this matrix.
+7. Exercise version-owned setup with separate caller/candidate processes and the
+   immutable legacy installers. Do not equate a changed CLI symlink with completed
+   local setup or claim the legacy first hop acquired new code retroactively.
 
 The RC4 baseline fixture tests compatible upgrades and rollback. It is not shipped
 or certification of physical second-machine/business-source coverage.
@@ -29,13 +32,13 @@ checkout. Configure the exact host binaries required by release verification:
 RELAY_V2_BINARY=/absolute/opencode-2.1.2 \
 RELAY_V2_BASELINE_BINARY=/absolute/opencode-2.1.0 \
 RELAY_V2_LATEST_BINARY=/absolute/opencode-2.2.5 \
-node scripts/verify-package.mjs --release --output /private/artifacts/0.2.3
+node scripts/verify-package.mjs --release --output /private/artifacts/0.2.4
 ```
 
-Assets are `herdr-relay-0.2.3.tgz`, `SHA256SUMS` and
-`herdr-relay-0.2.3.tgz.verification.json`. The report records the source commit,
-cleanliness, timestamp, host checks and audit result. Different bytes at an
-existing artifact path or inconsistent checksums are refused.
+Assets are `herdr-relay-0.2.4.tgz`, `SHA256SUMS` and
+`herdr-relay-0.2.4.tgz.verification.json`. The report records the source commit,
+cleanliness, timestamp, host checks, installer handover evidence and audit result.
+Different bytes at an existing artifact path or inconsistent checksums are refused.
 
 The verifier exercises native backend startup, scoped two-home onboarding,
 idempotent native capture, agent messaging, plugin/skill setup, backup and unit
@@ -54,8 +57,8 @@ On an explicit publication request:
    clean-source provenance, supported-host checks and zero-finding audit.
 
 ```sh
-git tag -a v0.2.3 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.3"
-git push origin refs/tags/v0.2.3
+git tag -a v0.2.4 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.4"
+git push origin refs/tags/v0.2.4
 ```
 
 `.github/workflows/ci.yml` runs tests/package verification on branch pushes, pull
@@ -64,7 +67,7 @@ version tags and publishes only after all gates pass. CI has read-only repositor
 permissions; only the final publication job gets `contents: write`.
 
 The release job takes `docs/release-VERSION.md`, checks tag/version/source evidence
-and publishes all three assets. Candidate versions are prereleases; stable 0.2.3
+and publishes all three assets. Candidate versions are prereleases; stable 0.2.4
 has no prerelease suffix. Stable releases become the latest release. Prereleases
 use `--prerelease --latest=false` and do not replace the stable selection.
 

@@ -294,6 +294,15 @@ compatibility: opencode
   Backend/node service upgrades and existing OpenCode plugin updates remain
   separate, explicit operations. Use the candidate CLI when upgrading from an
   older buggy CLI.
+  From 0.2.4, a protocol-capable caller runs setup in the fingerprint-verified
+  candidate's own process while retaining the installation lock. Inspect
+  `installer.version`, `installer.mode` and `complete`; a symlink/version change
+  alone is not setup completion. Failed or lost setup acknowledgement is
+  incomplete, not proof that no local changes occurred. Retry the original
+  installation safely, never reset configuration to force success.
+  Already-published pre-handover clients cannot acquire this automatically.
+  For the first upgrade into 0.2.4, use the checksum-verified, production-audited
+  candidate CLI directly as documented in installation-and-onboarding.md.
   If a 0.2.2 CLI activated 0.2.3, rerun `release install` through the newly
   activated CLI to execute the automatic local Herdr setup.
 - `herdr-relay skills status` compares the two shipped skills with installed files.

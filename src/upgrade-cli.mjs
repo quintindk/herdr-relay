@@ -8,6 +8,8 @@ import { serviceUpgrade, installationStatus, upgradeDirectory, installCliRelease
 export const upgradeHelp = `Relay service maintenance (node means Relay node, not nodejs):
   release install --version VERSION [--config-dir DIR] [--herdr-config TOML] [--no-herdr]
     Verified CLI, managed skills and local Herdr panel/shortcut; no service changes.
+    Handover-capable installers run the staged release's setup and report installer.version.
+    Pre-handover CLIs need the candidate-first bootstrap in installation-and-onboarding.md.
   node status [--config PRIVATE_NODE_JSON]
   backend status
   node upgrade --version VERSION [--apply] [--key KEY]

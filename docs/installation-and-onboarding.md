@@ -2,10 +2,10 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target **0.2.3**, which is in preparation and not yet published on
+Examples target **0.2.4**, which is in preparation and not yet published on
 [GitHub releases](https://github.com/quintindk/herdr-relay/releases). The current
-stable release is **0.2.2**. Its installer requires the manual Herdr setup in
-step 7.
+stable release is **0.2.3**. Already-published older installers have the bootstrap
+boundary described below.
 
 ## Requirements
 
@@ -28,18 +28,54 @@ and a successful zero-vulnerability production audit.
 ```sh
 umask 077
 sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.3.tgz
-herdr-relay release install --version 0.2.3
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.4.tgz
+herdr-relay release install --version 0.2.4
 herdr-relay --version
 ```
 
 Use a user-owned npm installation without sudo. `release install` activates the
 versioned CLI and safely synchronises managed skills. It does not upgrade existing
-services or change OpenCode plugin configuration. The 0.2.3 installer also
+services or change OpenCode plugin configuration. Installers from 0.2.3 also
 configures the local Herdr panel when Herdr is available; see step 7 for behaviour
-and opt-out. Run the 0.2.3 CLI for this behaviour. If an older CLI activated the
-release, rerun the command through the newly activated CLI. A checkout/npm link
-is not a published release installation.
+and opt-out. From 0.2.4, installation hands setup to the verified candidate process
+and reports its version under `installer.version`. Check `complete: true` and the
+separate skills/Herdr results, not just `--version`. A checkout/npm link is not a
+published release installation.
+
+### Upgrading a pre-handover CLI
+
+The already-released 0.2.2/0.2.3 binaries cannot implement the new handover. To get
+version-owned completion on the first upgrade into 0.2.4, start the **new** installer
+directly from the downloaded, checksum-verified package instead of calling it
+through the old CLI:
+
+```sh
+umask 077
+sha256sum -c SHA256SUMS
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
+BOOTSTRAP=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/relay-bootstrap-XXXXXX")
+npm install --prefix "$BOOTSTRAP" --omit=dev --ignore-scripts --no-audit --no-fund \
+  /absolute/download/herdr-relay-0.2.4.tgz
+npm audit --prefix "$BOOTSTRAP" --omit=dev
+node "$BOOTSTRAP/node_modules/herdr-relay/src/cli.mjs" release install --version 0.2.4
+```
+
+Stop if a checksum, install or audit command fails. Use a user-owned npm
+installation without sudo. The existing public CLI remains on PATH until verified
+activation replaces its package-owned symlink. The temporary prefix avoids
+overwriting an unrelated global wrapper and does not copy credentials. One
+invocation of the new installer completes setup. Once 0.2.4 is active, future
+`release install` commands hand setup to the staged release automatically.
+
+The published 0.2.3 caller already knows the current skills/Herdr setup and remains
+compatible with a one-pass 0.2.4 activation. That compatibility route is tested,
+but it cannot return the new candidate-executor receipt. Version 0.2.2 has no
+automatic Herdr setup and needs the candidate-first route for a complete first pass.
+
+For a machine that has already activated 0.2.3 but missed its Herdr setup, the
+existing repair remains `herdr-relay release install --version 0.2.3` through that
+newly activated CLI. Service upgrades alone are not proof that local panel setup
+ran; they remain a separate operation.
 
 ## 2. Install a fresh backend
 
