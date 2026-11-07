@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, renameSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { BackendStore } from '../src/backend-store.mjs';
 import { NodeJournal } from '../src/node-journal.mjs';
@@ -473,7 +473,11 @@ test('a changed directory after repair approval is refused before any native eff
   const ui = f.store.authenticate(issueGrantApprovalSession(f.store, f.operators.source, { terminalId: 'human' }).token);
   const permission = f.command(ui, 'repair', 'grant.repair_request', { id: 'repair', preparationId: f.request.id, expectedRevision: preview.expectedRevision, scope: preview.scope, previewHash: preview.previewHash });
   f.command(ui, 'approve', 'grant.request_decide', { id: permission.id, expectedRevision: 1, requestHash: permission.requestHash, decision: 'approve_once' });
-  rmSync(f.request.directory, { recursive: true }); mkdirSync(f.request.directory);
+  // Keeping the original inode allocated makes replacement deterministic even
+  // on filesystems that immediately recycle a deleted directory's inode.
+  const original = `${f.request.directory}-original`;
+  renameSync(f.request.directory, original); mkdirSync(f.request.directory);
+  assert.notEqual(lstatSync(f.request.directory).ino, lstatSync(original).ino);
   assert.equal((await f.ready()).reason, 'repair_checkpoint_changed'); assert.equal(f.starts, 0); assert.equal(f.nativeCreates, 1);
 });
 
