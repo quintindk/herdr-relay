@@ -304,7 +304,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
 }
 
 export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
-  detailGrant, decideGrant, createGrant, pendingGrantDecisions, updateRunResultNotifications, prepareAgentRename, renameAgent, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
+  detailGrant, decideGrant, createGrant, prepareInteractiveRepair, requestInteractiveRepair, pendingGrantDecisions, updateRunResultNotifications, prepareAgentRename, renameAgent, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
   const [board, setBoard] = useState(() => ({ companies: [], agents: [], projects: [], tasks: [], routines: [],
@@ -660,7 +660,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     ? `${labels[task.status] ?? task.status} · ${decisionText(task.attentionLabel)}` : `[${labels[task.status] ?? task.status}]`;
   const rowBlocks = layoutBoardRows(rows, { columns: width, native, rowText, statusLabel });
   if (quitting) return null;
-  if (native && view === 'grants') return h(GrantsPanel, { board, offline, loaded, width, height, detailGrant, decideGrant, createGrant, pendingGrantDecisions,
+  if (native && view === 'grants') return h(GrantsPanel, { board, offline, loaded, width, height, detailGrant, decideGrant, createGrant, prepareInteractiveRepair, requestInteractiveRepair, pendingGrantDecisions,
     refresh: publications => { if (publications) setBoard(value => ({ ...value, grants: { ...value.grants,
       pending: [...publications, ...(value.grants?.pending ?? []).filter(i => i.kind !== 'publication')] } })); setRefreshGeneration(value => value + 1); },
     onView: delta => { setView(value => nativeBoardViews[(nativeBoardViews.indexOf(value) + delta + nativeBoardViews.length) % nativeBoardViews.length]); setSelected(0); setSelectedNativeId(null); },

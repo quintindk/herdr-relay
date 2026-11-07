@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { releaseVersion, compatibility } from './release-info.mjs';
 import { resolveTaskIdentity } from './task-identity.mjs';
 import { issueGrantApprovalSession, nodeGrantPolicy } from './grants.mjs';
+import { interactiveRepairPreview } from './interactive-repair.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
@@ -28,7 +29,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       if (actor.scope?.kind === 'grant_approval') requireValue(req.method === 'GET' && url.pathname === '/v1/info' || req.method === 'POST' && url.pathname === '/v1/commands',
         'forbidden', 'Human Grants sessions are limited to grant decisions', 403);
       const maintenance = Boolean(maintenanceFile && existsSync(maintenanceFile));
-      requireValue(req.method === 'GET' || !maintenance, 'maintenance', 'Backend upgrade maintenance is active. Retry the same immutable operation after it completes', 503);
+      requireValue(req.method === 'GET' || req.method === 'POST' && url.pathname === '/v1/interactive-repair-preview' || !maintenance,
+        'maintenance', 'Backend upgrade maintenance is active. Retry the same immutable operation after it completes', 503);
       requireValue(req.url?.startsWith('/') && !req.url.startsWith('//'), 'invalid_request', 'Relative API path required');
       // Browser-originated writes are not part of this API. Harnesses use the
       // local credential connector; cross-site pages cannot borrow that context.
@@ -36,7 +38,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { agentRename: true, agentWorkspaceRelocation: true, headlessConnectionRebind: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
+        features: { interactiveRecovery: true, interactiveCapacity: true, interactiveGrantMatching: true, agentRename: true, agentWorkspaceRelocation: true, headlessConnectionRebind: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/command-receipts\/[^/]+$/.test(url.pathname)) {
@@ -44,7 +46,11 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         result = store.commandReceipt(actor, decodeURIComponent(url.pathname.split('/')[3]), url.searchParams.get('executionId'));
       }
       else if (req.method === 'GET' && /^\/v1\/nodes\/[^/]+\/provisioning-policy$/.test(url.pathname)) result = nodeGrantPolicy(store, decodeURIComponent(url.pathname.split('/')[3]));
-      else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
+      else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) {
+        requireValue([...url.searchParams.keys()].every(key => key === 'driverProtocol') && url.searchParams.getAll('driverProtocol').length <= 1 &&
+          (!url.searchParams.has('driverProtocol') || url.searchParams.get('driverProtocol') === '1'), 'invalid_query', 'Supported provisioning driver protocol required');
+        result = interactiveAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]), { driverProtocol: Number(url.searchParams.get('driverProtocol') ?? 0) });
+      }
       else if (req.method === 'GET' && /^\/v1\/headless_setups\/[^/]+\/authority$/.test(url.pathname)) result = headlessAuthority(store, actor, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && url.pathname === '/v1/snapshot') result = store.snapshot();
       else if (req.method === 'GET' && url.pathname === '/v1/task-identity') {
@@ -80,7 +86,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
           cursor: url.searchParams.get('cursor') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });
-      } else if (req.method === 'POST' && ['/v1/commands', '/v1/grants/ui-session', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read', '/v1/run-result-messages/take'].includes(url.pathname)) {
+      } else if (req.method === 'POST' && ['/v1/commands', '/v1/interactive-repair-preview', '/v1/grants/ui-session', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read', '/v1/run-result-messages/take'].includes(url.pathname)) {
         let size = 0;
         const chunks = [];
         for await (const chunk of req) {
@@ -91,7 +97,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString()); }
         catch { throw new RelayError('invalid_json', 'JSON body required', 400); }
-        if (url.pathname === '/v1/run-result-messages/take') {
+        if (url.pathname === '/v1/interactive-repair-preview') result = interactiveRepairPreview(store, actor, body);
+        else if (url.pathname === '/v1/run-result-messages/take') {
           requireValue(body && Object.keys(body).length === 1 && Object.hasOwn(body, 'consumerId'), 'invalid_request', 'Only the current ephemeral consumer is supported');
           result = store.runResultMessages.take(store, actor, body);
         }

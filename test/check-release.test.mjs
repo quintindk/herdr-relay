@@ -34,9 +34,9 @@ function evidenceFixture(t) {
   assert.ok(script, 'Exercise the actual publication evidence gate without running publication');
   const versions = ['2.1.0', '2.1.2', '2.2.5'];
   const report = {
-    version: '0.2.4', sourceCommit: 'fixture-commit', sourceTreeClean: true, releaseVerified: true,
-    auditVerified: true, vulnerabilities: { total: 0 },
-    installerHandover: { version: '0.2.4', passed: true, candidateProcessVerified: true, candidateOnlySetupExecuted: true,
+    version: '0.2.5', sourceCommit: 'fixture-commit', sourceTreeClean: true, releaseVerified: true,
+    auditVerified: true, vulnerabilities: { total: 0 }, interactiveProvisioningProtocol: 1,
+    installerHandover: { version: '0.2.5', passed: true, candidateProcessVerified: true, candidateOnlySetupExecuted: true,
       legacyBootstrapVerified: true, immutable022LimitationVerified: true, released023SinglePass: true,
       retryIdempotent: true, conflictRefused: true, allCandidateAuditsVerified: true, candidateAuditChecks: 6,
       legacyProductionActivationAllowed: false, syntheticFutureRelease: true, userServicesTouched: false, credentialsCopied: false },
@@ -46,13 +46,19 @@ function evidenceFixture(t) {
       pluginInvokedActualCli: true, humanTaskCreated: true, existingPeerExecutionRequested: true, activeParentRequired: false })),
     installedAgentGrantVerifications: versions.map(runtime => ({ runtime, passed: true, grantIssuedByCoordinatorWithoutOwner: true,
       agentGrantRetryIdempotent: true, revocationPausedSchedule: true, readinessHadNoExternalEffects: true })),
+    installedInteractiveRecoveryVerifications: versions.map(runtime => ({ runtime, passed: true, realModelToolTurn: true, scopedAgentTools: true,
+      insufficientGrantQueuedApproval: true, admissionBeforeFilesystemEffects: true, linkedRepairApproved: true, originalPreparationRetained: true,
+      realReceivingSessionVerified: true, existingTaskDispatchIdempotent: true, concurrentCapacityReservationVerified: true,
+      ordinaryEnrolmentCannotStealReservation: true, humanGrantRevocationVerified: true, herdrPlacementFixture: true, userServicesTouched: false, credentialsCopied: false })),
+    herdrPanelVerification: { passed: true, realHerdrServer: true, candidateInstallerHandover: true, stagedPackageAuditVerified: true,
+      keyboardLinkedRepairRequested: true, keyboardRepairApproved: true, keyboardGrantRevocationVerified: true, originalPreparationAndTaskPreserved: true, userServicesTouched: false },
   };
   const validate = value => {
-    writeFileSync(join(root, 'herdr-relay-0.2.4.tgz.verification.json'), JSON.stringify(value));
+    writeFileSync(join(root, 'herdr-relay-0.2.5.tgz.verification.json'), JSON.stringify(value));
     return execute(process.execPath, ['--input-type=module', '-e', script], { cwd: root, timeout: 10000,
-      env: { ...process.env, RELEASE_TAG: 'v0.2.4', SOURCE_COMMIT: 'fixture-commit' } });
+      env: { ...process.env, RELEASE_TAG: 'v0.2.5', SOURCE_COMMIT: 'fixture-commit' } });
   };
-  return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications'] };
+  return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications', 'installedInteractiveRecoveryVerifications'] };
 }
 
 test('publication evidence accepts successful installed checks on all three exact OpenCode hosts', async t => {
@@ -90,5 +96,16 @@ test('publication refuses missing, failed or mismatched installer-process eviden
   for (const update of [{ candidateProcessVerified: false }, { legacyBootstrapVerified: false }, { version: '0.2.3' },
     { allCandidateAuditsVerified: false }, { userServicesTouched: true }, { legacyProductionActivationAllowed: true }]) {
     await assert.rejects(validate({ ...report, installerHandover: { ...report.installerHandover, ...update } }), /AssertionError/);
+  }
+});
+
+test('publication refuses absent or failed Herdr keyboard evidence and unsafe recovery effects', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.herdrPanelVerification; await assert.rejects(validate(missing), /AssertionError/);
+  for (const field of ['keyboardLinkedRepairRequested', 'keyboardRepairApproved', 'keyboardGrantRevocationVerified']) {
+    const failed = structuredClone(report); failed.herdrPanelVerification[field] = false; await assert.rejects(validate(failed), /AssertionError/);
+  }
+  for (const field of ['userServicesTouched', 'credentialsCopied']) {
+    const unsafe = structuredClone(report); unsafe.installedInteractiveRecoveryVerifications[0][field] = true; await assert.rejects(validate(unsafe), /AssertionError/);
   }
 });

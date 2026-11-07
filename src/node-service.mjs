@@ -52,7 +52,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       catch { throw new RelayError('invalid_json', 'JSON request required'); }
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
       const path = new URL(req.url, 'http://node').pathname;
-      const readOnly = ['/agent/headless-connection-preview', '/agent/interactive-reconcile-preview', '/agent/headless-contract-preview', '/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
+    const readOnly = ['/agent/interactive-repair-preview', '/agent/headless-connection-preview', '/agent/interactive-reconcile-preview', '/agent/headless-contract-preview', '/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
         '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/task-identity', '/agent/comments', '/agent/relations',
         '/agent/questions', '/agent/messages', '/agent/message', '/agent/headless-status', '/agent/headless-grants', '/agent/headless-access', '/agent/headless-connections'];
       requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
@@ -291,11 +291,34 @@ export async function startNodeService({ journal, socketPath, workers, api, task
             if (permission.state !== 'approved') {
               res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(permission)); return;
             }
+            if (permission.kind === 'interactive_repair') body.id = permission.provisionRequestId;
           }
         }
         const request = await api('GET', `/v1/provision_requests/${encodeURIComponent(body.id)}`);
         requireValue(request.requesterAgentId === worker.agentId, 'forbidden', 'Only the initiating agent may inspect this request', 403);
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(request)); return;
+      }
+      if (['/agent/interactive-repair-preview', '/agent/interactive-repair-request'].includes(path)) {
+        currentReceiver();
+        requireValue(!worker.headlessSetupId, 'interactive_human_context_required', 'Headless jobs cannot request interactive preparation repair', 403);
+        requireValue(api && (await getBackendFeatures?.())?.interactiveRecovery,
+          'backend_upgrade_required', 'Interactive recovery requires the original interactive requester and a recovery-capable backend', 409);
+        const previewing = path.endsWith('preview');
+        requireValue(Object.keys(body).every(key => (previewing ? ['id', 'scope'] : ['key', 'payload']).includes(key)), 'invalid_request', 'Exact repair preview or immutable request payload required');
+        if (previewing) requireValue(typeof body.id === 'string' && body.id.trim() && body.id.length <= 96,
+          'invalid_request', 'Exact original preparation ID required');
+        const source = { requesterAgentId: worker.agentId, sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision };
+        let result;
+        if (previewing) result = await api('POST', '/v1/interactive-repair-preview', { ...body, ...source });
+        else {
+          requireValue(typeof body.key === 'string' && body.key.trim() && body.key.length <= 100 && body.payload &&
+            Object.keys(body.payload).every(key => ['id', 'preparationId', 'expectedRevision', 'scope', 'previewHash', 'reason'].includes(key)),
+            'invalid_request', 'A repair request needs its inspected revision, exact preview hash and unchanged scope');
+          const key = `interactive-source:${worker.agentId}:${body.key}`;
+          journal.queue({ key, action: 'interactive.repair_request', payload: { ...body.payload, ...source } });
+          await journal.flush(api); result = journal.receipt(key);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
       if (['/agent/interactive-prepare', '/agent/interactive-dispatch', '/agent/interactive-cancel'].includes(path)) {
         currentReceiver();
@@ -313,6 +336,8 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const key = `interactive-source:${worker.agentId}:${body.key}`;
         const previous = journal.receipt(key);
         const inheritedModel = operation === 'prepare' ? previous ? previous.command.payload.model : await preparationModel(worker, getNativeModel) : undefined;
+        if (operation === 'prepare' && body.payload.permissionScope !== undefined) requireValue((await getBackendFeatures?.())?.interactiveGrantMatching,
+          'backend_upgrade_required', 'Upgrade the backend before requesting scope-aware interactive permission. An older matcher may reuse an insufficient grant.', 409);
         const command = { key, action: `interactive.${operation === 'prepare' ? 'request' : operation}`,
           payload: { ...body.payload, ...(inheritedModel ? { model: inheritedModel } : {}), requesterAgentId: worker.agentId, sourceConversationId: worker.sessionId, sourceBindingRevision: worker.bindingRevision } };
         journal.queue(command);

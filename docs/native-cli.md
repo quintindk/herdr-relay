@@ -105,6 +105,13 @@ session/directory. Enrolment does not start work or restart OpenCode.
 See [receiving chats](native-receivers.md), [interactive provisioning](native-interactive-provisioning.md)
 and [headless setup](headless-authenticated-setup.md) for the distinct workflows.
 
+For [linked interactive repair](interactive-recovery.md), the original agent's
+scoped CLI uses `native work interactive-repair-preview` and
+`interactive-repair-request` with its existing worker context. The request needs
+the exact returned scope, preparation revision and preview hash plus an immutable
+key. Neither command approves permission or dispatches work. The human uses Grants
+to approve the repair. Do not borrow a backend-owner credential to recover an agent.
+
 ## Schedules
 
 ```sh

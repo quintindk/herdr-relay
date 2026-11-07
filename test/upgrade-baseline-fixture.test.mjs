@@ -6,7 +6,7 @@ import { upgradeBaselineFixture } from '../scripts/upgrade-baseline-fixture.mjs'
 import { hashBytes } from '../src/release-install.mjs';
 
 test('RC4 fixture verifies immutable bytes, reports actual advisory counts and never claims production approval', async t => {
-  const root = mkdtempSync('/tmp/opencode/relay-upgrade-smoke-baseline-test-');
+  const root = mkdtempSync(join(process.env.RELAY_TEST_SCRATCH ?? '/tmp/opencode', 'relay-upgrade-smoke-baseline-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bytes = Buffer.from('fixture artifact'), sha = hashBytes(bytes), version = '0.2.1-rc4';
   const calls = [];

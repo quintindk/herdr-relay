@@ -32,7 +32,8 @@ for the normal permission-request flow:
 
 1. An enrolled interactive agent calls `relay_interactive_prepare` with a stable
    key, request ID, destination node and exact agent/folder intent. `grantId` is
-   optional. A matching standing grant is reused automatically.
+   optional. A standing grant is reused only when it covers the requested scope.
+   `grantSelection` reports its identity/revision or exact mismatch reasons.
 2. Without permission, the backend saves `awaiting_approval`. It creates no
    provisioning work, folders, sessions, tasks or executions. Pending approval
    does not block maintenance.
@@ -42,14 +43,30 @@ for the normal permission-request flow:
 4. Approval atomically creates permission and resumes the saved preparation.
    Approve once is bound to that exact operation. Allow this scope can cover
    future matching preparations. A rejection never starts the operation.
-5. **Active** lists interactive, headless, task-reference and child-review grants
-   and supports revocation. **History** records decisions and their provenance.
+5. The destination reserves node-wide enrolment capacity before initial directory
+   or native effects. Full capacity leaves `waiting_capacity`, not a terminal
+   failure. New preparations require the capacity-aware 0.2.5 driver.
+6. **Active** lists interactive, headless, task-reference and child-review grants
+   and supports **v** for a confirmed revoke preview. **History** records decisions,
+   blocked preparations and their provenance. **p** previews a linked repair.
    `n` creates an interactive standing permission without opening an agent itself.
 
 Approval scope cannot exceed the destination's joined-node workspace policy and
 node-wide enrolment ceiling. UI-managed grants supply the provisioning permissions
 directly. They do not require a second `config.interactive` permission policy.
 Folder restrictions are application checks, not an OS sandbox.
+
+`maxAgents` is a **node-wide ceiling**, not a per-request creation allowance.
+Omit it to inherit the joined-node ceiling and select **Approve once** for one
+saved preparation. Do not calculate the current count plus one. Reservations
+participate in competing-grant and ordinary-enrolment admission checks.
+
+Blocked or capacity-waiting preparations use a [linked repair](interactive-recovery.md).
+It obtains fresh approval while retaining the original preparation, agent,
+conversation, verified directory/placement, captured tasks and failure history.
+The old standing permission is not edited or revoked automatically. Unknown
+effects must be reconciled before another attempt. A new preparation ID cannot
+duplicate an existing blocked or pending agent/workspace intent.
 
 The driver uses an explicit configured Herdr socket, or a verified local driver
 reported by an enrolled TUI. Ambiguous or offline drivers leave the request in
@@ -149,7 +166,14 @@ prevent it from recording a preparation request. Dispatch remains separate.
    the human grant, not the requesting model. The prepared binding must still be
    current before assignment.
 5. `relay_interactive_cancel`: cancel an outstanding preparation with its current
-   revision and reason. Cancellation never kills processes or deletes directories.
+    revision and reason. Blocked/cancelled preparations return `already_terminal`
+    without changing failure history. Cancellation never kills processes or deletes
+    directories. Uncertain capacity remains held until node inspection proves a
+    terminal fence and absence of an enrolment.
+6. `relay_interactive_repair`: preview the original preparation and proposed scope,
+   then request the exact preview with its revision/hash and an immutable key.
+   Approval happens in Grants. It cannot change the workspace, agent, model, topic
+   or task and cannot replay an uncertain native effect. See [repair payloads](interactive-recovery.md#repair-from-the-original-agent).
 
 Operator `native interactive request` and `dispatch` accept the same native
 payloads through explicit owner context. Agent calls always use scoped node-socket

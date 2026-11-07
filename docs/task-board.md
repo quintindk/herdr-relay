@@ -34,6 +34,8 @@ shown as awaiting activation rather than Active.
 | a | Open the human/agent assignment picker for a task |
 | s | Inspect eligible human task-status changes |
 | n | Rename the selected agent in Agents, or configure run result notifications from Schedule |
+| v in Grants | Inspect and confirm revocation of the selected active permission |
+| p in Grants | Preview and request approval for a linked preparation repair |
 | [ / ] | Select the previous/next occurrence in cron detail |
 | o | Open the exactly correlated selected occurrence's task |
 | t | Show technical details where offered |
@@ -93,6 +95,17 @@ Confirmed decisions persist before publication and reconcile their original key
 after a lost reply. A refusal requires inspection; an uncertain result is not
 silently treated as absent. Failed refreshes retain the last snapshot with an
 explicit offline/freshness warning rather than reporting an empty successful list.
+
+In Grants, **1/2/3** select Pending, Active and History. Search includes the requested
+agent, originating request and grant IDs, not only the requester name. Permission
+cards link their preparations. Selection follows the grant identity across refreshes.
+Closing a loading dialog prevents its late response from replacing another dialog.
+
+**Approve once** authorises one saved preparation. The enrolment ceiling shown in
+the editor is node-wide, not the number of new agents. **p** requests a new one-off
+repair approval without editing the old standing grant. A definite refusal offers
+**Dismiss refused decision**. An unconfirmed acknowledgement offers **Retry original
+decision** with the original key. See [interactive repair](interactive-recovery.md).
 
 ## Herdr panel
 

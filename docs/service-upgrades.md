@@ -23,10 +23,10 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-0.2.4, which is currently in preparation and must be published before use:
+0.2.5, which is currently in preparation and must be published before use:
 
 ```sh
-herdr-relay release install --version 0.2.4
+herdr-relay release install --version 0.2.5
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -40,7 +40,7 @@ From a handover-capable 0.2.4 CLI, setup runs in the verified candidate process 
 reports `installer.version`. Already-published old clients cannot gain that code
 retroactively. Use the [candidate-first bootstrap](installation-and-onboarding.md#upgrading-a-pre-handover-cli)
 when starting from one of those clients and needing version-owned completion.
-The published 0.2.3 caller's known setup remains compatible with a one-pass 0.2.4
+The published 0.2.3 caller's known setup remains compatible with a one-pass current-release
 activation, but its output cannot provide the new executor receipt.
 If the 0.2.2 CLI has already activated 0.2.3 without panel setup, invoking that
 newly activated 0.2.3 installer again remains the legacy repair.
@@ -52,15 +52,15 @@ skills or configuration.
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.2.4 --key stable-024-backend-host
-herdr-relay upgrade --services both --version 0.2.4 --key stable-024-backend-host --apply
+herdr-relay upgrade --services both --version 0.2.5 --key stable-025-backend-host
+herdr-relay upgrade --services both --version 0.2.5 --key stable-025-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.2.4 --key stable-024-node-host
-herdr-relay upgrade --services node --version 0.2.4 --key stable-024-node-host --apply
+herdr-relay upgrade --services node --version 0.2.5 --key stable-025-node-host
+herdr-relay upgrade --services node --version 0.2.5 --key stable-025-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -73,12 +73,25 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4/0.2.1/0.2.2/0.2.3-to-0.2.4 retains protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through 0.2.5 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
 
 Upgrading enables the supported connection-rebind and workspace-relocation
 operations. It does not apply either recovery automatically. Preview and confirm
 those changes separately after the required Relay components are upgraded.
+
+Interactive grant matching and [linked preparation repair](interactive-recovery.md)
+require the 0.2.5 backend, destination node and Relay plugin. CLI activation does
+not install those capabilities into running services. New preparations fence an
+older driver before filesystem/native effects and wait for the node upgrade.
+Legacy local records and failed preparations are inspected, not deleted or
+silently replayed. Capacity reservations and repair history use the existing
+revisioned records without a database migration.
+The release declares interactive provisioning compatibility protocol **1**.
+Switching back to code without that protocol is refused while capacity-aware
+preparations, held reservations or repair approvals remain outstanding. Settle or
+explicitly cancel and inspect those specific records first. Settled history and
+unrelated active executions do not block an otherwise compatible code switch.
 
 ## 3. Deferred plugin reload
 

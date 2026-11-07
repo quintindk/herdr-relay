@@ -94,3 +94,21 @@ test('runtime status does not mislabel the entire interactive chat as read-only'
     assert.match(value.permissions, /does not determine the chat capabilities/);
   } finally { await close(); }
 });
+
+test('interactive scope and repair tools describe the node ceiling and enforce separate preview/request schemas', async () => {
+  const tools = [];
+  const close = await server.setup({ options: { workerContextFile: '/fixture/worker.json' }, app: { version: '2.2.5' },
+    tool: { transform: async callback => { callback({ add: tool => tools.push(tool) }); return { dispose() {} }; } },
+    rpc: { register: async () => ({ dispose() {} }) } });
+  try {
+    const prepare = tools.find(tool => tool.name === 'relay_interactive_prepare');
+    const scope = prepare.input.properties.payload.properties.permissionScope;
+    assert.equal(scope.additionalProperties, false); assert.match(scope.properties.maxAgents.description, /Node-wide enrolment ceiling, not the number/);
+    assert.equal(scope.properties.maxAgents.maximum, 100);
+    const repair = tools.find(tool => tool.name === 'relay_interactive_repair');
+    assert.equal(repair.options.codemode, false); assert.equal(repair.input.additionalProperties, false);
+    assert.equal(repair.input.properties.payload, undefined, 'The unified repair tool uses operation plus exact preview fields');
+    assert.deepEqual(repair.input.oneOf[1].required, ['key', 'preparationId', 'expectedRevision', 'previewHash', 'scope']);
+    assert.match(repair.description, /Never approves its own request or replays uncertain effects/);
+  } finally { await close(); }
+});

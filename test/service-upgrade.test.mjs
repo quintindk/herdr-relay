@@ -76,6 +76,59 @@ test('database schema mismatch refuses downgrade or implicit migration before an
   assert.equal(f.calls.some(([action]) => action === 'stop'), false);
 });
 
+test('older code is refused while new admission work exists, but settled history does not block a code switch', async t => {
+  const f = fixture(t), request = { id: 'new-preparation', revision: 1, state: 'waiting_capacity', admissionRequired: true, admission: { protocol: 1, state: 'waiting' } };
+  f.store.save('provision_request', request);
+  await assert.rejects(f.apply(), { code: 'upgrade_interactive_protocol_required' });
+  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+  f.store.save('provision_request', { ...request, revision: 2, state: 'cancelled', admission: { protocol: 1, state: 'released' } });
+  assert.equal((await f.apply()).state, 'committed');
+  assert.equal(f.store.get('provision_request', request.id).state, 'cancelled');
+});
+
+test('protocol-aware candidate preserves active admission work without making unrelated activity an upgrade blocker', async t => {
+  const f = fixture(t), path = join(f.candidate, 'package.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(path, JSON.stringify({ ...manifest, relayCompatibility: { ...compatibility, interactiveProvisioning: 1 } }));
+  f.store.save('provision_request', { id: 'new-preparation', revision: 1, state: 'waiting_capacity', admissionRequired: true, admission: { protocol: 1, state: 'waiting' } });
+  assert.equal((await f.apply()).state, 'committed');
+  assert.equal(f.store.get('provision_request', 'new-preparation').state, 'waiting_capacity');
+});
+
+test('rollback to a pre-admission release refuses new reservations before stopping current services', async t => {
+  const f = fixture(t), path = join(f.candidate, 'package.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(path, JSON.stringify({ ...manifest, relayCompatibility: { ...compatibility, interactiveProvisioning: 1 } }));
+  const result = await f.apply(), calls = f.calls.length;
+  const request = { id: 'new-preparation', revision: 1, state: 'cancelled', admissionRequired: true, admission: { protocol: 1, state: 'reserved' } };
+  f.store.save('provision_request', request);
+  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies), { code: 'upgrade_interactive_protocol_required' });
+  assert.equal(f.calls.length, calls); assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
+  f.store.save('provision_request', { ...request, revision: 2, admission: { protocol: 1, state: 'released' } });
+  assert.equal((await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies)).state, 'rolled_back');
+});
+
+test('a repair approval pending on the coordinating node fences a downgrade without affecting other work', async t => {
+  const f = fixture(t);
+  f.journal.db.prepare('INSERT INTO cached_entities VALUES (?,?,?)').run('grant_request', 'repair', JSON.stringify({
+    entity: { id: 'repair', kind: 'interactive_repair', state: 'awaiting_approval' } }));
+  await assert.rejects(f.apply(), { code: 'upgrade_interactive_protocol_required' });
+  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+});
+
+test('a racing admission request refuses rollback after stop and restores the current supervisors without changing pointers', async t => {
+  const f = fixture(t), path = join(f.candidate, 'package.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(path, JSON.stringify({ ...manifest, relayCompatibility: { ...compatibility, interactiveProvisioning: 1 } }));
+  const result = await f.apply();
+  f.onStop = () => f.store.save('provision_request', { id: 'racing-preparation', revision: 1, state: 'requested', admissionRequired: true,
+    admission: { protocol: 1, state: 'required' } });
+  await assert.rejects(serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies),
+    { code: 'upgrade_interactive_protocol_required' });
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.candidate, 'src/cli.mjs'));
+  assert.ok([...f.states.values()].every(state => state.active));
+  const record = JSON.parse(readFileSync(join(f.operation(result.operationId), 'operation.json'), 'utf8'));
+  assert.equal(record.phase, 'committed'); assert.equal(record.rollbackFailureCode, 'upgrade_interactive_protocol_required');
+  assert.equal(f.store.get('provision_request', 'racing-preparation').state, 'requested');
+});
+
 test('pre-RC4 sources and schema-1 state are refused before staging or stopping services', async t => {
   const f = fixture(t), manifest = join(f.previous, 'package.json'), value = JSON.parse(readFileSync(manifest));
   writeFileSync(manifest, JSON.stringify({ ...value, version: '0.2.1-rc3' }));

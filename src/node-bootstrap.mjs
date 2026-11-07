@@ -1,5 +1,6 @@
 import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
 import { digest, requireValue } from './protocol.mjs';
+import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
 
 // A human credential is separate from both the backend-root credential and the
 // node daemon credential. It may manage this node's enrolments and the same
@@ -12,7 +13,7 @@ export function authoriseOperator(store, actor, action, payload) {
   if (!actor.scope) return;
   const scope = actor.scope;
   if (scope.kind === 'grant_approval') {
-    requireValue(actor.type === 'user' && actor.id === store.owner && ['grant.request_decide', 'grant.create', 'grant.revoke'].includes(action),
+    requireValue(actor.type === 'user' && actor.id === store.owner && ['grant.request_decide', 'grant.create', 'grant.revoke', 'grant.repair_request'].includes(action),
       'forbidden', 'Human Grants sessions cannot perform unrelated administration', 403);
     return;
   }
@@ -41,8 +42,11 @@ export function authoriseOperator(store, actor, action, payload) {
       (scope.mode === 'localUser' || withinRoots(payload.directory, scope.roots)), 'operator_scope_mismatch', 'Enrolment is outside this operator\'s node/workspace scope', 403);
     if (action === 'agent.relocate') requireValue(scope.mode === 'localUser' || withinRoots(store.get('agent', payload.id).directory, scope.roots),
       'operator_scope_mismatch', 'Relocation requires authority over both the original and destination workspaces', 403);
-    if (action === 'agent.enrol' && !store.get('agent', payload.id, false)) requireValue(store.all('agent').filter(a => a.nodeId === nodeId && a.standingGrant).length < scope.maxAgents,
-      'agent_limit', 'Node enrolment limit reached');
+    if (action === 'agent.enrol' && !store.get('agent', payload.id, false)) {
+      const usage = nodeEnrolmentUsage(store, nodeId);
+      requireValue(usage.used < Math.min(scope.maxAgents, usage.reservationCeiling),
+        'agent_limit', 'Node enrolment ceiling reached, including reserved preparations');
+    }
   }
 }
 

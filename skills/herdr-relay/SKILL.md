@@ -207,13 +207,31 @@ compatibility: opencode
   continuation; finish immediately after a successful staging tool.
 - Scheduling, provisioning and work assignment are separate actions. Interactive
   preparation opens a visible discussion, not an assigned task or model run.
-- `relay_interactive_prepare` accepts an optional `grantId`. Matching standing
-  permission is reused. Otherwise it records `awaiting_approval` under Grants,
+- `relay_interactive_prepare` accepts an optional `grantId`. Standing permission
+  is reused only when it covers the requested scope. `grantSelection` records the
+  selected identity/revision or mismatch reasons. Otherwise it records `awaiting_approval` under Grants,
   without requiring an owner credential or active parent execution. Human
   approval resumes the saved operation. Never approve your own request or repeat
   preparation to drive progress. Inspect `relay_interactive_status` instead.
   `waiting_driver` means permission exists but a verified destination Herdr
   connection is unavailable. It does not authorise a different destination.
+- `maxAgents` is the destination node-wide enrolment ceiling, not the number of
+  agents a request may create. Omit it to inherit the joined node ceiling and use
+  Approve once for one saved preparation. Do not compute current count plus one.
+  New preparations reserve capacity before initial directory/native effects.
+  `waiting_capacity` is a recoverable admission wait. `waiting_node_upgrade`
+  requires the capacity-aware destination Relay node, not a Herdr/OpenCode restart.
+- `relay_interactive_repair` previews `{operation:"preview",id:ORIGINAL_PREPARATION,
+  scope?:PROPOSED_SCOPE}`. If eligible, request `{operation:"request",id:NEW_REPAIR_ID,
+  preparationId:ORIGINAL_PREPARATION,expectedRevision:INSPECTED_REVISION,
+  scope:RETURNED_SCOPE,previewHash:RETURNED_HASH,key:IMMUTABLE_KEY,reason?:TEXT}`.
+  The human approves that exact repair once in Grants. It preserves the original
+  agent, receiving conversation, verified resources, task and failure history.
+  Do not cancel/recreate a blocked preparation or revoke an unrelated grant as a
+  workaround. A blocked/cancelled cancellation returns `already_terminal` without
+  changing history. Unknown effects and missing checkpoints require inspection,
+  never a resend, new identity, journal edit or borrowed credential. Upgrade the
+  backend, destination node and Relay plugin before using this recovery flow.
 - `native_project_identity_changed` during interactive preparation means this
   same chat, directory and creation time now report a different OpenCode project
   ID. No request was queued. Ask the human to run `/relay-attach` in this existing
@@ -229,8 +247,11 @@ compatibility: opencode
   A `refused` dispatch with `applied: false` did not commit; retain/reconcile the
   exact original key. Before retrying, inspect current task/execution evidence,
   especially if the human assigned it through the TUI. Do not duplicate that run.
-- Grants Pending offers Approve once, Allow this scope and Reject. Active lists
-  permissions and supports Revoke. History records security decisions. Permission
+- Grants Pending offers Approve once, Allow this scope and Reject. Repairs offer
+  Approve repair once or Reject. Active links preparations and supports `v` for
+  confirmed Revoke and `p` for a linked Repair request. Search includes requested
+  agent names and originating request/grant IDs. History retains blocked
+  preparations and security decisions. `r` refreshes, never revokes. Permission
   outcome notices are evidence, not fresh human instructions. They authorise no
   work beyond the original request. Dispatch still needs explicit permission.
 - For a Relay-provisioned discussion, read `relay_interactive_context` first.

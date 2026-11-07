@@ -1,6 +1,8 @@
 import { isAbsolute, normalize, relative, sep } from 'node:path';
 import { digest, now, requireValue } from './protocol.mjs';
-import { interactiveGrantCovers, requestInteractiveGrant } from './grants.mjs';
+import { interactiveGrantCovers, interactiveGrantMismatch, interactiveScope, requestInteractiveGrant, selectInteractiveGrant, nodeGrantPolicy } from './grants.mjs';
+import { interactiveCapacity } from './interactive-capacity.mjs';
+import { requestInteractiveRepair, applyInteractiveInspection } from './interactive-repair.mjs';
 
 const fields = (p, allowed, required = []) => requireValue(p && typeof p === 'object' && !Array.isArray(p) &&
   Object.keys(p).every(k => allowed.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_request', 'Missing or unsupported interactive provisioning fields');
@@ -15,18 +17,23 @@ export const interactiveOperationHash = p => digest({ id: p.id, nodeId: p.nodeId
   directory: p.directory, name: p.name, agentId: p.agentId ?? null, createDirectory: p.createDirectory ?? false,
   instance: p.instance ?? 'ensure', profile: p.profile ?? 'build', topic: p.topic ?? '', model: p.model ?? null });
 
-export function interactiveAuthority(store, actor, id, { ready = false } = {}) {
+export function interactiveAuthority(store, actor, id, { ready = false, driverProtocol = 0 } = {}) {
+  if (!store.inTransaction) return store.transaction(() => interactiveAuthority(store, actor, id, { ready, driverProtocol }));
   const request = store.get('provision_request', id);
   if (actor.type === 'user') store.ownerOnly(actor); else store.nodeOnly(actor, request.nodeId);
+  requireValue(!request.admissionRequired || actor.type === 'user' || driverProtocol === 1,
+    'interactive_node_upgrade_required', 'This preparation requires a capacity-aware Relay node. Upgrade that node before provisioning.', 409);
   const grant = store.get('provision_grant', request.grantId);
   requireValue(grant.state === 'active' && (!grant.expiresAt || Date.now() < Date.parse(grant.expiresAt)) &&
     grant.revision === request.grantRevision && (!grant.boundRequestId || grant.boundRequestId === request.id), 'provisioning_grant_inactive', 'Provisioning grant expired, changed or revoked', 403);
   requireValue(request.state !== 'cancelled' && (ready || !interactiveTerminal.includes(request.state)),
     'provisioning_inactive', 'Provisioning request is no longer active', 409);
-  return { request, grant };
+  return { request, grant, capacity: interactiveCapacity(store, request, grant, nodeGrantPolicy(store, request.nodeId).maxAgents) };
 }
 
 export function applyInteractive(store, actor, action, p, { created, changed, grantResume = false }) {
+  if (action === 'interactive.repair_request') return requestInteractiveRepair(store, actor, p, { created, changed });
+  if (action === 'interactive.repair_checkpoint') return applyInteractiveInspection(store, actor, action, p, changed);
   if (action === 'interactive.grant') {
     store.ownerOnly(actor);
     fields(p, ['id', 'requesterAgentId', 'nodeId', 'mode', 'roots', 'allowNewEnrolments', 'allowCreateDirectories', 'allowReplacement', 'allowDispatch', 'reviewPolicy', 'profiles', 'maxAgents', 'expiresAt'],
@@ -79,8 +86,19 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
     if (store.get('grant_request', p.id, false) && !grantResume) {
       return requestInteractiveGrant(store, actor, p, { created });
     }
-    const grant = p.grantId ? store.get('provision_grant', p.grantId) : store.all('provision_grant').find(grant => interactiveGrantCovers(grant, p));
-    if (!grant) return requestInteractiveGrant(store, actor, p, { created, changed });
+    if (!agent) {
+      const prior = store.all('provision_request').find(r => r.id !== p.id && r.requesterAgentId === p.requesterAgentId && r.nodeId === p.nodeId &&
+        r.directory === p.directory && r.name === p.name && (r.state !== 'cancelled' || !r.checkpoint?.safe));
+      requireValue(!prior, 'preparation_repair_required',
+        `Preparation ${prior?.id} already owns this agent/workspace intent. Inspect its status and use a linked Repair request instead of creating another preparation.`, 409);
+      const pending = store.all('grant_request').find(r => r.id !== p.id && r.kind === 'interactive' && r.state === 'awaiting_approval' &&
+        r.requesterAgentId === p.requesterAgentId && r.nodeId === p.nodeId && r.directory === p.directory && r.name === p.name);
+      requireValue(!pending, 'preparation_approval_pending', `Permission request ${pending?.id} already captures this agent/workspace intent. Inspect and approve the original request.`, 409);
+    }
+    if (p.permissionScope !== undefined) interactiveScope(store, p.nodeId, p.permissionScope, p);
+    const { grant: matchingGrant, selection } = selectInteractiveGrant(store, p);
+    const grant = p.grantId ? store.get('provision_grant', p.grantId) : matchingGrant;
+    if (!grant) return requestInteractiveGrant(store, actor, p, { created, changed, selection });
     p.grantId = grant.id;
     requireValue(grant.state === 'active' && (!grant.boundRequestId || grant.boundRequestId === p.id) && (!grant.expiresAt || Date.now() < Date.parse(grant.expiresAt)) && grant.requesterAgentId === p.requesterAgentId && grant.nodeId === p.nodeId,
       'provisioning_grant_inactive', 'An active grant for this requester and destination node is required', 403);
@@ -95,6 +113,9 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
     const instance = p.instance ?? 'ensure', profile = p.profile ?? 'build';
     requireValue(['ensure', 'replace'].includes(instance) && grant.profiles.includes(profile), 'invalid_profile', 'Unsupported instance mode or profile');
     requireValue(instance !== 'replace' || grant.allowReplacement, 'replacement_forbidden', 'Explicit replacement permission required', 403);
+    const mismatch = interactiveGrantMismatch(grant, p);
+    requireValue(mismatch.length === 0, 'provisioning_grant_insufficient',
+      `Selected grant ${grant.id} revision ${grant.revision} does not cover the requested scope: ${mismatch.join(', ')}. Request corrected permission in Grants.`, 409);
     if (p.topic !== undefined) requireValue(typeof p.topic === 'string' && p.topic.length <= 4000, 'invalid_topic', 'Bounded discussion context required');
     if (!agent) requireValue(!store.all('agent').some(a => a.nodeId === p.nodeId && a.directory === directory && a.name === name && a.standingGrant),
       'enrolment_exists', 'Use the existing enrolment ID rather than silently creating another');
@@ -104,7 +125,32 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
       intentHash, permissionScopeHash: digest(p.permissionScope ?? null),
       requesterNodeId: store.get('agent', p.requesterAgentId).nodeId,
       previousConversationId: agent?.conversationId ?? null, expectedBindingRevision: agent?.bindingRevision ?? 0,
-      desiredSessionId: `ses_${digest(['interactive', p.id]).slice(0, 26)}`, grantRevision: grant.revision, state: 'requested' });
+      desiredSessionId: `ses_${digest(['interactive', p.id]).slice(0, 26)}`, grantRevision: grant.revision,
+      grantSelection: { ...selection, selectedGrantId: grant.id, selectedGrantRevision: grant.revision },
+      admissionRequired: true, admission: { protocol: 1, state: 'required' }, state: 'requested' });
+  }
+  if (action === 'interactive.reserve') {
+    fields(p, ['id', 'expectedRevision', 'localCeiling'], ['id', 'expectedRevision']);
+    const { request, grant } = interactiveAuthority(store, actor, p.id, { driverProtocol: 1 });
+    store.nodeOnly(actor, request.nodeId); store.revision(request, p.expectedRevision);
+    const localCeiling = p.localCeiling ?? 100;
+    requireValue(Number.isSafeInteger(localCeiling) && localCeiling > 0 && localCeiling <= 100, 'invalid_capacity', 'Bounded local enrolment ceiling required');
+    const capacity = interactiveCapacity(store, request, grant, nodeGrantPolicy(store, request.nodeId).maxAgents, localCeiling);
+    if (!request.newEnrolment || capacity.existingEnrolment) {
+      const agent = store.get('agent', request.agentId);
+      requireValue(!request.newEnrolment || agent.standingGrant?.provisioningRequestId === request.id,
+        'agent_identity_changed', 'The reserved agent identity belongs to another enrolment', 409);
+      if (['existing', 'consumed'].includes(request.admission?.state)) return request;
+      return changed('provision_request', request, { admission: { protocol: 1, state: request.newEnrolment ? 'consumed' : 'existing', capacity } });
+    }
+    if (request.admission?.state === 'reserved') return request;
+    const waiting = capacity.available === 0;
+    const admission = { protocol: 1, state: waiting ? 'waiting' : 'reserved', capacity,
+      ...(waiting ? {} : { reservedAt: now() }) };
+    if (waiting && request.state === 'waiting_capacity' && digest(request.admission?.capacity) === digest(capacity)) return request;
+    return changed('provision_request', request, { admission,
+      state: waiting ? 'waiting_capacity' : ['waiting_capacity', 'waiting_node_upgrade'].includes(request.state) ? 'requested' : request.state,
+      reason: waiting ? 'node_enrolment_capacity' : null });
   }
   if (action === 'interactive.cancel') {
     fields(p, ['id', 'expectedRevision', 'reason', 'requesterAgentId', 'sourceConversationId', 'sourceBindingRevision'], ['id', 'expectedRevision', 'reason']);
@@ -116,6 +162,8 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
     }
     const request = store.get('provision_request', p.id); store.revision(request, p.expectedRevision); text(p.reason, 2000);
     if (actor.type === 'user') store.ownerOnly(actor); else requireValue(source(p).id === request.requesterAgentId, 'forbidden', 'Only the original requester can cancel', 403);
+    if (['blocked', 'cancelled'].includes(request.state)) return { ...request,
+      cancellation: { applied: false, disposition: 'already_terminal', message: 'Already terminal. No cancellation is needed. Inspect Repair request in Grants for a blocked preparation.' } };
     requireValue(!interactiveTerminal.includes(request.state), 'provisioning_inactive', 'Only an outstanding preparation can be cancelled');
     return changed('provision_request', request, { state: 'cancelled', reason: p.reason });
   }
@@ -123,8 +171,14 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
     fields(p, ['id', 'expectedRevision', 'state', 'receipt', 'reason'], ['id', 'expectedRevision', 'state']);
     const request = store.get('provision_request', p.id); store.nodeOnly(actor, request.nodeId); store.revision(request, p.expectedRevision);
     requireValue(!interactiveTerminal.includes(request.state), 'provisioning_inactive', 'Preparation already ended');
-    requireValue(['waiting_driver', 'accepted', 'preparing_workspace', 'opening_chat', 'attaching', 'ready', 'blocked', 'uncertain'].includes(p.state), 'invalid_state', 'Known provisioning phase required');
-    if (p.state !== 'blocked' && p.state !== 'uncertain') interactiveAuthority(store, actor, p.id);
+    requireValue(['waiting_driver', 'waiting_node_upgrade', 'accepted', 'preparing_workspace', 'opening_chat', 'attaching', 'ready', 'blocked', 'uncertain'].includes(p.state), 'invalid_state', 'Known provisioning phase required');
+    // An old driver cannot satisfy the protocol fence. Its failure report must
+    // leave the request waiting for an upgrade, not turn it into a dead end.
+    if (p.state === 'blocked' && p.reason === 'interactive_node_upgrade_required') {
+      if (request.state === 'waiting_node_upgrade') return request;
+      return changed('provision_request', request, { state: 'waiting_node_upgrade', reason: p.reason });
+    }
+    if (!['blocked', 'uncertain', 'waiting_node_upgrade'].includes(p.state)) interactiveAuthority(store, actor, p.id, { driverProtocol: 1 });
     if (p.reason !== undefined) text(p.reason, 2000);
     if (p.state === 'ready') {
       fields(p.receipt, ['agentId', 'conversationId', 'bindingId', 'generation', 'directory', 'workspaceId', 'tabId', 'paneId', 'terminalId', 'reused', 'readyAt', 'model'],
@@ -142,11 +196,24 @@ export function applyInteractive(store, actor, action, p, { created, changed, gr
   }
   if (action === 'interactive.enrol' || action === 'interactive.attach') {
     fields(p, action === 'interactive.enrol' ? ['id'] : ['id', 'attachment'], action === 'interactive.enrol' ? ['id'] : ['id', 'attachment']);
-    const { request, grant } = interactiveAuthority(store, actor, p.id); store.nodeOnly(actor, request.nodeId);
+    const { request, grant } = interactiveAuthority(store, actor, p.id, { driverProtocol: 1 }); store.nodeOnly(actor, request.nodeId);
     if (action === 'interactive.enrol') {
       requireValue(request.newEnrolment && grant.allowNewEnrolments, 'provisioning_forbidden', 'New enrolment not authorised', 403);
-      requireValue(store.all('agent').filter(a => a.nodeId === request.nodeId && a.standingGrant).length < grant.maxAgents, 'agent_limit', 'Destination enrolment limit reached');
+      const existing = store.get('agent', request.agentId, false);
+      if (existing) {
+        requireValue(existing.nodeId === request.nodeId && existing.directory === request.directory && existing.standingGrant?.provisioningRequestId === request.id,
+          'agent_identity_changed', 'Existing enrolment does not belong to this preparation', 409);
+        return existing;
+      }
+      requireValue(!request.admissionRequired || request.admission?.state === 'reserved', 'interactive_admission_required', 'Reserve capacity before creating an enrolment', 409);
+      const capacity = interactiveCapacity(store, request, grant, nodeGrantPolicy(store, request.nodeId).maxAgents,
+        request.admission?.capacity?.localCeiling ?? 100);
+      requireValue(capacity.available > 0, 'agent_limit', 'Destination enrolment capacity was reached');
       const agent = store.apply(actor, 'agent.enrol', { id: request.agentId, nodeId: request.nodeId, directory: request.directory, name: request.name }, { interactiveRequest: request });
+      if (request.admission) {
+        const consumed = changed('provision_request', request, { admission: { ...request.admission, state: 'consumed', consumedAt: now() } });
+        store.event('interactive.progress', consumed, actor, request.id);
+      }
       store.event('agent.enrol', agent, actor, request.id); return agent;
     }
     const a = p.attachment;

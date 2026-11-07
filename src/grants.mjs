@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { canonicalDirectory, withinRoots, interactiveOperationHash } from './interactive-contract.mjs';
 import { approveContractUpdate } from './headless-contract.mjs';
+import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
+import { requestInteractiveRepair, approveInteractiveRepair } from './interactive-repair.mjs';
 
 const fields = (p, allowed, required = allowed) => requireValue(p && typeof p === 'object' && !Array.isArray(p) &&
   Object.keys(p).every(k => allowed.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_grant_request', 'Missing or unsupported grant fields');
@@ -38,15 +40,47 @@ export function interactiveScope(store, nodeId, value, { directory, profile = 'b
   return scope;
 }
 
-export function interactiveGrantCovers(grant, p) {
-  return grant.state === 'active' && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now()) &&
-    grant.requesterAgentId === p.requesterAgentId && grant.nodeId === p.nodeId && (!grant.boundRequestId || grant.boundRequestId === p.id) &&
-    canonicalDirectory(p.directory) && (grant.mode === 'localUser' || withinRoots(p.directory, grant.roots)) && grant.profiles.includes(p.profile ?? 'build') &&
-    (p.agentId || grant.allowNewEnrolments) && (!p.createDirectory || grant.allowCreateDirectories) &&
-    (p.instance !== 'replace' || grant.allowReplacement);
+export function interactiveGrantMismatch(grant, p) {
+  const reasons = [], scope = p.permissionScope ?? {};
+  const check = (condition, reason) => { if (!condition) reasons.push(reason); };
+  check(grant.state === 'active' && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now()), 'grant_inactive');
+  check(grant.requesterAgentId === p.requesterAgentId, 'requester_mismatch');
+  check(grant.nodeId === p.nodeId, 'destination_mismatch');
+  check(!grant.boundRequestId || grant.boundRequestId === p.id, 'one_off_request_mismatch');
+  check(canonicalDirectory(p.directory) && (grant.mode === 'localUser' || withinRoots(p.directory, grant.roots ?? [])), 'directory_not_permitted');
+  check(grant.profiles.includes(p.profile ?? 'build'), 'profile_not_permitted');
+  check(p.agentId || grant.allowNewEnrolments, 'new_enrolment_not_permitted');
+  check(!p.createDirectory || grant.allowCreateDirectories, 'directory_creation_not_permitted');
+  check(p.instance !== 'replace' || grant.allowReplacement, 'replacement_not_permitted');
+  for (const field of ['allowNewEnrolments', 'allowCreateDirectories', 'allowReplacement', 'allowDispatch'])
+    check(!scope[field] || grant[field], `${field}_not_permitted`);
+  check(scope.maxAgents === undefined || grant.maxAgents >= scope.maxAgents, 'node_ceiling_below_requested');
+  check(!scope.roots || grant.mode === 'localUser' || scope.roots.every(root => withinRoots(root, grant.roots ?? [])), 'requested_roots_not_permitted');
+  check(!scope.profiles || scope.profiles.every(profile => grant.profiles.includes(profile)), 'requested_profiles_not_permitted');
+  check(!scope.reviewPolicy || scope.reviewPolicy === grant.reviewPolicy, 'review_policy_mismatch');
+  check(!scope.expiresAt || !grant.expiresAt || Date.parse(grant.expiresAt) >= Date.parse(scope.expiresAt), 'expiry_before_requested');
+  return [...new Set(reasons)];
 }
 
-export function requestInteractiveGrant(store, actor, p, { created }) {
+export const interactiveGrantCovers = (grant, p) => interactiveGrantMismatch(grant, p).length === 0;
+export const interactiveGrantScope = grant => Object.fromEntries(scopeFields.filter(field => grant[field] !== undefined).map(field => [field, grant[field]]));
+
+export function selectInteractiveGrant(store, p) {
+  const candidates = (p.grantId ? [store.get('provision_grant', p.grantId)] : store.all('provision_grant')
+    .filter(g => g.requesterAgentId === p.requesterAgentId && g.nodeId === p.nodeId));
+  const usage = nodeEnrolmentUsage(store, p.nodeId);
+  const considered = candidates.map(grant => {
+    const reasons = interactiveGrantMismatch(grant, p);
+    if (!p.agentId && usage.used >= Math.min(grant.maxAgents, usage.reservationCeiling)) reasons.push('node_enrolment_capacity');
+    return { grantId: grant.id, grantRevision: grant.revision, reasons, effectiveScope: interactiveGrantScope(grant) };
+  });
+  const match = considered.find(item => !item.reasons.length);
+  return { grant: match ? candidates.find(grant => grant.id === match.grantId) : null,
+    selection: { requestedScope: p.permissionScope ?? null, selectedGrantId: match?.grantId ?? null,
+      selectedGrantRevision: match?.grantRevision ?? null, currentEnrolments: usage.enrolled, reservations: usage.reserved, considered } };
+}
+
+export function requestInteractiveGrant(store, actor, p, { created, selection }) {
   const existing = store.get('grant_request', p.id, false);
   const { grantId, permissionScope, ...operation } = p;
   const operationHash = interactiveOperationHash(operation);
@@ -62,7 +96,8 @@ export function requestInteractiveGrant(store, actor, p, { created }) {
     'invalid_grant_scope', 'Requested permission must cover the requested operation');
   return created('grant_request', { id: p.id, permissionRequest: true, kind: 'interactive', requesterAgentId: p.requesterAgentId, nodeId: p.nodeId,
     requesterNodeId: store.get('agent', p.requesterAgentId).nodeId,
-    directory: p.directory, name: p.name, operation, requestHash: operationHash, requestedScopeHash: digest(permissionScope ?? null), scope, state: 'awaiting_approval', responsibleUserId: store.owner });
+    directory: p.directory, name: p.name, operation, requestHash: operationHash, requestedScopeHash: digest(permissionScope ?? null), scope,
+    ...(selection ? { grantSelection: selection } : {}), state: 'awaiting_approval', responsibleUserId: store.owner });
 }
 
 function approvalActor(store, actor) {
@@ -99,6 +134,7 @@ function resumeRequest(store, actor, request, grant, changed, decision) {
 
 export function applyGrantAction(store, actor, action, p, { created, changed }) {
   approvalActor(store, actor);
+  if (action === 'grant.repair_request') return requestInteractiveRepair(store, actor, p, { created, changed });
   const record = value => {
     const decision = created('grant_decision', { id: `grant_decision_${randomUUID()}`, ...value, decidedBy: grantDecider(actor), decidedAt: now() });
     store.event('grant.decision_recorded', decision, actor, p.id); return decision;
@@ -118,11 +154,21 @@ export function applyGrantAction(store, actor, action, p, { created, changed }) 
       return result;
     }
     if (p.decision === 'reject') {
-      record({ requestId: request.id, grantKind: 'interactive', outcome: 'rejected', reason: decision.reason });
+      record({ requestId: request.id, grantKind: request.kind, outcome: 'rejected', reason: decision.reason });
       return changed('grant_request', request, { state: 'rejected', decision });
     }
+    if (request.kind === 'interactive_repair') {
+      requireValue(p.decision === 'approve_once' && p.scope === undefined, 'invalid_grant_decision', 'Approve the exact repair once or reject it. The old standing permission is not changed.');
+      const scope = interactiveScope(store, request.nodeId, request.scope, request.operation);
+      const grant = mintInteractiveGrant(store, actor, `permission_${digest([request.id, request.revision]).slice(0, 48)}`,
+        request.requesterAgentId, request.nodeId, scope, { approvalRequestId: request.id, boundRequestId: request.operation.preparationId });
+      const result = approveInteractiveRepair(store, actor, request, grant, changed, decision);
+      record({ requestId: request.id, grantId: grant.id, grantKind: 'interactive', outcome: 'repair_approved', reason: decision.reason, scope });
+      return result;
+    }
     const once = p.decision === 'approve_once';
-    const scope = interactiveScope(store, request.nodeId, once ? { ...request.scope, roots: [request.directory], profiles: [request.operation.profile ?? 'build'],
+    if (once && p.scope) fields(p.scope, ['maxAgents'], []);
+    const scope = interactiveScope(store, request.nodeId, once ? { ...request.scope, ...(p.scope ?? {}), roots: [request.directory], profiles: [request.operation.profile ?? 'build'],
       allowNewEnrolments: !request.operation.agentId, allowCreateDirectories: !!request.operation.createDirectory,
       allowReplacement: request.operation.instance === 'replace' } : p.scope ?? request.scope, request.operation);
     requireValue(interactiveGrantCovers({ ...scope, state: 'active', requesterAgentId: request.requesterAgentId, nodeId: request.nodeId }, request.operation),
@@ -139,7 +185,8 @@ export function applyGrantAction(store, actor, action, p, { created, changed }) 
     const scope = interactiveScope(store, p.nodeId, p.scope);
     const grant = mintInteractiveGrant(store, actor, p.id, p.requesterAgentId, p.nodeId, scope);
     const resumed = [];
-    for (const request of store.all('grant_request').filter(r => r.state === 'awaiting_approval' && interactiveGrantCovers(grant, r.operation))) {
+    for (const request of store.all('grant_request').filter(r => r.kind === 'interactive' && r.state === 'awaiting_approval' &&
+      interactiveGrantCovers(grant, { ...r.operation, permissionScope: r.scope }))) {
       const decision = { decision: 'allow_scope', requestHash: request.requestHash, reason: p.reason ?? 'Covered by a new standing permission', decidedBy: grantDecider(actor), at: now() };
       resumeRequest(store, actor, request, grant, changed, decision); resumed.push(request.id);
     }
