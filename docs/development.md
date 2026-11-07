@@ -24,6 +24,7 @@ from checkout imports; a successful plain Node.js import does not prove renderin
 
 ```sh
 node scripts/verify-cli-bridge.mjs
+node scripts/verify-interactive-recovery.mjs
 node scripts/verify-agent-relocation.mjs
 node scripts/verify-headless-setup.mjs --legacy-contract-refusal --capabilities
 node scripts/verify-headless-setup.mjs --connection-rebind --contract-update --capabilities
@@ -41,6 +42,14 @@ Do not redirect them to a user's live state. PTY checks require Python and POSIX
 verifiers. `verify-installed-tui.mjs --package DIRECTORY --binary OPENCODE_BINARY`
 checks the actual host renderer. Release verification requires the exact supported
 OpenCode host binaries and a fresh production audit.
+
+The recovery verifier uses actual scoped OpenCode tool calls, native receiving
+sessions, the Grants transport and concurrent backend HTTP admission. Its Herdr
+placement is a fixture. The real Herdr panel verifier separately exercises keyboard
+repair, approval and revocation. Both run against the installed release package.
+The package CI job downloads checksum-pinned Herdr 0.9.5 for that isolated gate.
+Use a short scratch path when UNIX socket limits apply. `RELAY_TEST_SCRATCH` and
+`TMPDIR` can select a private disk-backed directory when `/tmp` quota is exhausted.
 
 Logs and verification receipts belong in CI artifacts or a private scratch path,
 normally `/tmp/opencode`, not `docs/evidence` or a development ledger in Git.

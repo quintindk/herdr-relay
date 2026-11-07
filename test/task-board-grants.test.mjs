@@ -72,3 +72,66 @@ test('Grants request detail sanitises source text and stays within a narrow view
   for (let i = 0; i < 20; i++) await input(instance, '\x1b[6~');
   assert.match(frame(instance), /END_CONTEX[\s│]*T/); assert.match(frame(instance), /Esc close/);
 });
+
+test('Active searches originating request IDs and v previews the selected grant before revocation', async t => {
+  const sent = [], lab = { ...active, title: 'Interactive agents · Lab', canRevoke: true, searchText: 'uwb-il2cpp-lab-dispatch-20261107' };
+  const other = { ...active, id: 'interactive:other', entityId: 'other', title: 'Unrelated permission' };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, grants: { ...base.grants, active: [other, lab] } }),
+    detailGrant: async ({ id }) => [other, lab].find(item => item.id === id),
+    decideGrant: async command => { sent.push(command); return { state: 'recorded', message: 'Revoked' }; }, interval: 60000, width: 110, height: 32 }));
+  t.after(() => instance.unmount()); await tick(); await grants(instance); await input(instance, '2');
+  await input(instance, '/'); await input(instance, 'uwb-il2cpp-lab-dispatch-20261107'); await input(instance, '\r');
+  assert.match(frame(instance), /Interactive agents · Lab/); assert.doesNotMatch(frame(instance), /Unrelated permission/);
+  await input(instance, 'v'); assert.match(frame(instance), /Confirm: Revoke/); assert.equal(sent.length, 0);
+  await input(instance, '\r'); assert.equal(sent.length, 1); assert.equal(sent[0].item.entityId, lab.entityId);
+});
+
+test('polling/reordering Active preserves selection by grant identity rather than row number', async t => {
+  const first = { ...active, id: 'interactive:first', entityId: 'first', title: 'First', canRevoke: true };
+  const second = { ...active, id: 'interactive:second', entityId: 'second', title: 'Second', canRevoke: true };
+  let records = [first, second];
+  const sent = [];
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, grants: { ...base.grants, active: records } }),
+    detailGrant: async ({ id }) => records.find(item => item.id === id),
+    decideGrant: async command => { sent.push(command); return { state: 'recorded', message: 'Revoked' }; }, interval: 60000, width: 100, height: 30 }));
+  t.after(() => instance.unmount()); await tick(); await grants(instance); await input(instance, '2'); await input(instance, 'j');
+  records = [second, first]; await input(instance, 'r'); await input(instance, 'v'); await input(instance, '\r');
+  assert.equal(sent[0].item.entityId, 'second');
+});
+
+test('closing a loading grant dialog prevents its stale response from replacing a newer selection', async t => {
+  const first = { ...active, id: 'interactive:first', entityId: 'first', title: 'First permission' };
+  const second = { ...active, id: 'interactive:second', entityId: 'second', title: 'Second permission' };
+  let resolveFirst;
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, grants: { ...base.grants, active: [first, second] } }),
+    detailGrant: async ({ id }) => id === first.id ? new Promise(resolve => { resolveFirst = resolve; }) : second,
+    interval: 60000, width: 110, height: 32 }));
+  t.after(() => instance.unmount()); await tick(); await grants(instance); await input(instance, '2'); await input(instance, '\r');
+  await input(instance, '\x1b'); await input(instance, 'j'); await input(instance, '\r');
+  resolveFirst(first); await tick(); await input(instance, '\r');
+  assert.match(frame(instance), /Second permission/); assert.match(frame(instance), /Confirm: Revoke/);
+});
+
+test('p requests a linked repair only after preview, and pending repair approval has no standing-scope option', async t => {
+  const target = { id: 'legacy-lab', name: 'Lab', directory: '/work/lab', state: 'blocked', reason: 'agent_limit' };
+  const lab = { ...active, title: 'Interactive agents · Lab', repairTargets: [target], scope: { ...active.scope, maxAgents: 1, allowDispatch: true } };
+  const previews = [], requests = [];
+  const preview = { eligible: true, preparationId: target.id, expectedRevision: 3, scope: { ...lab.scope, maxAgents: 25 },
+    previewHash: 'a'.repeat(64), instanceId: 'backend', checkpoint: { phase: 'directory' },
+    changes: [{ field: 'maxAgents', before: 1, after: 25 }], preserves: ['preparation', 'agent identity', 'captured tasks'] };
+  const instance = render(h(TaskBoardInkApp, { read: async () => ({ ...base, interactiveRecoveryAvailable: true, grants: { ...base.grants, active: [lab] } }),
+    detailGrant: async () => lab,
+    prepareInteractiveRepair: async input => { previews.push(input); return preview; },
+    requestInteractiveRepair: async input => { requests.push(input); return { state: 'recorded', message: 'Repair permission requested' }; },
+    interval: 60000, width: 110, height: 32 }));
+  t.after(() => instance.unmount()); await tick(); await grants(instance); await input(instance, '2'); await input(instance, 'p');
+  assert.match(frame(instance), /Repair interactive preparation/); assert.equal(requests.length, 0);
+  await input(instance, '\r'); assert.equal(previews.length, 1); assert.equal(previews[0].id, target.id); assert.equal(previews[0].scope.maxAgents, 25);
+  assert.match(frame(instance), /Change maxAgents: 1 → 25/); assert.equal(requests.length, 0);
+  await input(instance, '\r'); assert.equal(requests.length, 1); assert.equal(requests[0].preview.previewHash, preview.previewHash);
+  const repair = { ...request, kind: 'interactive_repair', repairPreview: preview };
+  const pending = render(h(TaskBoardInkApp, { read: async () => ({ ...base, grants: { ...base.grants, pending: [repair] } }), detailGrant: async () => repair,
+    interval: 60000, width: 110, height: 32 }));
+  t.after(() => pending.unmount()); await tick(); await grants(pending); await input(pending, '\r');
+  assert.match(frame(pending), /Approve repair once/); assert.doesNotMatch(frame(pending), /Allow this scope/);
+});

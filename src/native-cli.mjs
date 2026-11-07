@@ -32,6 +32,8 @@ export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
   agent relocate --agent ID --session ID --generation N --from-directory OLD --directory NEW --context OWNER_JSON
     [--config NODE_JSON] [--apply --key KEY --preview-hash HASH]  [same root chat; preview first, no replay]
   interactive grant|request|dispatch --file PAYLOAD_JSON --key KEY --context OWNER_JSON
+  interactive repair-preview --file JSON --context CONTEXT  [read-only permission/checkpoint preview]
+  interactive repair-request --file JSON --key KEY --context OWNER_JSON  [request human approval, never approves]
   interactive list|inspect [ID] --context OWNER_JSON
   interactive revoke|cancel ID --revision N --key KEY [--reason TEXT] --context OWNER_JSON
   node install|run --config PRIVATE_NODE_JSON
@@ -115,7 +117,8 @@ export async function main(args) {
     : group === 'schedule' && action === 'result-notifications' ? ['context', 'revision', 'key', 'inbox', 'requester']
     : group === 'board' ? ['context', 'json']
     : group === 'task' && action === 'resolve' ? ['context', 'reference', 'scope']
-    : group === 'interactive' && ['grant', 'request', 'dispatch'].includes(action) ? ['context', 'file', 'key']
+    : group === 'interactive' && action === 'repair-preview' ? ['context', 'file']
+    : group === 'interactive' && ['grant', 'request', 'dispatch', 'repair-request'].includes(action) ? ['context', 'file', 'key']
     : action === 'list' ? ['context', 'limit', 'cursor'] : action === 'inspect' ? ['context']
     : group === 'command' ? ['context', 'file']
     : ['create', 'edit', 'comment', 'request'].includes(action) || group === 'task-reference' && ['grant', 'revoke'].includes(action) ? ['context', 'file', 'key']
@@ -230,7 +233,8 @@ export async function main(args) {
           detailAgent: board.detailAgent, statusTask: board.statusTask, reviewTask: board.reviewTask, detailInbox: board.detailInbox,
            decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
            prepareHandback: board.prepareHandback, handbackTask: board.handbackTask,
-          detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions,
+           detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions,
+           prepareInteractiveRepair: board.prepareInteractiveRepair, requestInteractiveRepair: board.requestInteractiveRepair,
           updateRunResultNotifications: board.updateRunResultNotifications, prepareAgentRename: board.prepareAgentRename, renameAgent: board.renameAgent });
       }
     } finally { journal.close(); }
@@ -254,10 +258,14 @@ export async function main(args) {
     output(await api('GET', `/v1/${collections[group]}${id ? `/${encodeURIComponent(id)}` : query.size ? `?${query}` : ''}`)); return;
   }
   if (group === 'command') { output(await api('POST', '/v1/commands', payload())); return; }
+  if (group === 'interactive' && action === 'repair-preview') {
+    requireValue(!id, 'invalid_request', 'The payload supplies the preparation ID');
+    output(await api('POST', '/v1/interactive-repair-preview', payload())); return;
+  }
   const fileActions = { 'task:create': 'task.create', 'task:edit': 'task.update', 'task:comment': 'comment.create',
     'task-reference:grant': 'task.reference_namespace.grant', 'task-reference:revoke': 'task.reference_namespace.revoke',
     'execution:request': 'execution.request', 'schedule:create': 'schedule.install', 'interactive:grant': 'interactive.grant',
-    'interactive:request': 'interactive.request', 'interactive:dispatch': 'interactive.dispatch' };
+    'interactive:request': 'interactive.request', 'interactive:dispatch': 'interactive.dispatch', 'interactive:repair-request': 'interactive.repair_request' };
   let nativeAction = fileActions[`${group}:${action}`], data;
   if (nativeAction) { requireValue(!id, 'invalid_request', 'The payload file supplies the entity ID'); data = payload(); }
   else if (group === 'schedule' && action === 'result-notifications') {

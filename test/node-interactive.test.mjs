@@ -13,6 +13,7 @@ import { bootstrapNode } from '../src/node-bootstrap.mjs';
 import { issueGrantApprovalSession } from '../src/grants.mjs';
 import { createServer } from 'node:net';
 import { tickAgentNotices } from '../src/node-notices.mjs';
+import { interactiveRepairPreview } from '../src/interactive-repair.mjs';
 
 function fixture(t, { managed = false } = {}) {
   const root = mkdtempSync('/tmp/opencode/native-interactive-');
@@ -38,7 +39,7 @@ function fixture(t, { managed = false } = {}) {
   if (!managed) receivers.put(`interactive-request:${request.id}`, request);
   const config = { nodeId: 'destination', stateDirectory: root, interactive: { mode: 'roots', roots: [root], herdrSocketPath: join(root, 'herdr.sock'),
     allowNewEnrolments: true, allowCreateDirectories: true, allowReplacement: true, model: { id: 'configured', providerID: 'fixture' } } };
-  const f = { root, store, owner, actors, command, grant, request, journal, receivers, config, workspaceCreates: 0, starts: 0, nativeCreates: 0,
+  const f = { root, store, owner, actors, operators, command, grant, request, journal, receivers, config, workspaceCreates: 0, starts: 0, nativeCreates: 0,
     view: { protocol: 22, workspaces: [], tabs: [], panes: [], agents: [] }, sessions: new Map() };
   f.approve = decision => {
     const ui = store.authenticate(issueGrantApprovalSession(store, operators.source, { terminalId: 'human' }).token);
@@ -48,7 +49,8 @@ function fixture(t, { managed = false } = {}) {
   f.apiFor = actor => async (method, path, body) => {
     if (method === 'POST') return store.command(actor, body);
     const url = new URL(path, 'http://test'), [, plural, id, suffix] = url.pathname.slice(1).split('/');
-    if (suffix === 'authority') return interactiveAuthority(store, actor, id);
+    if (plural === 'info') return { features: { interactiveRecovery: true, interactiveCapacity: true } };
+    if (suffix === 'authority') return interactiveAuthority(store, actor, id, { driverProtocol: Number(url.searchParams.get('driverProtocol') ?? 0) });
     const kind = plural.slice(0, -1);
     return id ? store.get(kind, id) : store.query(kind, Object.fromEntries([...url.searchParams].map(([k, v]) => [k, k === 'limit' ? Number(v) : v])));
   };
@@ -416,4 +418,87 @@ test('node-local scoped tools forward through the backend even when the source a
   assert.equal(preparation.state, 'recorded');
   assert.equal(preparation.receipt.state, 'requested');
   assert.equal(f.store.all('execution').length, 0, 'Preparation does not dispatch another execution');
+});
+
+test('a linked repair resumes a legacy blocked directory without a duplicate agent, session, workspace or captured task', async t => {
+  const f = fixture(t);
+  f.store.save('provision_grant', { ...f.store.get('provision_grant', 'grant'), maxAgents: 1 });
+  f.store.save('provision_request', { ...f.store.get('provision_request', f.request.id), admissionRequired: false, admission: undefined });
+  for (let i = 0; i < 12; i++) {
+    const directory = join(f.root, `existing-${i}`);
+    f.command(f.owner, `existing-${i}`, 'agent.enrol', { id: `existing-${i}`, nodeId: 'destination', name: `Existing ${i}`, directory });
+    f.receivers.enrol({ id: `existing-${i}`, directory, name: `Existing ${i}`, transport: 'tools' });
+  }
+  assert.equal((await f.ready()).state, 'blocked'); assert.ok(existsSync(f.request.directory));
+  await f.tick();
+  const preview = interactiveRepairPreview(f.store, f.owner, { id: f.request.id });
+  assert.equal(preview.eligible, true); assert.equal(preview.checkpoint.phase, 'directory');
+  const before = readFileSync(join(f.request.directory, '.relay-workspace-owner'), 'utf8');
+  const ui = f.store.authenticate(issueGrantApprovalSession(f.store, f.operators.source, { terminalId: 'human-repair' }).token);
+  const permission = f.command(ui, 'repair-original', 'grant.repair_request', { id: 'repair-original', preparationId: f.request.id,
+    expectedRevision: preview.expectedRevision, scope: preview.scope, previewHash: preview.previewHash });
+  f.command(ui, 'approve-repair', 'grant.request_decide', { id: permission.id, expectedRevision: 1, requestHash: permission.requestHash, decision: 'approve_once' });
+  const ready = await f.ready();
+  assert.equal(ready.state, 'ready'); assert.equal(ready.agentId, f.request.agentId); assert.equal(ready.desiredSessionId, f.request.desiredSessionId);
+  assert.equal(readFileSync(join(f.request.directory, '.relay-workspace-owner'), 'utf8'), before);
+  assert.equal(f.workspaceCreates, 1); assert.equal(f.nativeCreates, 1); assert.equal(f.starts, 1);
+  const task = f.command(f.owner, 'captured-task', 'task.create', { id: 'captured', title: 'Captured compatibility task' });
+  const payload = { id: f.request.id, requesterAgentId: 'initiator', sourceConversationId: 'ses_source', sourceBindingRevision: 1,
+    taskId: task.id, taskRevision: task.revision, executionId: 'captured-execution', instructions: 'Only the captured compatibility test.' };
+  const execution = f.command(f.actors.source, 'captured-dispatch', 'interactive.dispatch', payload);
+  assert.equal(execution.targetAgentId, f.request.agentId); assert.equal(f.store.all('task').length, 1);
+  assert.deepEqual(f.store.get('task', task.id), task); assert.equal(ready.repairHistory[0].reason, 'agent_limit');
+  await f.tick(); assert.equal(f.workspaceCreates, 1); assert.equal(f.starts, 1);
+});
+
+test('capacity admission precedes directory creation and a lost reservation response is not an extra slot', async t => {
+  const f = fixture(t), api = f.api;
+  let lost = false;
+  f.api = async (method, path, body) => {
+    const result = await api(method, path, body);
+    if (body?.action === 'interactive.reserve' && !lost) { lost = true; throw Error('Lost reservation receipt'); }
+    return result;
+  };
+  await f.tick(); assert.ok(lost); assert.equal(existsSync(f.request.directory), false);
+  assert.equal(f.store.get('provision_request', f.request.id).admission.state, 'reserved');
+  await f.journal.flush(f.api);
+  assert.equal((await f.ready()).state, 'ready'); assert.equal(f.nativeCreates, 1); assert.equal(f.starts, 1);
+});
+
+test('a changed directory after repair approval is refused before any native effect', async t => {
+  const f = fixture(t); f.revokeDuringWorkspace = true;
+  assert.equal((await f.ready()).state, 'blocked'); await f.tick();
+  const preview = interactiveRepairPreview(f.store, f.owner, { id: f.request.id });
+  assert.equal(preview.eligible, true);
+  const ui = f.store.authenticate(issueGrantApprovalSession(f.store, f.operators.source, { terminalId: 'human' }).token);
+  const permission = f.command(ui, 'repair', 'grant.repair_request', { id: 'repair', preparationId: f.request.id, expectedRevision: preview.expectedRevision, scope: preview.scope, previewHash: preview.previewHash });
+  f.command(ui, 'approve', 'grant.request_decide', { id: permission.id, expectedRevision: 1, requestHash: permission.requestHash, decision: 'approve_once' });
+  rmSync(f.request.directory, { recursive: true }); mkdirSync(f.request.directory);
+  assert.equal((await f.ready()).reason, 'repair_checkpoint_changed'); assert.equal(f.starts, 0); assert.equal(f.nativeCreates, 1);
+});
+
+for (const observed of [false, true]) test(`lost native session creation reconciles observations without a resend (observed: ${observed})`, async t => {
+  const f = fixture(t), native = f.native;
+  f.native = async () => {
+    const connection = await native(), create = connection.client.session.create;
+    connection.client.session.create = async input => {
+      if (observed) await create(input); else f.nativeCreates++;
+      throw Object.assign(Error('Lost native create response'), { status: 503 });
+    };
+    return connection;
+  };
+  for (let i = 0; i < 14; i++) await f.tick();
+  assert.equal(f.nativeCreates, 1);
+  assert.equal(f.store.get('provision_request', f.request.id).state, observed ? 'ready' : 'uncertain');
+  assert.equal(f.starts, observed ? 1 : 0);
+});
+
+test('an upgraded driver resumes a first-hop node-upgrade wait without replacing the preparation', async t => {
+  const f = fixture(t), request = f.store.get('provision_request', f.request.id);
+  f.command(f.actors.destination, 'old-driver-report', 'interactive.progress', { id: request.id, expectedRevision: request.revision,
+    state: 'blocked', reason: 'interactive_node_upgrade_required' });
+  f.receivers.put(`interactive-op:${request.id}`, { id: request.id, directory: request.directory, phase: 'blocked', blocker: 'interactive_node_upgrade_required' });
+  assert.equal(existsSync(request.directory), false);
+  const ready = await f.ready(); assert.equal(ready.state, 'ready'); assert.equal(ready.agentId, request.agentId);
+  assert.equal(f.nativeCreates, 1); assert.equal(f.workspaceCreates, 1); assert.equal(f.starts, 1);
 });

@@ -16,6 +16,7 @@ import { registerHeadlessGrantTools } from './headless-grant-tools.mjs';
 import { headlessTaskOperationVariants } from '../../src/headless-task-schema.mjs';
 import { runResultNotificationsSchema } from '../../src/run-result-notifications.mjs';
 import { assertNotRunResultNotice } from './run-result-notice.mjs';
+import { interactiveScopeSchema } from '../../src/interactive-scope-schema.mjs';
 
 // Plugin.define is an identity/type helper, not a runtime requirement. Keep
 // its SDK contract for development without shipping its provider/tooling tree.
@@ -116,7 +117,7 @@ const plugin = {
         }, required: ['key', 'payload'], additionalProperties: false }, execute: (input, context) => worker(context, action, input) });
         const agent = async (context, action, input) => {
           if (!['questions', 'tasks', 'task', 'task-identity', 'comments', 'relations', 'agents', 'status', 'schedules', 'messages', 'message',
-            'interactive-context', 'interactive-grants', 'interactive-status', 'headless-status', 'headless-grants', 'headless-connections', 'headless-contract-preview'].includes(action))
+            'interactive-context', 'interactive-grants', 'interactive-status', 'interactive-repair-preview', 'headless-status', 'headless-grants', 'headless-connections', 'headless-contract-preview'].includes(action))
             await assertNotRunResultNotice(ctx, context);
           const connection = workerConnection(ctx.options, context.sessionID);
           if (connection.sessionId !== context.sessionID) throw new Error('Agent tool belongs to another exact conversation');
@@ -167,6 +168,18 @@ const plugin = {
         editor.add({ name: 'relay_interactive_status', description: 'Inspect one preparation requested by this durable agent. Ready receipts are historical placement evidence, not permanent availability.',
           options: { codemode: false }, input: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 96 } }, required: ['id'], additionalProperties: false },
           execute: (input, context) => agent(context, 'interactive-status', input) });
+        editor.add({ name: 'relay_interactive_repair', description: 'Preview a linked permission repair for a blocked or capacity-waiting preparation, then request human approval of that exact preview. Preserves the original preparation, agent, conversation, workspace, task and failure history. Never approves its own request or replays uncertain effects. Use the returned previewHash and inspected revision with an immutable key.',
+          options: { codemode: false }, input: { type: 'object', properties: {
+            operation: { enum: ['preview', 'request'] }, id: { type: 'string', minLength: 1, maxLength: 96 }, scope: interactiveScopeSchema,
+            key: { type: 'string', minLength: 1, maxLength: 100 }, preparationId: { type: 'string', minLength: 1, maxLength: 96 },
+            expectedRevision: { type: 'integer', minimum: 1 }, previewHash: { type: 'string', minLength: 64, maxLength: 64 },
+            reason: { type: 'string', maxLength: 2000 },
+          }, required: ['operation', 'id'], oneOf: [
+            { properties: { operation: { const: 'preview' } }, not: { anyOf: ['key', 'preparationId', 'expectedRevision', 'previewHash', 'reason'].map(field => ({ required: [field] })) } },
+            { properties: { operation: { const: 'request' } }, required: ['key', 'preparationId', 'expectedRevision', 'previewHash', 'scope'] },
+          ], additionalProperties: false },
+          execute: ({ operation, key, ...input }, context) => agent(context, `interactive-repair-${operation}`,
+            operation === 'preview' ? input : { key, payload: input }) });
         editor.add({ name: 'relay_message_send',
           description: 'Send an informational message/status update to another enrolled agent, independently of tasks. Does not create a task, dispatch work or convey human authority. Use an immutable retry key. Do not automatically reply to an incoming message.',
           options: { codemode: false }, input: { type: 'object', properties: {
@@ -184,13 +197,13 @@ const plugin = {
         for (const operation of ['prepare', 'dispatch', 'cancel']) {
           const string = { type: 'string', minLength: 1, maxLength: 256 };
           const properties = operation === 'prepare' ? { id: { ...string, maxLength: 96 }, grantId: string, nodeId: string, directory: { ...string, maxLength: 4096 },
-            agentId: string, name: string, createDirectory: { type: 'boolean' }, instance: { enum: ['ensure', 'replace'] }, profile: string, topic: { type: 'string', maxLength: 4000 }, permissionScope: { type: 'object', additionalProperties: true } } :
+            agentId: string, name: string, createDirectory: { type: 'boolean' }, instance: { enum: ['ensure', 'replace'] }, profile: string, topic: { type: 'string', maxLength: 4000 }, permissionScope: interactiveScopeSchema } :
             operation === 'dispatch' ? { id: string, taskId: string, taskRevision: { type: 'integer', minimum: 0 }, executionId: string, title: string, instructions: { ...string, maxLength: 16000 } } :
               { id: string, expectedRevision: { type: 'integer', minimum: 1 }, reason: { ...string, maxLength: 2000 } };
           editor.add({ name: `relay_interactive_${operation}`, options: { codemode: false },
-            description: operation === 'prepare' ? 'Request an interactive Herdr agent. Matching standing permissions are reused automatically. Without permission, records an awaiting_approval request in Grants; no owner context or grant ID is needed. Approval resumes the saved preparation. Preparation alone never assigns work or runs a model. On native_project_identity_changed, ask the human to run /relay-attach in this existing chat and confirm the same enrolment. Wait for confirmation before retrying the original ID/key/payload and existing worktree. Never bypass this through backend-admin credentials.' :
+            description: operation === 'prepare' ? 'Request one interactive Herdr agent. Reuses only grants that cover the requested scope and reports the selected grant/revision or mismatches. Omit maxAgents to inherit the node-wide enrolment ceiling; it is not a per-request creation allowance. Without permission, records awaiting_approval in Grants. Approve once binds permission to this preparation. Capacity is reserved before filesystem or native effects. Preparation alone never assigns work or runs a model. Repair blocked preparations with relay_interactive_repair rather than creating duplicates. On native_project_identity_changed, ask the human to run /relay-attach in this existing chat and confirm the same enrolment before retrying the original ID/key/payload. Never borrow backend-admin credentials.' :
               operation === 'dispatch' ? 'Assign one bounded task to an exact ready preparation under its active dispatch grant and original human handover. Existing tasks are reused without edits: supply their inspected taskRevision. Title is required only when creating a task. Approval notices can continue the original authorised workflow; no new human phrase is needed. Reconcile the original key, never duplicate a task/execution.' :
-                'Cancel an outstanding interactive preparation. Does not kill processes or delete already created workspaces.',
+                'Cancel an outstanding interactive preparation. Blocked/cancelled requests return already_terminal without changing history. Does not kill processes or delete already created workspaces. Uncertain effects retain their evidence and capacity until inspected.',
             input: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 100 }, payload: { type: 'object', properties,
               required: operation === 'prepare' ? ['id', 'nodeId'] : operation === 'dispatch' ? ['id', 'taskId', 'executionId', 'instructions'] : ['id', 'expectedRevision', 'reason'],
               additionalProperties: false } }, required: ['key', 'payload'], additionalProperties: false }, execute: (input, context) => agent(context, `interactive-${operation}`, input) });

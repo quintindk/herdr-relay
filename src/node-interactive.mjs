@@ -6,6 +6,7 @@ import { NativeReceivers } from './native-receivers.mjs';
 import { nativeConnection } from './native-enrol.mjs';
 import { canonicalDirectory, withinRoots, interactiveTerminal } from './interactive-contract.mjs';
 import { digest, now, requireValue } from './protocol.mjs';
+import { inspectInteractiveCheckpoint } from './node-interactive-recovery.mjs';
 
 export function herdrRpc(socketPath, method, params) {
   requireValue(isAbsolute(socketPath), 'invalid_herdr_config', 'Explicit local Herdr socket required');
@@ -78,12 +79,11 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
         try { records.reject(attachment, { code: publication.error }, await api('GET', `/v1/agents/${encodeURIComponent(request.agentId)}`)); } catch {}
       }
     }
-    if (interactiveTerminal.includes(request.state)) continue;
     let op = records.get(`interactive-op:${request.id}`) ?? { id: request.id, directory: request.directory, phase: 'initial' };
     const save = patch => { op = records.put(`interactive-op:${request.id}`, { ...op, ...patch }); return op; };
-    const authority = () => api('GET', `/v1/provision_requests/${encodeURIComponent(request.id)}/authority`);
+    const authority = () => api('GET', `/v1/provision_requests/${encodeURIComponent(request.id)}/authority?driverProtocol=1`);
     const command = async (key, action, payload) => {
-      const fullKey = `interactive:${request.id}:${key}`;
+      const fullKey = `interactive:${request.id}:${request.repair?.attempt ? `attempt-${request.repair.attempt}:` : ''}${key}`;
       journal.queue({ key: fullKey, action, payload }); await journal.flush(api);
       const receipt = journal.receipt(fullKey);
       requireValue(receipt?.state === 'recorded', 'publication_pending', 'Provisioning mutation awaits a receipt');
@@ -95,7 +95,37 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
       return command(`progress-${state}-${current.revision}`, 'interactive.progress', { id: request.id, expectedRevision: current.revision, state, ...extra });
     };
     try {
+      if (interactiveTerminal.includes(request.state)) {
+        if (['blocked', 'cancelled'].includes(request.state)) {
+          const features = (await api('GET', '/v1/info')).features;
+          if (features?.interactiveRecovery) {
+            const inspection = await inspectInteractiveCheckpoint(journal, records, api, request, records.get(`interactive-op:${request.id}`), { snapshot, native });
+            const current = await api('GET', `/v1/provision_requests/${encodeURIComponent(request.id)}`);
+            if (current.revision === request.revision && (digest(current.checkpoint ?? null) !== digest(inspection.checkpoint) ||
+              current.admission?.state === 'reserved' && inspection.checkpoint.safe))
+              await command(`inspect-${current.revision}-${digest(inspection.checkpoint)}`, 'interactive.repair_checkpoint', { id: request.id,
+                expectedRevision: current.revision, checkpoint: inspection.checkpoint });
+          }
+        }
+        continue;
+      }
       const { grant } = await authority();
+      if (request.state === 'waiting_node_upgrade' && op.phase === 'blocked' && op.blocker === 'interactive_node_upgrade_required' && !request.repair) {
+        requireValue(!op.directoryIntent && !op.directoryIdentity && !op.sessionId && !op.workspaceIntent && !op.startIntent && !op.bindingId,
+          'repair_checkpoint_changed', 'The old driver has unexpected effects. Inspect this preparation before continuing.', 409);
+        save({ phase: 'initial', blocker: undefined });
+      }
+      if (request.repair && op.repairAppliedAttempt !== request.repair.attempt) {
+        const inspection = await inspectInteractiveCheckpoint(journal, records, api, { ...request, state: 'blocked' }, op, { snapshot, native });
+        requireValue(inspection.checkpoint.safe && digest(inspection.checkpoint) === request.repair.checkpointHash,
+          'repair_checkpoint_changed', 'Local preparation changed since repair approval. Inspect the original resources before continuing.', 409);
+        for (const key of inspection.refusedKeys) {
+          const item = journal.receipt(key);
+          journal.recordPublication({ ...item, state: 'superseded', outcome: 'refused', applied: false, effectsUncertain: false,
+            repairRequestId: request.repair.requestId, reconciliation: 'terminal_request_fence_and_absent_enrolment' });
+        }
+        save({ ...inspection.reconciled, phase: inspection.checkpoint.phase, repairAppliedAttempt: request.repair.attempt, blocker: undefined });
+      }
       let policy = config.interactive;
       if (grant.managed) {
         const reported = records.list('interactive-driver').filter(driver => existsSync(driver.herdrSocketPath));
@@ -130,6 +160,18 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
           catch { await progress('waiting_driver', { reason: 'Waiting for the destination Herdr driver to become available.' }); continue; }
           if (!op.driverSocket) save({ driverSocket });
         }
+        if (request.admissionRequired) {
+          const current = await authority(), localCeiling = grant.managed ? grant.maxAgents : policy.maxAgents ?? 10;
+          const admitted = await command(`reserve-${current.request.revision}-${current.capacity.version}`, 'interactive.reserve', {
+            id: request.id, expectedRevision: current.request.revision, localCeiling });
+          if (admitted.state === 'waiting_capacity') {
+            const inspection = await inspectInteractiveCheckpoint(journal, records, api, admitted, op, { snapshot, native });
+            if (digest(admitted.checkpoint ?? null) !== digest(inspection.checkpoint)) await command(`inspect-${admitted.revision}-${digest(inspection.checkpoint)}`,
+              'interactive.repair_checkpoint', { id: request.id, expectedRevision: admitted.revision, checkpoint: inspection.checkpoint });
+            continue;
+          }
+          requireValue(['reserved', 'existing', 'consumed'].includes(admitted.admission?.state), 'interactive_admission_required', 'A confirmed reservation is required before filesystem effects');
+        }
         await progress('accepted'); await guard();
         if (!existsSync(op.directory)) {
           requireValue(request.createDirectory && policy.allowCreateDirectories && grant.allowCreateDirectories, 'directory_creation_forbidden', 'Directory does not exist and creation is not authorised');
@@ -151,6 +193,14 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
         if (request.newEnrolment) {
           requireValue(policy.allowNewEnrolments && records.list('enrolment').length < Math.min(policy.maxAgents ?? 10, grant.maxAgents) ||
             records.get(`enrolment:${request.agentId}`), 'agent_limit', 'New enrolment is disabled or the local agent limit was reached');
+          // A repaired directory-phase request still needs admission before
+          // enrolment. The original directory and identity are reused.
+          if (request.admissionRequired) {
+            const current = await authority();
+            const admitted = await command(`reserve-${current.request.revision}-${current.capacity.version}`, 'interactive.reserve', {
+              id: request.id, expectedRevision: current.request.revision, localCeiling: grant.managed ? grant.maxAgents : policy.maxAgents ?? 10 });
+            if (admitted.state === 'waiting_capacity') continue;
+          }
           const enrolment = records.enrol({ id: request.agentId, directory: op.directory, name: request.name, transport: 'tools' });
           await command('enrol', 'interactive.enrol', { id: request.id });
           requireValue(enrolment.id === request.agentId, 'agent_identity_changed', 'Prepared enrolment identity differs');
@@ -182,7 +232,9 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
         try { value = await connection.client.session.get({ sessionID: op.sessionId }); }
         catch (error) { if (error.status !== 404 && !['NotFoundError', 'SessionNotFoundError'].includes(error.name)) throw error; }
         if (!value && op.sessionId === request.desiredSessionId && op.phase === 'selected') {
+          requireValue(!op.sessionIntent, 'native_create_uncertain', 'A previous native session create has no observation. No resend is permitted.', 409);
           await guard();
+          save({ sessionIntent: true });
           value = await connection.client.session.create({ id: op.sessionId, location: { directory: op.directory }, agent: request.profile, model: op.model,
             title: request.name, metadata: { relayProvisionRequest: request.id, relayDiscussionTopic: request.topic ?? '' } });
         }
@@ -190,7 +242,8 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
           (op.sessionId !== request.desiredSessionId || value.metadata?.relayProvisionRequest === request.id), 'native_identity_mismatch', 'Exact prepared native session unavailable');
         if (op.model) requireValue(value.model?.id === op.model.id && value.model.providerID === op.model.providerID &&
           (!op.model.variant || op.model.variant === 'default' || value.model.variant === op.model.variant),
-          'native_model_changed', 'Native model differs from the explicitly resolved model');
+            'native_model_changed', 'Native model differs from the explicitly resolved model');
+        if (op.sessionIntent && !op.sessionObserved) save({ sessionObserved: true });
         return value;
       };
       const currentSession = await session();
@@ -249,7 +302,7 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
         if (!existsSync(authFile)) writeFileSync(authFile, JSON.stringify({ password: connection.password }), { mode: 0o600, flag: 'wx', flush: true });
         const operation = records.prepare({ agentId: request.agentId, identity: { sessionId: currentSession.id, projectId: currentSession.projectID,
           directory: op.directory, createdAt: currentSession.time.created }, url: connection.url, authFile,
-          expectedGeneration: request.expectedBindingRevision, key: `interactive-${digest(request.id)}` });
+          expectedGeneration: request.expectedBindingRevision, key: `interactive-${digest(request.id)}${request.repair?.attempt ? `-repair-${request.repair.attempt}` : ''}` });
         if (operation.state === 'pending') {
           let agent;
           try { agent = await command('attach', 'interactive.attach', { id: request.id, attachment: operation.command.payload }); }
@@ -290,12 +343,14 @@ export async function tickInteractive(journal, api, config, resolveBinding, depe
       // transport messages through backend progress records.
       const reason = typeof error.code === 'string' ? error.code : 'provisioning_transport_unavailable';
       save({ blocker: reason });
-      if (error.code === 'herdr_uncertain' || op.workspaceIntent && !op.placement || op.startIntent && op.phase === 'workspace') {
+      if (error.code === 'herdr_uncertain' || error.code === 'native_create_uncertain' ||
+        op.sessionIntent && !op.sessionObserved && op.phase === 'selected' && (!error.status || error.status >= 500) ||
+        op.workspaceIntent && !op.placement || op.startIntent && op.phase === 'workspace') {
         try { await progress('uncertain', { reason }); } catch {}
       } else if (error.status && error.status < 500 || ['interactive_not_configured', 'profile_forbidden', 'agent_limit', 'directory_creation_forbidden', 'directory_parent_missing',
         'provisioning_directory_forbidden', 'directory_identity_changed', 'directory_creation_uncertain', 'ambiguous_placement', 'placement_changed',
         'native_placement_mismatch', 'pane_occupied', 'enrolment_missing', 'enrolment_exists', 'native_identity_mismatch', 'native_model_unavailable', 'native_model_changed'].includes(error.code)) {
-        try { await progress('blocked', { reason }); save({ phase: 'blocked' }); } catch {}
+        try { await progress('blocked', { reason }); save({ resumePhase: op.phase === 'blocked' ? op.resumePhase : op.phase, phase: 'blocked' }); } catch {}
       }
     }
   }

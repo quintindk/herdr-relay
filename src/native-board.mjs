@@ -52,7 +52,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     summary: `${p.command.action}: ${p.command.payload.body ?? p.command.payload.reason ?? p.command.payload.name ?? 'acknowledgement'}`,
     context: p.state === 'conflict' ? `Refused (${p.error}). Dismiss this refused operation, then reopen the current item for a fresh decision.`
       : 'Outcome is unconfirmed. Retry reuses your original confirmation and operation key.',
-    from: 'This terminal', stateLabel: p.state === 'conflict' ? 'Needs inspection' : 'Publication unconfirmed',
+    from: 'This terminal', stateLabel: p.state === 'conflict' ? 'Decision refused' : 'Publication unconfirmed', publicationState: p.state,
     action: p.state === 'conflict' ? 'dismiss' : 'retry', error: p.error, command: p.command, instanceId: p.instance,
   }));
   const load = async signal => {
@@ -122,7 +122,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     async read(signal) {
       const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies, headless_setups } = await load(signal);
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents, headless_setups)),
-        inbox, grants, grantsAvailable: !!info.features?.grantsManagement, agentRenamingAvailable: !!info.features?.agentRename, nodePolicies,
+        inbox, grants, grantsAvailable: !!info.features?.grantsManagement, interactiveRecoveryAvailable: !!info.features?.interactiveRecovery, agentRenamingAvailable: !!info.features?.agentRename, nodePolicies,
         tasks: tasks.map(t => ({ ...scoped(t), instanceId: info.instanceId, ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
         localNode: localNode(nodes, info) ? { id: localNodeId, name: localNode(nodes, info).name ?? localNodeId } : null,
@@ -240,11 +240,27 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
         return { state: 'recorded', message: item.action === 'dismiss' ? 'Refused security decision dismissed.' : 'Original security decision reconciled.' };
       }
       const pending = item.section === 'pending';
+      requireValue(pending || item.canRevoke, 'grant_unavailable', 'This record is history, not a revocable permission. Inspect its linked preparation instead.');
       const command = pending ? { key, action: 'grant.request_decide', payload: { id: item.entityId, expectedRevision: item.revision,
-        requestHash: item.requestHash, decision, reason: reason ?? '', ...(decision === 'allow_scope' ? { scope: scope ?? item.scope } : {}) } } :
+        requestHash: item.requestHash, decision, reason: reason ?? '', ...(decision === 'allow_scope' ? { scope: scope ?? item.scope } :
+          decision === 'approve_once' && item.kind === 'interactive' && scope ? { scope } : {}) } } :
         { key, action: 'grant.revoke', payload: { id: item.entityId, kind: item.kind, expectedRevision: item.revision, reason: reason ?? '' } };
       await decisionJournal.submit(grantApi, command, item.instanceId);
       return { state: 'recorded', message: pending ? decision === 'reject' ? 'Permission rejected. No operation started.' : item.kind === 'headless_contract' ? 'Instruction revision approved. Activation waits for a settled worker and node acknowledgement. Existing scope is unchanged.' : 'Permission recorded. The saved preparation resumes automatically.' : 'Permission revoked. Existing processes were not terminated.' };
+    },
+    async prepareInteractiveRepair({ id, scope }) {
+      const info = await api('GET', '/v1/info');
+      requireValue(info.features?.interactiveRecovery, 'backend_upgrade_required', 'Upgrade the backend for linked preparation repair');
+      const preview = await api('POST', '/v1/interactive-repair-preview', { id, ...(scope ? { scope } : {}) });
+      return { ...preview, instanceId: info.instanceId };
+    },
+    async requestInteractiveRepair({ key, id, preview, reason }) {
+      requireValue(decisionJournal && key && preview?.eligible && preview.instanceId, 'repair_not_eligible',
+        `Repair is not ready: ${preview?.reason ?? 'inspect the exact preparation first'}`);
+      const payload = { id, preparationId: preview.preparationId, expectedRevision: preview.expectedRevision,
+        scope: preview.scope, previewHash: preview.previewHash, reason: reason ?? '' };
+      await decisionJournal.submit(grantApi, { key, action: 'grant.repair_request', payload }, preview.instanceId);
+      return { state: 'recorded', message: 'Repair permission requested. Approve its exact changes in Grants → Pending. The original task and preparation are retained.' };
     },
     async createGrant({ key, payload }) {
       requireValue(decisionJournal, 'decision_storage_required', 'Durable Grants decision storage required');

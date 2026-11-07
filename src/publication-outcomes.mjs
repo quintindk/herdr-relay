@@ -4,10 +4,12 @@ import { digest } from './protocol.mjs';
 // is not proof: proxies, key collisions and malformed/lost replies stay fenced.
 const validation = new Map([
   ['headless.task', new Set(['invalid_headless_request', 'invalid_headless_capabilities', 'invalid_reference', 'invalid_task'])],
+  ['interactive.repair_request', new Set(['invalid_interactive_repair', 'invalid_grant_scope', 'grant_scope_outside_node', 'stale_repair_preview', 'repair_not_eligible'])],
 ]);
+const validationStatuses = action => action === 'interactive.repair_request' ? [400, 409] : [400];
 const revisions = new Set(['stale_revision', 'stale_binding', 'task_busy', 'headless_task_busy', 'reference_conflict']);
 export function publicationOutcome(command, error) {
-  if (error.status === 400 && validation.get(command.action)?.has(error.code)) return {
+  if (validationStatuses(command.action).includes(error.status) && validation.get(command.action)?.has(error.code)) return {
     state: 'refused', outcome: 'definitively_rejected', applied: false, effectsUncertain: false,
     refusal: { kind: 'transactional_validation', code: error.code, status: error.status, details: String(error.message).slice(0, 1000) },
   };
@@ -26,6 +28,6 @@ export function definitivePublicationRefusal(row) {
   if (!validation.get(item.command.action)?.has(item.error)) return null;
   // Retained records may lack response proof. Only the exact transactional
   // validation codes above establish non-application without that proof.
-  if (item.refusal && (item.refusal.kind !== 'transactional_validation' || item.refusal.status !== 400 || item.refusal.code !== item.error)) return null;
+  if (item.refusal && (item.refusal.kind !== 'transactional_validation' || !validationStatuses(item.command.action).includes(item.refusal.status) || item.refusal.code !== item.error)) return null;
   return { id: row.key, action: item.command.action, error: item.error, applied: false, kind: 'transactional_validation' };
 }

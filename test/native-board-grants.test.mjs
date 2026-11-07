@@ -115,3 +115,69 @@ test('all four existing grant families are visible and revocable through Grants 
   assert.equal(f.store.get('task', 'parent-task').responsibleUserId, 'owner');
   assert.equal(after.inbox.length, 0);
 });
+
+test('human repair transport journals a linked correction, approval and revocation without changing the captured task', async t => {
+  const f = await fixture(t), item = await f.board.detailGrant({ id: `request:${f.request.id}` });
+  await f.board.decideGrant({ item, key: 'allow-wrong-ceiling', decision: 'allow_scope', scope: { ...f.request.scope, maxAgents: 1 } });
+  let request = f.store.get('provision_request', f.request.id);
+  request = f.command(f.node, 'interactive.progress', { id: request.id, expectedRevision: request.revision, state: 'blocked', reason: 'agent_limit' });
+  f.command(f.node, 'interactive.repair_checkpoint', { id: request.id, expectedRevision: request.revision,
+    checkpoint: { protocol: 1, safe: true, phase: 'initial', unresolved: [] } });
+  const task = f.command(f.operator, 'task.create', { id: 'captured-task', title: 'Captured compatibility task' });
+  const preview = await f.board.prepareInteractiveRepair({ id: request.id });
+  assert.equal(preview.eligible, true); assert.equal(preview.scope.maxAgents, 25);
+  const active = (await f.board.read()).grants.active[0];
+  assert.equal(active.scope.id, undefined, 'UI scope must not include the grant record identity/state');
+  assert.equal(active.scope.revision, undefined); assert.equal(active.scope.managed, undefined);
+  const edited = await f.board.prepareInteractiveRepair({ id: request.id, scope: { ...active.scope, maxAgents: 25 } });
+  assert.equal(edited.eligible, true);
+  const result = await f.board.requestInteractiveRepair({ key: 'repair-request', id: 'repair-discussion', preview, reason: 'Correct node-wide ceiling' });
+  assert.equal(result.state, 'recorded'); assert.equal(f.journal.pending().length, 0);
+  const repair = await f.board.detailGrant({ id: 'request:repair-discussion' });
+  assert.equal(repair.kind, 'interactive_repair'); assert.equal(repair.preparationId, request.id);
+  await f.board.decideGrant({ item: repair, key: 'approve-repair', decision: 'approve_once' });
+  const resumed = f.store.get('provision_request', request.id);
+  assert.equal(resumed.id, request.id); assert.equal(resumed.agentId, request.agentId); assert.equal(resumed.state, 'requested');
+  assert.equal(f.store.all('provision_request').length, 1); assert.equal(f.store.all('execution').length, 0);
+  assert.deepEqual(f.store.get('task', task.id), task);
+  const current = await f.board.detailGrant({ id: `interactive:${resumed.grantId}` });
+  await f.board.decideGrant({ item: current, key: 'revoke-repair' });
+  assert.equal(f.store.get('provision_grant', resumed.grantId).state, 'revoked');
+});
+
+test('lost repair acknowledgement retries the original key and never queues a second correction', async t => {
+  const f = await fixture(t);
+  await f.board.decideGrant({ item: await f.board.detailGrant({ id: `request:${f.request.id}` }), key: 'allow', decision: 'allow_scope' });
+  let request = f.store.get('provision_request', f.request.id);
+  request = f.command(f.node, 'interactive.progress', { id: request.id, expectedRevision: request.revision, state: 'blocked', reason: 'agent_limit' });
+  f.command(f.node, 'interactive.repair_checkpoint', { id: request.id, expectedRevision: request.revision,
+    checkpoint: { protocol: 1, safe: true, phase: 'initial', unresolved: [] } });
+  let lose = true;
+  const flaky = (...args) => f.api(...args);
+  flaky.withToken = token => {
+    const api = f.api.withToken(token);
+    return async (method, path, body) => {
+      const result = await api(method, path, body);
+      if (body?.action === 'grant.repair_request' && lose) { lose = false; throw Error('Lost repair acknowledgement'); }
+      return result;
+    };
+  };
+  const board = nativeBoard(flaky, { decisionJournal: f.journal }), preview = await board.prepareInteractiveRepair({ id: request.id });
+  await assert.rejects(board.requestInteractiveRepair({ key: 'original-repair', id: 'repair', preview }), /Lost repair acknowledgement/);
+  const pending = (await board.read()).grants.pending.find(item => item.kind === 'publication');
+  await board.decideGrant({ item: pending, key: 'unused' });
+  assert.equal(f.store.all('grant_request').filter(r => r.kind === 'interactive_repair').length, 1);
+  assert.equal(f.journal.pending().length, 0);
+});
+
+test('stale revocation is displayed as refused, not an uncertain acknowledgement, and cannot be retried as a new decision', async t => {
+  const f = await fixture(t);
+  await f.board.decideGrant({ item: await f.board.detailGrant({ id: `request:${f.request.id}` }), key: 'allow', decision: 'allow_scope' });
+  const grant = (await f.board.read()).grants.active[0], item = await f.board.detailGrant({ id: grant.id });
+  f.command(f.owner, 'interactive.revoke', { id: item.entityId, expectedRevision: item.revision });
+  await assert.rejects(f.board.decideGrant({ item, key: 'stale-revoke' }), { code: 'stale_revision' });
+  const pending = (await f.board.read()).grants.pending.find(item => item.kind === 'publication');
+  assert.equal(pending.stateLabel, 'Decision refused'); assert.equal(pending.publicationState, 'conflict'); assert.equal(pending.action, 'dismiss');
+  await f.board.decideGrant({ item: pending, key: 'unused' });
+  assert.equal(f.journal.inspect('stale-revoke').state, 'dismissed'); assert.equal(f.store.get('provision_grant', item.entityId).state, 'revoked');
+});

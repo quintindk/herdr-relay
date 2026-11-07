@@ -1,6 +1,30 @@
 # Changelog
 
-## 0.2.4 — Unreleased
+## 0.2.5 — Unreleased
+
+- Match every requested interactive permission requirement before reusing a grant.
+  Report selected grant/revision and mismatches. An insufficient standing grant
+  no longer swallows a corrected ceiling or dispatch request.
+- Reserve node enrolment capacity transactionally before directory or native
+  effects. Competing preparations and ordinary enrolment cannot steal a reserved
+  slot. Full capacity is an explicit wait, not a terminal provisioning failure.
+- Request a linked, previewed, human-approved repair of a blocked preparation.
+  Preserve its agent, conversation, verified resources, tasks, operation keys and
+  failure history. Reconcile uncertain effects before permitting another attempt.
+- Make Grants searchable by the requested agent and originating request. Add
+  `v` for confirmed revocation and `p` for repair. Keep selection stable across
+  refreshes and fence stale dialog responses. Distinguish refused decisions from
+  missing acknowledgements.
+- Clarify that `maxAgents` is a node-wide ceiling. Approve once authorises one
+  saved preparation. Cancelling an already-blocked request returns an explicit
+  no-op rather than suggesting that its history must be deleted.
+- Require installed-package recovery checks on all three supported OpenCode
+  hosts and real Herdr keyboard repair/approval/revocation evidence.
+- Fence a switch to pre-admission code while new preparations, held reservations
+  or repair approvals still require the interactive protocol. Preserve settled
+  history and unrelated active work without introducing a database migration.
+
+## 0.2.4 — 03 November 2026
 
 - Hand local release setup to the fingerprint-verified candidate's own Node
   process instead of continuing to run the caller's older setup modules.

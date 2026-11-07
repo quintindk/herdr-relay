@@ -3,11 +3,11 @@
 Native tasks, agent collaboration and durable node services for **Herdr and
 OpenCode**. Relay owns its task backend. No external task tracker is required.
 
-**[0.2.3](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.3)** is the current
+**[0.2.4](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.4)** is the current
 stable release. Existing installations must be on **0.2.1-rc4 or later** to upgrade.
-**0.2.4 is in preparation**, handing verified release setup to the candidate's own
-process. See the [0.2.4 release notes](docs/release-0.2.4.md) and its explicit legacy
-bootstrap boundary.
+**0.2.5 is in preparation**, fixing interactive grant matching, reserving enrolment
+capacity and adding linked, human-approved provisioning repair. See the
+[0.2.5 release notes](docs/release-0.2.5.md).
 
 ## What it does
 
@@ -15,6 +15,7 @@ bootstrap boundary.
 - Durable agents across receiving-chat changes and multiple machines.
 - Explicit work dispatch, human steering, questions, escalation and reviewed results.
 - Revocable interactive-provisioning and headless-automation grants.
+- Scope-aware grant matching, capacity admission and evidence-preserving interactive repair.
 - Node-owned cron schedules with persistent Inbox results and optional online-only
   requester messages. Reporting is separate from cron firing and business coverage.
 - A native terminal board: **Tasks, Agents, Inbox, Grants and Schedule**.
@@ -43,7 +44,7 @@ for managed skills and local Herdr panel setup.
 - **Daily use:** `herdr-relay tui` and [terminal controls](docs/task-board.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
-- **Release details:** [0.2.3 release notes](docs/release-0.2.3.md).
+- **Release details:** [0.2.4 release notes](docs/release-0.2.4.md).
 
 Do not reset a backend, delete a journal or repeat bootstrap to perform an upgrade.
 Published versions and their assets are immutable.
@@ -58,6 +59,7 @@ Published versions and their assets are immutable.
 | Tasks, Inbox and result decisions | [Task Inbox](docs/native-task-inbox.md) |
 | Task references and imported aliases | [Task identity](docs/native-task-references.md) |
 | Interactive peer preparation and dispatch | [Interactive provisioning](docs/native-interactive-provisioning.md) |
+| Blocked preparation and capacity recovery | [Interactive repair](docs/interactive-recovery.md) |
 | Reusable authenticated automation | [Headless setup](docs/headless-authenticated-setup.md) |
 | Explicit headless capabilities | [Task and artefact capabilities](docs/approved-headless-capabilities.md) |
 | Destination-local headless configuration | [Headless provisioning](docs/native-headless-agents.md) |

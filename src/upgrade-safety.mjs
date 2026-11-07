@@ -10,12 +10,24 @@ export function backendMaintenanceBlockers(db) {
   const blockers = [];
   for (const [kind, settled] of [
     ['execution', ['requested', 'waiting', 'waiting_children', 'waiting_time', 'in_review', 'monitor_review', 'monitor_blocked', 'completed', 'cancelled', 'failed', 'rejected']],
-    ['message', ['queued', 'delivered', 'blocked']], ['provision_request', ['requested', 'waiting_driver', 'ready', 'blocked', 'cancelled']], ['headless_setup', ['ready', 'blocked']],
+    ['message', ['queued', 'delivered', 'blocked']], ['provision_request', ['requested', 'waiting_driver', 'waiting_capacity', 'waiting_node_upgrade', 'ready', 'blocked', 'cancelled']], ['headless_setup', ['ready', 'blocked']],
   ]) for (const row of db.prepare('SELECT data FROM entities WHERE kind=?').all(kind)) {
     const entity = JSON.parse(row.data);
     if (!settled.includes(entity.state)) blockers.push({ kind: kind === 'provision_request' ? 'preparation' : kind, id: entity.id, state: entity.state });
   }
   return blockers;
+}
+
+const dependsOnInteractiveProtocol = request => request.admission?.state === 'reserved' ||
+  request.admissionRequired && !['ready', 'blocked', 'cancelled'].includes(request.state);
+const interactiveProtocolWork = (requests, permissions = []) => [
+  ...requests.filter(dependsOnInteractiveProtocol).map(request => ({ kind: 'preparation', id: request.id, state: request.state })),
+  ...permissions.filter(request => request.kind === 'interactive_repair' && request.state === 'awaiting_approval')
+    .map(request => ({ kind: 'repair_permission', id: request.id, state: request.state })),
+];
+export function assertInteractiveUpgradeCompatibility(identity, release) {
+  requireValue(release.compatibility.interactiveProvisioning === 1 || !identity.interactiveProtocolWork?.length,
+    'upgrade_interactive_protocol_required', 'Pending capacity-aware preparations, held reservations or repair approvals require interactive provisioning protocol 1. Settle or explicitly cancel and inspect them before switching to older code. History and unrelated work remain intact.', 409);
 }
 
 export function inspectDatabase(path, role) {
@@ -31,7 +43,9 @@ export function inspectDatabase(path, role) {
       const instanceId = db.prepare("SELECT value FROM settings WHERE key='instance'").get()?.value;
       requireValue(instanceId, 'upgrade_state_invalid', 'Existing backend instance identity is missing');
       blockers.push(...backendMaintenanceBlockers(db));
-      return { instanceId, schema, blockers };
+      return { instanceId, schema, blockers, interactiveProtocolWork: interactiveProtocolWork(
+        db.prepare("SELECT data FROM entities WHERE kind='provision_request'").all().map(row => JSON.parse(row.data)),
+        db.prepare("SELECT data FROM entities WHERE kind='grant_request'").all().map(row => JSON.parse(row.data))) };
     }
     const identity = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='identity'").get()?.value ?? 'null');
     requireValue(identity?.nodeId && identity.instanceId, 'upgrade_state_invalid', 'Existing node/backend identity is missing');
@@ -64,7 +78,12 @@ export function inspectDatabase(path, role) {
       if (row.state === 'administratively_abandoned' && JSON.parse(row.data).administrativeDisposition?.kind === 'abandonment') continue;
       if (!['pending', 'completed', 'failed', 'cancelled', 'in_review', 'waiting_question'].includes(row.state)) blockers.push({ kind: 'occurrence', id: row.id, state: row.state });
     }
-    return { ...identity, schema, blockers, ...(refusedPublications.length ? { refusedPublications } : {}) };
+    const preparations = db.prepare("SELECT value FROM settings WHERE key LIKE 'interactive-request:%'").all().map(row => JSON.parse(row.value));
+    const permissions = db.prepare("SELECT data FROM cached_entities WHERE kind='grant_request'").all().map(row => JSON.parse(row.data).entity);
+    const pendingRepairs = db.prepare("SELECT key,data FROM outbox WHERE state IN ('pending','conflict')").all()
+      .filter(row => JSON.parse(row.data).command.action === 'interactive.repair_request').map(row => ({ kind: 'repair_publication', id: row.key, state: JSON.parse(row.data).state }));
+    return { ...identity, schema, blockers, interactiveProtocolWork: [...interactiveProtocolWork(preparations, permissions), ...pendingRepairs],
+      ...(refusedPublications.length ? { refusedPublications } : {}) };
   } finally { db.close(); }
 }
 

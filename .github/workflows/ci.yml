@@ -50,6 +50,8 @@ jobs:
         run: node scripts/verify-cli-bridge.mjs --self-capture
       - name: Approval-notice CLI reads without an active execution or operator context
         run: node scripts/verify-cli-bridge.mjs --notice-read
+      - name: Scoped interactive grant matching, linked repair and concurrent capacity admission
+        run: node scripts/verify-interactive-recovery.mjs
       - name: Never-prompted receiving chat, instruction load and execution-scoped CLI
         run: node packages/opencode-relay/smoke-receivers.mjs --first-message
       - name: Human steering, explicit historical recovery and independent human operations
@@ -105,6 +107,12 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/tui-baseline" --no-audit --no-fund @opencode/cli@2.1.0
       - name: Install OpenCode 2.2.5 host
         run: npm install --prefix "$RUNNER_TEMP/tui-latest" --no-audit --no-fund @opencode/cli@2.2.5
+      - name: Install checksum-pinned Herdr 0.9.5 for isolated keyboard verification
+        run: |
+          curl --fail --location --silent --show-error https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64 --output "$RUNNER_TEMP/herdr"
+          printf '%s  %s\n' 14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d "$RUNNER_TEMP/herdr" | sha256sum --check -
+          chmod 0755 "$RUNNER_TEMP/herdr"
+          "$RUNNER_TEMP/herdr" --version
       - name: Verify version metadata and release notes
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
@@ -114,6 +122,7 @@ jobs:
           RELAY_V2_BINARY: ${{ runner.temp }}/tui-host/node_modules/.bin/opencode2
           RELAY_V2_BASELINE_BINARY: ${{ runner.temp }}/tui-baseline/node_modules/.bin/opencode2
           RELAY_V2_LATEST_BINARY: ${{ runner.temp }}/tui-latest/node_modules/.bin/opencode2
+          HERDR_BINARY: ${{ runner.temp }}/herdr
         run: node scripts/verify-package.mjs --release --output "$RUNNER_TEMP/release"
       - name: Stage release notes
         run: |

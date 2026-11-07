@@ -42,8 +42,10 @@ export class NativeDecisionJournal {
       const receipt = await api('POST', '/v1/commands', command);
       const p = command.payload;
       const valid = receipt?.id === p.id && (command.action === 'agent.rename' ?
-        receipt.name === p.name && receipt.nameRevision === p.expectedNameRevision + 1 : command.action === 'grant.request_decide' ?
+         receipt.name === p.name && receipt.nameRevision === p.expectedNameRevision + 1 : command.action === 'grant.request_decide' ?
         receipt.state === (p.decision === 'reject' ? 'rejected' : 'approved') && receipt.decision?.decision === p.decision && receipt.decision?.requestHash === p.requestHash :
+        command.action === 'grant.repair_request' ? receipt.kind === 'interactive_repair' && receipt.state === 'awaiting_approval' &&
+          receipt.operation?.preparationId === p.preparationId && receipt.requestHash === p.previewHash :
         command.action === 'grant.revoke' ? receipt.state === 'revoked' && receipt.grantKind === p.kind :
         command.action === 'grant.create' ? receipt.state === 'active' && receipt.grantKind === 'interactive' && receipt.scopeHash === digest(p.scope) :
         command.action === 'execution.request' ? receipt.taskId === p.taskId && receipt.taskRevision === p.taskRevision &&

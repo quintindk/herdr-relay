@@ -34,5 +34,7 @@ export function releaseInfo(directory) {
   const contract = manifest.relayCompatibility;
   requireValue(contract && contract.protocol === compatibility.protocol && contract.backendSchema === compatibility.backendSchema && contract.nodeSchema === compatibility.nodeSchema,
     'upgrade_incompatible', 'Explicit relay/0.2 backend schema-2 and node schema-1 metadata is required');
+  requireValue(contract.interactiveProvisioning === undefined || [0, 1].includes(contract.interactiveProvisioning),
+    'upgrade_incompatible', 'Unsupported interactive provisioning compatibility protocol');
   return { directory, version: manifest.version, compatibility: contract, fingerprint: fingerprint(directory) };
 }

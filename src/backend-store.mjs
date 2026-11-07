@@ -9,7 +9,8 @@ import { applyHeadlessSetup, headlessAuthority } from './headless-setup-contract
 import { authoriseOperator } from './node-bootstrap.mjs';
 import { applyMessage } from './agent-messages.mjs';
 import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
-import { applyGrantAction } from './grants.mjs';
+import { applyGrantAction, nodeGrantPolicy } from './grants.mjs';
+import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
 import { runResultNotifications, runResultReport, scheduleRequester, OnlineRunResultMessages } from './run-result-notifications.mjs';
 import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
 import { agentName } from './agent-name.mjs';
@@ -228,6 +229,7 @@ export class BackendStore {
   }
 
   command(actor, { key, action, payload }) {
+    if (!this.inTransaction) return this.transaction(() => this.command(actor, { key, action, payload }));
     string(action, 'action', 100);
     requireValue(payload && typeof payload === 'object' && !Array.isArray(payload), 'invalid_request', 'Payload required');
     authoriseOperator(this, actor, action, payload);
@@ -306,6 +308,9 @@ export class BackendStore {
         'invalid_directory', 'Canonical absolute enrolled directory required');
       requireValue(!this.all('agent').some(a => a.nodeId === p.nodeId && a.directory === p.directory && a.name === p.name && a.standingGrant),
         'enrolment_exists', 'This workspace and agent name already have an enrolment', 409);
+      const usage = nodeEnrolmentUsage(this, p.nodeId);
+      if (!authority.interactiveRequest && usage.reserved) requireValue(usage.used < Math.min(nodeGrantPolicy(this, p.nodeId).maxAgents, usage.reservationCeiling),
+        'agent_limit', 'Outstanding preparations have reserved the remaining node enrolment capacity', 409);
       return created('agent', { ...p, mode: 'interactive', capabilities: [], ownerId: this.owner, bindingRevision: 0,
         standingGrant: { autoAttach: true, scheduleManagement: true, userId: this.owner, at: now(),
           ...(authority.interactiveRequest ? { provisioningRequestId: authority.interactiveRequest.id } : {}) } });

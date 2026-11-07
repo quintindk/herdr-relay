@@ -42,7 +42,8 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
   'src/native-cli-surface.mjs', 'packages/opencode-relay/headless-grant-tools.mjs',
-  'src/grants.mjs', 'src/grants-view.mjs', 'src/grants-panel.mjs', 'src/task-board-dispatch.mjs',
+   'src/grants.mjs', 'src/grants-view.mjs', 'src/grants-panel.mjs', 'src/task-board-dispatch.mjs',
+   'src/interactive-capacity.mjs', 'src/interactive-repair.mjs', 'src/node-interactive-recovery.mjs', 'src/interactive-scope-schema.mjs',
   'src/native-worker-api.mjs', 'src/native-observation-recovery.mjs', 'src/interactive-dispatch-reconciliation.mjs',
    'packages/opencode-relay/native-input.mjs', 'src/native-interaction.mjs', 'src/headless-contract.mjs',
    'src/node-headless-contract.mjs', 'src/headless-task-schema.mjs', 'src/publication-outcomes.mjs',
@@ -67,9 +68,11 @@ execFileSync('npm', ['install', '--prefix', consumer, '--omit=dev', '--ignore-sc
 const installed = join(consumer, 'node_modules/herdr-relay');
 assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).relayInstaller?.protocol, 1,
   'The production package must declare candidate-owned setup');
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).relayCompatibility?.interactiveProvisioning, 1,
+  'The production package must declare the state-aware interactive provisioning compatibility protocol');
 const installerHandover = values['skip-audit'] ? null : await verifyInstallerHandover({ artifact, packageDirectory: installed });
 if (installerHandover) console.log(JSON.stringify({ installerHandover }, null, 2));
-const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [];
+const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [], installedInteractiveRecoveryVerifications = [];
 for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']]) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
@@ -95,6 +98,21 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   installedAgentGrantVerifications.push({ runtime: grant.runtimeVersion, passed: grant.passed,
     grantIssuedByCoordinatorWithoutOwner: grant.grantIssuedByCoordinatorWithoutOwner, agentGrantRetryIdempotent: grant.agentGrantRetryIdempotent,
     revocationPausedSchedule: grant.revocationPausedSchedule, readinessHadNoExternalEffects: grant.readinessHadNoExternalEffects });
+  const recoveryOutput = execFileSync(process.execPath, ['scripts/verify-interactive-recovery.mjs'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
+  process.stdout.write(recoveryOutput);
+  const recovery = JSON.parse(recoveryOutput);
+  assert.equal(recovery.runtime, version); assert.equal(recovery.passed, true);
+  installedInteractiveRecoveryVerifications.push(recovery);
+}
+let herdrPanelVerification = null;
+if (!values['skip-audit']) {
+  const panelOutput = execFileSync(process.execPath, ['scripts/verify-herdr-panel.mjs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+    env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_PACKAGE_ARTIFACT: artifact } });
+  process.stdout.write(panelOutput); herdrPanelVerification = JSON.parse(panelOutput);
+  assert.equal(herdrPanelVerification.passed, true);
+  for (const field of ['keyboardLinkedRepairRequested', 'keyboardRepairApproved', 'keyboardGrantRevocationVerified', 'originalPreparationAndTaskPreserved'])
+    assert.equal(herdrPanelVerification[field], true, `Missing installed Herdr keyboard gate: ${field}`);
 }
 assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(installed, 'package.json'))).bin), ['herdr-relay']);
 assert.equal(existsSync(join(consumer, 'node_modules/@opencode-ai/plugin')), false, 'Unused vulnerable V1 SDK chain must not be installed');
@@ -300,8 +318,9 @@ let onboarding;
 }
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
-const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications, nativeBackendStarted: true,
+const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
+  installedInteractiveRecoveryVerifications, herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],

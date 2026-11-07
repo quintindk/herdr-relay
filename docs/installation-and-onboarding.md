@@ -2,9 +2,9 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target **0.2.4**, which is in preparation and not yet published on
+Examples target **0.2.5**, which is in preparation and not yet published on
 [GitHub releases](https://github.com/quintindk/herdr-relay/releases). The current
-stable release is **0.2.3**. Already-published older installers have the bootstrap
+stable release is **0.2.4**. Already-published older installers have the bootstrap
 boundary described below.
 
 ## Requirements
@@ -28,8 +28,8 @@ and a successful zero-vulnerability production audit.
 ```sh
 umask 077
 sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.4.tgz
-herdr-relay release install --version 0.2.4
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.5.tgz
+herdr-relay release install --version 0.2.5
 herdr-relay --version
 ```
 
@@ -45,7 +45,8 @@ published release installation.
 ### Upgrading a pre-handover CLI
 
 The already-released 0.2.2/0.2.3 binaries cannot implement the new handover. To get
-version-owned completion on the first upgrade into 0.2.4, start the **new** installer
+version-owned completion on the first upgrade into a handover-capable release
+(0.2.4 or later), start the **new** installer
 directly from the downloaded, checksum-verified package instead of calling it
 through the old CLI:
 
@@ -55,20 +56,20 @@ sha256sum -c SHA256SUMS
 mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
 BOOTSTRAP=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/relay-bootstrap-XXXXXX")
 npm install --prefix "$BOOTSTRAP" --omit=dev --ignore-scripts --no-audit --no-fund \
-  /absolute/download/herdr-relay-0.2.4.tgz
+  /absolute/download/herdr-relay-0.2.5.tgz
 npm audit --prefix "$BOOTSTRAP" --omit=dev
-node "$BOOTSTRAP/node_modules/herdr-relay/src/cli.mjs" release install --version 0.2.4
+node "$BOOTSTRAP/node_modules/herdr-relay/src/cli.mjs" release install --version 0.2.5
 ```
 
 Stop if a checksum, install or audit command fails. Use a user-owned npm
 installation without sudo. The existing public CLI remains on PATH until verified
 activation replaces its package-owned symlink. The temporary prefix avoids
 overwriting an unrelated global wrapper and does not copy credentials. One
-invocation of the new installer completes setup. Once 0.2.4 is active, future
+invocation of the new installer completes setup. Once 0.2.4 or later is active, future
 `release install` commands hand setup to the staged release automatically.
 
 The published 0.2.3 caller already knows the current skills/Herdr setup and remains
-compatible with a one-pass 0.2.4 activation. That compatibility route is tested,
+compatible with a one-pass current-release activation. That compatibility route is tested,
 but it cannot return the new candidate-executor receipt. Version 0.2.2 has no
 automatic Herdr setup and needs the candidate-first route for a complete first pass.
 

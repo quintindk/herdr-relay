@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { digest, requireValue, RelayError } from './protocol.mjs';
 import { serviceLock } from './service-lock.mjs';
 import { parseManagedUnit } from './managed-service-unit.mjs';
-import { serviceIdentity, identityFingerprint } from './upgrade-safety.mjs';
+import { serviceIdentity, identityFingerprint, assertInteractiveUpgradeCompatibility } from './upgrade-safety.mjs';
 import { stageRelease, hashBytes } from './release-install.mjs';
 import { releaseInfo, releaseVersion } from './release-info.mjs';
 import { readPrivateJson, writePrivateJson } from './private-files.mjs';
@@ -250,6 +250,7 @@ export async function serviceUpgrade(input, dependencies = {}) {
       const identity = identityCheck(service, unit, { allowBusy: beforeSwitch || compatibleSwitch() });
       requireValue(identity.schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
         'upgrade_incompatible', 'Rollback writer does not support the current database schema. No database will be restored');
+      assertInteractiveUpgradeCompatibility(identity, unit.release);
     }
     const reloadPlugin = record.files.some(file => file.kind === 'plugin' && fileHash(file.path) !== file.beforeHash);
     if (reloadPlugin) await pluginGate('rollback');
@@ -260,10 +261,11 @@ export async function serviceUpgrade(input, dependencies = {}) {
         const identity = identityCheck(service, unit, { allowBusy: beforeSwitch || compatibleSwitch() });
         requireValue(identity.schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
           'upgrade_incompatible', 'Rollback writer is incompatible with the current database schema');
+        assertInteractiveUpgradeCompatibility(identity, unit.release);
       }
       if (reloadPlugin) await pluginGate('rollback');
     } catch (error) {
-      if (!beforeSwitch && ['upgrade_busy', 'upgrade_pending_decisions'].includes(error.code)) {
+      if (!beforeSwitch && ['upgrade_busy', 'upgrade_pending_decisions', 'upgrade_interactive_protocol_required'].includes(error.code)) {
         requireValue(record.files.every((file, i) => fileHash(file.path) === unchangedFiles[i]), 'upgrade_configuration_changed', 'Rollback configuration changed while stopping');
         // Nothing has been reverted yet. Restore the current supervisors so a
         // racing turn/decision can settle, instead of freezing it behind maintenance.
@@ -290,8 +292,12 @@ export async function serviceUpgrade(input, dependencies = {}) {
       requireValue(!record.migrateTaskReferences && compatibleSwitch(), 'upgrade_incompatible', 'Only schema-compatible RC4-or-later operations can resume or roll back');
       requireValue(releaseInfo(record.candidateDirectory).fingerprint === record.candidateFingerprint, 'release_conflict', 'Retained candidate package content changed');
       if (input.rollback) {
-        for (const { service, unit } of originals()) requireValue(serviceIdentity(unit).schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
-          'upgrade_incompatible', 'Rollback writer does not support the current database schema. No database will be restored');
+        for (const { service, unit } of originals()) {
+          const identity = serviceIdentity(unit);
+          requireValue(identity.schema === unit.release.compatibility[service.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
+            'upgrade_incompatible', 'Rollback writer does not support the current database schema. No database will be restored');
+          assertInteractiveUpgradeCompatibility(identity, unit.release);
+        }
         if (!input.apply) return { state: 'rollback_plan', operationId: id, services: record.services.map(s => ({ role: s.role, version: s.previousVersion })), databaseRestore: false };
         if (record.phase !== 'rolled_back') await rollback();
         return { state: 'rolled_back', operationId: id, databasesRestored: false, pluginReloadDeferred: record.deferredPluginReload ?? null };
@@ -357,6 +363,7 @@ export async function serviceUpgrade(input, dependencies = {}) {
         const identity = serviceIdentity(file.unit);
         requireValue(identity.schema === validated.compatibility[file.role === 'backend' ? 'backendSchema' : 'nodeSchema'],
           'upgrade_incompatible', 'Service database and candidate schema must match. Database migrations are unsupported');
+        assertInteractiveUpgradeCompatibility(identity, validated);
       }
       for (const service of services) {
         const identity = serviceIdentity(files.find(file => file.role === service.role).unit);
@@ -406,7 +413,8 @@ export async function serviceUpgrade(input, dependencies = {}) {
       if (record.phase !== 'activating') {
         checkFiles(); maintenance(true); save({ phase: 'stopping' }); await stop();
         for (const { service, unit } of originals()) {
-          identityCheck(service, unit, { allowBusy: compatibleSwitch() });
+          const identity = identityCheck(service, unit, { allowBusy: compatibleSwitch() });
+          assertInteractiveUpgradeCompatibility(identity, releaseInfo(record.candidateDirectory));
           await databaseBackup(service.database, join(operationPath, `${service.role}-before-upgrade.sqlite`));
           for (const [index, path] of service.identityFiles.entries()) {
             const target = join(operationPath, `${service.role}-identity-${index}`);

@@ -32,11 +32,12 @@ checkout. Configure the exact host binaries required by release verification:
 RELAY_V2_BINARY=/absolute/opencode-2.1.2 \
 RELAY_V2_BASELINE_BINARY=/absolute/opencode-2.1.0 \
 RELAY_V2_LATEST_BINARY=/absolute/opencode-2.2.5 \
-node scripts/verify-package.mjs --release --output /private/artifacts/0.2.4
+HERDR_BINARY=/absolute/herdr-0.9.5 \
+node scripts/verify-package.mjs --release --output /private/artifacts/0.2.5
 ```
 
-Assets are `herdr-relay-0.2.4.tgz`, `SHA256SUMS` and
-`herdr-relay-0.2.4.tgz.verification.json`. The report records the source commit,
+Assets are `herdr-relay-0.2.5.tgz`, `SHA256SUMS` and
+`herdr-relay-0.2.5.tgz.verification.json`. The report records the source commit,
 cleanliness, timestamp, host checks, installer handover evidence and audit result.
 Different bytes at an existing artifact path or inconsistent checksums are refused.
 
@@ -45,6 +46,11 @@ idempotent native capture, agent messaging, plugin/skill setup, backup and unit
 generation. It rejects retired code and private/development files in the package.
 `--skip-audit` is offline preflight only and is refused with `--release`.
 Checksums establish byte integrity, not a signing-key attestation.
+
+Release certification also requires installed-package interactive recovery on all
+three OpenCode hosts and real Herdr keyboard repair, approval and revocation. The
+CI package job downloads checksum-pinned Herdr 0.9.5 into its private runner path.
+The publication gate checks this evidence rather than accepting a missing field.
 
 ## Push, CI, tag, publish
 
@@ -57,8 +63,8 @@ On an explicit publication request:
    clean-source provenance, supported-host checks and zero-finding audit.
 
 ```sh
-git tag -a v0.2.4 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.4"
-git push origin refs/tags/v0.2.4
+git tag -a v0.2.5 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.5"
+git push origin refs/tags/v0.2.5
 ```
 
 `.github/workflows/ci.yml` runs tests/package verification on branch pushes, pull
@@ -67,7 +73,7 @@ version tags and publishes only after all gates pass. CI has read-only repositor
 permissions; only the final publication job gets `contents: write`.
 
 The release job takes `docs/release-VERSION.md`, checks tag/version/source evidence
-and publishes all three assets. Candidate versions are prereleases; stable 0.2.4
+and publishes all three assets. Candidate versions are prereleases; stable 0.2.5
 has no prerelease suffix. Stable releases become the latest release. Prereleases
 use `--prerelease --latest=false` and do not replace the stable selection.
 
