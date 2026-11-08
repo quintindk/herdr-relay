@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Acknowledge native interactive model selections through a subsequent human
+  message without replacing the assignment or replaying its prompt. Verify the
+  model chain/current selection, retain control provenance and fence stale outcomes.
+  Existing model-switch conflicts use the exact current-human recovery preview.
+  Scheduled/headless jobs, peer inputs and profile/workspace changes remain fenced.
+- Recheck receiver generation when applying input recovery. Isolate a changed
+  project identity to its owning invocation instead of aborting other agent work.
+- Preserve the latest human CLI source when an owned shell/subagent completion
+  arrives across a follow-up. Correlate successful native tool receipts, not IDs
+  mentioned in tool input. Peer/identity boundaries remain separate authority.
+
 ## 0.2.5 — Unreleased
 
 - Match every requested interactive permission requirement before reusing a grant.

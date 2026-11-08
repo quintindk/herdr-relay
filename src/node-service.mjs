@@ -160,6 +160,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           requireValue(typeof body.key === 'string' && /^[A-Za-z0-9:_.-]{1,100}$/.test(body.key) && preview.previewHash === body.previewHash,
             'stale_recovery_preview', 'Exact preview and immutable key required');
           result = journal.transaction(() => {
+            currentReceiver();
             const recovered = applyInteractiveRecovery(journal, work, preview, body.sourceMessageId);
             const receipt = { state: 'applied', executionId: work.id, previewHash: body.previewHash, sourceMessageId: body.sourceMessageId, localState: recovered.state, promptReplayed: false };
             journal.db.prepare('INSERT INTO settings VALUES (?,?)').run(key, JSON.stringify(receipt)); return receipt;

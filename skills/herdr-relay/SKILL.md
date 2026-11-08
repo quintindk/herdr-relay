@@ -281,11 +281,24 @@ compatibility: opencode
 - Ordinary human corrections in a verified interactive chat steer its current
   assignment, including after a native idle boundary. Do not routinely cancel or
   redispatch it. A native successful turn is not a submitted Relay result.
+- New interactive runs can acknowledge a structured native model selection through
+  a subsequent genuine human message in the same chat. The current model/variant
+  must match its native history. Selection alone grants no work or operator access.
+  Model control is recorded separately from human input and fences stale outcomes.
+  Scheduled/headless jobs, standing monitors and profile/workspace changes remain
+  excluded. Never use this policy to change a headless model or authentication pin.
 - For an older `concurrent_native_input` conflict, use
   `relay_interactive_reconcile` to preview the exact execution, then apply its
   returned hash under a current human request and immutable key. It retains the
   old invocation/conflict and never replays a prompt or fabricates completion.
   Ambiguous ownership, pending publications and cancellation remain fenced.
+  Retained model-switch conflicts need that exact human-authorised recovery too,
+  with a valid current native model and subsequent human acknowledgement. An
+  upgrade alone never clears an old model conflict.
+- Correlated shell/subagent completions preserve the latest human CLI source
+  across ordinary follow-ups, including after idle. They do not authorise new
+  work or restore authority across peer/identity boundaries. A question-tool answer
+  is not a new native human source and cannot repair an unrelated hard boundary.
 - A separate current human task operation uses the configured CLI operator route,
   not expanded worker credentials. Do not infer a chat-wide restriction from an
   assigned scope or invent an unattempted refusal. Inspect actual CLI arguments,

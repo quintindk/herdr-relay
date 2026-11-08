@@ -43,6 +43,11 @@ compatibility: opencode
 - In a verified interactive chat, ordinary human follow-ups steer the current
   assignment. They do not require a replacement execution. Later turns need their
   own terminal evidence; never submit a pre-correction outcome as current work.
+- A native interactive model change needs a subsequent human acknowledgement and
+  matching current model/variant. It does not expand the assignment. Older
+  model-switch conflicts need exact current-human preview/apply recovery, not
+  worker administration, prompt replay or a replacement enrolment. This policy
+  does not relax scheduled/headless model pins or identity boundaries.
 - Work reads expose `inputRevision`. Direct tools recheck it automatically. CLI
   workers must pass `--input-revision VALUE` on subsequent mutations. A stale
   revision requires reading the new input, not inventing a result or retrying old
@@ -50,6 +55,8 @@ compatibility: opencode
 - Historical input conflicts have an inspected human-authorised recovery path.
   Do not clear journals or borrow operator credentials. Separate human operations
   can use their proper configured human route; worker scope itself is unchanged.
+  Correlated background completions do not replace the latest human source across
+  follow-ups. A question-tool confirmation is not a fresh native human message.
 
 - Cancellation is a stop request, not a completion receipt. Do not submit success
   after cancellation or invent terminal evidence for an interrupted runtime.

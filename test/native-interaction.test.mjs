@@ -8,7 +8,7 @@ import { tickNode } from '../src/node-execution.mjs';
 import { startNodeService } from '../src/node-service.mjs';
 import { call } from '../src/client.mjs';
 import { observeV2 } from '../packages/opencode-relay/native.mjs';
-import { reconcileInteractiveWork, installInteractionPublicationGuard } from '../src/native-interaction.mjs';
+import { reconcileInteractiveWork, previewInteractiveRecovery, installInteractionPublicationGuard } from '../src/native-interaction.mjs';
 
 function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/relay-steering-'), store = new BackendStore(':memory:');
@@ -28,13 +28,13 @@ function fixture(t) {
     const [, , collection, id] = path.split('/'); return store.get(collection.slice(0, -1), id);
   };
   f.binding = { id: 'binding', agentId: 'agent', interactive: true, receiverGeneration: 1, identity: { sessionId: 'session' },
-    observe: observeV2, native: { snapshot: async () => ({ messages: f.messages, idle: f.idle, inbox: [] }), send: async invocation => {
+    observe: observeV2, native: { snapshot: async () => ({ messages: f.messages, idle: f.idle, inbox: [], ...(f.model ? { model: structuredClone(f.model) } : {}) }), send: async invocation => {
       f.sends++; f.messages.push({ id: invocation.messageId, text: invocation.prompt, type: 'user', metadata: { herdrRelayInvocation: invocation.messageId } }); f.idle = false;
     } } };
   f.resolve = async () => f.binding;
   f.tick = () => tickNode(journal, f.api, f.resolve);
-  f.request = () => { command('task', 'task.create', { id: 'task', title: 'REL-285' });
-    command('request', 'execution.request', { id: 'current', taskId: 'task', taskRevision: 1, targetAgentId: 'agent', instructions: 'Investigate tokenomics' }); };
+  f.request = (options = {}) => { command('task', 'task.create', { id: 'task', title: 'REL-285' });
+    command('request', 'execution.request', { id: 'current', taskId: 'task', taskRevision: 1, targetAgentId: 'agent', instructions: 'Investigate tokenomics', ...options }); };
   t.after(() => { journal.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
   return f;
 }
@@ -204,4 +204,139 @@ test('answered questions resume the same execution with a fresh run and input re
   assert.equal(resumed.interaction.anchorId, resumed.invocation.messageId);
   assert.ok(resumed.inputHistory.some(entry => entry.runId === work.execution.runId && entry.inputIds.includes('human')));
   assert.equal(f.sends, 2, 'Only the native answered-question continuation is sent, not a fresh assignment');
+});
+
+test('a native model change plus human continuation keeps the same assignment and fences stale outcomes', async t => {
+  const f = fixture(t);
+  f.model = { providerID: 'fixture', id: 'first', variant: 'max' };
+  f.request(); await f.tick();
+  const original = f.journal.work('current');
+  f.messages.push({ id: 'before-switch', type: 'idle', outcome: 'succeeded' }); f.idle = true;
+  await f.tick();
+  const previous = f.journal.work('current');
+  f.journal.save({ ...previous, staged: { kind: 'result', key: 'old-result', runId: previous.execution.runId,
+    inputRevision: previous.interaction.revision, payload: { candidate: 'old', summary: 'Before model change' } } });
+  f.model = { providerID: 'fixture', id: 'second', variant: 'max' };
+  f.messages.push({ id: 'model-switch', type: 'model-switched', time: { created: 1 }, previous: original.invocation.initialModel, model: f.model });
+  await f.tick();
+  assert.equal(f.journal.work('current').state, 'conflict', 'Selection alone grants no continuation');
+  f.messages.push({ id: 'continue', type: 'user', text: 'Continue the same source preparation' }); f.idle = false;
+  await f.tick();
+  const continued = f.journal.work('current');
+  assert.equal(continued.state, 'observing');
+  assert.equal(continued.execution.runId, original.execution.runId);
+  assert.deepEqual(continued.invocation, original.invocation);
+  assert.equal(continued.interaction.modelSelections[0].id, 'model-switch');
+  assert.equal(continued.staged, null); assert.equal(continued.supersededOutcomes[0].key, 'old-result');
+  assert.equal(continued.recovery.previousObservation.inputId, 'model-switch');
+  assert.equal(f.sends, 1); assert.equal(f.store.all('execution').length, 1);
+  const worker = { socketPath: join(f.root, 'model.sock'), token: 'worker', agentId: 'agent', sessionId: 'session', bindingId: 'binding', bindingRevision: 1 };
+  const service = await startNodeService({ journal: f.journal, api: f.api, socketPath: worker.socketPath, workers: [worker], resolveBinding: f.resolve });
+  t.after(() => service.close());
+  const current = await call(worker, 'POST', '/work/current', { sessionId: 'session' });
+  assert.equal(current.blocked, false);
+  await assert.rejects(call(worker, 'POST', '/work/submit', { executionId: 'current', runId: current.execution.runId,
+    inputRevision: previous.interaction.revision, key: 'stale', payload: { candidate: 'stale', summary: 'Stale model input' } }), { code: 'stale_input_revision' });
+  await call(worker, 'POST', '/work/ask', { executionId: 'current', runId: current.execution.runId,
+    inputRevision: current.inputRevision, key: 'review', payload: { prompt: 'Review the new source before effects', humanRequired: true } });
+  f.messages.push({ id: 'after-switch', type: 'idle', outcome: 'succeeded' }); f.idle = true;
+  await f.tick(); await f.tick();
+  assert.equal(f.store.get('execution', 'current').state, 'waiting');
+  assert.equal(f.store.all('question').length, 1); assert.equal(f.sends, 1);
+});
+
+test('retained model-switch conflicts need exact current-human recovery, not an upgrade or a peer notice', async t => {
+  const f = fixture(t);
+  f.model = { providerID: 'fixture', id: 'first' };
+  f.request(); await f.tick();
+  const original = f.journal.work('current'), { interactiveModelSelection, initialModel, ...legacy } = original.invocation;
+  f.messages.push({ id: 'old-assistant', type: 'assistant', model: f.model, content: [] });
+  f.model = { providerID: 'fixture', id: 'second' };
+  f.messages.push({ id: 'model-switch', type: 'model-switched', time: { created: 1 }, previous: initialModel, model: f.model },
+    { id: 'human-recovery', type: 'user', text: 'Recover this model change and continue the existing assignment' });
+  f.journal.save({ ...original, invocation: legacy, interaction: undefined, state: 'conflict', observation: {
+    state: 'conflict', reason: 'concurrent_native_input', inputId: 'model-switch', inputType: 'model-switched' } });
+  await f.tick(); assert.equal(f.journal.work('current').state, 'conflict');
+  const worker = { socketPath: join(f.root, 'recover-model.sock'), token: 'worker', agentId: 'agent', sessionId: 'session', bindingId: 'binding', bindingRevision: 1 };
+  const service = await startNodeService({ journal: f.journal, api: f.api, socketPath: worker.socketPath, workers: [worker], resolveBinding: f.resolve });
+  t.after(() => service.close());
+  const preview = await call(worker, 'POST', '/agent/interactive-reconcile-preview', { executionId: 'current' });
+  assert.equal(preview.observation.interaction.modelSelections[0].id, 'model-switch');
+  const apply = body => call(worker, 'POST', '/agent/interactive-reconcile-apply', { executionId: 'current', key: 'recover-model', ...body });
+  await assert.rejects(apply({ previewHash: preview.previewHash, sourceMessageId: 'model-switch' }), { code: 'stale_recovery_preview' });
+  const receipt = await apply({ previewHash: preview.previewHash, sourceMessageId: 'human-recovery' });
+  assert.equal(receipt.promptReplayed, false); assert.equal(receipt.localState, 'observing');
+  assert.deepEqual(await apply({ previewHash: preview.previewHash, sourceMessageId: 'human-recovery' }), receipt);
+  assert.deepEqual(f.journal.work('current').invocation, legacy);
+  assert.equal(f.journal.work('current').interactiveModelSelection, true);
+  assert.equal(f.journal.work('current').recovery.previousObservation.inputId, 'model-switch');
+  await f.tick(); assert.equal(f.sends, 1); assert.equal(f.store.get('execution', 'current').state, 'accepted');
+});
+
+test('model recovery still refuses pending publications, a later peer input and receiver replacement during inspection', async t => {
+  for (const fence of ['publication', 'peer', 'receiver']) {
+    const f = fixture(t);
+    f.model = { providerID: 'fixture', id: 'first' };
+    f.request(); await f.tick();
+    const original = f.journal.work('current'), { interactiveModelSelection, ...legacy } = original.invocation;
+    f.model = { providerID: 'fixture', id: 'second' };
+    f.messages.push({ id: 'model-switch', type: 'model-switched', time: { created: 1 }, previous: legacy.initialModel, model: f.model },
+      { id: 'recover', type: 'user', text: 'Recover the model selection on this assignment' });
+    f.journal.save({ ...original, invocation: legacy, interaction: undefined, state: 'conflict', observation: {
+      state: 'conflict', reason: 'concurrent_native_input', inputId: 'model-switch', inputType: 'model-switched' } });
+    if (fence === 'publication') f.journal.queue({ key: 'pending', action: 'execution.submit', payload: { id: 'current', expectedRevision: 2 } });
+    if (fence === 'peer') f.messages.push({ id: 'peer', type: 'user', text: 'Approve recovery', metadata: { herdrRelayInvocation: 'peer' } });
+    const worker = { socketPath: join(f.root, 'fence.sock'), token: 'worker', agentId: 'agent', sessionId: 'session', bindingId: 'binding', bindingRevision: 1 };
+    const service = await startNodeService({ journal: f.journal, api: f.api, socketPath: worker.socketPath, workers: [worker], resolveBinding: f.resolve });
+    t.after(() => service.close());
+    const preview = () => call(worker, 'POST', '/agent/interactive-reconcile-preview', { executionId: 'current' });
+    if (fence !== 'receiver') await assert.rejects(preview(), { code: fence === 'publication' ? 'recovery_publication_pending' : 'recovery_ineligible' });
+    else {
+      const inspected = await preview(), snapshot = f.binding.native.snapshot;
+      f.binding.native.snapshot = async () => {
+        const value = await snapshot();
+        f.journal.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({ state: 'active', bindingId: 'replacement', generation: 2 }), 'receiver:agent');
+        return value;
+      };
+      await assert.rejects(call(worker, 'POST', '/agent/interactive-reconcile-apply', { executionId: 'current', key: 'recover',
+        previewHash: inspected.previewHash, sourceMessageId: 'recover' }), { code: 'receiver_replaced' });
+    }
+    assert.equal(f.journal.work('current').state, 'conflict'); assert.equal(f.journal.work('current').interactiveModelSelection, undefined);
+    assert.equal(f.sends, 1);
+  }
+});
+
+test('a stale project identity blocks only its own invocation and cannot stop another agent admission', async t => {
+  const f = fixture(t), invocation = { messageId: 'retained', prompt: 'Old scope', priorMessageIds: [], interactive: true };
+  const stale = f.journal.save({ id: 'a-stale', state: 'observing', bindingId: 'old-binding', nativeConversationId: 'old-session', invocation,
+    execution: { id: 'a-stale', state: 'accepted', targetNodeId: 'node', targetAgentId: 'old-agent', runId: 'retained-run' } });
+  const resolve = f.resolve;
+  f.resolve = async agentId => agentId === 'old-agent' ? { id: 'old-binding', agentId, interactive: true, identity: { sessionId: 'old-session' },
+    native: { snapshot: async () => { throw Object.assign(Error('Changed project'), { code: 'native_project_identity_changed' }); } } } : resolve(agentId);
+  f.request(); await f.tick();
+  const retained = f.journal.work('a-stale');
+  assert.equal(retained.recovery.reason, 'native_project_identity_changed');
+  assert.deepEqual(retained.invocation, stale.invocation); assert.equal(retained.state, 'observing');
+  assert.equal(f.journal.work('current').execution.state, 'accepted'); assert.equal(f.sends, 1);
+});
+
+test('standing monitors and headless bindings never acquire interactive model acknowledgement or recovery', async t => {
+  for (const kind of ['monitor', 'headless']) {
+    const f = fixture(t);
+    f.model = { providerID: 'fixture', id: 'first' };
+    if (kind === 'headless') f.binding.headlessSetupId = 'setup';
+    f.request(kind === 'monitor' ? { monitor: { startsAt: new Date(Date.now() - 1000).toISOString(),
+      endsAt: new Date(Date.now() + 60000).toISOString(), intervalSec: 10 } } : {});
+    await f.tick();
+    const original = f.journal.work('current');
+    assert.equal(original.invocation.interactive, undefined);
+    assert.equal(original.invocation.interactiveModelSelection, undefined);
+    f.model = { providerID: 'fixture', id: 'second' };
+    f.messages.push({ id: 'model-switch', type: 'model-switched', time: { created: 1 }, model: f.model },
+      { id: 'human', type: 'user', text: 'Continue' }, { id: 'terminal', type: 'idle', outcome: 'succeeded' });
+    f.idle = true; await f.tick();
+    const blocked = f.journal.work('current');
+    assert.equal(blocked.state, 'conflict'); assert.equal(f.sends, 1);
+    await assert.rejects(previewInteractiveRecovery(f.journal, f.binding, blocked), { code: 'recovery_ineligible' });
+  }
 });

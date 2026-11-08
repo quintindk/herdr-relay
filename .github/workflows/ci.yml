@@ -56,6 +56,12 @@ jobs:
         run: node packages/opencode-relay/smoke-receivers.mjs --first-message
       - name: Human steering, explicit historical recovery and independent human operations
         run: node packages/opencode-relay/smoke-receivers.mjs --legacy-recovery
+      - name: Interactive model selection and same-assignment human acknowledgement
+        run: node packages/opencode-relay/smoke-receivers.mjs --model-switch
+      - name: Exact historical model-switch recovery without prompt replay
+        run: node packages/opencode-relay/smoke-receivers.mjs --model-switch --legacy-recovery
+      - name: Owned background completion preserves the latest human CLI source
+        run: node scripts/verify-cli-bridge.mjs --completion-steering
       - name: Native task-independent message smoke
         run: npm --prefix packages/opencode-relay run smoke:messages
       - name: Existing root chats relocate between workspaces without duplicate agents or policy changes

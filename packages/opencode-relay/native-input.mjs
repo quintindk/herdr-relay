@@ -12,11 +12,18 @@ export function completionInput(message, preceding) {
   const metadata = message.metadata;
   const name = metadata?.source === 'shell' ? 'shell' : metadata?.source === 'subagent' ? 'subagent' : null;
   const id = name === 'shell' ? metadata.shellID : metadata?.childID;
-  if (!name || typeof id !== 'string' || !id || !['completed', 'failed', 'cancelled'].includes(metadata.state)) return false;
+  if (!name || typeof id !== 'string' || !(name === 'shell' ? /^sh_[A-Za-z0-9_-]+$/ : /^ses_[A-Za-z0-9_-]+$/).test(id) ||
+    !['completed', 'failed', 'cancelled'].includes(metadata.state) || metadata.herdrRelayInvocation || metadata.notification || metadata.synthetic) return false;
   // A native completion must identify a tool started in this same input's work.
   // Unrelated peer/schedule notifications never inherit earlier human authority.
-  return preceding.some(message => message.type === 'assistant' && message.content?.some(part =>
-    part.type === 'tool' && part.name === name && (JSON.stringify(part.state ?? {}).match(/(?:sh|ses)_[A-Za-z0-9_-]+/g) ?? []).includes(id)));
+  return preceding.some(message => message.type === 'assistant' && message.content?.some(part => {
+    if (part.type !== 'tool' || part.name !== name || part.state?.status !== 'completed') return false;
+    const reported = part.state.metadata?.[name === 'shell' ? 'shellID' : 'sessionID'];
+    if (reported !== undefined) return reported === id;
+    // Older native receipts report the ID in tool output. Never match an ID
+    // mentioned in the tool's input prompt or override a different native ID.
+    return (JSON.stringify(part.state.content ?? []).match(/(?:sh|ses)_[A-Za-z0-9_-]+/g) ?? []).includes(id);
+  }));
 }
 
 export function supportingInput(message, preceding) {
@@ -28,4 +35,20 @@ export function supportingInput(message, preceding) {
 export function humanInput(message) {
   return message?.type === 'user' && typeof message.text === 'string' && !!message.text.trim() &&
     !message.metadata?.herdrRelayInvocation && !message.metadata?.synthetic && !message.metadata?.notification && !message.metadata?.source;
+}
+
+export function modelReference(value) {
+  const valid = text => typeof text === 'string' && text.trim() === text && text.length > 0 && text.length <= 256 && !/[\x00-\x1f]/.test(text);
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    !Object.keys(value).every(key => ['providerID', 'id', 'variant'].includes(key)) || !valid(value.providerID) || !valid(value.id) ||
+    value.variant !== undefined && !valid(value.variant)) return null;
+  return { providerID: value.providerID, id: value.id, ...(value.variant && value.variant !== 'default' ? { variant: value.variant } : {}) };
+}
+
+// Native model selection is control evidence, not a human instruction. The
+// observer also requires a later human input and a matching current selection.
+export function modelSelectionInput(message) {
+  return message?.type === 'model-switched' && Number.isSafeInteger(message.time?.created) && message.time.created > 0 &&
+    !message.metadata?.source && !message.metadata?.herdrRelayInvocation && !message.metadata?.synthetic && !message.metadata?.notification &&
+    !!modelReference(message.model) && (message.previous === undefined || !!modelReference(message.previous));
 }

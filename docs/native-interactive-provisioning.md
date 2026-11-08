@@ -208,9 +208,32 @@ later instructions were completed, and native success alone is never a submitted
 Relay result.
 
 Only verified interactive receiver bindings use this policy. Scheduled/headless
-work, other Relay invocations, peer notifications and identity/control changes do
-not gain human steering or operator authority. A different assignment remains a
-separate work decision. The runtime does not guess task switches from keywords.
+work, standing monitors, other Relay invocations, peer notifications and profile/
+workspace identity changes do not gain human steering or operator authority.
+A different assignment remains a separate work decision. The runtime does not
+guess task switches from keywords.
+
+New interactive invocations capture the native model selection. A structured
+`model-switched` event can be acknowledged by a subsequent genuine human message
+in that same chat. The observer checks the model-reference chain and the current
+session selection, then records model control evidence separately from the human
+input IDs. Variant changes count as model selections too. Selecting a model alone
+does not authorise continuation, expand business scope or provide operator access.
+Native model availability/authentication and granted headless model pins are not
+changed by this policy.
+
+A selection without a later human message, mismatched current model, missing
+selection event or malformed/foreign control evidence fails closed. The latest
+human message still needs its own terminal, and model changes alter the input
+revision so old staged outcomes cannot be published as current work.
+
+Owned background shell/subagent completions preserve the latest human CLI source
+across ordinary follow-ups. Ownership is correlated against successful native tool
+receipts in the same input segment, including tools started before that follow-up.
+Completion text and IDs merely mentioned in a tool prompt cannot establish ownership.
+Peer, uncorrelated synthetic and profile/workspace boundaries remain fenced.
+A question-tool answer is not a new native human source. It cannot repair a hard
+boundary or substitute for separate human approval.
 
 Staged outcomes record their input revision. New steering retains obsolete staged
 outcomes as superseded evidence. Unattempted stale publications are retired without
@@ -239,6 +262,13 @@ original invocation and prior conflict remain recorded. Recovery does not send a
 prompt, submit a result, close a task or cancel/redispatch work. Continue in the
 same chat under the recovered assignment. A subsequent steering message changes
 the preview and must be inspected before applying it.
+
+The same preview/apply flow handles retained model-switch conflicts on invocations
+created before model acknowledgement was supported. Its preview includes the exact
+native model selections and subsequent human input. Apply retains the original
+invocation and conflict and enables acknowledgement on that existing assignment.
+An upgrade alone does not silently adopt a retained model-switch conflict. A peer
+notice, profile/workspace change or uncertain publication cannot authorise recovery.
 
 An earlier task's answered question can leave a separate `continuation_ready`
 execution on the same receiver. Do not replay its question or let recovery
