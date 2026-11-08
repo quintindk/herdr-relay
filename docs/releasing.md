@@ -35,11 +35,11 @@ RELAY_V2_BINARY=/absolute/opencode-2.1.2 \
 RELAY_V2_BASELINE_BINARY=/absolute/opencode-2.1.0 \
 RELAY_V2_LATEST_BINARY=/absolute/opencode-2.2.5 \
 HERDR_BINARY=/absolute/herdr-0.9.5 \
-node scripts/verify-package.mjs --release --output /private/artifacts/0.2.5
+node scripts/verify-package.mjs --release --output /private/artifacts/0.2.6
 ```
 
-Assets are `herdr-relay-0.2.5.tgz`, `SHA256SUMS` and
-`herdr-relay-0.2.5.tgz.verification.json`. The report records the source commit,
+Assets for the draft version are `herdr-relay-0.2.6.tgz`, `SHA256SUMS` and
+`herdr-relay-0.2.6.tgz.verification.json`. The report records the source commit,
 cleanliness, timestamp, host checks, installer handover evidence and audit result.
 Different bytes at an existing artifact path or inconsistent checksums are refused.
 
@@ -56,6 +56,10 @@ The publication gate checks this evidence rather than accepting a missing field.
 
 ## Push, CI, tag, publish
 
+The 0.2.6 batch remains an unpublished draft. Push its feature branch and keep its
+pull request in draft while collecting fixes. Branch/PR CI may build verification
+artifacts but does not authorise a tag, publication, merge or live upgrade.
+
 On an explicit publication request:
 
 1. Push the exact release commit and wait for branch CI to pass.
@@ -65,8 +69,8 @@ On an explicit publication request:
    clean-source provenance, supported-host checks and zero-finding audit.
 
 ```sh
-git tag -a v0.2.5 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.5"
-git push origin refs/tags/v0.2.5
+git tag -a v0.2.6 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.6"
+git push origin refs/tags/v0.2.6
 ```
 
 `.github/workflows/ci.yml` runs tests/package verification on branch pushes, pull
@@ -75,8 +79,9 @@ version tags and publishes only after all gates pass. CI has read-only repositor
 permissions; only the final publication job gets `contents: write`.
 
 The release job takes `docs/release-VERSION.md`, checks tag/version/source evidence
-and publishes all three assets. Candidate versions are prereleases; stable 0.2.5
-has no prerelease suffix. Stable releases become the latest release. Prereleases
+and publishes all three assets. Versions with a prerelease suffix are prereleases.
+Stable version numbers such as 0.2.6 become releases only after explicit publication.
+Stable releases become the latest release. Prereleases
 use `--prerelease --latest=false` and do not replace the stable selection.
 
 Existing releases/assets are never replaced. Do not retarget published tags,

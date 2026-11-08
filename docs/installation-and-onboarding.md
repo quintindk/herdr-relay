@@ -2,10 +2,10 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target **0.2.5**, which is in preparation and not yet published on
-[GitHub releases](https://github.com/quintindk/herdr-relay/releases). The current
-stable release is **0.2.4**. Already-published older installers have the bootstrap
-boundary described below.
+Examples target the published stable release **0.2.5** on
+[GitHub releases](https://github.com/quintindk/herdr-relay/releases).
+**0.2.6 is an unpublished draft**, not an installation target yet.
+Already-published older installers have the bootstrap boundary described below.
 
 ## Requirements
 

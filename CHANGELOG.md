@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.6 — Unreleased
+
+Draft bug-fix batch. Additional fixes will be collected before publication.
 
 - Acknowledge native interactive model selections through a subsequent human
   message without replacing the assignment or replaying its prompt. Verify the
@@ -13,7 +15,7 @@
   arrives across a follow-up. Correlate successful native tool receipts, not IDs
   mentioned in tool input. Peer/identity boundaries remain separate authority.
 
-## 0.2.5 — Unreleased
+## 0.2.5 — 07 November 2026
 
 - Match every requested interactive permission requirement before reusing a grant.
   Report selected grant/revision and mismatches. An insufficient standing grant
