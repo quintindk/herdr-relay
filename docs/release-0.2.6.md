@@ -29,6 +29,11 @@ while this batch remains in draft.
 - **Native regression gates:** CI and installed-package verification exercise new
   model acknowledgement, exact historical model recovery and a real background
   shell completion arriving after a human follow-up on OpenCode 2.1.0, 2.1.2 and 2.2.5.
+- **Upgrade CI asset reads:** the test-only RC4 baseline downloader retries transient
+  HTTP/transport failures at most three times, discards partial responses and reports
+  the HTTP status, attempt and asset path on refusal. Permanent HTTP refusals,
+  insecure redirects, excessive size and invalid checksums still fail immediately.
+  Baseline audit findings remain explicit and candidate production audits stay strict.
 
 Scheduled/headless jobs and standing monitors do not acquire interactive model
 acknowledgement. Existing model/authentication pins, permissions, task ownership,

@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { hashBytes } from '../src/release-install.mjs';
 import { releaseInfo } from '../src/release-info.mjs';
 import { requireValue } from '../src/protocol.mjs';
@@ -16,13 +17,34 @@ export async function upgradeBaselineFixture({ directory }, dependencies = {}) {
   const scratch = resolve(process.env.RELAY_TEST_SCRATCH ?? '/tmp/opencode');
   requireValue(dirname(root) === scratch && realpathSync(scratch) === scratch && basename(root).startsWith('relay-upgrade-smoke-') && basename(directory) === 'releases' && realpathSync(root) === root,
     'invalid_fixture_directory', 'The RC4 baseline may only be installed in a fresh isolated upgrade-smoke directory');
-  const run = dependencies.run ?? promisify(execFile), fetcher = dependencies.fetch ?? fetch;
+  const run = dependencies.run ?? promisify(execFile), fetcher = dependencies.fetch ?? fetch, pause = dependencies.delay ?? delay;
   const read = async (url, maximum) => {
-    const response = await fetcher(url, { signal: AbortSignal.timeout(60000), redirect: 'follow' });
-    requireValue(response.ok && new URL(response.url || url).protocol === 'https:', 'fixture_download_failed', 'RC4 asset download failed');
-    const chunks = []; let size = 0;
-    for await (const chunk of response.body) { size += chunk.length; requireValue(size <= maximum, 'fixture_too_large', 'RC4 asset exceeded its size bound'); chunks.push(chunk); }
-    return Buffer.concat(chunks);
+    // Only read-only transient failures retry. Integrity and permanent refusals
+    // still fail immediately, and no partial response survives another attempt.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      let response, transientHttp = false;
+      try {
+        response = await fetcher(url, { signal: AbortSignal.timeout(60000), redirect: 'follow' });
+        requireValue(new URL(response.url || url).protocol === 'https:', 'fixture_download_failed', 'RC4 asset redirect must remain HTTPS');
+        transientHttp = [408, 429, 500, 502, 503, 504].includes(response.status);
+        requireValue(response.ok, 'fixture_download_failed', `RC4 asset download failed (HTTP ${response.status}, attempt ${attempt}/3) for ${new URL(url).pathname}`);
+        requireValue(response.body, 'fixture_download_failed', 'RC4 asset response has no body');
+        const chunks = []; let size = 0;
+        for await (const chunk of response.body) { size += chunk.length; requireValue(size <= maximum, 'fixture_too_large', 'RC4 asset exceeded its size bound'); chunks.push(chunk); }
+        return Buffer.concat(chunks);
+      } catch (error) {
+        await response?.body?.cancel().catch(() => {});
+        const transientTransport = ['AbortError', 'TimeoutError'].includes(error.name) ||
+          error.name === 'TypeError' && ['fetch failed', 'terminated'].includes(error.message);
+        if (!transientHttp && !transientTransport) throw error;
+        if (attempt === 3) {
+          if (!transientTransport) throw error;
+          requireValue(false, 'fixture_download_failed', `RC4 asset download failed after 3 attempts (${error.name}) for ${new URL(url).pathname}`);
+        }
+        const retryAfter = Number(response?.headers.get('retry-after'));
+        await pause(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 5000) : attempt * 1000);
+      }
+    }
   };
   const name = `herdr-relay-${version}.tgz`, url = `https://github.com/quintindk/herdr-relay/releases/download/v${version}`;
   const sums = (await read(`${url}/SHA256SUMS`, 65536)).toString('utf8');

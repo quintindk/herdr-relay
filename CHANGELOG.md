@@ -14,6 +14,9 @@ Draft bug-fix batch. Additional fixes will be collected before publication.
 - Preserve the latest human CLI source when an owned shell/subagent completion
   arrives across a follow-up. Correlate successful native tool receipts, not IDs
   mentioned in tool input. Peer/identity boundaries remain separate authority.
+- Bound transient RC4 baseline asset-download retries in the upgrade CI fixture.
+  Report HTTP status and attempt, discard partial responses and retain strict
+  HTTPS, size, checksum and candidate production-audit checks.
 
 ## 0.2.5 — 07 November 2026
 
