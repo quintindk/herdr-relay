@@ -8,6 +8,10 @@ stream/model provenance and headless cron preflight. Install only published,
 verified release assets. Existing installations must be on **0.2.1-rc4 or later**
 to upgrade. See the [0.2.6 release notes](docs/release-0.2.6.md).
 
+**0.2.7 is in draft preparation**, adding bounded peer collaboration, clearer
+agent instructions and attachment recovery. See the [draft notes](docs/release-0.2.7.md).
+It is not published and does not change the stable installation above.
+
 ## What it does
 
 - Human-owned tasks with stable references, comments, dependencies and source links.
