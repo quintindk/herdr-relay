@@ -167,7 +167,8 @@ export async function tickNode(journal, api, resolveBinding) {
       if (!snapshot.idle || snapshot.inbox?.length) continue;
       const invocation = { runId: execution.runId, messageId: `msg_${digest([execution.id, execution.runId])}`, priorMessageIds: snapshot.messages.map(message => message.id),
         ...(binding.prepareInvocation?.(snapshot) ?? {}),
-        ...(binding.interactive && !binding.headlessSetupId ? { interactive: true } : {}),
+        ...(binding.interactive && !binding.headlessSetupId && !execution.monitor ? { interactive: true, interactiveModelSelection: true,
+          ...(snapshot.model ? { initialModel: snapshot.model } : {}) } : {}),
         prompt: `Relay execution ${execution.id}, run ${execution.runId}.\n${execution.instructions}\n` +
           (work.answer ? `Clarification answer: ${work.answer.body}\n` : '') +
           (work.children?.length ? `Child result receipts for inspection: ${JSON.stringify(work.children.map(child => ({ id: child.id, revision: child.revision,
@@ -232,7 +233,7 @@ export async function tickNode(journal, api, resolveBinding) {
       }
     }
     } catch (error) {
-      if (!['native_identity_mismatch', 'receiver_replaced'].includes(error.code)) throw error;
+      if (!['native_identity_mismatch', 'native_project_identity_changed', 'receiver_replaced'].includes(error.code)) throw error;
       // A missing historical chat blocks that attempt, not every other agent on
       // the node. Keep its invocation and uncertainty evidence intact.
       journal.save({ ...journal.work(work.id), recovery: { state: 'blocked', reason: error.code ?? 'native_or_backend_unavailable', at: now() } });

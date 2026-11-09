@@ -23,7 +23,8 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-0.2.5, which is currently in preparation and must be published before use:
+the stable release **0.2.5**. The **0.2.6** bug-fix batch remains an unpublished
+draft and must not be installed or used for a live upgrade yet:
 
 ```sh
 herdr-relay release install --version 0.2.5
@@ -73,7 +74,7 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4 through 0.2.5 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through the 0.2.6 draft retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
 
 Upgrading enables the supported connection-rebind and workspace-relocation

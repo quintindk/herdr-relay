@@ -89,20 +89,21 @@ const model = createServer(async (req, res) => {
     assert.equal(input.tools?.some(t => ['shell', 'relay_shell_call'].includes(t.function.name)), false, 'Denied shell must not be advertised');
     shellDeniedHidden = true;
   }
-  const steps = contractTurn ? ['relay_headless_contract', 'relay_headless_contract'] : grantTurn ? ['relay_headless_grant'] : probe ? ['relay_headless_permissions', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
-    ['relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), ...(shellAllowed ? ['relay_shell_call'] : []),
+  const steps = contractTurn ? ['relay_headless_contract', 'relay_headless_contract'] : grantTurn ? ['relay_headless_grant'] : probe ? ['relay_headless_permissions', 'relay_headless_scope', ...(capabilityMode ? ['relay_headless_capabilities'] : []), 'relay_work_submit'] :
+    ['relay_headless_permissions', 'relay_headless_scope', 'relay_mcp_tools', ...(!mcpDenied ? ['relay_mcp_call', 'relay_mcp_call'] : []), ...(shellAllowed ? ['relay_shell_call'] : []),
       ...(capabilityMode ? ['relay_headless_task', 'relay_headless_task', 'relay_headless_task'] : []), 'relay_work_submit'];
   const name = steps[called];
   const tool = name && input.tools?.find(t => t.function.name.endsWith(name));
   if (name && !tool) console.error(JSON.stringify({ missingTool: name, advertised: input.tools?.map(t => t.function.name) }));
   const taskStep = steps.slice(0, called).filter(step => step === 'relay_headless_task').length;
+  const mcpStep = steps.slice(0, called).filter(step => step === 'relay_mcp_call').length;
   const args = name === 'relay_headless_task' ? { key: taskStep === 0 ? 'schema-create' : 'schema-comment', operation: taskStep === 0 ? 'task.create' : 'comment.create',
     source: { namespace: 'external:record', externalId: 'native-schema-fixture' },
     payload: taskStep === 0 ? { title: 'Native operation-specific schema fixture' } : { taskId: `task_headless_${digest(['owner', 'external:record', 'native-schema-fixture'])}`,
       expectedRevision: 1, body: 'Only the valid comment may persist', ...(taskStep === 1 ? { reason: 'Unsupported field must fail before enqueue' } : {}) } } :
     name === 'relay_headless_contract' ? { ...contractProposal, operation: called === 0 ? 'preview' : 'request', ...(called === 1 ? { key: 'contract-once', previewHash: contractPreviewHash } : {}) } :
-    name === 'relay_headless_grant' ? { key: 'grant-once', payload: grantProposal } : name === 'relay_mcp_call' ? { tool: called === 1 ? 'records_read' : 'actions_send', arguments: called === 1 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
-    ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : name === 'relay_shell_call' ? { command: `printf '%s' 'shell-fixture' > '${shellOutput}'` } : ['relay_headless_capabilities', 'relay_headless_permissions', 'relay_mcp_tools'].includes(name) ? {} :
+    name === 'relay_headless_grant' ? { key: 'grant-once', payload: grantProposal } : name === 'relay_mcp_call' ? { tool: mcpStep === 0 ? 'records_read' : 'actions_send', arguments: mcpStep === 0 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
+    ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : name === 'relay_shell_call' ? { command: `printf '%s' 'shell-fixture' > '${shellOutput}'` } : ['relay_headless_capabilities', 'relay_headless_permissions', 'relay_headless_scope', 'relay_mcp_tools'].includes(name) ? {} :
     { key: probe ? 'ready' : 'job', candidate: probe ? 'headless-readiness' : 'fixture-job', summary: 'Native capability and result submission verified.' };
   const delta = tool ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${called}`, type: 'function', function: { name: tool.function.name, arguments: JSON.stringify(args) } }] }
     : { role: 'assistant', content: 'Fixture done.' };
@@ -336,6 +337,17 @@ try {
   if (shellMode && !shellAllowed) assert.equal(shellDeniedHidden, true);
   if (shellAllowed) assert.equal(readFileSync(shellOutput, 'utf8'), 'shell-fixture');
   assert.ok(mcpSessions.every(sessionId => sessionId === approvedSetup.sessionId), 'MCP calls must retain the dedicated worker session context');
+  const scopeCalls = (await client.session.context({ sessionID: approvedSetup.sessionId })).filter(message => message.type === 'assistant')
+    .flatMap(message => message.content.filter(part => part.type === 'tool' && part.name === 'relay_headless_scope'));
+  assert.ok(scopeCalls.length >= 2, 'Readiness and business work must both inspect scope through the actual advertised tool');
+  for (const part of scopeCalls) {
+    assert.equal(part.state.status, 'completed');
+    const scope = JSON.parse(part.state.content[0].text);
+    assert.deepEqual(scope.permissions, { mcp: !mcpDenied, shell: shellAllowed });
+    assert.deepEqual(scope.taskActions, capabilityMode ? ['task.create', 'task.update', 'comment.create', 'reference.attach'] : []);
+    assert.deepEqual(scope.sourceNamespaces, capabilityMode ? ['external:record'] : []);
+    if (!capabilityMode) assert.equal(scope.artifacts, null);
+  }
   if (capabilityMode) {
     const taskId = `task_headless_${digest(['owner', 'external:record', 'native-schema-fixture'])}`;
     assert.equal((await owner('GET', `/v1/comments?taskId=${taskId}`)).items.length, 1, 'Invalid comment must not persist');
@@ -377,6 +389,7 @@ try {
     connectionRebindReadinessAndNextFiring: rebindMode, connectionRebindPreservedWorkerSessionScopeAndSchedule: rebindMode,
     legacyValidationRefusalDoesNotBlockActivation: legacyRefusalMode,
     operationSpecificHeadlessSchemasVerified: capabilityMode,
+    headlessScopeInspectionVerified: true, emptyNativeScopeWithShellVerified: shellAllowed && !capabilityMode,
     persistentRunResultInboxVerified: notificationMode, onlineOnlyRequesterResultVerified: notificationMode,
     credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {

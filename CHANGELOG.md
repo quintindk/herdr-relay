@@ -1,6 +1,31 @@
 # Changelog
 
-## 0.2.5 — Unreleased
+## 0.2.6 — Unreleased
+
+Draft bug-fix batch. Additional fixes will be collected before publication.
+
+- Keep native incomplete-stream and output-limit continuations in their existing
+  owned turn. Correlate the fixed OpenCode control with its adjacent completed
+  assistant failure/finish instead of blocking it as foreign input. Preserve the
+  original invocation, CLI source and run without granting new human authority.
+- Expose read-only headless scope inspection to shell/MCP-only grants. Report
+  empty native task/artifact capabilities without blocking separately approved
+  shell/MCP work or requiring another grant or contract revision.
+- Acknowledge native interactive model selections through a subsequent human
+  message without replacing the assignment or replaying its prompt. Verify the
+  model chain/current selection, retain control provenance and fence stale outcomes.
+  Existing model-switch conflicts use the exact current-human recovery preview.
+  Scheduled/headless jobs, peer inputs and profile/workspace changes remain fenced.
+- Recheck receiver generation when applying input recovery. Isolate a changed
+  project identity to its owning invocation instead of aborting other agent work.
+- Preserve the latest human CLI source when an owned shell/subagent completion
+  arrives across a follow-up. Correlate successful native tool receipts, not IDs
+  mentioned in tool input. Peer/identity boundaries remain separate authority.
+- Bound transient RC4 baseline asset-download retries in the upgrade CI fixture.
+  Report HTTP status and attempt, discard partial responses and retain strict
+  HTTPS, size, checksum and candidate production-audit checks.
+
+## 0.2.5 — 07 November 2026
 
 - Match every requested interactive permission requirement before reusing a grant.
   Report selected grant/revision and mismatches. An insufficient standing grant

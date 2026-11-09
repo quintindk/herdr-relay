@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { supportingInput, humanInput } from './native-input.mjs';
+import { supportingInput, humanInput, modelReference, modelSelectionInput } from './native-input.mjs';
 import { digest, requireValue } from '../../src/protocol.mjs';
 
 function check(condition, code) {
@@ -60,8 +60,9 @@ export class NativeOpenCodeV2 {
       this.client.session.active(), this.client.session.inbox.list({ sessionID: this.identity.sessionId }),
     ]);
     check(active && typeof active === 'object' && !Array.isArray(active) && Array.isArray(inbox), 'invalid_native_response');
-    await this.verify();
-    return { messages, idle: !active[this.identity.sessionId], inbox };
+    const session = await this.verify();
+    return { messages, idle: !active[this.identity.sessionId], inbox,
+      ...(session.model ? { model: structuredClone(session.model) } : {}) };
   }
 
   async send(invocation, options) {
@@ -87,17 +88,38 @@ export function observeV2(snapshot, invocation) {
       !invocation.priorMessageIds.includes(message.id) && !supportingInput(message, snapshot.messages.slice(0, offset)));
     if (unexpected) return { state: 'conflict', reason: 'concurrent_native_input', inputId: unexpected.id, inputType: unexpected.type };
     let anchor = index;
-    const inputs = [];
+    const inputs = [], modelSelections = [];
+    let selectedModel = modelReference(invocation.initialModel), selectionOffset = index;
+    const modelConflict = (message, modelChange) => ({ state: 'conflict', reason: 'concurrent_native_input',
+      ...(message ? { inputId: message.id } : {}), inputType: 'model-switched', modelChange });
     for (let offset = index + 1; offset < snapshot.messages.length; offset++) {
       const message = snapshot.messages[offset];
       if (humanInput(message)) { inputs.push({ id: message.id, digest: digest(message) }); anchor = offset; continue; }
+      if (message.type === 'model-switched' && invocation.interactiveModelSelection === true) {
+        if (!modelSelectionInput(message)) return modelConflict(message, 'invalid_native_selection');
+        const model = modelReference(message.model), previous = modelReference(message.previous);
+        // Older invocations have no captured model. Use native assistant evidence
+        // before the first switch when available, never model-switch prose.
+        selectedModel ??= modelReference(snapshot.messages.slice(0, offset).findLast(m => m.type === 'assistant' && m.model)?.model);
+        if (previous && selectedModel && digest(previous) !== digest(selectedModel)) return modelConflict(message, 'selection_chain_mismatch');
+        modelSelections.push({ id: message.id, model, ...(previous ? { previous } : {}), digest: digest(message) });
+        selectedModel = model; selectionOffset = offset; continue;
+      }
       if (['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type) &&
         !supportingInput(message, snapshot.messages.slice(index + 1, offset)))
         return { state: 'conflict', reason: 'concurrent_native_input', inputId: message.id, inputType: message.type };
     }
+    if (modelSelections.length) {
+      const selection = modelSelections.at(-1);
+      if (anchor <= selectionOffset) return modelConflict(selection, 'human_acknowledgement_required');
+      const current = modelReference(snapshot.model);
+      if (!current || digest(current) !== digest(selectedModel)) return modelConflict(selection, 'current_selection_mismatch');
+    } else if (invocation.interactiveModelSelection === true && invocation.initialModel &&
+      digest(modelReference(snapshot.model)) !== digest(modelReference(invocation.initialModel))) return modelConflict(null, 'selection_event_missing');
     // Choose the terminal after the latest adopted input, never a previous turn's
     // idle receipt. This also handles a correction steered into a busy turn.
-    const interaction = { revision: digest(inputs), inputIds: inputs.map(input => input.id), anchorId: snapshot.messages[anchor].id };
+    const interaction = { revision: modelSelections.length ? digest({ inputs, modelSelections }) : digest(inputs),
+      inputIds: inputs.map(input => input.id), anchorId: snapshot.messages[anchor].id, ...(modelSelections.length ? { modelSelections } : {}) };
     const terminal = snapshot.messages.slice(anchor + 1).find(message => message.type === 'idle');
     if (!terminal || !snapshot.idle || snapshot.inbox.length) return { state: 'observed', reason: 'awaiting_terminal_response', interaction };
     const end = snapshot.messages.findIndex(message => message.id === terminal.id);

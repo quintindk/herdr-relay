@@ -7,7 +7,7 @@ import { requireValue } from '../../src/protocol.mjs';
 import { nativeCliInvocation, executionCliInvocation, readOnlyCliInvocation } from '../../src/native-cli-surface.mjs';
 import { humanSource } from './human-proposals.mjs';
 import { workerConnection, workerContextPath } from './worker-context.mjs';
-import { supportingInput } from './native-input.mjs';
+import { supportingInput, humanInput, modelSelectionInput } from './native-input.mjs';
 import { call } from '../../src/client.mjs';
 
 const execute = promisify(execFile);
@@ -99,11 +99,15 @@ export async function interactiveCliSource(ctx, context, connection = workerConn
   const messages = await ctx.session.context({ sessionID: context.sessionID });
   const callIndex = messages.findIndex(message => message.id === context.messageID);
   requireValue(callIndex >= 0, 'human_source_required', 'Native tool message must belong to this chat');
-  let sourceIndex = -1;
+  let sourceIndex = -1, ownershipStart = -1;
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (!['user', 'synthetic', 'shell', 'location-switched', 'agent-switched', 'model-switched'].includes(message.type)) continue;
-    if (supportingInput(message, messages.slice(sourceIndex + 1, index))) continue;
+    if (supportingInput(message, messages.slice(ownershipStart + 1, index))) continue;
+    // Human follow-ups supersede authority, not the ownership of already started
+    // background tools. Native model control preserves correlation but is never
+    // itself a human source. Other boundaries start a separate ownership segment.
+    if (ownershipStart < 0 || !humanInput(message) && !modelSelectionInput(message)) ownershipStart = index;
     sourceIndex = index;
   }
   const trigger = messages[sourceIndex];

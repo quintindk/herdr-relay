@@ -7,15 +7,16 @@ import { NodeJournal } from '../src/node-journal.mjs';
 import { headlessExecutionScope, headlessReferenceLookup } from '../src/headless-tasks.mjs';
 import { startNodeService } from '../src/node-service.mjs';
 import { call } from '../src/client.mjs';
+import { headlessRunAuthority } from '../src/headless-setup-contract.mjs';
 
-function fixture(t, { capabilities = true, readiness = false, directory = '/workspace', taskActions = ['task.create', 'task.update', 'comment.create', 'reference.attach'] } = {}) {
+function fixture(t, { capabilities = true, readiness = false, directory = '/workspace', permissions = { mcp: false }, taskActions = ['task.create', 'task.update', 'comment.create', 'reference.attach'] } = {}) {
   const store = new BackendStore(':memory:'); t.after(() => store.close()); const owner = store.authenticate(store.bootstrap().token);
   const command = (actor, key, action, payload) => store.command(actor, { key, action, payload });
   command(owner, 'node', 'node.enrol', { id: 'node', name: 'Fixture' }); const node = store.authenticate(store.enrolCredential(owner, 'node', 'token').token);
   command(owner, 'agent', 'agent.enrol', { id: 'coordinator', nodeId: 'node', name: 'Coordinator', directory });
   command(owner, 'attach', 'agent.attach', { id: 'coordinator', expectedBindingRevision: 0, conversationId: 'ses_coordinator', directory, bindingId: 'binding_coordinator' });
   command(owner, 'grant', 'headless.grant', { id: 'grant', requesterAgentId: 'coordinator', nodeId: 'node', name: 'approved-worker', directory,
-    model: { providerID: 'fixture', id: 'fixture', integrationID: 'fixture', connectionId: 'fixture' }, permissions: { mcp: false },
+    model: { providerID: 'fixture', id: 'fixture', integrationID: 'fixture', connectionId: 'fixture' }, permissions,
     contract: '.opencode/skills/approved-job/SKILL.md', schedule: { id: 'schedule', cron: '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none' },
     ...(capabilities ? { capabilities: { sourceNamespaces: ['external:record'], taskActions, artifacts: { receipts: 'approved/receipts', state: 'approved/state.json', history: 'approved/history', runs: 'approved/runs', summaries: 'approved/summaries' } } } : {}) });
   const setup = command(node, 'setup', 'headless.request', { grantId: 'grant', requesterAgentId: 'coordinator', sourceConversationId: 'ses_coordinator', sourceBindingRevision: 1 });
@@ -61,6 +62,34 @@ test('read-only and action-limited profiles, wrong sources/runs, cancellation an
   f.store.save('execution', { ...f.execution, cancellationRequested: true }); assert.throws(() => f.mutate('task.create', 'cancelled', { title: 'Denied' }), { code: 'headless_execution_inactive' });
 });
 
+test('shell-only workers can inspect empty native capability scope without receiving task or artifact permissions', async t => {
+  const root = mkdtempSync('/tmp/opencode/headless-scope-'), f = fixture(t, { directory: root, capabilities: false, permissions: { mcp: false, shell: true } });
+  const journal = new NodeJournal(join(root, 'node.sqlite'), { nodeId: 'node', instanceId: f.store.instance });
+  journal.save({ id: f.execution.id, state: 'observing', execution: f.execution, bindingId: f.setup.bindingId, nativeConversationId: f.setup.sessionId });
+  const api = async (_method, path, body) => {
+    if (path === `/v1/headless_setups/${f.setup.id}/authority`) return { setup: f.store.get('headless_setup', f.setup.id), grant: f.store.get('headless_grant', 'grant') };
+    assert.equal(path, '/v1/headless/read');
+    if (body.operation === 'access') return headlessExecutionScope(f.store, f.node, body);
+    assert.equal(body.operation, 'permissions');
+    const { setup, grant } = headlessRunAuthority(f.store, f.node, body);
+    return { id: setup.id, sessionId: setup.sessionId, permissions: grant.permissions, capabilities: grant.capabilities ?? null };
+  };
+  const socketPath = join(root, 'node.sock'), service = await startNodeService({ journal, socketPath, api,
+    workers: [{ token: 'fixture', agentId: f.setup.agentId, sessionId: f.setup.sessionId, headlessSetupId: f.setup.id }] });
+  t.after(async () => { await service.close(); journal.close(); rmSync(root, { recursive: true, force: true }); });
+  const connection = { socketPath, token: 'fixture' }, body = { executionId: f.execution.id, runId: f.execution.runId, payload: {} };
+  const scope = await call(connection, 'POST', '/work/headless-scope', body);
+  assert.deepEqual(scope.permissions, { mcp: false, shell: true });
+  assert.deepEqual(scope.sourceNamespaces, []); assert.deepEqual(scope.taskActions, []); assert.equal(scope.artifacts, null);
+  assert.equal(journal.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 0);
+  await assert.rejects(call(connection, 'POST', '/work/headless-scope', { ...body, payload: { shell: true } }), { code: 'invalid_headless_request' });
+  await assert.rejects(call(connection, 'POST', '/work/headless-scope', { ...body, runId: 'old' }));
+  await assert.rejects(call(connection, 'POST', '/work/headless-task', { ...body, key: 'denied', payload: {
+    key: 'denied', operation: 'task.create', source: f.source, payload: { title: 'Not granted' } } }), { code: 'headless_capability_not_authorised' });
+  f.store.save('execution', { ...f.execution, cancellationRequested: true });
+  await assert.rejects(call(connection, 'POST', '/work/headless-scope', body), { code: 'headless_execution_inactive' });
+});
+
 test('headless mutations cannot edit unsettled tasks or tasks owned by someone else', t => {
   const f = fixture(t); assert.throws(() => f.mutate('task.update', 'busy', { id: 'control', expectedRevision: f.store.get('task', 'control').revision, changes: { title: 'Denied' } }), { code: 'headless_task_busy' });
   const task = f.mutate('task.create', 'capture', { title: 'Originally owned' }); f.store.save('task', { ...f.store.get('task', task.taskId), responsibleUserId: 'other' });
@@ -86,12 +115,30 @@ test('worker routes reconcile lost replies and cached uncertain audit writes, th
   let offline = false, loseReply = true;
   const api = async (method, path, body) => {
     if (offline) throw Error('Fixture offline');
-    if (path === '/v1/headless/read') { const scope = headlessExecutionScope(f.store, f.node, body); return body.operation === 'references' ? headlessReferenceLookup(f.store, f.node, body) : { id: scope.setup.id, directory: scope.setup.directory, profile: scope.profile, readiness: false }; }
+    if (path === `/v1/headless_setups/${f.setup.id}/authority`) return { setup: f.store.get('headless_setup', f.setup.id), grant: f.store.get('headless_grant', 'grant') };
+    if (path === '/v1/headless/read') {
+      const scope = headlessExecutionScope(f.store, f.node, body);
+      if (body.operation === 'permissions') return { id: scope.setup.id, sessionId: scope.setup.sessionId, directory: scope.setup.directory,
+        permissions: scope.grant.permissions, capabilities: scope.profile, readiness: false };
+      return body.operation === 'references' ? headlessReferenceLookup(f.store, f.node, body) : { id: scope.setup.id, directory: scope.setup.directory, profile: scope.profile, readiness: false };
+    }
     const value = f.store.command(f.node, body); if (loseReply && body.action === 'headless.task') { loseReply = false; throw Error('Lost committed reply'); } return value;
   };
   const socketPath = join(root, 'node.sock'), service = await startNodeService({ journal, socketPath, api, workers: [{ token: 'fixture', agentId: f.setup.agentId, sessionId: f.setup.sessionId, headlessSetupId: f.setup.id }] });
   t.after(async () => { await service.close(); journal.close(); rmSync(root, { recursive: true, force: true }); });
   const connection = { socketPath, token: 'fixture' }, scope = { executionId: f.execution.id, runId: f.execution.runId };
+  const inspected = await call(connection, 'POST', '/work/headless-scope', { ...scope, payload: {} });
+  assert.deepEqual(inspected.taskActions, f.store.get('headless_grant', 'grant').capabilities.taskActions);
+  const cached = JSON.parse(journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`headless-authority:${f.execution.id}:${f.execution.runId}`).value);
+  assert.deepEqual(cached.profile, f.store.get('headless_grant', 'grant').capabilities);
+  offline = true;
+  const audit = await call(connection, 'POST', '/work/headless-artifacts', { ...scope, payload: {
+    operation: 'receipt', key: 'inspection-audit', source: { ...f.source, externalId: 'inspection-only' }, action: 'external.read',
+    expectedRevision: 0, status: 'uncertain', data: { phase: 'scope-inspected' } } });
+  assert.equal(audit.authorisation, 'cached_uncertain_audit_only'); offline = false;
+  await call(connection, 'POST', '/work/headless-artifacts', { ...scope, payload: {
+    operation: 'receipt', key: 'inspection-reconciled', source: { ...f.source, externalId: 'inspection-only' }, action: 'external.read',
+    expectedRevision: audit.revision, status: 'no_change', data: { phase: 'fixture-confirmed-no-external-effect' } } });
   const request = { ...scope, key: 'capture', payload: { key: 'capture', operation: 'task.create', source: f.source, payload: { title: 'HTTP capture' } } };
   await assert.rejects(call(connection, 'POST', '/work/headless-task', request)); offline = true;
   const record = { operation: 'receipt', key: 'uncertain', source: f.source, action: 'task.create', expectedRevision: 0, status: 'uncertain', data: { originalKey: 'capture' } };
@@ -99,7 +146,7 @@ test('worker routes reconcile lost replies and cached uncertain audit writes, th
   await assert.rejects(call(connection, 'POST', '/work/headless-artifacts', { ...scope, payload: { operation: 'checkpoint', key: 'offline' } })); offline = false;
   const applied = await call(connection, 'POST', '/work/headless-task', request); assert.equal(applied.state, 'recorded'); assert.equal(f.store.all('task').length, 2);
   const durable = await call(connection, 'POST', '/work/headless-artifacts', { ...scope, payload: { ...record, key: 'confirmed', expectedRevision: pending.revision, status: 'applied', data: { operationId: applied.receipt.id } } });
-  const checkpoint = await call(connection, 'POST', '/work/headless-artifacts', { ...scope, payload: { operation: 'checkpoint', key: 'checkpoint', expectedRevision: 0, data: { opaqueCursor: 'belongs-to-job' }, receiptIds: [durable.id] } }); assert.equal(checkpoint.revision, 1);
+  const checkpoint = await call(connection, 'POST', '/work/headless-artifacts', { ...scope, payload: { operation: 'checkpoint', key: 'checkpoint', expectedRevision: 0, data: { opaqueCursor: 'belongs-to-job' }, receiptIds: [audit.id, durable.id] } }); assert.equal(checkpoint.revision, 1);
   f.store.save('execution', { ...f.store.get('execution', f.execution.id), cancellationRequested: true }); await assert.rejects(call(connection, 'POST', '/work/headless-task', request), { code: 'headless_execution_inactive' });
 });
 

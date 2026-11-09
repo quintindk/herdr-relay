@@ -26,8 +26,12 @@ const workspace = join(root, 'workspace'), state = join(root, 'node');
 mkdirSync(workspace); mkdirSync(state);
 const binary = process.env.RELAY_V2_BINARY ?? join(here, 'node_modules/.bin/opencode2');
 const legacyRecovery = process.argv.includes('--legacy-recovery');
-const steering = process.argv.includes('--steering') || legacyRecovery;
-const firstMessage = process.argv.includes('--first-message') || steering;
+const modelSwitch = process.argv.includes('--model-switch');
+const nativeContinuation = process.argv.includes('--native-continuation');
+const interruptedTasks = new Set();
+const steering = process.argv.includes('--steering') || legacyRecovery || modelSwitch;
+assert.ok(!nativeContinuation || !steering, 'Native stream continuation uses its own fixture mode');
+const firstMessage = process.argv.includes('--first-message') || steering || nativeContinuation;
 const tuiOnly = process.argv.includes('--tui-only') || firstMessage;
 if (firstMessage) {
   mkdirSync(join(workspace, 'nested'));
@@ -64,6 +68,15 @@ const model = createServer(async (req, res) => {
   }
   const steps = steering && taskId ? recovering ? ['relay_interactive_reconcile', 'relay_interactive_reconcile', 'relay_work_read'] : closing ? ['relay_cli', 'relay_work_read', 'relay_work_submit'] : powerBi ? ['relay_work_read'] : ['relay_work_read', 'read', 'relay_work_read'] :
     firstMessage && taskId ? ['relay_work_read', 'read', 'relay_work_read', 'relay_cli', 'relay_work_submit'] : ['relay_work_read', 'relay_work_submit'];
+  if (nativeContinuation && taskId && tools.length === 3 && !interruptedTasks.has(taskId)) {
+    interruptedTasks.add(taskId); requests++;
+    // Let the real OpenCode runner create its recovery control. Do not inject a
+    // synthetic message through the API or handcraft a successful native receipt.
+    res.setHeader('content-type', 'text/event-stream');
+    res.end(`data: ${JSON.stringify({ id: `interrupted-${requests}`, created: 1, model: 'fixture', object: 'chat.completion.chunk',
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'Fixture stream interrupted before scoped CLI progress.' }, finish_reason: null }] })}\n\n`);
+    return;
+  }
   const name = steps[tools.length];
   const tool = name && input.tools?.find(t => t.function?.name.endsWith(name) && (name !== 'read' || !t.function.name.includes('relay_')));
   assert.ok(!name || tool, `Missing actual native fixture tool: ${name}`);
@@ -104,7 +117,8 @@ try {
     plugins: [{ package: join(packageDirectory, 'packages/opencode-relay'), options: { workerDirectory: state } }], model: 'receiver-fixture/fixture', compaction: { auto: false },
     providers: { 'receiver-fixture': { package: '@ai-sdk/openai-compatible', settings: {
       baseURL: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'disposable-fixture',
-    }, models: { fixture: { name: 'Fixture', limit: { context: 8192, output: 256 } } } } },
+    }, models: { fixture: { name: 'Fixture', limit: { context: 8192, output: 256 } },
+      ...(modelSwitch ? { replacement: { name: 'Replacement fixture', limit: { context: 8192, output: 256 } } } : {}) } } },
   } });
   const firstSession = await runtime.client.session.create({ location: { directory: workspace }, title: 'First receiving chat' });
   const password = JSON.parse(readFileSync(join(root, 'runtime/auth.json'))).password;
@@ -150,11 +164,17 @@ try {
         await wait('first corrected native terminal', () => journal.work(sent.execution.id)?.state === 'native_finished');
         assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
         const firstTerminal = journal.work(sent.execution.id).observation.messageId;
+        if (modelSwitch) {
+          await runtime.client.session.switchModel({ sessionID: sessionId, model: { providerID: 'receiver-fixture', id: 'replacement' } });
+          await wait('model selection acknowledgement fence', () => journal.work(sent.execution.id)?.observation?.modelChange === 'human_acknowledgement_required');
+          assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
+        }
         if (legacyRecovery) {
-          const work = journal.work(sent.execution.id), { interactive, ...invocation } = work.invocation;
+          const work = journal.work(sent.execution.id), { interactive, interactiveModelSelection, initialModel, ...invocation } = work.invocation;
           const messages = (await runtime.client.message.list({ sessionID: sessionId, order: 'asc', limit: 100 })).data;
           journal.save({ ...work, interaction: undefined, invocation, state: 'conflict', observation: { state: 'conflict', reason: 'concurrent_native_input',
-            inputId: messages.find(m => m.type === 'user' && m.text === 'there is a per account cost too...').id, inputType: 'user' } });
+            inputId: modelSwitch ? messages.findLast(m => m.type === 'model-switched').id : messages.find(m => m.type === 'user' && m.text === 'there is a per account cost too...').id,
+            inputType: modelSwitch ? 'model-switched' : 'user' } });
           await runtime.client.session.prompt({ sessionID: sessionId, text: 'RECOVER_OWNERSHIP_FIXTURE: Preview and apply recovery of this existing assignment. Do not redispatch or replay it.', delivery: 'steer' });
           await runtime.client.session.wait({ sessionID: sessionId });
           await wait('explicit inspected legacy recovery', () => journal.work(sent.execution.id)?.interactiveOwnership === true && journal.work(sent.execution.id)?.state === 'native_finished');
@@ -163,7 +183,13 @@ try {
         await runtime.client.session.wait({ sessionID: sessionId });
         await wait('post-idle steering terminal', () => journal.work(sent.execution.id)?.observation.messageId !== firstTerminal && journal.work(sent.execution.id)?.state === 'native_finished');
         assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
-        assert.equal((await call(connection, 'POST', '/work/current', { sessionId })).blocked, false);
+        const current = await call(connection, 'POST', '/work/current', { sessionId });
+        assert.equal(current.blocked, false);
+        if (modelSwitch) {
+          assert.equal(current.interaction.modelSelections.length, 1);
+          assert.equal((await runtime.client.session.get({ sessionID: sessionId })).model.id, 'replacement');
+          assert.equal(journal.work(sent.execution.id).invocation.messageId, current.sourceMessageId);
+        }
         await runtime.client.session.prompt({ sessionID: sessionId, text: 'CLOSE_OLD_FIXTURE: Close the separate old fixture task, then submit the assigned task result.', delivery: 'steer' });
       }
       await wait('fresh never-prompted receiver task completion', async () => {
@@ -179,6 +205,14 @@ try {
       assert.match(prompts[0].text, /first prompt/);
       assert.ok(messages.some(message => message.type === 'synthetic' && message.metadata?.instruction?.paths?.includes(join(workspace, 'nested/AGENTS.md'))),
         'The actual native file tool must load nested AGENTS instructions during the owned execution');
+      if (nativeContinuation) {
+        assert.ok(interruptedTasks.has(task.id));
+        const index = messages.findIndex(message => message.type === 'synthetic' &&
+          message.text === 'The previous response was interrupted. Continue from where you left off without repeating completed content.');
+        assert.ok(index > 0, 'The real native runner must retain its incomplete-stream continuation');
+        assert.equal(messages[index].metadata, undefined); assert.equal(messages[index - 1].type, 'assistant');
+        assert.equal(messages[index - 1].finish, 'error'); assert.ok(messages[index - 1].error);
+      }
       assert.equal((await owner('GET', '/v1/executions')).items.filter(execution => execution.taskId === task.id).length, 1);
       const comments = (await owner('GET', `/v1/comments?taskId=${task.id}`)).items;
       if (steering) {
@@ -318,6 +352,8 @@ try {
     executionScopedCliCommentVerified: firstMessage && !steering, humanSteeringWithoutRedispatch: steering,
     postIdleSteeringTerminalVerified: steering, separateHumanTaskClosureVerified: steering,
     explicitHistoricalInputRecoveryVerified: legacyRecovery,
+    interactiveModelSelectionVerified: modelSwitch, explicitHistoricalModelRecoveryVerified: modelSwitch && legacyRecovery,
+    nativeStreamContinuationVerified: nativeContinuation,
     keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands,
     landingScreenCommands: keyboardCommands && landing, scopedHumanOperator: keyboardCommands && process.argv.includes('--scoped-operator'), state: root }, null, 2));
 } finally {

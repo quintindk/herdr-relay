@@ -73,6 +73,8 @@ assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).r
 const installerHandover = values['skip-audit'] ? null : await verifyInstallerHandover({ artifact, packageDirectory: installed });
 if (installerHandover) console.log(JSON.stringify({ installerHandover }, null, 2));
 const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [], installedInteractiveRecoveryVerifications = [];
+const installedNativeInputVerifications = [];
+const installedHeadlessScopeVerifications = [];
 for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']]) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
@@ -98,12 +100,35 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   installedAgentGrantVerifications.push({ runtime: grant.runtimeVersion, passed: grant.passed,
     grantIssuedByCoordinatorWithoutOwner: grant.grantIssuedByCoordinatorWithoutOwner, agentGrantRetryIdempotent: grant.agentGrantRetryIdempotent,
     revocationPausedSchedule: grant.revocationPausedSchedule, readinessHadNoExternalEffects: grant.readinessHadNoExternalEffects });
+  const scopeOutput = execFileSync(process.execPath, ['scripts/verify-headless-setup.mjs', '--shell', '--mcp-denied'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+      env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
+  process.stdout.write(scopeOutput);
+  const scope = JSON.parse(scopeOutput);
+  assert.equal(scope.runtimeVersion, version); assert.equal(scope.passed, true);
+  assert.equal(scope.headlessScopeInspectionVerified, true); assert.equal(scope.emptyNativeScopeWithShellVerified, true);
+  installedHeadlessScopeVerifications.push({ runtime: scope.runtimeVersion, passed: scope.passed,
+    headlessScopeInspectionVerified: scope.headlessScopeInspectionVerified, emptyNativeScopeWithShellVerified: scope.emptyNativeScopeWithShellVerified });
   const recoveryOutput = execFileSync(process.execPath, ['scripts/verify-interactive-recovery.mjs'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
   process.stdout.write(recoveryOutput);
   const recovery = JSON.parse(recoveryOutput);
   assert.equal(recovery.runtime, version); assert.equal(recovery.passed, true);
   installedInteractiveRecoveryVerifications.push(recovery);
+  for (const [script, flags, fields] of [
+    ['packages/opencode-relay/smoke-receivers.mjs', ['--model-switch'], ['interactiveModelSelectionVerified', 'firstTaskDeliveryExactlyOnce']],
+    ['packages/opencode-relay/smoke-receivers.mjs', ['--model-switch', '--legacy-recovery'], ['explicitHistoricalModelRecoveryVerified', 'firstTaskDeliveryExactlyOnce']],
+    ['packages/opencode-relay/smoke-receivers.mjs', ['--native-continuation'], ['nativeStreamContinuationVerified', 'executionScopedCliCommentVerified', 'firstTaskDeliveryExactlyOnce']],
+    ['scripts/verify-cli-bridge.mjs', ['--completion-steering'], ['ownedCompletionPreservedLatestHuman']],
+  ]) {
+    const nativeOutput = execFileSync(process.execPath, [script, ...flags], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+      env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
+    process.stdout.write(nativeOutput);
+    const native = JSON.parse(nativeOutput);
+    assert.equal(native.runtime, version); assert.equal(native.passed, true);
+    for (const field of fields) assert.equal(native[field], true, `Missing installed native input gate: ${field}`);
+    installedNativeInputVerifications.push({ runtime: native.runtime, passed: native.passed, ...Object.fromEntries(fields.map(field => [field, native[field]])) });
+  }
 }
 let herdrPanelVerification = null;
 if (!values['skip-audit']) {
@@ -320,7 +345,7 @@ const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['aud
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
   cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
-  installedInteractiveRecoveryVerifications, herdrPanelVerification, nativeBackendStarted: true,
+  installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
