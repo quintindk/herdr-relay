@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.2.6 — Unreleased
+## 0.2.6 — 09 November 2026
 
-Draft bug-fix batch. Additional fixes will be collected before publication.
+Bug fixes for native input provenance and headless cron preflight.
 
 - Keep native incomplete-stream and output-limit continuations in their existing
   owned turn. Correlate the fixed OpenCode control with its adjacent completed

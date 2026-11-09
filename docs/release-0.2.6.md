@@ -1,11 +1,10 @@
 # Herdr Relay 0.2.6
 
-**Unpublished draft bug-fix batch.** More fixes will be collected before the human
-authorises publication. A draft pull request or CI package build is not a release.
-Do not create/push the version tag, publish assets or upgrade live installations
-while this batch remains in draft.
+Bug-fix release for native input provenance and headless cron preflight.
+Release date: **9 November 2026**. Installation and live service upgrades remain
+separate operations from publication.
 
-## Current fixes
+## Fixes
 
 - **Native stream continuation:** OpenCode's fixed incomplete-stream and output-limit
   controls retain the existing invocation, run and CLI source. The observer checks
@@ -51,19 +50,21 @@ Scheduled/headless jobs and standing monitors do not acquire interactive model
 acknowledgement. Existing model/authentication pins, permissions, task ownership,
 native history and uncertain-effect evidence remain intact.
 
-## Compatibility and release hold
+## Compatibility and verification
 
 Protocol remains **relay/0.2**, backend schema **2**, node journal schema **1**,
 interactive provisioning protocol **1** and installer protocol **1**. The minimum
 upgrade source remains **0.2.1-rc4**. No database migration, reset, credential copy
 or re-enrolment is required.
 
-The initial fixes passed local root/plugin regressions and isolated native checks
-on all three supported OpenCode hosts. Fixture models are deterministic and do
-not certify business execution or live provider authentication. Final release
-certification still requires the complete [release gates](releasing.md), including
-clean-source provenance, production installation/audit, installed-host checks,
-Herdr keyboard verification and compatible upgrade/rollback evidence.
+The fixes passed 619 root tests, 130 plugin tests and installed-package checks on
+all three supported OpenCode hosts. The production audit reported zero
+vulnerabilities. Isolated checks covered actual stream recovery, shell-only cron
+execution and result notifications, Herdr keyboard controls and compatible
+active-work upgrade/rollback. Fixture models do not certify business execution
+or live provider authentication.
 
-Keep the pull request in draft and append further reviewed fixes to this batch.
-Publication, merging and live deployment require their own explicit human decisions.
+The tag workflow repeats the [release gates](releasing.md) and publishes only
+after exact-tag verification. The supplied verification report binds the assets
+to their clean source commit, supported hosts and fresh production audit.
+Publication does not upgrade a live installation or replay a failed job.

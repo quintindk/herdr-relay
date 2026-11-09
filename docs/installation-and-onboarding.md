@@ -2,9 +2,9 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target the published stable release **0.2.5** on
+Examples target stable version **0.2.6** on
 [GitHub releases](https://github.com/quintindk/herdr-relay/releases).
-**0.2.6 is an unpublished draft**, not an installation target yet.
+Install only after its published assets and verification report are available.
 Already-published older installers have the bootstrap boundary described below.
 
 ## Requirements
@@ -28,8 +28,8 @@ and a successful zero-vulnerability production audit.
 ```sh
 umask 077
 sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.5.tgz
-herdr-relay release install --version 0.2.5
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.6.tgz
+herdr-relay release install --version 0.2.6
 herdr-relay --version
 ```
 
@@ -56,9 +56,9 @@ sha256sum -c SHA256SUMS
 mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
 BOOTSTRAP=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/relay-bootstrap-XXXXXX")
 npm install --prefix "$BOOTSTRAP" --omit=dev --ignore-scripts --no-audit --no-fund \
-  /absolute/download/herdr-relay-0.2.5.tgz
+  /absolute/download/herdr-relay-0.2.6.tgz
 npm audit --prefix "$BOOTSTRAP" --omit=dev
-node "$BOOTSTRAP/node_modules/herdr-relay/src/cli.mjs" release install --version 0.2.5
+node "$BOOTSTRAP/node_modules/herdr-relay/src/cli.mjs" release install --version 0.2.6
 ```
 
 Stop if a checksum, install or audit command fails. Use a user-owned npm

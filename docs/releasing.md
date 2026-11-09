@@ -38,7 +38,7 @@ HERDR_BINARY=/absolute/herdr-0.9.5 \
 node scripts/verify-package.mjs --release --output /private/artifacts/0.2.6
 ```
 
-Assets for the draft version are `herdr-relay-0.2.6.tgz`, `SHA256SUMS` and
+Assets for 0.2.6 are `herdr-relay-0.2.6.tgz`, `SHA256SUMS` and
 `herdr-relay-0.2.6.tgz.verification.json`. The report records the source commit,
 cleanliness, timestamp, host checks, installer handover evidence and audit result.
 Different bytes at an existing artifact path or inconsistent checksums are refused.
@@ -56,9 +56,10 @@ The publication gate checks this evidence rather than accepting a missing field.
 
 ## Push, CI, tag, publish
 
-The 0.2.6 batch remains an unpublished draft. Push its feature branch and keep its
-pull request in draft while collecting fixes. Branch/PR CI may build verification
-artifacts but does not authorise a tag, publication, merge or live upgrade.
+While collecting fixes, keep the feature pull request in draft. Branch/PR CI may
+build verification artifacts but does not authorise a tag, publication, merge or
+live upgrade. Finalise release notes, the changelog and installation examples
+before tagging an explicitly authorised release.
 
 On an explicit publication request:
 
