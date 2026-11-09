@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Exclude definitively refused attachment bindings from node loading without
+  deleting their command, error or identity history. Preserve confirmed historical
+  bindings and uncertain attachment reconciliation.
+- Add previewed, repeat-safe `node recover attachment` retirement for an
+  unreferenced refused binding. Verify backend ownership, retain an integrity-checked
+  backup and audit, and leave the current receiver unchanged.
+- Isolate terminal attachment and landing-session retries by node configuration
+  and workspace. Migrate legacy intent only in its original workspace, preserve
+  immutable keys, show the saved target, and inspect scoped outboxes during upgrades.
+
 ## 0.2.6 — 09 November 2026
 
 Bug fixes for native input provenance and headless cron preflight.

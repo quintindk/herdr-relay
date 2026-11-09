@@ -3,6 +3,7 @@ import test from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { assertNoPendingRelayOutboxes } from '../src/upgrade-native-decisions.mjs';
+import { enrolmentOutboxName } from '../packages/opencode-relay/enrolment-outbox.mjs';
 
 test('plugin-ID upgrade preserves empty outboxes across channels and refuses pending or unknown state', t => {
   const root = mkdtempSync('/tmp/opencode/relay-outbox-test-');
@@ -21,4 +22,17 @@ test('plugin-ID upgrade preserves empty outboxes across channels and refuses pen
   }
   writeFileSync(file, '{broken');
   assert.throws(() => assertNoPendingRelayOutboxes(root), { code: 'upgrade_plugin_state_unavailable' });
+});
+
+test('upgrade inspection includes workspace-scoped outboxes and never ignores a saved retry', t => {
+  const root = mkdtempSync('/tmp/opencode/relay-scoped-outbox-test-');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const directory = join(root, 'latest/tui'); mkdirSync(directory, { recursive: true });
+  const file = join(directory, `plugin.herdr.relay.tui.${enrolmentOutboxName('/private/node.json', '/workspace')}.json`);
+  writeFileSync(file, '{"pending":null,"sessionCreation":null}');
+  assert.deepEqual(assertNoPendingRelayOutboxes(root), { outboxesChecked: 1 });
+  const pending = JSON.stringify({ pending: { key: 'original', args: ['exact-original-command'] }, sessionCreation: null });
+  writeFileSync(file, pending);
+  assert.throws(() => assertNoPendingRelayOutboxes(root), { code: 'upgrade_pending_decisions' });
+  assert.equal(readFileSync(file, 'utf8'), pending);
 });

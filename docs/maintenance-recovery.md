@@ -80,6 +80,39 @@ Revision conflicts require inspection, not an automatic retry or a changed paylo
 under the original key. A proven refusal is not an uncertain external effect; an
 unknown outcome is not quietly downgraded into a refusal.
 
+## Refused attachment binding recovery
+
+A refused attachment can retain a prepared binding without ever designating its
+conversation. Older nodes attempted to load that retained evidence as a receiver,
+so a `conversation_alias` refusal could block the refresh of unrelated agents.
+
+```sh
+herdr-relay node recover attachment ORIGINAL_ATTACHMENT_KEY \
+  --reason 'Retire the refused binding blocking receiver refresh' --key attachment-recovery-v1
+```
+
+Review the preview, then repeat the same command with `--preview-hash HASH --apply`.
+The local operator CLI checks the exact refused command and binding, confirms the
+backend designates a different binding, rechecks ownership after an integrity-checked
+backup, and records a separate immutable retirement receipt. The original attachment
+remains `refused`. Its binding, command and error are not deleted or rewritten, and
+the current agent and receiving chat remain unchanged.
+
+Confirmed, uncertain, designated, explicitly configured, headless, work-pinned or
+notice-pinned bindings are ineligible. The running node honours the retirement
+marker on its next binding refresh. No OpenCode restart, prompt replay, native
+settlement or process termination is involved. Repeat application returns the
+original receipt.
+
+A later, separately confirmed attachment cannot reuse the retired binding ID,
+even if it targets the same conversation and generation. Its new operation key
+pins a distinct binding while the refused attempt and retirement remain intact.
+
+Current node loading excludes validated, unreferenced refused bindings directly,
+so ordinary attachment refusals do not require manual recovery. Upgrade checks
+continue to inspect both legacy and workspace-scoped terminal outboxes. Pending
+keyboard decisions must still be resolved rather than discarded to force reload.
+
 ## Headless payload validation
 
 Tool, node and backend share operation-specific headless task payload schemas.

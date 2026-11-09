@@ -13,7 +13,7 @@ export function assertNoPendingRelayOutboxes(stateDirectory) {
   for (const channel of readdirSync(stateDirectory, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
     const directory = join(stateDirectory, channel.name, 'tui');
     if (!existsSync(directory)) continue;
-    for (const name of readdirSync(directory).filter(name => /^plugin\.herdr\.relay\..*\.(?:enrolment|human)-outbox\.json$/.test(name))) {
+    for (const name of readdirSync(directory).filter(name => /^plugin\.herdr\.relay\..*\.(?:enrolment|human)-outbox(?:-[^.]+)?\.json$/.test(name))) {
       let state;
       try { state = readPrivateJson(join(directory, name)); }
       catch { throw new RelayError('upgrade_plugin_state_unavailable', 'Cannot inspect a durable Relay outbox. No pending command was discarded', 409); }

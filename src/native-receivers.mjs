@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { digest, requireValue } from './protocol.mjs';
+import { digest, now, requireValue } from './protocol.mjs';
 
 // These records share the node journal's transaction boundary with admission.
 // An attachment fences new admissions before its backend mutation is attempted.
@@ -30,6 +30,24 @@ export class NativeReceivers {
     });
   }
   receiver(agentId) { return this.get(`receiver:${agentId}`); }
+  loadableBindings() {
+    const operations = new Map();
+    for (const operation of this.list('attachment')) {
+      const id = operation.binding?.id;
+      if (!operations.has(id)) operations.set(id, []);
+      operations.get(id).push(operation);
+    }
+    return this.list('native-binding').filter(binding => {
+      const linked = operations.get(binding.id);
+      if (!linked?.length || linked.some(operation => operation.state !== 'refused')) return true;
+      // A rejected preparation is retained evidence, not a historical receiver.
+      // Validate its identity and absence of pins before excluding it from loading.
+      const matching = linked.find(operation => digest(operation.binding) === digest(binding));
+      requireValue(matching, 'attachment_recovery_ineligible', 'Retained binding has no matching refused attachment evidence');
+      this.refusedAttachment(matching.key);
+      return false;
+    });
+  }
   prepare({ agentId, identity, url, authFile, expectedGeneration, key, relocation }) {
     return this.journal.transaction(() => {
       const enrolment = this.get(`enrolment:${agentId}`);
@@ -55,7 +73,11 @@ export class NativeReceivers {
         !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(work.execution.state)),
         'native_session_reserved', 'This historical chat still has pinned work. Resume it without claiming a new binding', 409);
       const generation = expectedGeneration + 1;
-      const binding = { id: `binding_${digest([agentId, generation, identity.sessionId])}`, agentId,
+      const originalId = `binding_${digest([agentId, generation, identity.sessionId])}`;
+      // Recovery retires an attempt, not permission to confirm this chat later.
+      // A new human-confirmed key must never reuse a retired binding identity.
+      const id = this.get(`retired-binding:${originalId}`) ? `binding_${digest([agentId, generation, identity.sessionId, key])}` : originalId;
+      const binding = { id, agentId,
         name: enrolment.name, mode: 'interactive', harness: 'opencode-v2', reserved: true,
         workerTransport: enrolment.transport, url, authFile, identity, receiverGeneration: generation };
       const operation = { key, digest: digest(request), expectedGeneration, state: 'pending', binding, previousBindingId: current?.bindingId ?? null,
@@ -92,6 +114,56 @@ export class NativeReceivers {
       this.put(`receiver:${agent.id}`, unchanged ? previous ?? { generation: 0, bindingId: null, state: 'detached' } :
         { generation: agent.bindingRevision, bindingId: agent.bindingId ?? null, state: 'blocked', error: 'backend_receiver_changed' });
       return this.put(`attachment:${operation.key}`, { ...operation, state: 'refused', error: error.code });
+    });
+  }
+  refusedAttachment(key) {
+    const operation = this.get(`attachment:${key}`);
+    requireValue(operation, 'not_found', 'Unknown local attachment');
+    const binding = operation.binding;
+    requireValue(operation.state === 'refused' && typeof operation.error === 'string' && operation.error && !operation.receipt &&
+      binding?.receiverGeneration === operation.expectedGeneration + 1 && operation.key === key,
+    'attachment_recovery_ineligible', 'Only a definitively refused attachment without a receipt may be retired');
+    const request = { agentId: binding.agentId, identity: binding.identity, url: binding.url, authFile: binding.authFile,
+      expectedGeneration: operation.expectedGeneration, ...(operation.relocation ? { relocation: operation.relocation } : {}) };
+    const command = { key: `attach:${key}`, action: operation.relocation ? 'agent.relocate' : 'agent.attach', payload: {
+      id: binding.agentId, expectedBindingRevision: operation.expectedGeneration, conversationId: binding.identity.sessionId,
+      directory: binding.identity.directory, bindingId: binding.id, ...(operation.relocation ?? {}) } };
+    requireValue(operation.digest === digest(request) && operation.command && digest(operation.command) === digest(command) &&
+      digest(this.get(`native-binding:${binding.id}`)) === digest(binding),
+    'attachment_recovery_ineligible', 'Refused attachment identity, command and retained binding must match');
+    const linked = this.list('attachment').filter(item => item.binding?.id === binding.id);
+    requireValue(linked.every(item => item.state === 'refused' && !item.receipt) &&
+      !this.list('receiver').some(receiver => receiver.bindingId === binding.id) &&
+      !this.list('headless-op').some(item => item.binding?.id === binding.id) &&
+      !this.journal.db.prepare("SELECT 1 FROM work WHERE json_extract(data,'$.bindingId')=? OR json_extract(data,'$.execution.bindingId')=? LIMIT 1").get(binding.id, binding.id) &&
+      !this.journal.db.prepare("SELECT 1 FROM notices WHERE json_extract(data,'$.bindingId')=? LIMIT 1").get(binding.id),
+    'attachment_recovery_ineligible', 'A designated, confirmed, uncertain or work-pinned binding cannot be retired');
+    return { operation, proof: { kind: 'definitive_attachment_refusal', attachmentKey: key, bindingId: binding.id,
+      agentId: binding.agentId, error: operation.error, bindingDigest: digest(binding), linkedAttachmentsDigest: digest(linked),
+      receiverDigest: digest(this.receiver(binding.agentId) ?? null), workPinned: false, noticePinned: false } };
+  }
+  retireRefusedAttachment(id, { key, reason, expectedDigest, proof, backup, actor = 'local_operator' }) {
+    return this.journal.transaction(() => {
+      const request = { operation: 'attachment.retire_refused', id, key, reason, expectedDigest }, auditKey = `recovery:${digest(key)}`;
+      const previous = this.get(auditKey);
+      if (previous) { requireValue(previous.requestHash === digest(request), 'operation_conflict', 'Recovery key changed'); return previous.receipt; }
+      const { operation, proof: localProof } = this.refusedAttachment(id);
+      requireValue(digest(operation) === expectedDigest && proof?.nodeId === this.journal.nodeId &&
+        Object.entries(localProof).every(([field, value]) => proof[field] === value) &&
+        Number.isSafeInteger(proof.backendBindingRevision) && proof.backendBindingRevision >= 0 &&
+        (proof.backendBindingId === null || typeof proof.backendBindingId === 'string') && proof.backendBindingId !== operation.binding.id,
+      'stale_recovery_preview', 'Refused attachment or inspected backend ownership changed; inspect it again');
+      requireValue(typeof reason === 'string' && reason.trim() && reason.length <= 2000 && !this.get(`retired-binding:${operation.binding.id}`),
+        'attachment_recovery_ineligible', 'Explicit retirement reason and an unretired refused binding required');
+      const disposition = { state: 'retired', kind: 'refused_attachment', key, attachmentKey: id, reason, actor, at: now(),
+        originalDigest: expectedDigest, proof, backup, backendChanged: false, receiverChanged: false,
+        nativeSettlementClaimed: false, nativeProcessTerminationClaimed: false };
+      const receipt = { state: 'refused_binding_retired', kind: 'attachment', id, key, bindingId: operation.binding.id,
+        agentId: operation.binding.agentId, originalState: operation.state, backendChanged: false, receiverChanged: false,
+        nativeSettlementClaimed: false, nativeProcessTerminationClaimed: false, successfulCompletionClaimed: false, backup };
+      this.put(`retired-binding:${operation.binding.id}`, disposition);
+      this.put(auditKey, { requestHash: digest(request), before: operation, disposition, receipt });
+      return receipt;
     });
   }
   resolve(agentId, pinned) {
