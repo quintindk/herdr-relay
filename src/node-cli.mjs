@@ -180,7 +180,7 @@ try {
       if (!entry.receiverGeneration) bindings.set(entry.agentId, configured);
     };
     const refreshReceivers = async () => {
-      for (const entry of receivers.list('native-binding')) if (!historicalBindings.has(entry.id)) await loadBinding(entry);
+      for (const entry of receivers.loadableBindings()) if (!historicalBindings.has(entry.id)) await loadBinding(entry);
       for (const enrolment of receivers.list('enrolment')) {
         const entry = receivers.resolve(enrolment.id);
         const binding = entry && historicalBindings.get(entry.id);

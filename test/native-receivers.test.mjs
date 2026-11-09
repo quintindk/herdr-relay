@@ -10,6 +10,7 @@ import { tickAutomation } from '../src/node-automation.mjs';
 import { tickNode } from '../src/node-execution.mjs';
 import { startNodeService } from '../src/node-service.mjs';
 import { call } from '../src/client.mjs';
+import { digest } from '../src/protocol.mjs';
 
 function fixture(t, disk = false) {
   const root = mkdtempSync('/tmp/opencode/receivers-');
@@ -194,4 +195,87 @@ test('replacement chats manage the same persistent cron with scoped credentials,
   assert.equal(current.observation.inputId, 'foreign');
   await assert.rejects(call(connection(1), 'POST', '/work/submit', { executionId: 'execution', runId: 'run', key: 'blocked',
     payload: { candidate: 'not-authorised', summary: 'Not accepted' } }), { code: 'execution_inactive' });
+});
+
+test('loading excludes a refused conversation alias while preserving accepted and historical receiver bindings', t => {
+  const f = fixture(t, true), first = f.attach('ses_first', 0), second = f.attach('ses_second', 1);
+  const peer = f.receivers.enrol({ id: 'peer', name: 'Peer', directory: f.root, transport: 'tools' });
+  f.command(f.owner, 'peer', 'agent.enrol', { id: peer.id, nodeId: 'node', name: peer.name, directory: f.root });
+  const prepare = (sessionId, key) => f.receivers.prepare({ agentId: peer.id, expectedGeneration: 0, key,
+    identity: { sessionId, projectId: 'project', directory: f.root, createdAt: 1 }, url: first.url, authFile: first.authFile });
+  const refused = prepare('ses_second', 'alias');
+  assert.throws(() => f.command(f.owner, refused.command.key, refused.command.action, refused.command.payload), { code: 'conversation_alias' });
+  f.receivers.reject(refused, { code: 'conversation_alias' }, f.store.get('agent', peer.id));
+  const accepted = prepare('ses_peer', 'peer-attachment');
+  f.receivers.confirm(accepted, f.command(f.owner, accepted.command.key, accepted.command.action, accepted.command.payload));
+  const before = f.receivers.get('attachment:alias');
+  assert.deepEqual(new Set(f.receivers.loadableBindings().map(binding => binding.id)), new Set([first.id, second.id, accepted.binding.id]));
+  assert.deepEqual(f.receivers.get('attachment:alias'), before);
+  assert.deepEqual(f.receivers.get(`native-binding:${refused.binding.id}`), refused.binding);
+  f.journal.close(); f.journal = new NodeJournal(f.filename, { nodeId: 'node', instanceId: f.store.instance });
+  f.receivers = new NativeReceivers(f.journal);
+  assert.deepEqual(new Set(f.receivers.loadableBindings().map(binding => binding.id)), new Set([first.id, second.id, accepted.binding.id]));
+});
+
+test('an unconfirmed binding stays loadable for original-key reconciliation and cannot become a current receiver', t => {
+  const f = fixture(t), first = f.attach('ses_old', 0);
+  const pending = f.receivers.prepare({ agentId: f.agentId, expectedGeneration: 1, key: 'lost-reply',
+    identity: { ...first.identity, sessionId: 'ses_new' }, url: first.url, authFile: first.authFile });
+  assert.deepEqual(new Set(f.receivers.loadableBindings().map(binding => binding.id)), new Set([first.id, pending.binding.id]));
+  assert.equal(f.receivers.resolve(f.agentId), null);
+  assert.equal(f.receivers.get('attachment:lost-reply').state, 'pending');
+});
+
+test('a binding later confirmed under another key remains loadable despite its older refused attempt', t => {
+  const f = fixture(t), first = f.attach('ses_occupied', 0);
+  const peer = f.receivers.enrol({ id: 'peer', name: 'Peer', directory: f.root, transport: 'tools' });
+  f.command(f.owner, 'peer', 'agent.enrol', { id: peer.id, nodeId: 'node', name: peer.name, directory: f.root });
+  const prepare = key => f.receivers.prepare({ agentId: peer.id, expectedGeneration: 0, key,
+    identity: first.identity, url: first.url, authFile: first.authFile });
+  const refused = prepare('alias');
+  assert.throws(() => f.command(f.owner, refused.command.key, refused.command.action, refused.command.payload), { code: 'conversation_alias' });
+  f.receivers.reject(refused, { code: 'conversation_alias' }, f.store.get('agent', peer.id));
+  f.attach('ses_replacement', 1);
+  const accepted = prepare('confirmed-later');
+  assert.equal(accepted.binding.id, refused.binding.id);
+  f.receivers.confirm(accepted, f.command(f.owner, accepted.command.key, accepted.command.action, accepted.command.payload));
+  assert.ok(f.receivers.loadableBindings().some(binding => binding.id === accepted.binding.id));
+  assert.equal(f.receivers.get('attachment:alias').state, 'refused');
+});
+
+test('multiple refused attempts with changed native endpoints retain their history without blocking loading', t => {
+  const f = fixture(t), first = f.attach('ses_occupied', 0);
+  const peer = f.receivers.enrol({ id: 'peer', name: 'Peer', directory: f.root, transport: 'tools' });
+  f.command(f.owner, 'peer', 'agent.enrol', { id: peer.id, nodeId: 'node', name: peer.name, directory: f.root });
+  for (const key of ['first-refusal', 'second-refusal']) {
+    const operation = f.receivers.prepare({ agentId: peer.id, expectedGeneration: 0, key, identity: first.identity,
+      url: key === 'first-refusal' ? first.url : 'http://127.0.0.1:4097', authFile: join(f.root, `${key}.json`) });
+    assert.throws(() => f.command(f.owner, operation.command.key, operation.command.action, operation.command.payload), { code: 'conversation_alias' });
+    f.receivers.reject(operation, { code: 'conversation_alias' }, f.store.get('agent', peer.id));
+  }
+  assert.deepEqual(f.receivers.loadableBindings().map(binding => binding.id), [first.id]);
+  assert.equal(f.receivers.get('attachment:first-refusal').state, 'refused');
+  assert.equal(f.receivers.get('attachment:second-refusal').state, 'refused');
+});
+
+test('a new confirmed attachment after retirement cannot reuse the refused binding identity', t => {
+  const f = fixture(t), first = f.attach('ses_occupied', 0);
+  const peer = f.receivers.enrol({ id: 'peer', name: 'Peer', directory: f.root, transport: 'tools' });
+  f.command(f.owner, 'peer', 'agent.enrol', { id: peer.id, nodeId: 'node', name: peer.name, directory: f.root });
+  const prepare = key => f.receivers.prepare({ agentId: peer.id, expectedGeneration: 0, key,
+    identity: first.identity, url: first.url, authFile: first.authFile });
+  const refused = prepare('refused');
+  assert.throws(() => f.command(f.owner, refused.command.key, refused.command.action, refused.command.payload), { code: 'conversation_alias' });
+  f.receivers.reject(refused, { code: 'conversation_alias' }, f.store.get('agent', peer.id));
+  const { operation, proof } = f.receivers.refusedAttachment(refused.key);
+  f.receivers.retireRefusedAttachment(refused.key, { key: 'retire', reason: 'Human requested recovery', expectedDigest: digest(operation),
+    proof: { ...proof, nodeId: 'node', backendBindingId: null, backendBindingRevision: 0 }, backup: 'fixture-backup' });
+  f.attach('ses_replacement', 1);
+  const accepted = prepare('new-confirmed-key');
+  assert.notEqual(accepted.binding.id, refused.binding.id);
+  assert.deepEqual(prepare('new-confirmed-key'), accepted);
+  f.receivers.confirm(accepted, f.command(f.owner, accepted.command.key, accepted.command.action, accepted.command.payload));
+  assert.ok(f.receivers.loadableBindings().some(binding => binding.id === accepted.binding.id));
+  assert.equal(f.receivers.get(`retired-binding:${refused.binding.id}`).state, 'retired');
+  assert.equal(f.receivers.get('attachment:refused').state, 'refused');
 });

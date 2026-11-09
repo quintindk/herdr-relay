@@ -8,6 +8,10 @@ stream/model provenance and headless cron preflight. Install only published,
 verified release assets. Existing installations must be on **0.2.1-rc4 or later**
 to upgrade. See the [0.2.6 release notes](docs/release-0.2.6.md).
 
+**0.2.7 is in draft preparation**, adding bounded peer collaboration, clearer
+agent instructions and attachment recovery. See the [draft notes](docs/release-0.2.7.md).
+It is not published and does not change the stable installation above.
+
 ## What it does
 
 - Human-owned tasks with stable references, comments, dependencies and source links.
@@ -41,6 +45,7 @@ for managed skills and local Herdr panel setup.
 - **New installation:** [Installation and onboarding](docs/installation-and-onboarding.md).
 - **Already on RC4:** [Upgrade without re-enrolling](docs/service-upgrades.md).
 - **Daily use:** `herdr-relay tui` and [terminal controls](docs/task-board.md).
+- **Two-agent work:** [Bounded collaboration](docs/collaboration.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
 - **Release details:** [0.2.6 release notes](docs/release-0.2.6.md) and
@@ -65,6 +70,7 @@ Published versions and their assets are immutable.
 | Destination-local headless configuration | [Headless provisioning](docs/native-headless-agents.md) |
 | Scheduled result visibility | [Run result notifications](docs/run-result-notifications.md) |
 | Native CLI access from an agent | [CLI bridge](docs/node-cli-bridge.md) |
+| Coordinator/peer work, budgets and continuation | [Collaboration](docs/collaboration.md) |
 | Recovery without manufactured completion | [Maintenance and recovery](docs/maintenance-recovery.md) |
 | Managed agent instructions | [Skill installation](docs/skill-installation.md) |
 | OpenCode plugin implementation | [Plugin package](packages/opencode-relay/README.md) |

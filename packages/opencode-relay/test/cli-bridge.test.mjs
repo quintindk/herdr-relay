@@ -31,6 +31,22 @@ test('interactive CLI bridge needs a human request, not an active Relay executio
   assert.equal(exact.calls[0].operatorContextFile, '/node/operator.json');
 });
 
+test('a current human may explicitly select worker context for an ordinary read without execution provenance', async () => {
+  let environment;
+  const result = await runRelayCli({ args: ['native', 'agent', 'inspect', 'peer', '--context', '{worker}'], directory: '/workspace',
+    operatorContextFile: '/node/operator.json', workerContextFile: '/node/worker.json', sessionId: 'session' }, { run: async (_command, _args, options) => {
+    environment = options.env; return { stdout: '{}' };
+  } });
+  assert.equal(environment.RELAY_CLI_READ_ONLY, '1'); assert.equal(environment.RELAY_CLI_EXECUTION_ID, '');
+  assert.equal(result.authority, 'enrolled_read_only'); assert.equal(result.context, 'worker'); assert.equal(result.operatorContextUsed, false);
+  let assigned;
+  await runRelayCli({ args: ['native', 'task', 'inspect', 'task', '--context', '{worker}'], directory: '/workspace',
+    workerContextFile: '/node/worker.json', executionSource: { executionId: 'execution', runId: 'run', id: 'source' } }, { run: async (_command, _args, options) => {
+    assigned = options.env; return { stdout: '{}' };
+  } });
+  assert.equal(assigned.RELAY_CLI_READ_ONLY, ''); assert.equal(assigned.RELAY_CLI_EXECUTION_ID, 'execution');
+});
+
 test('instruction loads and exact shell completions preserve human CLI provenance without granting authority to notifications', async () => {
   const f = fixture();
   f.messages.splice(1, 0, { id: 'instructions', type: 'synthetic', metadata: { instruction: { paths: ['/workspace/AGENTS.md'] } } });

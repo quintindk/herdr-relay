@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { autoAttachmentCandidate, registerEnrolmentCommands } from '../enrolment-commands.mjs';
+import { enrolmentOutboxName } from '../enrolment-outbox.mjs';
 
 function fixture(t) {
   const f = { session: 'ses_current', runtime: 'one', commands: [], calls: [], events: new Map(), toasts: [], records: [],
     createdSessions: new Map(), creates: [], navigations: [], model: { providerID: 'fixture', modelID: 'selected', variant: 'high' },
-    sessionDirectory: '/workspace', outbox: { pending: null }, enrolments: [{ id: 'wright', name: 'Wright', directory: '/workspace', autoAttach: true,
+    sessionDirectory: '/workspace', outbox: { pending: null, sessionCreation: null }, legacyOutbox: { pending: null, sessionCreation: null },
+    enrolments: [{ id: 'wright', name: 'Wright', directory: '/workspace', autoAttach: true,
       installedSchedules: 2, obligations: [], receiver: { state: 'active', conversationId: 'ses_old', generation: 1 } }] };
   f.confirm = async () => true;
+  f.stores = new Map([['enrolment-outbox', f.legacyOutbox], [enrolmentOutboxName('/private/node.json', '/workspace'), f.outbox]]);
   f.renames = [];
   f.renameWorkspace = async (_ctx, receipt, options) => { assert.equal(options.current(), true); f.renames.push(receipt); return { state: 'renamed' }; };
   f.runCli = async args => {
@@ -33,11 +36,14 @@ function fixture(t) {
     client: { rpc: () => ({ inspect: async () => ({ generation: f.runtime }) }),
       session: { get: async ({ sessionID }) => {
         if (f.createdSessions.has(sessionID)) return f.createdSessions.get(sessionID);
-        if (sessionID === f.outbox.sessionCreation?.id) throw Object.assign(Error('Session not found'), { status: 404 });
+        if ([...f.stores.values()].some(outbox => sessionID === outbox.sessionCreation?.id)) throw Object.assign(Error('Session not found'), { status: 404 });
         return { id: sessionID, location: { directory: f.sessionDirectory }, ...(f.parentID ? { parentID: f.parentID } : {}) };
       }, create: input => f.createSession(input) } },
     data: { on: (name, callback) => { f.events.set(name, callback); return () => f.events.delete(name); } },
-    storage: { store: () => [f.outbox, async update => update(f.outbox)] },
+    storage: { store: (name, options) => {
+      if (!f.stores.has(name)) f.stores.set(name, structuredClone(options.initial));
+      const state = f.stores.get(name); return [state, async update => update(state)];
+    } },
     ui: { model: { current: () => f.model }, router: { navigate: destination => {
       f.navigations.push(destination); f.session = destination.sessionID; f.track(f.session);
     } }, toast: { show: value => f.toasts.push(value) }, dialog: {
@@ -296,4 +302,65 @@ test('Home reconciles an already confirmed attachment without creating a new cha
   assert.equal(f.creates.length, 0);
   assert.deepEqual(f.calls.filter(args => args[1] === 'attach').at(-1), pending.args);
   assert.equal(f.outbox.pending, null);
+});
+
+test('a legacy retry in another workspace does not intercept or modify the current human attachment', async t => {
+  const f = fixture(t);
+  const original = { key: 'blender', args: ['agent', 'attach', '--config', '/private/node.json', '--session', 'ses_blender',
+    '--directory', '/blender', '--key', 'blender', '--agent', 'blender-agent', '--generation', '1'] };
+  f.legacyOutbox.pending = structuredClone(original);
+  let confirmation;
+  f.confirm = async options => { confirmation = options; return true; };
+  await f.run('relay-attach');
+  assert.equal(confirmation.title, 'Replace receiving conversation');
+  assert.deepEqual(f.legacyOutbox.pending, original); assert.equal(f.outbox.pending, null);
+  assert.equal(f.calls.filter(args => args[1] === 'attach').length, 1);
+  assert.equal(f.calls.find(args => args[1] === 'attach').includes('ses_blender'), false);
+});
+
+test('legacy reconciliation migrates only its own workspace and previews the original receiving chat', async t => {
+  const f = fixture(t); f.failure = true; await f.run('relay-attach');
+  const pending = structuredClone(f.outbox.pending);
+  f.legacyOutbox.pending = structuredClone(pending); f.outbox.pending = null;
+  f.failure = false; f.session = 'ses_another';
+  let preview;
+  f.confirm = async options => { preview = options; return true; };
+  await f.run('relay-attach');
+  assert.equal(preview.title, 'Reconcile confirmed Relay attachment');
+  assert.match(preview.message, /Workspace: \/workspace/); assert.match(preview.message, /Original receiving chat: ses_current/);
+  assert.deepEqual(f.calls.filter(args => args[1] === 'attach').at(-1), pending.args);
+  assert.equal(f.legacyOutbox.pending, null); assert.equal(f.outbox.pending, null);
+});
+
+test('a saved node-readiness failure remains in its workspace while another workspace can attach', async t => {
+  const f = fixture(t), run = f.runCli;
+  f.runCli = args => {
+    if (args[0] === 'node' && f.sessionDirectory === '/workspace') throw Object.assign(Error('Saved, but node not ready'), { code: 'node_not_ready' });
+    return run(args);
+  };
+  await f.run('relay-attach'); const pending = structuredClone(f.outbox.pending);
+  assert.ok(pending);
+  f.sessionDirectory = '/other-workspace'; f.enrolments[0].directory = '/other-workspace';
+  await f.run('relay-attach');
+  assert.deepEqual(f.outbox.pending, pending);
+  assert.equal(f.stores.get(enrolmentOutboxName('/private/node.json', '/other-workspace')).pending, null);
+  assert.equal(f.calls.filter(args => args[1] === 'attach').at(-1).includes('/other-workspace'), true);
+});
+
+test('a refused publication cannot clear a different confirmed operation in the same workspace', async t => {
+  const f = fixture(t), original = f.runCli;
+  const other = { key: 'other', args: ['agent', 'attach', '--config', '/private/node.json', '--session', 'ses_other',
+    '--directory', '/workspace', '--key', 'other', '--agent', 'wright', '--generation', '1'] };
+  f.runCli = async args => {
+    if (args[1] === 'attach') { f.outbox.pending = structuredClone(other); throw Object.assign(Error('Definitive refusal'), { code: 'attachment_refused' }); }
+    return original(args);
+  };
+  await f.run('relay-attach'); assert.deepEqual(f.outbox.pending, other);
+});
+
+test('a competing confirmed operation cannot be overwritten after this TUI confirmation', async t => {
+  const f = fixture(t), other = { key: 'other', args: ['saved-other'] };
+  f.confirm = async () => { f.outbox.pending = structuredClone(other); return true; };
+  await f.run('relay-attach');
+  assert.deepEqual(f.outbox.pending, other); assert.equal(f.calls.filter(args => args[1] === 'attach').length, 0);
 });

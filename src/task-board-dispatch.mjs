@@ -20,6 +20,8 @@ export function assignmentRows(agents, columns) {
 
 export function NativeDispatchModal({ modal, setModal, submit, prepareHuman, width, height }) {
   const agent = modal.agents[modal.index], human = agent?.kind === 'human';
+  const peers = modal.agents.filter(peer => peer.kind !== 'human' && peer.id !== agent?.id && !peer.headlessSetupId);
+  const peer = peers.find(peer => peer.id === modal.peerAgentId);
   useInput((input, key) => {
     if (modal.busy) return;
     if (key.escape) { if (modal.stage !== 'select' && !modal.locked) setModal({ ...modal, stage: 'select', scroll: 0 }); else setModal(null); return; }
@@ -29,9 +31,19 @@ export function NativeDispatchModal({ modal, setModal, submit, prepareHuman, wid
       if (key.upArrow || input === 'k') setModal({ ...modal, index: Math.max(0, modal.index - 1) });
       if (key.return) {
         if (human) void prepareHuman(modal);
-        else setModal({ ...modal, stage: 'handover', text: '', error: '', scroll: 0 });
+        else setModal({ ...modal, stage: 'handover', text: '', peerAgentId: null, maxRounds: 2, error: '', scroll: 0 });
       }
       return;
+    }
+    if (!human && key.ctrl && input === 'b') {
+      if (!modal.collaborationAvailable) { setModal({ ...modal, error: 'Bounded collaboration needs the upgraded backend and nodes' }); return; }
+      if (agent.headlessSetupId) { setModal({ ...modal, error: 'Select a general coordinator, not a separately pinned headless job' }); return; }
+      if (!peers.length) { setModal({ ...modal, error: 'No independent enrolled peer is available' }); return; }
+      const index = peers.findIndex(candidate => candidate.id === modal.peerAgentId);
+      setModal({ ...modal, peerAgentId: index === peers.length - 1 ? null : peers[index + 1].id, error: '', scroll: 0 }); return;
+    }
+    if (!human && key.ctrl && input === 'r' && peer) {
+      setModal({ ...modal, maxRounds: (modal.maxRounds ?? 2) % 4 + 1, error: '', scroll: 0 }); return;
     }
     if (key.pageDown || key.pageUp) { setModal({ ...modal, scroll: Math.max(0, (modal.scroll || 0) + (key.pageDown ? 5 : -5)) }); return; }
     if (key.return && !key.shift) {
@@ -50,7 +62,9 @@ export function NativeDispatchModal({ modal, setModal, submit, prepareHuman, wid
   const title = modal.stage === 'select' ? 'Assign task' : human ? 'Take back from agent → Todo' : 'Send task';
   const content = human ? modal.preview?.alreadyHuman ? 'Already with you. No outstanding assignment was found. No operation will be created.'
     : `From: ${modal.preview?.workerName || 'Selected worker'} · ${modal.preview?.nodeName || 'Selected node'}\nWithdraw this assignment and return the task to Todo. Unanswered questions are superseded, not answered. History is preserved. Native process termination is not claimed.\n\nReason\n${modal.text}${modal.stage !== 'confirm' ? '▏' : ''}\n${modal.stage === 'confirm' ? '\nConfirm this exact handback.' : ''}`
-    : `To: ${agent.displayName || agent.name} · ${agent.nodeName || agent.nodeId}\n${agent.directory || ''}\n\nHandover\n${modal.text}▏`;
+    : `To: ${agent.displayName || agent.name} · ${agent.nodeName || agent.nodeId}\n${agent.directory || ''}\n` +
+      (peer ? `Collaborate with: ${peer.displayName || peer.name} · ${modal.maxRounds ?? 2} peer rounds · 10 minute limit\n` :
+        modal.collaborationAvailable ? 'Collaboration: off · Ctrl+B selects a peer\n' : '') + `\nHandover\n${modal.text}▏`;
   return h(Box, { position: 'absolute', left: Math.max(0, Math.floor((width - w) / 2)), top: Math.max(0, Math.floor((height - size) / 2)),
     width: w, height: size, borderStyle: 'round', borderColor: 'cyan', backgroundColor: 'black', paddingX: 2, flexDirection: 'column', overflow: 'hidden' },
   h(Text, { bold: true, color: 'cyan' }, title),
@@ -62,5 +76,6 @@ export function NativeDispatchModal({ modal, setModal, submit, prepareHuman, wid
   h(Text, { color: 'red', wrap: 'wrap' }, decisionText(modal.error || '')),
   h(Text, { dimColor: true, wrap: 'wrap' }, modal.busy ? 'Inspecting/publishing…' : modal.locked ? 'Esc close · Reconcile the original request in Inbox' : modal.stage === 'select'
     ? '↑↓ select · Enter inspect · Esc cancel' : modal.preview?.alreadyHuman ? 'Enter/Esc close' : modal.stage === 'confirm'
-      ? 'Enter confirm · Esc back' : human ? 'Type reason · PgUp/Dn · Enter preview · Esc back' : 'Enter send · Shift+Enter newline · PgUp/Dn · Esc back'));
+      ? 'Enter confirm · Esc back' : human ? 'Type reason · PgUp/Dn · Enter preview · Esc back' :
+        `${modal.collaborationAvailable ? 'Ctrl+B peer · Ctrl+R rounds · ' : ''}Enter send · Shift+Enter newline · PgUp/Dn · Esc back`));
 }

@@ -14,6 +14,7 @@ import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
 import { runResultNotifications, runResultReport, scheduleRequester, OnlineRunResultMessages } from './run-result-notifications.mjs';
 import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
 import { agentName } from './agent-name.mjs';
+import { collaborationRequest, childTerminal } from './collaboration.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -274,6 +275,14 @@ export class BackendStore {
       const updated = changed('task', task, { status });
       this.event('task.execution_disposition', updated, actor, causation);
       return updated;
+    };
+    const cancelCollaborationChildren = (parent, reason) => {
+      if (!parent.collaboration) return;
+      for (const child of this.all('execution').filter(e => e.parentExecutionId === parent.id && !childTerminal(e) && !e.result && !e.cancellationRequested)) {
+        const cancelled = changed('execution', child, { cancellationRequested: true, cancellationReason: reason,
+          ...(child.state === 'requested' ? { state: 'cancelled' } : {}) });
+        this.event('execution.cancel', cancelled, actor, parent.id);
+      }
     };
 
     if (action === 'node.enrol') {
@@ -773,7 +782,7 @@ export class BackendStore {
       return changed('task', task, { references: [...(task.references ?? []), p.reference] });
     }
     if (action === 'execution.request') {
-      fields(p, ['id', 'taskId', 'taskRevision', 'originAgentId', 'originConversation', 'targetAgentId', 'instructions', 'reviewPolicy', 'allowDelegation', 'monitor'],
+      fields(p, ['id', 'taskId', 'taskRevision', 'originAgentId', 'originConversation', 'targetAgentId', 'instructions', 'reviewPolicy', 'allowDelegation', 'collaboration', 'monitor'],
         ['id', 'taskId', 'taskRevision', 'targetAgentId', 'instructions']);
       const task = this.get('task', p.taskId); this.revision(task, p.taskRevision);
       requireValue(!terminal(task), 'task_terminal', 'Cannot execute terminal task', 409);
@@ -793,6 +802,17 @@ export class BackendStore {
       requireValue(!target.capabilities.includes('observation_only'), 'target_not_enrolled', 'Observed conversation has no execution binding');
       requireValue(p.allowDelegation === undefined || typeof p.allowDelegation === 'boolean', 'invalid_request', 'Delegation grant must be boolean');
       requireValue(actor.type === 'user' || !p.allowDelegation, 'forbidden', 'Only human may grant fresh delegation scope', 403);
+      let collaboration;
+      if (p.collaboration !== undefined) {
+        requireValue(p.allowDelegation === true && !p.monitor && !target.headlessSetupId, 'invalid_collaboration', 'Use a general coordinator with human-authorised delegation, not a separately pinned headless job');
+        const budget = collaborationRequest(p.collaboration);
+        for (const id of budget.peerAgentIds) {
+          const peer = this.get('agent', id);
+          requireValue(id !== target.id && peer.ownerId === target.ownerId && !peer.headlessSetupId && !peer.capabilities.includes('observation_only'),
+            'invalid_collaboration', 'Collaboration peers must be independent enrolled agents with the same owner');
+        }
+        collaboration = { ...budget, deadline: new Date(Date.now() + budget.timeoutSeconds * 1000).toISOString() };
+      }
       string(p.instructions, 'instructions');
       requireValue(['none', 'human'].includes(p.reviewPolicy ?? 'none'), 'unsupported_policy', 'Use none or human review');
       if (p.monitor) {
@@ -802,7 +822,7 @@ export class BackendStore {
       }
       requireValue(!this.all('execution').some(e => e.taskId === task.id && !['completed', 'cancelled', 'rejected', 'failed'].includes(e.state)),
         'task_busy', 'Task already has an outstanding execution', 409);
-      return created('execution', { ...p, targetNodeId: target.nodeId, reviewPolicy: p.reviewPolicy ?? 'none',
+      return created('execution', { ...p, ...(collaboration ? { collaboration } : {}), targetNodeId: target.nodeId, reviewPolicy: p.reviewPolicy ?? 'none',
         targetConversationId: target.standingGrant ? null : target.conversationId ?? null, targetBindingRevision: target.standingGrant ? null : target.bindingRevision ?? null,
         responsibleUserId: this.owner, state: 'requested', originNodeId: p.originAgentId ? this.get('agent', p.originAgentId).nodeId : null,
         cancellationRequested: false });
@@ -836,7 +856,13 @@ export class BackendStore {
       string(p.title, 'title', 512); string(p.instructions, 'instructions');
       const target = this.get('agent', p.targetAgentId);
       requireValue(!target.capabilities.includes('observation_only'), 'target_not_enrolled', 'Observed conversation has no execution binding');
-      requireValue(target.id !== parent.targetAgentId && ['none', 'human', 'agent'].includes(p.reviewPolicy ?? parent.reviewPolicy),
+      if (parent.collaboration) {
+        requireValue(Date.now() < Date.parse(parent.collaboration.deadline), 'collaboration_deadline', 'Collaboration deadline reached', 409);
+        requireValue(parent.collaboration.peerAgentIds.includes(target.id), 'collaboration_peer_not_allowed', 'Use a peer selected in the original handover', 403);
+        requireValue(this.all('execution').filter(e => e.parentExecutionId === parent.id).length < parent.collaboration.maxRounds,
+          'collaboration_round_limit', 'The authorised peer-round budget is exhausted', 409);
+      }
+      requireValue(target.id !== parent.targetAgentId && ['none', 'human', 'agent'].includes(p.reviewPolicy ?? 'none'),
         'invalid_delegation', 'Independent target and supported review policy required');
       if (p.reviewPolicy === 'agent') {
         const grant = this.get('review_grant', p.reviewGrantId);
@@ -849,9 +875,10 @@ export class BackendStore {
       const child = created('task', task);
       this.event('task.create', child, actor, p.id);
       return created('execution', { id: p.id, taskId: child.id, taskRevision: child.revision, originAgentId: parent.targetAgentId,
-        originNodeId: actor.id, parentExecutionId: parent.id, targetAgentId: target.id, targetNodeId: target.nodeId,
+        originNodeId: actor.id, parentExecutionId: parent.id, parentRunId: parent.runId, targetAgentId: target.id, targetNodeId: target.nodeId,
         targetConversationId: target.standingGrant ? null : target.conversationId ?? null, targetBindingRevision: target.standingGrant ? null : target.bindingRevision ?? null,
-        instructions: p.instructions, reviewPolicy: p.reviewPolicy ?? parent.reviewPolicy,
+        instructions: p.instructions, reviewPolicy: p.reviewPolicy ?? 'none',
+        ...(parent.collaboration ? { collaborationDeadline: parent.collaboration.deadline } : {}),
         ...(p.reviewGrantId ? { reviewGrantId: p.reviewGrantId } : {}), allowDelegation: false,
         responsibleUserId: this.owner, state: 'requested', cancellationRequested: false });
     }
@@ -929,9 +956,22 @@ export class BackendStore {
       const parent = this.get('execution', p.id); this.nodeOnly(actor, parent.targetNodeId); this.revision(parent, p.expectedRevision);
       requireValue(parent.state === 'waiting_children' && !parent.cancellationRequested, 'invalid_child_wait', 'Waiting parent required');
       const children = parent.childExecutionIds.map(id => this.get('execution', id));
-      requireValue(children.every(child => child.state === 'completed' && child.result), 'children_pending', 'All required children must complete successfully', 409);
-      const continuationId = digest(children.map(child => [child.id, child.revision, child.result.digest]));
-      return changed('execution', parent, { state: 'continuation_ready', childContinuationId: continuationId, continuationId });
+      requireValue(children.every(child => childTerminal(child) && (child.state !== 'completed' || child.result)),
+        'children_pending', 'Required peer executions must return a result or a terminal failure', 409);
+      const continuationId = digest(children.map(child => [child.id, child.revision, child.state, child.result?.digest ?? null]));
+      return changed('execution', parent, { state: 'continuation_ready', childContinuationId: continuationId, continuationId,
+        childOutcome: children.every(child => child.state === 'completed') ? 'completed' : 'partial_failure' });
+    }
+    if (action === 'execution.collaboration_timeout') {
+      fields(p, ['id', 'expectedRevision'], ['id', 'expectedRevision']);
+      const e = this.get('execution', p.id); this.nodeOnly(actor, e.targetNodeId); this.revision(e, p.expectedRevision);
+      const root = e.collaboration ? e : e.parentExecutionId ? this.get('execution', e.parentExecutionId) : null;
+      requireValue(root?.collaboration && Date.now() >= Date.parse(root.collaboration.deadline) && !childTerminal(e) && !e.result,
+        'collaboration_not_expired', 'Only an expired collaborative execution without a submitted result may time out', 409);
+      const reason = 'Collaboration deadline reached';
+      cancelCollaborationChildren(e, reason);
+      return changed('execution', e, { cancellationRequested: true, cancellationReason: reason,
+        ...(e.state === 'requested' ? { state: 'cancelled' } : {}) });
     }
     if (action === 'execution.admit') {
       fields(p, ['id', 'expectedRevision', 'bindingId', 'runId'], ['id', 'expectedRevision', 'bindingId', 'runId']);
@@ -975,6 +1015,7 @@ export class BackendStore {
       const e = this.get('execution', p.id); this.revision(e, p.expectedRevision); string(p.reason, 'reason', 2000);
       if (actor.type !== 'user' && actor.id !== e.originNodeId) forbidden('Only requester or human may request cancellation');
       requireValue(!['completed', 'rejected', 'failed', 'cancelled'].includes(e.state), 'execution_terminal', 'Execution has already ended');
+      cancelCollaborationChildren(e, p.reason);
       return changed('execution', e, { cancellationRequested: true, cancellationReason: p.reason,
         ...(e.state === 'requested' ? { state: 'cancelled' } : {}) });
     }
@@ -1013,6 +1054,8 @@ export class BackendStore {
         'invalid_settlement', 'Only outstanding work can settle as failed or cancelled');
       requireValue(p.outcome !== 'cancelled' || e.cancellationRequested, 'cancellation_not_requested', 'Cancellation request required');
       string(p.evidence, 'evidence', 4000);
+      cancelCollaborationChildren(e, p.evidence);
+      if (e.parentExecutionId) taskDisposition(e.taskId, p.outcome === 'failed' ? 'blocked' : 'cancelled', e.id);
       return changed('execution', e, { state: p.outcome, settlement: { outcome: p.outcome, evidence: p.evidence, at: now() } });
     }
     if (action === 'question.ask') {
@@ -1092,17 +1135,21 @@ export class BackendStore {
       const e = this.get('execution', p.id); this.nodeOnly(actor, e.targetNodeId); this.revision(e, p.expectedRevision);
       requireValue(e.state === 'accepted' && !e.cancellationRequested && !terminal(this.get('task', e.taskId)), 'execution_inactive', 'Current execution required');
       string(p.summary, 'summary'); string(p.candidate, 'candidate', 512); string(p.evidence, 'evidence', 4000);
+      const peers = this.all('execution').filter(child => child.parentExecutionId === e.id);
+      const failedPeerTasks = new Set(peers.filter(child => childTerminal(child) && child.state !== 'completed').map(child => child.taskId));
       requireValue(!this.all('question').some(q => q.executionId === e.id && q.blocking && q.status === 'open') &&
-        !this.all('execution').some(child => child.parentExecutionId === e.id && child.state !== 'completed'),
-        'execution_blocked', 'Open questions or unsuccessful child work prevents submission');
+        peers.every(childTerminal), 'execution_blocked', 'Open questions or active peer work prevents submission');
       requireValue(this.get('task', e.taskId).dependencies.every(id => this.get('task', id).status === 'done') &&
-        !this.all('task').some(child => child.parentId === e.taskId && !terminal(child)),
+        !this.all('task').some(child => child.parentId === e.taskId && !terminal(child) &&
+          (!failedPeerTasks.has(child.id) || this.all('execution').some(run => run.taskId === child.id && !childTerminal(run)))),
         'execution_blocked', 'Task dependencies or open child tasks prevent completion');
       taskDisposition(e.taskId, e.reviewPolicy !== 'none' ? 'in_review' : 'done', e.id);
       const revokedReview = e.reviewPolicy === 'agent' && this.get('review_grant', e.reviewGrantId).state !== 'active';
       return changed('execution', e, { state: e.reviewPolicy !== 'none' ? 'in_review' : 'completed',
         ...(revokedReview ? { reviewerMode: 'human_recovery' } : {}),
         result: { candidate: p.candidate, summary: p.summary, evidence: p.evidence,
+          ...(failedPeerTasks.size ? { peerFailures: peers.filter(child => child.state !== 'completed').map(child => ({ id: child.id,
+            taskId: child.taskId, state: child.state, settlement: child.settlement })) } : {}),
           sequence: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0)+1 AS seq FROM changes').get().seq),
           digest: digest({ candidate: p.candidate, summary: p.summary }) } });
     }

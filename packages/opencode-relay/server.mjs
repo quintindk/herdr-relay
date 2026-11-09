@@ -65,7 +65,7 @@ const plugin = {
           });
           return { content: JSON.stringify(result) };
         };
-        editor.add({ name: 'relay_work_read', description: 'Read your exact Relay execution and cancellation state.',
+        editor.add({ name: 'relay_work_read', description: 'Read the active assignment, current input and cancellation state. No active assignment does not disable separate human-requested CLI operations.',
           options: { codemode: false }, input: { type: 'object', properties: {}, additionalProperties: false },
           execute: (input, context) => worker(context, 'read', input) });
         editor.add({ name: 'relay_children', description: 'Refresh direct child execution results and exact candidate revisions for inspection.',
@@ -88,7 +88,7 @@ const plugin = {
         editor.add({ name: 'relay_headless_reference_lookup', description: 'Read exact native source identity and explicit imported aliases under the headless capability grant. Does not infer missing legacy references or mutate tasks.', options: { codemode: false },
           input: { type: 'object', properties: { reference: sourceSchema, aliases: { type: 'array', maxItems: 16, items: sourceSchema } }, required: ['reference'], additionalProperties: false },
           execute: (input, context) => worker(context, 'headless-reference', { payload: input }) });
-        editor.add({ name: 'relay_headless_artifacts', description: 'Read or durably update receipts, history, run records and revisioned checkpoints in explicitly approved paths. No arbitrary filesystem access. Job-specific cursor meanings and business completion rules remain in the external contract.', options: { codemode: false },
+        editor.add({ name: 'relay_headless_artifacts', description: 'Manage receipts, history, run records and checkpoints through the approved artifact-path API. Separately granted shell access follows its own scope. Cursor meanings and business completion rules belong to the job contract.', options: { codemode: false },
           input: { type: 'object', properties: {
             operation: { enum: ['inventory', 'read', 'state', 'receipt', 'checkpoint', 'run'] }, key: { type: 'string', minLength: 1, maxLength: 128 },
             id: { type: 'string' }, legacyFile: { type: 'string', maxLength: 192 }, revision: { type: 'integer', minimum: 1 }, source: sourceSchema, action: { type: 'string', maxLength: 80 }, expectedRevision: { type: 'integer', minimum: 0 },
@@ -104,7 +104,7 @@ const plugin = {
         for (const [name, action, properties, required, description] of [
           ['relay_delegate', 'delegate', { id: { type: 'string' }, taskId: { type: 'string' }, title: { type: 'string' },
             instructions: { type: 'string' }, targetAgentId: { type: 'string' }, reviewPolicy: { enum: ['none', 'human', 'agent'] }, reviewGrantId: { type: 'string' } },
-          ['id', 'taskId', 'title', 'instructions', 'targetAgentId'], 'Delegate a direct child within the current explicit execution grant.'],
+          ['id', 'taskId', 'title', 'instructions', 'targetAgentId'], 'Request peer work within the current job grant. For a bounded collaborative job, finish this native turn after the request; Relay handles wait/resume. Legacy delegation uses relay_wait_children.'],
           ['relay_wait_children', 'wait-children', { childExecutionIds: { type: 'array', minItems: 1, maxItems: 64, uniqueItems: true, items: { type: 'string' } } },
           ['childExecutionIds'], 'Stage a child wait. Finish this turn immediately after success.'],
           ['relay_delay', 'delay', { until: { type: 'string', format: 'date-time' }, reason: { type: 'string' } },
@@ -181,7 +181,7 @@ const plugin = {
           execute: ({ operation, key, ...input }, context) => agent(context, `interactive-repair-${operation}`,
             operation === 'preview' ? input : { key, payload: input }) });
         editor.add({ name: 'relay_message_send',
-          description: 'Send an informational message/status update to another enrolled agent, independently of tasks. Does not create a task, dispatch work or convey human authority. Use an immutable retry key. Do not automatically reply to an incoming message.',
+          description: 'Send informational peer messages with an immutable retry key. An incoming once envelope permits its one reply; other incoming messages do not. Messages are not work dispatch: use job delegation for collaboration.',
           options: { codemode: false }, input: { type: 'object', properties: {
             key: { type: 'string', minLength: 1, maxLength: 100 }, recipientAgentId: { type: 'string', minLength: 1, maxLength: 256 },
              kind: { enum: ['message', 'status'] }, subject: { type: 'string', minLength: 1, maxLength: 256 }, body: { type: 'string', minLength: 1, maxLength: 8000 },

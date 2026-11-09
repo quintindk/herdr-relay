@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { RelayRuntime } from './rpc.mjs';
 import { createRoot, createEffect } from 'solid-js';
 import { renameHerdrWorkspace } from './herdr-session.mjs';
+import { enrolmentOutboxes, enrolmentOperationScope } from './enrolment-outbox.mjs';
 
 const execute = promisify(execFile);
 const launcher = fileURLToPath(new URL('../../scripts/plugin-launch.sh', import.meta.url));
@@ -36,7 +37,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
   if (!ctx.options.ownerContextFile) return () => {};
   const configFile = ctx.options.nativeNodeConfigFile ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-native/node.json');
   const common = ['--context', ctx.options.ownerContextFile, '--config', configFile];
-  const [outbox, updateOutbox] = ctx.storage.store('enrolment-outbox', { initial: { pending: null } });
+  const outboxes = enrolmentOutboxes(ctx.storage, configFile);
   let closed = false, busy = false, generation = 0;
   let previous = selectedSession(), enrolments = [], continuity = null;
   const created = new Map();
@@ -78,7 +79,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     enrolments = await runCli(['agent', 'enrolments', ...common]);
     captureOrigin(selectedSession());
   };
-  const openLandingSession = async origin => {
+  const openLandingSession = async (origin, { outbox, updateOutbox }) => {
     const location = origin.location;
     let input = outbox.sessionCreation ? JSON.parse(JSON.stringify(outbox.sessionCreation)) : null;
     if (!input) {
@@ -87,7 +88,10 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
       input = { id, location: { directory: location.directory }, metadata: { relayLandingSession: id },
         ...(selectedModel ? { model: { providerID: selectedModel.providerID, id: selectedModel.modelID,
           ...(selectedModel.variant ? { variant: selectedModel.variant } : {}) } } : {}) };
-      await updateOutbox(draft => { draft.sessionCreation = input; });
+      await updateOutbox(draft => {
+        if (draft.sessionCreation) throw new Error('Another Relay session creation is already saved for this workspace');
+        draft.sessionCreation = input;
+      });
     }
     check(origin);
     if (input.location.directory !== location.directory) throw new Error('Pending session creation belongs to another workspace');
@@ -113,7 +117,7 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     record({ type: 'landing_session_created', sessionId: session.id });
     return session;
   };
-  const publish = async (pending, origin) => {
+  const publish = async (pending, origin, { updateOutbox }) => {
     const result = await runCli(pending.args);
     // Reuse a healthy node, or install/start it. Never restart OpenCode.
     await runCli(['node', 'ensure', '--config', result.configFile, '--session', result.sessionId]);
@@ -140,21 +144,29 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
     if (closed || busy || automatic && !selectedSession()) return;
     busy = true;
     const origin = { session: selectedSession(), generation };
+    let scope, operationKey;
     try {
-      const selected = origin.session && !outbox.pending ? await ctx.client.session.get({ sessionID: origin.session }) : null;
+      const selected = origin.session ? await ctx.client.session.get({ sessionID: origin.session }) : null;
       origin.location = { ...(selected?.location ?? defaultLocation()) };
       origin.runtime = await runtimeGeneration(origin.location);
       check(origin);
+      scope = await outboxes.forDirectory(origin.location.directory);
+      check(origin);
+      const { outbox, updateOutbox } = scope;
       if (outbox.pending) {
         if (automatic) return;
-        if (!await ctx.ui.dialog.confirm({ title: 'Reconcile confirmed Relay attachment', message: 'Retry the previously confirmed operation with its original key. This does not claim another chat.' })) return;
+        const pending = JSON.parse(JSON.stringify(outbox.pending)), saved = enrolmentOperationScope(pending);
+        if (!saved || saved.configFile !== configFile || saved.directory !== origin.location.directory) throw new Error('Saved Relay operation does not match this workspace. Inspect it before retrying');
+        operationKey = pending.key;
+        if (!await ctx.ui.dialog.confirm({ title: 'Reconcile confirmed Relay attachment', message:
+          `Agent: ${saved.name ?? saved.agentId}\nWorkspace: ${saved.directory}\nOriginal receiving chat: ${saved.sessionId}\n\nRetry the previously confirmed operation with its original key. This does not claim another chat.` })) return;
         check(origin);
-        await publish(JSON.parse(JSON.stringify(outbox.pending)), origin); return;
+        await publish(pending, origin, scope); return;
       }
       await refresh(); check(origin);
       const scoped = enrolments.filter(e => e.directory === origin.location.directory || e.receiver?.conversationId === origin.session);
       if (kind === 'attach' && !scoped.length) { toast('No standing enrolment for this workspace. Use /relay-enrol first.'); return; }
-      const session = origin.session ? await ctx.client.session.get({ sessionID: origin.session }) : await openLandingSession(origin);
+      const session = origin.session ? await ctx.client.session.get({ sessionID: origin.session }) : await openLandingSession(origin, scope);
       check(origin);
       if (session.parentID) throw new Error('Attach from a root chat, not a fork');
       if (session.location?.directory !== origin.location.directory) throw new Error('Workspace changed during attachment. Retry in the current workspace');
@@ -206,15 +218,19 @@ export function registerEnrolmentCommands(ctx, { selectedSession, record = () =>
         ...(ctx.options.nativeServiceRegistration ? ['--service-registration', ctx.options.nativeServiceRegistration] : []),
         ...(kind === 'enrol' ? ['--reserved', '--name', name, '--transport', 'tools'] : ['--agent', enrolment.id, '--generation', String(enrolment.receiver?.generation ?? 0)])];
       const pending = { key, args };
-      await updateOutbox(draft => { draft.pending = pending; });
-      await publish(pending, origin);
+      operationKey = key;
+      await updateOutbox(draft => {
+        if (draft.pending) throw new Error('Another confirmed Relay attachment is already saved for this workspace');
+        draft.pending = pending;
+      });
+      await publish(pending, origin, scope);
     } catch (error) {
-      if (['attachment_refused', 'attachment_superseded', 'stale_binding', 'native_session_reserved'].includes(error.code)) {
-        await updateOutbox(draft => { draft.pending = null; });
+      if (scope && ['attachment_refused', 'attachment_superseded', 'stale_binding', 'native_session_reserved'].includes(error.code)) {
+        await scope.updateOutbox(draft => { if (draft.pending?.key === operationKey) draft.pending = null; });
       }
       // execFile's default error includes its argv. Never show the context file,
       // stack, child stdout or credentials in a toast or retained evidence.
-      toast(outbox.pending ? 'Relay attachment needs reconciliation. Retry the command with its saved operation.' : error.message, 'error');
+      toast(scope?.outbox.pending ? 'Relay attachment needs reconciliation. Retry the command with its saved operation.' : error.message, 'error');
       record({ type: 'attachment_refused', reason: error.code ?? 'attachment_failed', sessionId: origin.session });
     } finally { busy = false; }
   };

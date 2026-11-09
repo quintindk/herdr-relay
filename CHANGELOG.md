@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.7 — Unreleased
+
+- Carry collaboration permission, selected peers, round limit and deadline through
+  the normal task handover. Add a same-form peer selector rather than another
+  grant/approval workflow. The coordinator automatically waits after handing off.
+- Resume coordinators with terminal peer failures. Settle a delegated native turn
+  without a submission as an explicit failure, preserve failed attempts in final
+  reports, and stop inheriting final human review onto ordinary internal checks.
+- Scope worker instructions to their actual execution/tool boundaries. Keep the
+  everyday skills concise and move specialised/historical operational detail into
+  on-demand references. Honour explicit worker-context read-only CLI queries from
+  a current human chat without demanding an execution.
+- Add opt-in real-model collaboration acceptance using the existing authenticated
+  service, private workspaces and two actual tool-using model sessions. Keep that
+  evidence distinct from scripted provider/transport fixtures.
+
+- Exclude definitively refused attachment bindings from node loading without
+  deleting their command, error or identity history. Preserve confirmed historical
+  bindings and uncertain attachment reconciliation.
+- Add previewed, repeat-safe `node recover attachment` retirement for an
+  unreferenced refused binding. Verify backend ownership, retain an integrity-checked
+  backup and audit, and leave the current receiver unchanged.
+- Isolate terminal attachment and landing-session retries by node configuration
+  and workspace. Migrate legacy intent only in its original workspace, preserve
+  immutable keys, show the saved target, and inspect scoped outboxes during upgrades.
+
 ## 0.2.6 — 09 November 2026
 
 Bug fixes for native input provenance and headless cron preflight.

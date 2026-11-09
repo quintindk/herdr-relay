@@ -51,7 +51,7 @@ export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
   execution request --file PAYLOAD_JSON --key KEY
   execution cancel ID --revision N --reason TEXT --key KEY
   execution handback ID --revision N --reason TEXT --key KEY  [human withdrawal, no native completion/termination claim]
-  node recover list|work|publication ...  [audited local abandonment; node recover --help]
+  node recover list|work|publication|attachment ...  [audited local recovery; node recover --help]
   schedule preview --cron EXPR [--timezone Africa/Johannesburg]
   schedule create --file PAYLOAD_JSON --key KEY  [payload: {id,definition}, enabled must be explicit]
   schedule pause|resume ID --revision N --key KEY

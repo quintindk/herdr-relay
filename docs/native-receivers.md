@@ -28,6 +28,12 @@ open but does not attach it, including through a delayed automatic-attachment ev
   previews its current receiver and confirms replacement. Multiple roles require
   selection. Repeating attachment in the current chat is a no-op.
 - Confirmed operations are stored in the local TUI outbox before publication.
+  Retry slots are scoped to the node configuration and canonical workspace, not
+  shared between unrelated terminals. Legacy saved intent moves to its scoped
+  slot only when its original workspace runs a command, with the same key and
+  arguments retained before acknowledging the legacy slot. A conflicting slot
+  preserves both operations for inspection. Reconciliation shows the saved agent,
+  workspace and original receiving chat before confirmation.
   Lost replies reconcile the same operation, key and original conversation.
   Retrying a superseded operation cannot reclaim the receiver.
   Reconciliation retains the original intent even if its chat has been archived
@@ -87,6 +93,10 @@ folder discovery or an idle observation.
   an owner-authenticated backend mutation is reconciled before enabling the new
   receiver. A lost response leaves a pending operation, not two receivers.
 - The daemon hot-loads new bindings without restarting OpenCode or the node.
+  A definitively refused preparation is retained history, not a historical
+  receiver. Loading excludes it only after validating its identity and absence
+  of receiver/work/notice pins. Confirmed historical and uncertain bindings remain
+  available for their original scoped work and reconciliation.
   Per-binding worker credentials remain private. Its worker index resolves only
   the actual calling session, never a guessed or globally current session.
 - Fresh execution requests target the stable agent and are pinned at admission.

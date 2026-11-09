@@ -5,6 +5,7 @@ import { digest, requireValue } from './protocol.mjs';
 import { readPrivateJson, writePrivateJson } from './private-files.mjs';
 import { nativeBackendClient } from './backend-client.mjs';
 import { NodeJournal } from './node-journal.mjs';
+import { NativeReceivers } from './native-receivers.mjs';
 import { definitivePublicationRefusal } from './publication-outcomes.mjs';
 import { defaultNodeConfig } from './native-onboarding.mjs';
 import { serviceLock } from './service-lock.mjs';
@@ -24,6 +25,7 @@ function view(path, config) {
 }
 
 export function recoveryInventory(journal) {
+  const receivers = new NativeReceivers(journal);
   return { complete: true, work: journal.db.prepare("SELECT id,state,data FROM work WHERE state NOT IN ('settled','native_finished','settled_waiting','pending')").all().map(row => {
     const w = JSON.parse(row.data); return { id: row.id, state: row.state, backendStateCached: w.execution?.state,
       invocationMessageId: w.invocation?.messageId ?? null, observationReason: w.observation?.reason ?? null,
@@ -31,7 +33,9 @@ export function recoveryInventory(journal) {
   }), publications: journal.db.prepare("SELECT key,hash,state,data FROM outbox WHERE state NOT IN ('recorded','superseded','administratively_abandoned')").all().map(row => {
     const item = JSON.parse(row.data); return { key: row.key, state: row.state, action: item.command?.action, error: item.error,
       outcome: item.outcome ?? null, definitivelyRejected: Boolean(definitivePublicationRefusal(row)) };
-  }) };
+  }), attachments: receivers.list('attachment').filter(item => item.state === 'refused').map(item => ({
+    key: item.key, state: item.state, error: item.error, bindingId: item.binding.id, agentId: item.binding.agentId,
+    retired: Boolean(receivers.get(`retired-binding:${item.binding.id}`)) })) };
 }
 
 async function workProof(journal, id, api, nodeId) {
@@ -57,6 +61,20 @@ async function workProof(journal, id, api, nodeId) {
     scheduleId: schedule.id, scheduleRevision: schedule.revision, scheduleCancelled: true };
 }
 
+async function attachmentProof(journal, id, api, config) {
+  const { operation, proof } = new NativeReceivers(journal).refusedAttachment(id);
+  requireValue(!(config.bindings ?? []).some(binding => binding.id === operation.binding.id),
+    'attachment_recovery_ineligible', 'An explicitly configured binding cannot be retired by attachment recovery');
+  const info = await api('GET', '/v1/info');
+  requireValue(info.instanceId === journal.identity.instanceId && info.protocol === 'relay/0.2',
+    'backend_identity_mismatch', 'Pinned backend identity required for attachment recovery');
+  const agent = await api('GET', `/v1/agents/${encodeURIComponent(operation.binding.agentId)}`);
+  requireValue(agent.id === operation.binding.agentId && agent.nodeId === config.nodeId && agent.bindingId !== operation.binding.id,
+    'attachment_recovery_ineligible', 'The backend must confirm this refused binding is not the designated receiver');
+  return { ...proof, nodeId: config.nodeId, backendBindingId: agent.bindingId ?? null,
+    backendBindingRevision: agent.bindingRevision, backendConversationId: agent.conversationId ?? null };
+}
+
 export async function nodeRecovery(input, dependencies = {}) {
   const configFile = resolve(input.configFile ?? defaultNodeConfig()), config = readPrivateJson(configFile);
   requireValue(config.identityVersion === 2 && config.nodeId && resolve(config.stateDirectory) === config.stateDirectory,
@@ -66,9 +84,9 @@ export async function nodeRecovery(input, dependencies = {}) {
   let unlock;
   try {
     if (input.kind === 'list') return recoveryInventory(journal);
-    requireValue(['work', 'publication'].includes(input.kind) && typeof input.id === 'string' && input.id.length > 0 && input.id.length <= 512 &&
+    requireValue(['work', 'publication', 'attachment'].includes(input.kind) && typeof input.id === 'string' && input.id.length > 0 && input.id.length <= 512 &&
       typeof input.key === 'string' && /^[A-Za-z0-9:_.-]{1,100}$/.test(input.key) && typeof input.reason === 'string' && input.reason.trim() && input.reason.length <= 2000,
-    'invalid_request', 'Exact work/publication, immutable key and bounded reason required');
+    'invalid_request', 'Exact work/publication/attachment, immutable key and bounded reason required');
     const operation = join(root, 'recoveries', `recovery_${digest([config.nodeId, input.key])}`), headerPath = join(operation, 'request.json');
     const inputHash = digest({ configFile, kind: input.kind, id: input.id, key: input.key, reason: input.reason, previewHash: input.previewHash ?? null });
     if (input.apply) {
@@ -101,6 +119,9 @@ export async function nodeRecovery(input, dependencies = {}) {
             expectedRevision: record.command.payload.expectedRevision, currentRevision: observed.execution.revision };
       }
       requireValue(proof, 'publication_ineligible', 'This is not a proven transactional validation refusal. Uncertain outcomes, operation-key collisions and revision conflicts require reconciliation, not abandonment');
+    } else if (input.kind === 'attachment') {
+      record = new NativeReceivers(journal).get(`attachment:${input.id}`);
+      proof = await attachmentProof(journal, input.id, dependencies.api ?? nativeBackendClient(config.backend), config);
     } else {
       const api = dependencies.api ?? nativeBackendClient(config.backend);
       const info = await api('GET', '/v1/info');
@@ -111,7 +132,8 @@ export async function nodeRecovery(input, dependencies = {}) {
     const preview = { state: 'recovery_preview', kind: input.kind, id: input.id, key: input.key, reason: input.reason, previewHash, recordDigest, proof,
       originalState: record.state, invocationMessageId: record.invocation?.messageId ?? null,
       nativeSettlementClaimed: false, nativeProcessTerminationClaimed: false, successfulCompletionClaimed: false,
-      warning: 'Administrative abandonment prevents Relay replay. It does not stop native processes or undo effects already dispatched.' };
+      warning: input.kind === 'attachment' ? 'Retire only the refused binding. The original attachment, current receiver and all history remain unchanged.' :
+        'Administrative abandonment prevents Relay replay. It does not stop native processes or undo effects already dispatched.' };
     if (!input.apply) return preview;
     requireValue(input.previewHash === previewHash, 'stale_recovery_preview', 'Exact unchanged recovery preview required');
     mkdirSync(operation, { recursive: true, mode: 0o700 });
@@ -124,12 +146,16 @@ export async function nodeRecovery(input, dependencies = {}) {
     if (input.kind === 'work') {
       const api = dependencies.api ?? nativeBackendClient(config.backend);
       requireValue(digest(await workProof(journal, input.id, api, config.nodeId)) === digest(proof), 'stale_recovery_preview', 'Backend ownership changed during backup; inspect it again');
+    } else if (input.kind === 'attachment') {
+      requireValue(digest(await attachmentProof(journal, input.id, dependencies.api ?? nativeBackendClient(config.backend), config)) === digest(proof),
+        'stale_recovery_preview', 'Attachment or backend ownership changed during backup; inspect it again');
     }
     const writable = new NodeJournal(database, { nodeId: config.nodeId, instanceId: journal.identity.instanceId });
     try {
       const options = { key: input.key, reason: input.reason, expectedDigest: recordDigest, proof, backup,
         actor: `local_operator:os-user-${process.getuid?.() ?? 'unknown'}` };
-      const receipt = input.kind === 'work' ? writable.abandonWork(input.id, options) : writable.abandonPublication(input.id, options);
+      const receipt = input.kind === 'work' ? writable.abandonWork(input.id, options) : input.kind === 'attachment' ?
+        new NativeReceivers(writable).retireRefusedAttachment(input.id, options) : writable.abandonPublication(input.id, options);
       writePrivateJson(join(operation, 'receipt.json'), receipt);
       return { ...receipt, replayed: false };
     } finally { writable.close(); }

@@ -20,7 +20,10 @@ test('v2 worker instructions use actual scoped tools without shell transport', (
   assert.match(instructions, /relay_work_submit/);
   assert.match(instructions, /relay_work_ask/);
   assert.doesNotMatch(instructions, /node-worker-cli|--context|--file|relay_delegate|relay_review_child/);
-  assert.match(instructions, /Do not claim a submission succeeded/);
+  assert.match(instructions, /Report actual results/);
+  assert.match(instructions, /stop effects for this execution/);
+  assert.match(instructions, /shell\/MCP\/file work follows its own granted permissions/);
+  assert.doesNotMatch(instructions, /not shell commands|Final root review remains human/);
 });
 
 test('session permissions are applied only from explicit validated operator configuration', async () => {
@@ -42,4 +45,11 @@ test('session permissions are applied only from explicit validated operator conf
 test('v2 delegation instructions remain conditional on execution grants', () => {
   assert.match(v2WorkerInstructions({ allowDelegation: true }), /relay_delegate/);
   assert.match(v2WorkerInstructions({ childExecutionIds: ['child'] }), /relay_children/);
+});
+
+test('collaboration instructions make waiting automatic and scope approval to genuine human decisions', () => {
+  const instructions = v2WorkerInstructions({ allowDelegation: true, collaboration: { peerAgentIds: ['peer'], maxRounds: 2, deadline: '2026-11-09T12:00:00Z' } });
+  assert.match(instructions, /at most 2 peer executions/); assert.match(instructions, /separate wait call is unnecessary/);
+  assert.match(instructions, /without seeking repeated approval/);
+  assert.doesNotMatch(instructions, /Final root review remains human|relay_delegate and relay_wait_children/);
 });

@@ -6,6 +6,7 @@ import { buildGrantsView } from './grants-view.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
 import { agentName } from './agent-name.mjs';
 import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
+import { collaborationRequest } from './collaboration.mjs';
 
 export function boardLocalIdentity(context) {
   return context?.scope?.kind === 'node_operator' && context.nodeId === context.scope.nodeId && context.instanceId
@@ -122,7 +123,8 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     async read(signal) {
       const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies, headless_setups } = await load(signal);
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents, headless_setups)),
-        inbox, grants, grantsAvailable: !!info.features?.grantsManagement, interactiveRecoveryAvailable: !!info.features?.interactiveRecovery, agentRenamingAvailable: !!info.features?.agentRename, nodePolicies,
+        inbox, grants, grantsAvailable: !!info.features?.grantsManagement, collaborationAvailable: !!info.features?.boundedCollaboration,
+        interactiveRecoveryAvailable: !!info.features?.interactiveRecovery, agentRenamingAvailable: !!info.features?.agentRename, nodePolicies,
         tasks: tasks.map(t => ({ ...scoped(t), instanceId: info.instanceId, ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
         localNode: localNode(nodes, info) ? { id: localNodeId, name: localNode(nodes, info).name ?? localNodeId } : null,
@@ -203,13 +205,18 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     async dispatchTask({ taskId, expectedRevision, instanceId, key, payload }) {
       requireValue(decisionJournal && key && payload?.targetAgentId && typeof payload.instructions === 'string' &&
         payload.instructions.trim() && payload.instructions.length <= 4000, 'invalid_handover', 'Select an agent and provide a bounded handover');
+      requireValue(payload.allowDelegation === undefined || typeof payload.allowDelegation === 'boolean', 'invalid_handover', 'Collaboration must be an explicit handover choice');
+      const collaboration = payload.collaboration === undefined ? undefined : collaborationRequest(payload.collaboration);
+      requireValue(!collaboration || payload.allowDelegation === true, 'invalid_handover', 'A collaborative handover must allow delegation');
       const previous = decisionJournal.inspect(key);
       if (previous) {
         const command = previous.command;
         const marker = '\nHuman handover:\n';
         requireValue(command.action === 'execution.request' && command.payload.taskId === taskId && command.payload.taskRevision === expectedRevision &&
           command.payload.targetAgentId === payload.targetAgentId && command.payload.instructions.includes(marker) &&
-          command.payload.instructions.slice(command.payload.instructions.indexOf(marker) + marker.length) === payload.instructions.trim(),
+          command.payload.instructions.slice(command.payload.instructions.indexOf(marker) + marker.length) === payload.instructions.trim() &&
+          (command.payload.allowDelegation ?? false) === (payload.allowDelegation ?? false) &&
+          digest(command.payload.collaboration ?? null) === digest(collaboration ?? null),
         'decision_conflict', 'Confirmed handover payload changed');
         const execution = await decisionJournal.submit(api, command, previous.instance);
         return { state: 'recorded', execution, message: 'Original execution request reconciled. No additional work was sent.' };
@@ -220,8 +227,10 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       requireValue(task.revision === expectedRevision, 'stale_revision', 'Task changed. Refresh and inspect the handover again', 409);
       const info = await api('GET', '/v1/info');
       requireValue(!instanceId || info.instanceId === instanceId, 'backend_identity_changed', 'Backend identity changed since the task preview. No work was requested');
+      requireValue(!collaboration || info.features?.boundedCollaboration, 'backend_upgrade_required', 'Upgrade the backend and owning nodes for bounded collaboration');
       const command = { key, action: 'execution.request', payload: { id: `execution_${digest([taskId, key])}`, taskId, taskRevision: expectedRevision,
-        targetAgentId: payload.targetAgentId, reviewPolicy: 'none', instructions:
+        targetAgentId: payload.targetAgentId, reviewPolicy: 'none', ...(payload.allowDelegation !== undefined ? { allowDelegation: payload.allowDelegation } : {}),
+        ...(collaboration ? { collaboration } : {}), instructions:
           `Read task ${task.reference ?? task.id} (${task.id}), its description and comments before acting.\nHuman handover:\n${payload.instructions.trim()}` } };
       const execution = await decisionJournal.submit(api, command, info.instanceId);
       return { state: 'recorded', execution, message: 'Execution requested. Delivery waits for the designated receiver and available capacity.' };

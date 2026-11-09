@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { tickAutomation } from '../src/node-automation.mjs';
+import { NativeReceivers } from '../src/native-receivers.mjs';
 
 function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/node-recovery-'), database = join(root, 'node.sqlite');
@@ -197,4 +198,62 @@ test('a late transport callback cannot resurrect a publication abandoned after a
   reject(Object.assign(Error('Lost reply'), { code: 'ECONNRESET' })); await assert.rejects(pending);
   assert.equal(f.journal.receipt(command.key).state, 'administratively_abandoned');
   await f.journal.flush(() => assert.fail('Abandoned command cannot replay'));
+});
+
+function refusedAttachment(f) {
+  f.receivers = new NativeReceivers(f.journal);
+  f.receivers.enrol({ id: 'agent', name: 'Agent', directory: f.root, transport: 'tools' });
+  const operation = f.receivers.prepare({ key: 'refused-attachment', agentId: 'agent', expectedGeneration: 0,
+    identity: { sessionId: 'occupied-session', projectId: 'project', directory: f.root, createdAt: 1 },
+    url: 'http://127.0.0.1:4096', authFile: join(f.root, 'auth.json') });
+  f.agent = { id: 'agent', nodeId: 'node', bindingRevision: 0 };
+  f.receivers.reject(operation, { code: 'conversation_alias' }, f.agent);
+  f.api = async (_method, path) => path === '/v1/info' ? { instanceId: 'instance', protocol: 'relay/0.2' } : f.agent;
+  return f.receivers.get(`attachment:${operation.key}`);
+}
+
+test('attachment recovery retires only the refused binding, preserves its exact history and is repeat-safe', async t => {
+  const f = fixture(t), original = refusedAttachment(f);
+  const receiver = f.receivers.receiver('agent'), binding = f.receivers.get(`native-binding:${original.binding.id}`);
+  const input = { kind: 'attachment', id: original.key, key: 'retire-refused-binding', reason: 'Human requested attachment recovery' };
+  const preview = await f.recover(input);
+  assert.equal(preview.proof.error, 'conversation_alias'); assert.equal(existsSync(f.directory), false);
+  await assert.rejects(f.recover({ ...input, apply: true, previewHash: 'wrong' }), { code: 'stale_recovery_preview' });
+  const applied = await f.recover({ ...input, apply: true, previewHash: preview.previewHash });
+  assert.equal(applied.state, 'refused_binding_retired'); assert.equal(applied.backendChanged, false);
+  assert.ok(existsSync(applied.backup)); assert.equal(applied.receiverChanged, false);
+  assert.deepEqual(f.receivers.get(`attachment:${original.key}`), original);
+  assert.deepEqual(f.receivers.get(`native-binding:${binding.id}`), binding);
+  assert.deepEqual(f.receivers.receiver('agent'), receiver);
+  assert.equal(f.receivers.get(`retired-binding:${binding.id}`).state, 'retired');
+  assert.equal((await f.recover({ ...input, apply: true, previewHash: preview.previewHash })).replayed, true);
+  await assert.rejects(f.recover({ ...input, reason: 'Changed', apply: true, previewHash: preview.previewHash }), { code: 'operation_conflict' });
+});
+
+for (const change of ['pending', 'recorded', 'receipt', 'binding', 'command', 'missing-command', 'receiver', 'work', 'notice', 'headless', 'confirmed-alias', 'backend'])
+  test(`attachment recovery refuses ${change} evidence without retiring or deleting a binding`, async t => {
+    const f = fixture(t), operation = refusedAttachment(f), id = operation.binding.id;
+    if (['pending', 'recorded'].includes(change)) f.receivers.put(`attachment:${operation.key}`, { ...operation, state: change });
+    if (change === 'receipt') f.receivers.put(`attachment:${operation.key}`, { ...operation, receipt: { bindingId: id } });
+    if (change === 'binding') f.receivers.put(`native-binding:${id}`, { ...operation.binding, identity: { ...operation.binding.identity, sessionId: 'changed' } });
+    if (change === 'command') f.receivers.put(`attachment:${operation.key}`, { ...operation, command: { ...operation.command, key: 'changed' } });
+    if (change === 'missing-command') f.receivers.put(`attachment:${operation.key}`, { ...operation, command: undefined });
+    if (change === 'receiver') f.receivers.put('receiver:agent', { bindingId: id, generation: 1, state: 'active' });
+    if (change === 'work') f.journal.save({ id: 'work', state: 'observing', bindingId: id, execution: { state: 'accepted' } });
+    if (change === 'notice') f.journal.db.prepare('INSERT INTO notices VALUES (?,?,?)').run('notice', 'observing', JSON.stringify({ bindingId: id }));
+    if (change === 'headless') f.receivers.put('headless-op:setup', { binding: operation.binding });
+    if (change === 'confirmed-alias') f.receivers.put('attachment:another-key', { ...operation, key: 'another-key', state: 'recorded', receipt: { bindingId: id } });
+    if (change === 'backend') f.agent.bindingId = id;
+    await assert.rejects(f.recover({ kind: 'attachment', id: operation.key }), { code: 'attachment_recovery_ineligible' });
+    assert.equal(f.receivers.get(`retired-binding:${id}`), null);
+    assert.ok(f.receivers.get(`attachment:${operation.key}`)); assert.ok(f.receivers.get(`native-binding:${id}`));
+  });
+
+test('attachment recovery rechecks backend ownership after its integrity-checked backup', async t => {
+  const f = fixture(t), original = refusedAttachment(f);
+  const input = { ...f.input, kind: 'attachment', id: original.key }, preview = await f.recover(input);
+  const { backup } = await import('node:sqlite');
+  await assert.rejects(nodeRecovery({ ...input, apply: true, previewHash: preview.previewHash }, { api: f.api,
+    backup: async (...args) => { await backup(...args); f.agent.bindingId = original.binding.id; } }), { code: 'attachment_recovery_ineligible' });
+  assert.equal(f.receivers.get(`retired-binding:${original.binding.id}`), null);
 });

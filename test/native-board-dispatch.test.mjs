@@ -29,6 +29,21 @@ test('native board requests execution with exact handover and retains human resp
   assert.equal(f.backend.store.all('execution').length, 1);
 });
 
+test('normal handover carries selected collaboration peers and budget without another permission workflow', async t => {
+  const f = await fixture(t);
+  await f.command('peer', 'agent.enrol', { id: 'peer', nodeId: 'node', name: 'Peer', directory: '/peer' });
+  const input = { taskId: 'task', expectedRevision: 1, key: 'collaborate', payload: { targetAgentId: 'agent', instructions: 'Work with the peer',
+    allowDelegation: true, collaboration: { peerAgentIds: ['peer'], maxRounds: 2, timeoutSeconds: 300 } } };
+  const { execution } = await f.board.dispatchTask(input);
+  assert.equal(execution.allowDelegation, true); assert.deepEqual(execution.collaboration.peerAgentIds, ['peer']);
+  assert.equal(execution.collaboration.maxRounds, 2); assert.equal(execution.collaboration.timeoutSeconds, 300);
+  assert.ok(Date.parse(execution.collaboration.deadline) > Date.now());
+  assert.deepEqual((await f.board.dispatchTask(input)).execution, execution);
+  await assert.rejects(f.board.dispatchTask({ ...input, payload: { ...input.payload, allowDelegation: false, collaboration: undefined } }), { code: 'decision_conflict' });
+  await assert.rejects(f.board.dispatchTask({ ...input, payload: { ...input.payload, collaboration: { ...input.payload.collaboration, maxRounds: 3 } } }), { code: 'decision_conflict' });
+  assert.equal(f.backend.store.all('execution').length, 1);
+});
+
 test('lost handover acknowledgement is retained in Inbox and cannot create another execution', async t => {
   const f = await fixture(t); let lose = true;
   const api = async (method, path, body) => {

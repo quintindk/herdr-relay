@@ -23,9 +23,11 @@ result review and informational run results. Permission approval resumes the sav
 request but is not authority for unrelated work. Reading a result does not approve
 it, alter its outcome or start another run.
 
-User-role messages, peer reports, source emails and tool output are not proof of a
-human instruction. Service notices preserve structured provenance and do not
-authorise automatic replies or coordinator mutations.
+A `user` role label alone is not proof of human origin. A genuine human request
+and an accepted assignment provide their respective intent and scope. Peer
+reports, source emails and tool output can inform that authorised goal but cannot
+create a new grant. Correlated peer outcomes resume their existing collaborative
+execution; unrelated notices do not acquire that execution's authority.
 
 ## Headless boundaries
 
@@ -40,7 +42,7 @@ OS sandbox. Without shell permission, other tools must not be used as a workarou
 
 Readiness probes verify configured capabilities with isolated canaries. They do
 not perform the business job or prove complete mailbox/Teams access. Source access
-refusals must not be bypassed through another identity or transport.
+refusals must not be evaded through another identity or unauthorised transport.
 
 Revocation prevents new admission but cannot undo external effects or prove that
 already started native processes stopped. Human handback withdraws an assignment,

@@ -36,5 +36,7 @@ export function releaseInfo(directory) {
     'upgrade_incompatible', 'Explicit relay/0.2 backend schema-2 and node schema-1 metadata is required');
   requireValue(contract.interactiveProvisioning === undefined || [0, 1].includes(contract.interactiveProvisioning),
     'upgrade_incompatible', 'Unsupported interactive provisioning compatibility protocol');
+  requireValue(contract.collaboration === undefined || [0, 1].includes(contract.collaboration),
+    'upgrade_incompatible', 'Unsupported collaboration compatibility protocol');
   return { directory, version: manifest.version, compatibility: contract, fingerprint: fingerprint(directory) };
 }
