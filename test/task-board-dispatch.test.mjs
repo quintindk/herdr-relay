@@ -49,3 +49,31 @@ test('human is the first choice, previews current ownership and requires an expl
   assert.match(frame(instance), /Confirm this exact handback/);
   await input(instance, '\r'); assert.equal(writes.length, 1); assert.equal(writes[0].executionId, 'run'); assert.equal(writes[0].reason, 'I will finish it');
 });
+
+test('one handover selects the collaborator and bounded rounds without a separate approval dialog', async t => {
+  const sent = [], collaborativeBoard = { ...board, collaborationAvailable: true, agents: [...board.agents,
+    { ...board.agents[0], id: 'peer', name: 'Peer', displayName: 'Peer' }] };
+  const instance = render(React.createElement(TaskBoardInkApp, { read: async () => collaborativeBoard, interval: 60000, width: 100, height: 28,
+    dispatchTask: async value => { sent.push(value); return { state: 'recorded', execution: { taskId: 'task', targetAgentId: value.payload.targetAgentId }, message: 'Collaborative job requested' }; } }));
+  t.after(() => instance.unmount()); await tick(); await input(instance, 'j'); await input(instance, 'a');
+  await input(instance, 'j'); await input(instance, '\r');
+  const coordinator = frame(instance).includes('To: Peer') ? 'peer' : 'agent';
+  await input(instance, '\x02'); assert.match(frame(instance), /Collaborate with:/); assert.match(frame(instance), /2 peer rounds/);
+  await input(instance, '\x12'); assert.match(frame(instance), /3 peer rounds/);
+  await input(instance, 'Review and repair with the selected peer'); await input(instance, '\r');
+  assert.equal(sent.length, 1); assert.equal(sent[0].payload.allowDelegation, true);
+  assert.deepEqual(sent[0].payload.collaboration, { peerAgentIds: [coordinator === 'peer' ? 'agent' : 'peer'], maxRounds: 3, timeoutSeconds: 600 });
+});
+
+test('an uncertain collaborative handover locks its peer and budget as well as its text', async t => {
+  const sent = [], collaborativeBoard = { ...board, collaborationAvailable: true, agents: [...board.agents,
+    { ...board.agents[0], id: 'peer', name: 'Peer', displayName: 'Peer' }] };
+  const instance = render(React.createElement(TaskBoardInkApp, { read: async () => collaborativeBoard, interval: 60000, width: 100, height: 28,
+    dispatchTask: async value => { sent.push(value); throw Error('Lost collaborative acknowledgement'); } }));
+  t.after(() => instance.unmount()); await tick(); await input(instance, 'j'); await input(instance, 'a');
+  await input(instance, 'j'); await input(instance, '\r'); await input(instance, '\x02');
+  await input(instance, 'Bounded peer check'); await input(instance, '\r');
+  assert.match(frame(instance), /original request in Inbox/);
+  await input(instance, '\x02'); await input(instance, '\x12'); await input(instance, '\r');
+  assert.equal(sent.length, 1); assert.equal(sent[0].payload.collaboration.maxRounds, 2);
+});

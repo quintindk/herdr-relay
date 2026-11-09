@@ -218,6 +218,8 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
         'Summary', '', ...wrapLines(task.description || 'No description.'), ...(technical ? ['', `Task identity: ${task.id}`] : [])],
       Result: result ? ['Submitted result', '', ...wrapLines(result.summary), '',
         ...(detail.data.actions !== undefined && !technical ? ['Exact candidate identity: press t for technical details'] : [`Candidate  ${result.candidate}`]),
+        ...(result.peerFailures?.length ? ['', 'Peer attempts needing attention', ...result.peerFailures.flatMap(peer =>
+          wrapLines(`${peer.id}: ${peer.state}${peer.settlement?.evidence ? ` · ${peer.settlement.evidence}` : ''}`))] : []),
         ...(result.deliverables ? ['', 'Deliverables', ...wrapLines(JSON.stringify(result.deliverables))] : []),
         ...(result.checks ? ['', 'Checks', ...wrapLines(JSON.stringify(result.checks))] : [])] : ['No Relay result.'],
       Comments: detail.data.comments?.length ? detail.data.comments.flatMap((comment, index) => [
@@ -482,7 +484,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
           setNotice(result.message); setAssignment(null); setRefreshGeneration(value => value + 1); return;
         }
         const result = await dispatchTask({ taskId: current.task.id, expectedRevision: current.task.revision, instanceId: current.task.instanceId, key: current.key,
-          payload: { targetAgentId: agent.id, instructions: current.text } });
+          payload: { targetAgentId: agent.id, instructions: current.text, ...(current.peerAgentId ? { allowDelegation: true,
+            collaboration: { peerAgentIds: [current.peerAgentId], maxRounds: current.maxRounds ?? 2, timeoutSeconds: 600 } } : {}) } });
         if (result.state !== 'recorded' || result.execution?.targetAgentId !== agent.id || result.execution?.taskId !== current.task.id) throw Error('Execution request is not confirmed');
         setNotice(result.message); setAssignment(null); setRefreshGeneration(value => value + 1); return;
       }
@@ -617,7 +620,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       if (native) agents = [{ id: 'human', kind: 'human', displayName: 'You (human)' }, ...agents];
       if (!agents.length) { setNotice('Assignment unavailable: no present agents in this company'); return; }
       setAssignment({ task: row.task, agents, index: Math.max(0, agents.findIndex(agent => agent.id === row.task.assigneeAgentId)), busy: false, error: '',
-        ...(native ? { native: true, stage: 'select', text: '', key: `human-dispatch:${randomUUID()}` } : {}) });
+        ...(native ? { native: true, stage: 'select', text: '', key: `human-dispatch:${randomUUID()}`, collaborationAvailable: !!board.collaborationAvailable,
+          peerAgentId: null, maxRounds: 2 } : {}) });
       setNotice(''); return;
     }
     if (key.return || input === 'd' || key.tab) {

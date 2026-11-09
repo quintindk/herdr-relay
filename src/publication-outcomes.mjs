@@ -5,8 +5,10 @@ import { digest } from './protocol.mjs';
 const validation = new Map([
   ['headless.task', new Set(['invalid_headless_request', 'invalid_headless_capabilities', 'invalid_reference', 'invalid_task'])],
   ['interactive.repair_request', new Set(['invalid_interactive_repair', 'invalid_grant_scope', 'grant_scope_outside_node', 'stale_repair_preview', 'repair_not_eligible'])],
+  ['execution.delegate', new Set(['invalid_request', 'invalid_delegation', 'delegation_not_authorised', 'review_grant_inactive',
+    'collaboration_deadline', 'collaboration_peer_not_allowed', 'collaboration_round_limit'])],
 ]);
-const validationStatuses = action => action === 'interactive.repair_request' ? [400, 409] : [400];
+const validationStatuses = action => action === 'execution.delegate' ? [400, 403, 409] : action === 'interactive.repair_request' ? [400, 409] : [400];
 const revisions = new Set(['stale_revision', 'stale_binding', 'task_busy', 'headless_task_busy', 'reference_conflict']);
 export function publicationOutcome(command, error) {
   if (validationStatuses(command.action).includes(error.status) && validation.get(command.action)?.has(error.code)) return {

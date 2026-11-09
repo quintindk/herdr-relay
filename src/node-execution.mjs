@@ -2,6 +2,7 @@ import { digest, now, requireValue } from './protocol.mjs';
 import { reconcileObservationConflict } from './native-observation-recovery.mjs';
 import { reconcileInteractiveWork, installInteractionPublicationGuard } from './native-interaction.mjs';
 import { abandonedWork } from './node-journal.mjs';
+import { childTerminal, peerExecutions } from './collaboration.mjs';
 
 // A bounded node tick. Native bindings are injected by the local runtime host.
 // Persist admission and prompt intent before crossing either external boundary.
@@ -18,6 +19,17 @@ export async function tickNode(journal, api, resolveBinding) {
     let execution = work.execution;
     if (abandonedWork(work)) continue;
     if (execution.localOccurrence) continue;
+    const deadline = execution.collaboration?.deadline ?? execution.collaborationDeadline;
+    const finishedResult = work.staged?.kind === 'result' && work.observation?.state === 'finished' && work.observation.outcome === 'succeeded';
+    if (deadline && Date.now() >= Date.parse(deadline) && connected && !execution.cancellationRequested &&
+      !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(execution.state) && !finishedResult && !execution.result) {
+      const key = `collaboration-timeout:${digest([execution.id, execution.revision])}`;
+      journal.queue({ key, action: 'execution.collaboration_timeout', payload: { id: execution.id, expectedRevision: execution.revision } });
+      await journal.flush(api);
+      const receipt = journal.receipt(key);
+      if (receipt?.state === 'recorded') execution = receipt.receipt;
+      work = journal.save({ ...work, execution });
+    }
     if (execution.monitor && Date.now() >= Date.parse(execution.monitor.endsAt) && !execution.cancellationRequested &&
       !['completed', 'cancelled', 'failed', 'rejected'].includes(execution.state)) {
       if (!work.monitorExpiryCommand) {
@@ -43,7 +55,7 @@ export async function tickNode(journal, api, resolveBinding) {
     }
     if (execution.state === 'waiting_children' && connected && work.state === 'settled_waiting' && !execution.cancellationRequested) {
       const children = await Promise.all(execution.childExecutionIds.map(id => api('GET', `/v1/executions/${encodeURIComponent(id)}`)));
-      if (children.every(child => child.state === 'completed' && child.result)) {
+      if (children.every(child => childTerminal(child) && (child.state !== 'completed' || child.result))) {
         journal.queue({ key: `children-ready:${digest([execution.id, execution.revision])}`, action: 'execution.check_children',
           payload: { id: execution.id, expectedRevision: execution.revision } });
         await journal.flush(api);
@@ -171,8 +183,9 @@ export async function tickNode(journal, api, resolveBinding) {
           ...(snapshot.model ? { initialModel: snapshot.model } : {}) } : {}),
         prompt: `Relay execution ${execution.id}, run ${execution.runId}.\n${execution.instructions}\n` +
           (work.answer ? `Clarification answer: ${work.answer.body}\n` : '') +
-          (work.children?.length ? `Child result receipts for inspection: ${JSON.stringify(work.children.map(child => ({ id: child.id, revision: child.revision,
-            reviewPolicy: child.reviewPolicy, reviewGrantId: child.reviewGrantId, state: child.state, result: child.result })))}\n` : '') +
+          (work.children?.length ? `Peer outcomes for this job: ${JSON.stringify(work.children.map(child => ({ id: child.id, revision: child.revision,
+            reviewPolicy: child.reviewPolicy, reviewGrantId: child.reviewGrantId, state: child.state, result: child.result,
+            settlement: child.settlement, cancellationReason: child.cancellationReason })))}\nUse returned results in the existing goal. A failed peer is an outcome to handle, not permission to claim success or replay an uncertain effect.\n` : '') +
           (execution.monitor ? `This is a bounded standing monitor through ${execution.monitor.endsAt}. Submit one check result; Relay retains this task and schedules the next interval. Do not run a continuous polling model turn.\n` : '') +
           (binding.workerInstructions?.(execution) ?? ''), createdAt: now() };
       work = journal.save({ ...work, state: 'intent', invocation });
@@ -204,6 +217,26 @@ export async function tickNode(journal, api, resolveBinding) {
         id: execution.id, expectedRevision: execution.revision, outcome: execution.cancellationRequested ? 'cancelled' : 'failed',
         evidence: `Exact native terminal ${observation.messageId}, outcome ${observation.outcome}`,
       } }, { inputRevision: execution.cancellationRequested ? undefined : work.interaction?.revision });
+      continue;
+    }
+    if (execution.state === 'accepted' && execution.collaboration && (!work.staged || work.staged.kind === 'result') && connected) {
+      const peers = await peerExecutions(api, execution.id, execution.runId);
+      if (peers.length && (!work.staged || peers.some(peer => !childTerminal(peer)))) {
+        // A collaborative handover already authorises waiting for its peers.
+        // The model need not orchestrate an extra wait call after every handoff.
+        const key = `collaboration-wait:${digest([execution.id, execution.runId, peers.map(peer => peer.id)])}`;
+        journal.queue({ key, action: 'execution.wait_children', payload: { id: execution.id, expectedRevision: execution.revision,
+          childExecutionIds: peers.map(peer => peer.id) } }, { inputRevision: work.interaction?.revision });
+        journal.save({ ...work, state: 'settled_waiting', staged: null,
+          ...(work.staged ? { provisionalOutcomes: [...(work.provisionalOutcomes ?? []), { ...work.staged, reason: 'peer_results_pending', at: now() }] } : {}) });
+        continue;
+      }
+    }
+    if (execution.parentExecutionId && execution.state === 'accepted' && !work.staged) {
+      journal.queue({ key: `missing-peer-result:${digest([execution.id, execution.runId])}`, action: 'execution.settle', payload: {
+        id: execution.id, expectedRevision: execution.revision, outcome: 'failed',
+        evidence: `Native peer turn ${observation.messageId} finished successfully without a result or clarification submission`,
+      } }, { inputRevision: work.interaction?.revision });
       continue;
     }
     if (work.staged && observation.outcome === 'succeeded' && execution.state === 'accepted') {

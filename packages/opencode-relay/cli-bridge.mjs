@@ -67,7 +67,8 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
   const contextIndex = argv.findIndex(arg => arg === '--context' || arg.startsWith('--context='));
   const selectedContext = contextIndex < 0 ? executionSource || agentReadSource ? workerContextFile : operatorContextFile :
     argv[contextIndex] === '--context' ? argv[contextIndex + 1] : argv[contextIndex].slice('--context='.length);
-  const readScope = { authority: agentReadSource ? 'enrolled_read_only' : executionSource ? 'execution' : operatorContextFile ? 'human_operator' : 'unscoped',
+  const workerReadOnly = Boolean(agentReadSource || !executionSource && selectedContext === workerContextFile && readOnlyCliInvocation(args));
+  const readScope = { authority: workerReadOnly ? 'enrolled_read_only' : executionSource ? 'execution' : operatorContextFile ? 'human_operator' : 'unscoped',
     context: selectedContext && selectedContext === workerContextFile ? 'worker' : selectedContext && selectedContext === operatorContextFile ? 'operator' : 'none',
     operatorContextUsed: Boolean(selectedContext && selectedContext === operatorContextFile) };
   try {
@@ -75,7 +76,7 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
     // node. Match the Relay executable's /usr/bin/env node interpreter instead.
     result = await run('node', [cli, ...argv], { cwd: directory, timeout, signal, maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, RELAY_CONTEXT: '', RELAY_NATIVE_CONTEXT: executionSource || agentReadSource ? workerContextFile : operatorContextFile ?? '', OPENCODE_SESSION_ID: sessionId ?? '',
-        RELAY_CLI_READ_ONLY: agentReadSource ? '1' : '',
+        RELAY_CLI_READ_ONLY: workerReadOnly ? '1' : '',
         RELAY_CLI_EXECUTION_ID: executionSource?.executionId ?? '', RELAY_CLI_RUN_ID: executionSource?.runId ?? '', RELAY_CLI_SOURCE_ID: executionSource?.id ?? '',
         RELAY_CLI_INPUT_REVISION: executionSource?.inputRevision ?? '' } });
     if (scratch) rmSync(scratch, { recursive: true, force: true });

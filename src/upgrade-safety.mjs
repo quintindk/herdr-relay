@@ -28,7 +28,13 @@ const interactiveProtocolWork = (requests, permissions = []) => [
 export function assertInteractiveUpgradeCompatibility(identity, release) {
   requireValue(release.compatibility.interactiveProvisioning === 1 || !identity.interactiveProtocolWork?.length,
     'upgrade_interactive_protocol_required', 'Pending capacity-aware preparations, held reservations or repair approvals require interactive provisioning protocol 1. Settle or explicitly cancel and inspect them before switching to older code. History and unrelated work remain intact.', 409);
+  requireValue(release.compatibility.collaboration === 1 || !identity.collaborationWork?.length,
+    'upgrade_collaboration_protocol_required', 'Active bounded collaboration requires protocol 1. Finish or explicitly cancel that job before switching to older code. Unrelated work and historical results are unchanged.', 409);
 }
+
+const collaborationWork = executions => executions.filter(e => (e?.collaboration || e?.collaborationDeadline) &&
+  !['completed', 'failed', 'cancelled', 'rejected', 'in_review'].includes(e.state))
+  .map(e => ({ kind: 'collaboration', id: e.id, state: e.state }));
 
 export function inspectDatabase(path, role) {
   requireValue(existsSync(path), 'upgrade_state_missing', 'Existing service database is required. Upgrade never initialises a new identity');
@@ -43,7 +49,8 @@ export function inspectDatabase(path, role) {
       const instanceId = db.prepare("SELECT value FROM settings WHERE key='instance'").get()?.value;
       requireValue(instanceId, 'upgrade_state_invalid', 'Existing backend instance identity is missing');
       blockers.push(...backendMaintenanceBlockers(db));
-      return { instanceId, schema, blockers, interactiveProtocolWork: interactiveProtocolWork(
+      return { instanceId, schema, blockers, collaborationWork: collaborationWork(db.prepare("SELECT data FROM entities WHERE kind='execution'").all().map(row => JSON.parse(row.data))),
+        interactiveProtocolWork: interactiveProtocolWork(
         db.prepare("SELECT data FROM entities WHERE kind='provision_request'").all().map(row => JSON.parse(row.data)),
         db.prepare("SELECT data FROM entities WHERE kind='grant_request'").all().map(row => JSON.parse(row.data))) };
     }
@@ -82,7 +89,8 @@ export function inspectDatabase(path, role) {
     const permissions = db.prepare("SELECT data FROM cached_entities WHERE kind='grant_request'").all().map(row => JSON.parse(row.data).entity);
     const pendingRepairs = db.prepare("SELECT key,data FROM outbox WHERE state IN ('pending','conflict')").all()
       .filter(row => JSON.parse(row.data).command.action === 'interactive.repair_request').map(row => ({ kind: 'repair_publication', id: row.key, state: JSON.parse(row.data).state }));
-    return { ...identity, schema, blockers, interactiveProtocolWork: [...interactiveProtocolWork(preparations, permissions), ...pendingRepairs],
+    return { ...identity, schema, blockers, collaborationWork: collaborationWork(db.prepare('SELECT data FROM work').all().map(row => JSON.parse(row.data).execution)),
+      interactiveProtocolWork: [...interactiveProtocolWork(preparations, permissions), ...pendingRepairs],
       ...(refusedPublications.length ? { refusedPublications } : {}) };
   } finally { db.close(); }
 }

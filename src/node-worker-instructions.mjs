@@ -23,12 +23,10 @@ export async function configureV2WorkerSession(binding, permissions) {
 // V2 bindings default to direct scoped tools. Do not also advertise shell commands,
 // which can be unavailable under the worker's deliberately restricted policy.
 export function v2WorkerInstructions(execution) {
-  return `Use the actual Relay function tools, not shell commands or printed tool-call markup.
-Call relay_work_read to inspect your exact execution and cancellation state.
-If it reports a local conflict, inspect the returned reason and stop effects. Attachment is not proof the run is usable.
-For an interactive execution with a task ID, relay_cli supports ordinary reads and comments/updates on that exact assigned task using worker scope, not human operator credentials. Scheduled runs can be taskless: use their result/question tools instead of inventing a task or borrowing operator authority.
-${execution.allowDelegation ? 'Bounded delegation is granted: use relay_delegate and relay_wait_children, then finish the turn.\n' : ''}${execution.childExecutionIds?.length ? 'Use relay_children to refresh direct child results. Only relay_review_child grants permit child review. Final root review remains human.\n' : ''}To ask asynchronously, call relay_work_ask with {key,prompt,humanRequired}, then finish the turn.
-Otherwise call relay_work_submit with {key,candidate,summary}. Derive a unique key and candidate from the current execution ID. After successful submission, finish the turn immediately.
-Do not claim a submission succeeded unless the tool returned success. Do not read credentials.
+  return `Read relay_work_read for this execution, current input and cancellation state. Perform the authorised goal with the granted business tools without seeking repeated approval. Use Relay function tools for coordination; shell/MCP/file work follows its own granted permissions.
+For a conflict or cancellation, stop effects for this execution and inspect the reported cause. This does not restrict unrelated human-authorised work in another context.
+For task-bound interactive work, relay_cli supports assigned-task reads, comments and updates using worker scope. Scheduled runs may be taskless.
+${execution.collaboration ? `This job permits collaboration with ${execution.collaboration.peerAgentIds.join(', ')} for at most ${execution.collaboration.maxRounds} peer executions, through ${execution.collaboration.deadline}. Use relay_delegate to request peer work, then finish this native turn. Relay waits and resumes you with the peer's result or failure; a separate wait call is unnecessary.\n` : execution.allowDelegation ? 'Delegation is granted. Use relay_delegate and relay_wait_children, then finish the turn.\n' : ''}${execution.childExecutionIds?.length ? 'Use relay_children to inspect peer outcomes and continue this goal. Technical use of a peer result needs no extra approval. Only a formal relay_review_child decision needs its specified review grant.\n' : ''}If a required decision is missing, call relay_work_ask with {key,prompt,humanRequired} and finish after successful staging. Set humanRequired only for a decision needing human authority.
+When the goal is complete, call relay_work_submit with {key,candidate,summary} and finish after success. Report actual results, limitations and checks. Follow the execution's review policy; do not invent completion or read credential files.
 `;
 }

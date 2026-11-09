@@ -34,7 +34,8 @@
     "protocol": "relay/0.2",
     "backendSchema": 2,
     "nodeSchema": 1,
-    "interactiveProvisioning": 1
+    "interactiveProvisioning": 1,
+    "collaboration": 1
   },
   "relayInstaller": {
     "protocol": 1

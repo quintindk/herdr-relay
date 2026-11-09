@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Carry collaboration permission, selected peers, round limit and deadline through
+  the normal task handover. Add a same-form peer selector rather than another
+  grant/approval workflow. The coordinator automatically waits after handing off.
+- Resume coordinators with terminal peer failures. Settle a delegated native turn
+  without a submission as an explicit failure, preserve failed attempts in final
+  reports, and stop inheriting final human review onto ordinary internal checks.
+- Scope worker instructions to their actual execution/tool boundaries. Keep the
+  everyday skills concise and move specialised/historical operational detail into
+  on-demand references. Honour explicit worker-context read-only CLI queries from
+  a current human chat without demanding an execution.
+- Add opt-in real-model collaboration acceptance using the existing authenticated
+  service, private workspaces and two actual tool-using model sessions. Keep that
+  evidence distinct from scripted provider/transport fixtures.
+
 - Exclude definitively refused attachment bindings from node loading without
   deleting their command, error or identity history. Preserve confirmed historical
   bindings and uncertain attachment reconciliation.

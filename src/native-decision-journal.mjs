@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { canonical, digest, requireValue } from './protocol.mjs';
+import { collaborationReceiptMatches } from './collaboration.mjs';
 
 // Human keyboard decisions only. Persist the exact authorised command before
 // sending it. A lost reply must never create a new decision or operation key.
@@ -48,8 +49,9 @@ export class NativeDecisionJournal {
           receipt.operation?.preparationId === p.preparationId && receipt.requestHash === p.previewHash :
         command.action === 'grant.revoke' ? receipt.state === 'revoked' && receipt.grantKind === p.kind :
         command.action === 'grant.create' ? receipt.state === 'active' && receipt.grantKind === 'interactive' && receipt.scopeHash === digest(p.scope) :
-        command.action === 'execution.request' ? receipt.taskId === p.taskId && receipt.taskRevision === p.taskRevision &&
-          receipt.targetAgentId === p.targetAgentId && receipt.instructions === p.instructions && receipt.state === 'requested' :
+         command.action === 'execution.request' ? receipt.taskId === p.taskId && receipt.taskRevision === p.taskRevision &&
+          receipt.targetAgentId === p.targetAgentId && receipt.instructions === p.instructions && receipt.state === 'requested' &&
+          (receipt.allowDelegation ?? false) === (p.allowDelegation ?? false) && collaborationReceiptMatches(receipt.collaboration, p.collaboration, receipt.createdAt) :
         command.action === 'execution.handback' ? receipt.revision === p.expectedRevision + 1 && receipt.state === 'cancelled' &&
           receipt.cancellationReason === p.reason && receipt.administrativeDisposition?.kind === 'owner_handback' &&
           receipt.administrativeDisposition.assignmentWithdrawn === true && receipt.administrativeDisposition.nativeSettlementClaimed === false &&

@@ -75,6 +75,12 @@ Shell-only scope inspection is separately recorded in
 
 ## Coverage and release integrity
 
+The opt-in [collaboration acceptance](collaboration.md#verification) uses actual
+models and the normal handover, not scripted tool-call responses. It is not run
+implicitly by CI or a default smoke command. Deterministic fixtures continue to
+test protocol/failure boundaries; they are not evidence of goal-directed model
+collaboration.
+
 Retain native identity, permission, review, recovery, offline-cache and compatible
 upgrade regressions when removing obsolete integration tests. Shared native code
 must not depend on a retired service merely to obtain a test fixture.
