@@ -73,14 +73,14 @@ test('skill symlinks and invalid receipts are never replaced, even with explicit
   assert.equal(installSkills({ ...f, replaceModified: true }).state, 'skill_conflict');
 });
 
-test('public skills CLI uses the selected config directory and node install syncs skills without real systemd', t => {
+test('public skills CLI and node install preserve both shipped skills byte-for-byte without real systemd', t => {
   const f = fixture(t), cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
   const status = JSON.parse(execFileSync(process.execPath, [cli, 'skills', 'status', '--config-dir', f.configDirectory], { encoding: 'utf8' }));
   assert.ok(status.skills.every(s => s.state === 'missing'));
   const installed = JSON.parse(execFileSync(process.execPath, [cli, 'skills', 'install', '--config-dir', f.configDirectory], { encoding: 'utf8' }));
   assert.equal(installed.state, 'skills_installed');
-  const shipped = readFileSync(new URL('../skills/herdr-relay/SKILL.md', import.meta.url), 'utf8');
-  assert.equal(readFileSync(f.target('herdr-relay'), 'utf8'), shipped);
+  const shipped = name => readFileSync(new URL(`../skills/${name}/SKILL.md`, import.meta.url));
+  for (const name of ['herdr-relay', 'relay-work']) assert.deepEqual(readFileSync(f.target(name)), shipped(name));
   const bin = join(f.root, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   const nodeConfig = join(f.root, 'node.json'); writeFileSync(nodeConfig, '{"nodeId":"fixture"}');
@@ -88,5 +88,6 @@ test('public skills CLI uses the selected config directory and node install sync
     encoding: 'utf8', env: { ...process.env, HOME: f.root, XDG_CONFIG_HOME: join(f.root, 'config'), PATH: `${bin}:${process.env.PATH}` },
   }));
   assert.equal(result.skills.state, 'skills_installed');
-  assert.equal(readFileSync(join(f.root, 'config/opencode/skills/herdr-relay/SKILL.md'), 'utf8'), shipped);
+  for (const name of ['herdr-relay', 'relay-work'])
+    assert.deepEqual(readFileSync(join(f.root, 'config/opencode/skills', name, 'SKILL.md')), shipped(name));
 });

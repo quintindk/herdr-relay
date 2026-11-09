@@ -157,7 +157,10 @@ const skillConfig = join(root, 'installed-skills'); mkdirSync(skillConfig);
 const installedCli = join(consumer, 'node_modules/.bin/herdr-relay');
 const installedSkills = JSON.parse(execFileSync(installedCli, ['skills', 'install', '--config-dir', skillConfig], { encoding: 'utf8' }));
 assert.equal(installedSkills.state, 'skills_installed');
-assert.match(readFileSync(join(skillConfig, 'skills/herdr-relay/SKILL.md'), 'utf8'), /Relay uses its native task backend/);
+for (const name of ['herdr-relay', 'relay-work']) assert.deepEqual(
+  readFileSync(join(skillConfig, 'skills', name, 'SKILL.md')),
+  readFileSync(join(installed, 'skills', name, 'SKILL.md')),
+  `Installed ${name} skill must match the packaged bytes`);
 assert.equal(JSON.parse(execFileSync(installedCli, ['skills', 'install', '--config-dir', skillConfig], { encoding: 'utf8' })).state, 'skills_current');
 if (!values['skip-audit']) {
   const activationBin = join(root, 'activation-bin'); mkdirSync(activationBin);
