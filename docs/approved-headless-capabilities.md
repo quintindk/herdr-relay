@@ -40,7 +40,10 @@ conflict rather than being overwritten. No shell or generic write tool is grante
 
 ## Runtime tools
 
-- `relay_headless_scope`: inspect the exact active run's approved capabilities.
+- `relay_headless_scope`: inspect the exact active run's shell/MCP permissions and
+  optional native capabilities. This read is available without a capability profile,
+  returning empty source/action lists and `artifacts: null`. Those empty lists do
+  not restrict separately granted shell/MCP access or require a new grant.
 - `relay_headless_task`: create/update/comment/attach a source reference through
   native Tasks, with stable source identity, operation key and inspected revision.
 - `relay_headless_reference_lookup`: inspect exact source identities and explicit

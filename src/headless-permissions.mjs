@@ -13,9 +13,9 @@ export function headlessSessionPermissions(grant, mcpTools = []) {
     ...(grant.contractFiles ?? []).map(f => ({ action: 'read', resource: `${grant.directory}/${f.path}`, effect: 'allow' })),
     ...['relay_work_read', 'relay_work_submit', 'relay_work_ask', 'relay_task_list', 'relay_task_inspect', 'relay_task_comments', 'relay_task_relations']
       .map(action => ({ action, resource: '*', effect: 'allow' }))];
-  const actions = ['relay_headless_permissions', 'relay_mcp_tools', ...(grant.permissions.mcp ? ['relay_mcp_call', ...mcpTools.map(tool => tool.id)] : []),
+  const actions = ['relay_headless_permissions', 'relay_headless_scope', 'relay_mcp_tools', ...(grant.permissions.mcp ? ['relay_mcp_call', ...mcpTools.map(tool => tool.id)] : []),
     ...(grant.permissions.shell ? ['relay_shell_call', 'shell'] : [])];
-  if (grant.capabilities) actions.push('relay_headless_scope', 'relay_headless_capabilities',
+  if (grant.capabilities) actions.push('relay_headless_capabilities',
     ...(grant.capabilities.taskActions.length ? ['relay_headless_task', 'relay_headless_reference_lookup'] : []),
     ...(grant.capabilities.artifacts ? ['relay_headless_artifacts'] : []));
   return [...permissions, ...[...new Set(actions)].map(action => ({ action, resource: '*', effect: 'allow' }))];

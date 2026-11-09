@@ -575,16 +575,28 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       }
       else if (path === '/work/read') result = { execution: work.execution, localState: work.state, inputRevision: work.interaction?.revision ?? null,
         answer: work.answer ?? null, cancellationRequested: work.execution.cancellationRequested };
-      else if (path === '/work/headless-access') {
+      else if (['/work/headless-access', '/work/headless-scope'].includes(path)) {
+        const inspection = path === '/work/headless-scope';
         requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested &&
-          Object.keys(body).every(key => ['executionId', 'runId'].includes(key)), 'headless_execution_inactive', 'Exact active headless tool scope required', 403);
+          Object.keys(body).every(key => ['executionId', 'runId', ...(inspection ? ['payload'] : [])].includes(key)),
+          'headless_execution_inactive', 'Exact active headless tool scope required', 403);
+        if (inspection) requireValue(body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload) && Object.keys(body.payload).length === 0,
+          'invalid_headless_request', 'Scope inspection takes no overrides');
         const result = await api('POST', '/v1/headless/read', { operation: 'permissions', executionId: work.id, runId: body.runId });
         requireValue(result.id === worker.headlessSetupId && result.sessionId === worker.sessionId, 'headless_scope_mismatch', 'Connector grant belongs to another worker', 403);
         const authority = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
         const contract = checkContract(authority.setup, authority.grant);
-        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ...result, ...contract, outcomeStaged: Boolean(work.staged) })); return;
+        // Inspection is available to every headless grant. Empty native task/file
+        // capabilities do not negate its separately approved shell/MCP permission.
+        if (inspection && result.capabilities) journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+          .run(`headless-authority:${work.id}:${body.runId}`, JSON.stringify({ id: result.id, directory: result.directory,
+            profile: result.capabilities, readiness: result.readiness }));
+        const response = inspection ? { permissions: result.permissions, sourceNamespaces: result.capabilities?.sourceNamespaces ?? [],
+          taskActions: result.capabilities?.taskActions ?? [], artifacts: result.capabilities?.artifacts ?? null } :
+          { ...result, ...contract, outcomeStaged: Boolean(work.staged) };
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(response)); return;
       }
-      else if (['/work/headless-task', '/work/headless-reference', '/work/headless-artifacts', '/work/headless-observation', '/work/headless-capabilities', '/work/headless-scope'].includes(path)) {
+      else if (['/work/headless-task', '/work/headless-reference', '/work/headless-artifacts', '/work/headless-observation', '/work/headless-capabilities'].includes(path)) {
         requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
           Object.keys(body).every(k => ['executionId', 'runId', 'key', 'payload'].includes(k)) && body.payload && typeof body.payload === 'object',
         'headless_execution_inactive', 'Exact active headless execution and capability payload required', 403);
@@ -599,10 +611,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           requireValue(auditOnly && cached && (!error.status || error.status >= 500), error.code ?? 'headless_authority_unavailable', 'Fresh authorisation required; only uncertain audit records can use cached scope offline');
           scope = JSON.parse(cached.value); offline = true;
         }
-        if (path === '/work/headless-scope') {
-          requireValue(Object.keys(body.payload).length === 0, 'invalid_headless_request', 'Capability inspection takes no overrides');
-          result = { sourceNamespaces: scope.profile.sourceNamespaces, taskActions: scope.profile.taskActions, artifacts: scope.profile.artifacts ?? null };
-        } else if (path === '/work/headless-task') {
+        if (path === '/work/headless-task') {
           requireValue(typeof body.key === 'string' && body.key === body.payload.key, 'invalid_headless_request', 'Exact stable mutation key required');
           validateHeadlessTaskPayload(body.payload.operation, body.payload.payload);
           const command = { key: `headless-transport:${digest([work.id, body.runId, body.payload.source, body.payload.operation, body.key])}`, action: 'headless.task',

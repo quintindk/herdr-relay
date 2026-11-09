@@ -235,6 +235,15 @@ Peer, uncorrelated synthetic and profile/workspace boundaries remain fenced.
 A question-tool answer is not a new native human source. It cannot repair a hard
 boundary or substitute for separate human approval.
 
+OpenCode's fixed incomplete-stream and output-limit continuations are supporting
+controls, not foreign work or new human instructions. Relay matches the untagged
+synthetic control to its immediately preceding completed assistant error/length
+finish and ordered native timestamps. Arbitrary continuation prose, tagged peer
+notices and a different native boundary do not qualify. The same invocation, run
+and latest genuine source remain in force. A retained false conflict can be
+re-observed in place without prompt replay or an invented submission. The controls
+come from the [OpenCode runner](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/session/runner/llm.ts).
+
 Staged outcomes record their input revision. New steering retains obsolete staged
 outcomes as superseded evidence. Unattempted stale publications are retired without
 being sent. A publication already attempted when input changes remains explicitly

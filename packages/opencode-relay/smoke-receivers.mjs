@@ -27,8 +27,11 @@ mkdirSync(workspace); mkdirSync(state);
 const binary = process.env.RELAY_V2_BINARY ?? join(here, 'node_modules/.bin/opencode2');
 const legacyRecovery = process.argv.includes('--legacy-recovery');
 const modelSwitch = process.argv.includes('--model-switch');
+const nativeContinuation = process.argv.includes('--native-continuation');
+const interruptedTasks = new Set();
 const steering = process.argv.includes('--steering') || legacyRecovery || modelSwitch;
-const firstMessage = process.argv.includes('--first-message') || steering;
+assert.ok(!nativeContinuation || !steering, 'Native stream continuation uses its own fixture mode');
+const firstMessage = process.argv.includes('--first-message') || steering || nativeContinuation;
 const tuiOnly = process.argv.includes('--tui-only') || firstMessage;
 if (firstMessage) {
   mkdirSync(join(workspace, 'nested'));
@@ -65,6 +68,15 @@ const model = createServer(async (req, res) => {
   }
   const steps = steering && taskId ? recovering ? ['relay_interactive_reconcile', 'relay_interactive_reconcile', 'relay_work_read'] : closing ? ['relay_cli', 'relay_work_read', 'relay_work_submit'] : powerBi ? ['relay_work_read'] : ['relay_work_read', 'read', 'relay_work_read'] :
     firstMessage && taskId ? ['relay_work_read', 'read', 'relay_work_read', 'relay_cli', 'relay_work_submit'] : ['relay_work_read', 'relay_work_submit'];
+  if (nativeContinuation && taskId && tools.length === 3 && !interruptedTasks.has(taskId)) {
+    interruptedTasks.add(taskId); requests++;
+    // Let the real OpenCode runner create its recovery control. Do not inject a
+    // synthetic message through the API or handcraft a successful native receipt.
+    res.setHeader('content-type', 'text/event-stream');
+    res.end(`data: ${JSON.stringify({ id: `interrupted-${requests}`, created: 1, model: 'fixture', object: 'chat.completion.chunk',
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'Fixture stream interrupted before scoped CLI progress.' }, finish_reason: null }] })}\n\n`);
+    return;
+  }
   const name = steps[tools.length];
   const tool = name && input.tools?.find(t => t.function?.name.endsWith(name) && (name !== 'read' || !t.function.name.includes('relay_')));
   assert.ok(!name || tool, `Missing actual native fixture tool: ${name}`);
@@ -193,6 +205,14 @@ try {
       assert.match(prompts[0].text, /first prompt/);
       assert.ok(messages.some(message => message.type === 'synthetic' && message.metadata?.instruction?.paths?.includes(join(workspace, 'nested/AGENTS.md'))),
         'The actual native file tool must load nested AGENTS instructions during the owned execution');
+      if (nativeContinuation) {
+        assert.ok(interruptedTasks.has(task.id));
+        const index = messages.findIndex(message => message.type === 'synthetic' &&
+          message.text === 'The previous response was interrupted. Continue from where you left off without repeating completed content.');
+        assert.ok(index > 0, 'The real native runner must retain its incomplete-stream continuation');
+        assert.equal(messages[index].metadata, undefined); assert.equal(messages[index - 1].type, 'assistant');
+        assert.equal(messages[index - 1].finish, 'error'); assert.ok(messages[index - 1].error);
+      }
       assert.equal((await owner('GET', '/v1/executions')).items.filter(execution => execution.taskId === task.id).length, 1);
       const comments = (await owner('GET', `/v1/comments?taskId=${task.id}`)).items;
       if (steering) {
@@ -333,6 +353,7 @@ try {
     postIdleSteeringTerminalVerified: steering, separateHumanTaskClosureVerified: steering,
     explicitHistoricalInputRecoveryVerified: legacyRecovery,
     interactiveModelSelectionVerified: modelSwitch, explicitHistoricalModelRecoveryVerified: modelSwitch && legacyRecovery,
+    nativeStreamContinuationVerified: nativeContinuation,
     keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands,
     landingScreenCommands: keyboardCommands && landing, scopedHumanOperator: keyboardCommands && process.argv.includes('--scoped-operator'), state: root }, null, 2));
 } finally {

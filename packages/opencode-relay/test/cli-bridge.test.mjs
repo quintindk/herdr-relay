@@ -119,6 +119,27 @@ test('a matching accepted execution uses worker CLI context and cannot become an
   await assert.rejects(f.invoke({ args: ['native', 'task', 'comment'] }), { code: 'execution_source_required' });
 });
 
+test('native interrupted-stream continuation preserves the actual human or assigned CLI source without acquiring authority', async () => {
+  for (const assigned of [false, true]) {
+    const f = fixture();
+    if (assigned) {
+      f.messages[0].metadata = { herdrRelayInvocation: 'human' };
+      f.current = { execution: { id: 'execution', runId: 'run', state: 'accepted', cancellationRequested: false }, sourceMessageId: 'human' };
+    }
+    f.messages.splice(1, 0, { id: 'failed', type: 'assistant', time: { created: 2, completed: 3 }, finish: 'error',
+      error: { type: 'provider.unknown', message: 'Fixture interruption' }, content: [] },
+    { id: 'continuation', type: 'synthetic', time: { created: 4 },
+      text: 'The previous response was interrupted. Continue from where you left off without repeating completed content.' });
+    const result = await f.invoke({ args: ['native', 'task', 'comment'] });
+    assert.equal(JSON.parse(result.content).sourceMessageId, 'human');
+    assert.equal(f.calls[0].operatorContextFile, assigned ? undefined : '/node/operator.json');
+    assert.equal(f.calls[0].executionSource?.executionId, assigned ? 'execution' : undefined);
+    f.messages[2].metadata = { source: 'peer' };
+    await assert.rejects(f.invoke({ args: ['native', 'task', 'comment'] }), /human-source/);
+    assert.equal(f.calls.length, 1);
+  }
+});
+
 test('approval notices can reconcile execution/preparation reads without a human phrase, active execution or operator credential', async () => {
   const f = fixture();
   f.messages[0] = { id: 'permission-notice', type: 'user', text: 'Recorded approval evidence, not a human instruction',

@@ -246,6 +246,11 @@ Isolated real-host gate: `node scripts/verify-headless-setup.mjs --contract-upda
 
 - `relay_headless_permissions` inspects MCP and shell policy without executing
   external effects. A granted shell must have a native shell executor available.
+- `relay_headless_scope` is read-only and available to every headless grant. It
+  reports shell/MCP permissions and any optional native task/artifact capabilities.
+  Empty source/action lists and `artifacts: null` do not deny an explicitly approved
+  shell or MCP permission. Shell/MCP-only jobs need no native task/artifact grant
+  or capability canary, and should not invent another preflight approval gate.
 - `relay_shell_call` uses the native shell input schema, session and cancellation
   signal. Only an accepted authorised business run may dispatch it. No owner context
   or borrowed credential is supplied.

@@ -184,7 +184,12 @@ compatibility: opencode
 
 ## Work, questions and review
 
-- In versions exposing approved headless capabilities, inspect `relay_headless_scope`.
+- Headless shell/MCP permissions are independent of optional native task/artifact
+  capabilities. Use `relay_headless_permissions` for shell/MCP policy and
+  `relay_headless_scope` for any native capability scopes. Scope inspection is
+  available to every headless grant. Empty source/action lists or artifact paths
+  do not deny an explicitly granted shell/MCP permission. Do not require another
+  grant, contract revision or unrelated capability canary for already-approved work.
   Use only the exact task-action and artifact-path grants. The generic
   `relay_headless_task`, `relay_headless_reference_lookup` and
   `relay_headless_artifacts` tools do not authorise dispatch, review, arbitrary

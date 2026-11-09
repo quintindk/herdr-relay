@@ -4,6 +4,13 @@
 
 Draft bug-fix batch. Additional fixes will be collected before publication.
 
+- Keep native incomplete-stream and output-limit continuations in their existing
+  owned turn. Correlate the fixed OpenCode control with its adjacent completed
+  assistant failure/finish instead of blocking it as foreign input. Preserve the
+  original invocation, CLI source and run without granting new human authority.
+- Expose read-only headless scope inspection to shell/MCP-only grants. Report
+  empty native task/artifact capabilities without blocking separately approved
+  shell/MCP work or requiring another grant or contract revision.
 - Acknowledge native interactive model selections through a subsequent human
   message without replacing the assignment or replaying its prompt. Verify the
   model chain/current selection, retain control provenance and fence stale outcomes.

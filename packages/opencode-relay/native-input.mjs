@@ -26,8 +26,24 @@ export function completionInput(message, preceding) {
   }));
 }
 
+// OpenCode's runner emits these two untagged synthetic controls after a completed
+// assistant step. Match the fixed control AND its adjacent native failure/finish,
+// never arbitrary "continue" prose or a peer's tagged notification. These retain
+// the existing source only. They are not human acknowledgement or new authority.
+// Upstream: anomalyco/opencode v2.2.5, packages/core/src/session/runner/llm.ts.
+export function continuationInput(message, preceding) {
+  if (message?.type !== 'synthetic' || message.metadata !== undefined) return false;
+  const finish = message.text === 'The previous response was interrupted. Continue from where you left off without repeating completed content.' ? 'error' :
+    message.text === 'Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces.' ? 'length' : null;
+  const previous = preceding.at(-1), created = message.time?.created, start = previous?.time?.created, completed = previous?.time?.completed;
+  return finish !== null && previous?.type === 'assistant' && previous.finish === finish &&
+    Number.isSafeInteger(created) && created > 0 && Number.isSafeInteger(start) && start > 0 &&
+    Number.isSafeInteger(completed) && completed >= start && created >= completed &&
+    (finish === 'error' ? typeof previous.error?.type === 'string' && !!previous.error.type : !previous.error);
+}
+
 export function supportingInput(message, preceding) {
-  return instructionInput(message) || completionInput(message, preceding);
+  return instructionInput(message) || completionInput(message, preceding) || continuationInput(message, preceding);
 }
 
 // Native user input is collaboration only inside a verified interactive binding.

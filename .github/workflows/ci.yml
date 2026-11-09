@@ -54,6 +54,8 @@ jobs:
         run: node scripts/verify-interactive-recovery.mjs
       - name: Never-prompted receiving chat, instruction load and execution-scoped CLI
         run: node packages/opencode-relay/smoke-receivers.mjs --first-message
+      - name: Native incomplete-stream continuation retains assigned scope and submission
+        run: node packages/opencode-relay/smoke-receivers.mjs --native-continuation
       - name: Human steering, explicit historical recovery and independent human operations
         run: node packages/opencode-relay/smoke-receivers.mjs --legacy-recovery
       - name: Interactive model selection and same-assignment human acknowledgement
@@ -84,6 +86,8 @@ jobs:
         run: node scripts/verify-headless-setup.mjs --mcp-denied
       - name: Headless shell allowed with harmless outside-workspace write
         run: node scripts/verify-headless-setup.mjs --shell
+      - name: Shell-only headless scope inspection needs no task or artifact grant
+        run: node scripts/verify-headless-setup.mjs --shell --mcp-denied
       - name: Headless shell denied without effect
         run: node scripts/verify-headless-setup.mjs --shell-denied --mcp-denied
       - name: Installed RC4 compatible upgrade, rollback and chat-continuity smoke

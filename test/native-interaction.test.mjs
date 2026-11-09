@@ -245,6 +245,26 @@ test('a native model change plus human continuation keeps the same assignment an
   assert.equal(f.store.all('question').length, 1); assert.equal(f.sends, 1);
 });
 
+test('a retained native stream-continuation conflict recovers in place without replay, a new human source or a fabricated result', async t => {
+  const f = fixture(t); f.request(); await f.tick();
+  const original = f.journal.work('current');
+  f.messages.push({ id: 'failed', type: 'assistant', time: { created: 1, completed: 2 }, finish: 'error',
+    error: { type: 'provider.unknown', message: 'Fixture interrupted stream' }, content: [] },
+  { id: 'continuation', type: 'synthetic', time: { created: 3 },
+    text: 'The previous response was interrupted. Continue from where you left off without repeating completed content.' },
+  { id: 'terminal', type: 'idle', outcome: 'succeeded' }); f.idle = true;
+  f.journal.save({ ...original, state: 'conflict', observation: {
+    state: 'conflict', reason: 'concurrent_native_input', inputId: 'continuation', inputType: 'synthetic' } });
+  await f.tick();
+  const recovered = f.journal.work('current');
+  assert.equal(recovered.state, 'native_finished'); assert.equal(recovered.observation.messageId, 'terminal');
+  assert.deepEqual(recovered.invocation, original.invocation);
+  assert.deepEqual(recovered.interaction.inputIds, []); assert.equal(recovered.interaction.anchorId, original.invocation.messageId);
+  assert.equal(recovered.recovery.previousObservation.inputId, 'continuation');
+  assert.equal(recovered.execution.runId, original.execution.runId); assert.equal(recovered.staged, original.staged);
+  assert.equal(f.store.get('execution', 'current').state, 'accepted'); assert.equal(f.sends, 1);
+});
+
 test('retained model-switch conflicts need exact current-human recovery, not an upgrade or a peer notice', async t => {
   const f = fixture(t);
   f.model = { providerID: 'fixture', id: 'first' };

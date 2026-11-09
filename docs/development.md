@@ -28,6 +28,8 @@ node scripts/verify-cli-bridge.mjs --completion-steering
 node scripts/verify-interactive-recovery.mjs
 node packages/opencode-relay/smoke-receivers.mjs --model-switch
 node packages/opencode-relay/smoke-receivers.mjs --model-switch --legacy-recovery
+node packages/opencode-relay/smoke-receivers.mjs --native-continuation
+node scripts/verify-headless-setup.mjs --shell --mcp-denied
 node scripts/verify-agent-relocation.mjs
 node scripts/verify-headless-setup.mjs --legacy-contract-refusal --capabilities
 node scripts/verify-headless-setup.mjs --connection-rebind --contract-update --capabilities
@@ -66,6 +68,10 @@ model-conflict recovery and a real background shell completion arriving after a
 human follow-up. They use deterministic fixture models and isolated native services,
 not live provider accounts. Package verification runs these against the installed
 package on each supplied supported host and records `installedNativeInputVerifications`.
+The continuation fixture deliberately truncates a provider stream so the real native
+runner emits its recovery control, then verifies scoped CLI progress and submission.
+Shell-only scope inspection is separately recorded in
+`installedHeadlessScopeVerifications`, with no native task/artifact grant added.
 
 ## Coverage and release integrity
 

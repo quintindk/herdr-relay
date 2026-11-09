@@ -7,6 +7,16 @@ while this batch remains in draft.
 
 ## Current fixes
 
+- **Native stream continuation:** OpenCode's fixed incomplete-stream and output-limit
+  controls retain the existing invocation, run and CLI source. The observer checks
+  the adjacent completed assistant failure/finish and timestamps. These controls
+  do not become human input, acknowledge model changes or legitimise peer notices.
+  Retained false conflicts can be re-observed without replaying a prompt or
+  fabricating a submitted result.
+- **Shell-only cron preflight:** read-only `relay_headless_scope` is available even
+  without optional native task/artifact capabilities. It reports the existing
+  shell/MCP permissions and empty capability lists. Already-approved shell/MCP work
+  needs no additional grant, contract revision or unrelated capability canary.
 - **Interactive model acknowledgement:** a structured native `model-switched`
   event can be acknowledged by a subsequent genuine human message in the same
   verified chat. The observer checks the previous/current model and variant,
@@ -29,6 +39,8 @@ while this batch remains in draft.
 - **Native regression gates:** CI and installed-package verification exercise new
   model acknowledgement, exact historical model recovery and a real background
   shell completion arriving after a human follow-up on OpenCode 2.1.0, 2.1.2 and 2.2.5.
+  They also exercise a real interrupted provider stream and shell-only scope
+  inspection followed by an authorised shell command on those installed hosts.
 - **Upgrade CI asset reads:** the test-only RC4 baseline downloader retries transient
   HTTP/transport failures at most three times, discards partial responses and reports
   the HTTP status, attempt and asset path on refusal. Permanent HTTP refusals,

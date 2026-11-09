@@ -40,6 +40,8 @@ test('shell capability inspection is effect-free and uses the native input schem
   assert.equal(f.checks[0].action, 'shell');
   const permissions = headlessSessionPermissions(f.scope);
   assert.ok(permissions.some(rule => rule.action === 'shell' && rule.resource === '*' && rule.effect === 'allow'));
+  assert.ok(permissions.some(rule => rule.action === 'relay_headless_scope' && rule.resource === '*' && rule.effect === 'allow'));
+  assert.equal(permissions.some(rule => ['relay_headless_task', 'relay_headless_artifacts', 'relay_headless_capabilities'].includes(rule.action) && rule.effect === 'allow'), false);
   assert.equal(permissions.some(rule => ['write', 'edit', 'execute'].includes(rule.action) && rule.effect === 'allow'), false);
 });
 
