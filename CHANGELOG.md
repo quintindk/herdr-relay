@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.7 — Unreleased
+## 0.2.7 — 10 November 2026
 
 - Carry collaboration permission, selected peers, round limit and deadline through
   the normal task handover. Add a same-form peer selector rather than another

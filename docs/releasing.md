@@ -4,10 +4,9 @@ Release preparation does not publish, upgrade services, change live configuratio
 or reset state. Publication requires an explicit human instruction and an immutable
 version tag. Packages are distributed through GitHub Releases, not npm.
 
-The current release preparation is **0.2.7**. Keep its pull request in draft until
-the remaining verification and review are complete. The versioned commands below
-describe the planned release; preparation alone does not authorise running the
-publication steps or installing unpublished assets.
+This procedure targets **0.2.7**. Merging a pull request updates source, not the
+published release. The versioned commands below require explicit publication
+authority and verified source. Never install unpublished assets.
 
 ## Required gates
 
@@ -43,7 +42,7 @@ HERDR_BINARY=/absolute/herdr-0.9.5 \
 node scripts/verify-package.mjs --release --output /private/artifacts/0.2.7
 ```
 
-Planned assets for 0.2.7 are `herdr-relay-0.2.7.tgz`, `SHA256SUMS` and
+Release assets for 0.2.7 are `herdr-relay-0.2.7.tgz`, `SHA256SUMS` and
 `herdr-relay-0.2.7.tgz.verification.json`. The report records the source commit,
 cleanliness, timestamp, host checks, installer handover evidence and audit result.
 Different bytes at an existing artifact path or inconsistent checksums are refused.

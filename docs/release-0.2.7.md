@@ -1,8 +1,8 @@
 # Herdr Relay 0.2.7
 
-**Status: draft, not published.** Release date and final verification are pending.
-Preparing or merging this version does not authorise a tag, publication or live
-service upgrade. Published installation examples remain on 0.2.6 until release.
+Bounded peer collaboration, concise agent instructions and attachment recovery.
+Release date: **10 November 2026**. Installation and live service upgrades remain
+separate operations from publication.
 
 ## Bounded peer collaboration
 
@@ -68,9 +68,16 @@ An active collaborative job fences a switch to older code lacking its protocol;
 settled history and unrelated work do not create that fence. Existing grants,
 credential boundaries, model pins and uncertain-effect evidence remain intact.
 
-## Verification completed during development
+## Verification
 
 - 661 root regression tests and 143 plugin tests passed, with repository checks.
+- Clean merged-source CI passed production-only installation on OpenCode **2.1.0,
+  2.1.2 and 2.2.5**, with a fresh production audit reporting **zero vulnerabilities**.
+  Both installed managed skills match their packaged bytes.
+- Installed checks cover native continuation and model recovery, scoped CLI task
+  handover, agent-issued grants and linked interactive repair. Isolated checks
+  cover candidate-owned installer handover, native onboarding, compatible
+  active-work upgrade/rollback and real Herdr **0.9.5** keyboard controls.
 - A real-model run on OpenCode **2.2.6** used two GPT-6.1 Sol agents in two private
   workspaces. Independent assessment, coordinator repair, fresh peer verification
   and final reporting completed in two peer rounds and three coordinator turns,
@@ -82,11 +89,10 @@ credential boundaries, model pins and uncertain-effect evidence remain intact.
   deterministic fixture models. That is transport/terminal evidence, not the
   real-model collaboration result.
 
-These checks do not replace the required installed-package host matrix, production
-audit, compatible upgrade/rollback and Herdr keyboard verification. Those remain
-release gates while the PR is draft. Real-model acceptance covers the private
-manifest task, not production business-source access or physical multi-machine
-qualification.
+Real-model acceptance covers the private manifest task, not production
+business-source access or physical multi-machine qualification.
 
-The [release procedure](releasing.md) still requires explicit publication authority
-and exact verified assets. No release tag or live upgrade is part of this draft.
+The tag workflow repeats the [release gates](releasing.md) and publishes only
+after exact-tag verification. The supplied verification report binds the assets
+to their clean source commit, supported hosts and fresh production audit.
+Publication does not upgrade a live installation or replay a failed job.
