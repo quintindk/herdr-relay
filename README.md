@@ -9,6 +9,10 @@ recovery. Install only published, verified release assets. Existing installation
 must be on **0.2.1-rc4 or later** to upgrade. See the
 [0.2.7 release notes](docs/release-0.2.7.md).
 
+**0.2.8 is in draft preparation**, adding a local-time clock to OpenCode's bottom
+status bar. See the [draft notes](docs/release-0.2.8.md). Installation examples
+remain on published **0.2.7** until the new release is available.
+
 ## What it does
 
 - Human-owned tasks with stable references, comments, dependencies and source links.
