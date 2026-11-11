@@ -35,6 +35,7 @@
     "backendSchema": 2,
     "nodeSchema": 1,
     "interactiveProvisioning": 1,
+    "agentDeletion": 1,
     "collaboration": 1
   },
   "relayInstaller": {

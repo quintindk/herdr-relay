@@ -38,5 +38,7 @@ export function releaseInfo(directory) {
     'upgrade_incompatible', 'Unsupported interactive provisioning compatibility protocol');
   requireValue(contract.collaboration === undefined || [0, 1].includes(contract.collaboration),
     'upgrade_incompatible', 'Unsupported collaboration compatibility protocol');
+  requireValue(contract.agentDeletion === undefined || [0, 1].includes(contract.agentDeletion),
+    'upgrade_incompatible', 'Unsupported agent deletion compatibility protocol');
   return { directory, version: manifest.version, compatibility: contract, fingerprint: fingerprint(directory) };
 }

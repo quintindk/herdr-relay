@@ -10,6 +10,7 @@ import { BoardText, modalSize, appendBoardInput } from './board-text.mjs';
 import { routineDetailLayout } from './board-detail-layout.mjs';
 import { layoutBoardRows, boardRowViewport } from './board-row-layout.mjs';
 import { AgentRenamePanel } from './agent-rename-panel.mjs';
+import { LifecycleDeletePanel, ScheduleCreatePanel, scheduleFormPayload } from './lifecycle-panels.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
@@ -142,7 +143,7 @@ function ReviewModal({ modal, setModal, submit, width, height }) {
   h(Text, { dimColor: true }, modal.confirm ? 'Enter apply · Esc back' : modal.decision === 'reject' ? 'Type feedback · Enter review · Esc cancel' : 'Enter review · Esc cancel'));
 }
 
-function AgentDetailModal({ detail, close, rename, width, height }) {
+function AgentDetailModal({ detail, close, rename, remove, width, height }) {
   const [scroll, setScroll] = useState(0), [technical, setTechnical] = useState(false);
   const { width: w, height: size } = modalSize(width, height, 100, 26), viewport = Math.max(1, size - 8);
   const agent = detail.data?.agent;
@@ -165,6 +166,7 @@ function AgentDetailModal({ detail, close, rename, width, height }) {
   const start = Math.min(scroll, Math.max(0, lines.length - viewport));
   useInput((input, key) => {
     if (input === 'n' && rename && agent) { void rename(agent); return; }
+    if (input === 'x' && remove && agent) { void remove(agent); return; }
     if (key.escape || key.return || input === 'q') { close(); return; }
     if (input === 't') { setTechnical(value => !value); setScroll(0); return; }
     if (key.downArrow || input === 'j') setScroll(value => Math.min(Math.max(0, lines.length - viewport), value + 1));
@@ -177,10 +179,10 @@ function AgentDetailModal({ detail, close, rename, width, height }) {
   h(Text, { bold: true, color: 'cyan' }, 'Agent details'),
   h(Box, { height: viewport, flexDirection: 'column', overflow: 'hidden' }, ...lines.slice(start, start + viewport).map((line, i) => h(Text, { key: i, wrap: 'truncate-end' }, line || ' '))),
   h(Box, { flexGrow: 1 }), h(Text, { dimColor: true }, `${start + 1}-${Math.min(lines.length, start + viewport)}/${lines.length}`),
-  h(Text, { dimColor: true, wrap: 'truncate-end' }, `j/k · PgUp/PgDn · ${rename ? 'n rename · ' : ''}t details · Esc close`));
+  h(Text, { dimColor: true, wrap: 'truncate-end' }, `j/k · PgUp/PgDn · ${rename ? 'n rename · ' : ''}${remove ? 'x delete · ' : ''}t details · Esc close`));
 }
 
-function DetailModal({ detail, close, openOccurrence, openAction, review, openRunResultNotifications, width, height }) {
+function DetailModal({ detail, close, openOccurrence, openAction, review, openRunResultNotifications, controlSchedule, width, height }) {
   const actions = detail.data?.actions ?? [];
   const taskTabs = [...(actions.length ? ['Actions'] : []), 'Overview', 'Result', 'Comments', ...(detail.data?.activity ? ['Activity'] : [])];
   const [tab, setTab] = useState(0);
@@ -199,7 +201,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
   const tabsText = taskTabs.map((name, i) => tab === i ? `[${name}]` : name).join(' · ');
   const tabsRows = wrapBoardText(tabsText, contentWidth).length;
   const footerText = detail.kind === 'task' ? `${actions.length && taskTabs[tab] === 'Actions' ? 'Enter act · ' : detail.data?.review ? 'A approve · F/R reject · ' : ''}↑↓ scroll · PgUp/PgDn · Home/End · Tab section · Esc close`
-    : '↑↓ scroll · PgUp/PgDn · [/] occurrences · n notices · o task · Esc close';
+    : `↑↓ scroll · PgUp/PgDn · [/] occurrences · n notices · ${controlSchedule ? 'x delete · p pause/resume · ' : ''}o task · Esc close`;
   const footerRows = wrapBoardText(footerText, contentWidth).length;
   const viewportHeight = Math.max(1, modalHeight - 2 - titleRows - footerRows - 2 - (detail.kind === 'task' ? tabsRows + 1 : 0));
   const wrapLines = value => wrapBoardText(value, contentWidth);
@@ -240,6 +242,9 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
   const maxScroll = Math.max(0, content.length - viewportHeight);
   useInput((input, key) => {
     if (detail.kind === 'routine' && input === 'n') { openRunResultNotifications?.(detail.data); return; }
+    if (detail.kind === 'routine' && controlSchedule && detail.data && ['x', 'p'].includes(input)) {
+      void controlSchedule(detail.data, input === 'x' ? 'delete' : detail.data.enabled === false || detail.data.state === 'paused' ? 'resume' : 'pause'); return;
+    }
     if (detail.kind === 'task' && input === 't') { setTechnical(value => !value); return; }
     if (detail.kind === 'task' && taskTabs[tab] === 'Actions') {
       if (key.return) { void openAction(actions[actionIndex]); return; }
@@ -306,6 +311,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
 }
 
 export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
+  prepareAgentDelete, deleteAgent, prepareScheduleCreation, prepareScheduleCreate, createSchedule, prepareScheduleChange, changeSchedule,
   detailGrant, decideGrant, createGrant, prepareInteractiveRepair, requestInteractiveRepair, pendingGrantDecisions, updateRunResultNotifications, prepareAgentRename, renameAgent, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
   const width = fixedWidth ?? window.columns ?? 100, height = fixedHeight ?? window.rows ?? 30;
@@ -317,6 +323,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const [decisionModal, setDecisionModal] = useState(null);
   const [settingsModal, setSettingsModal] = useState(null);
   const [renameModal, setRenameModal] = useState(null);
+  const [lifecycleModal, setLifecycleModal] = useState(null), [newScheduleModal, setNewScheduleModal] = useState(null);
   const [decisionReceipt, setDecisionReceipt] = useState(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
@@ -359,7 +366,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     const rows = buildBoardRows(board, { showDone, showIdle, filter, expanded });
     return native ? rows.filter(row => row.type !== 'group' || row.counts.total > 0) : rows;
   }, [board, showDone, showIdle, filter, collapsed]);
-  const routineRows = useMemo(() => board.routines.filter(routine => showDone || routine.state !== 'cancelled')
+  const routineRows = useMemo(() => board.routines.filter(routine => showDone || !routine.cancelled && routine.state !== 'cancelled')
     .map(routine => ({ id: `cron:${routine.id}`, type: 'routine', routine })), [board.routines, showDone]);
   const inboxRows = useMemo(() => (board.inbox ?? []).filter(item => !filter || decisionText(`${item.title} ${item.summary} ${item.from} ${item.stateLabel}`).toLowerCase().includes(filter.toLowerCase()))
     .map(item => ({ id: item.id, type: 'inbox', item })), [board.inbox, filter]);
@@ -448,6 +455,68 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
         error: clean(error.message || 'Rename is unconfirmed. Reconcile the original operation in Inbox') });
       setRefreshGeneration(value => value + 1);
     }
+  };
+  const lifecycleError = (set, current, error) => {
+    const publications = pendingDecisions?.(), publication = publications?.find(item => item.key === current.key);
+    set(value => value?.requestId === current.requestId ? { ...current, busy: false, locked: publications ? !!publication : true,
+      refused: publication?.action === 'dismiss', error: clean(error.message || 'Acknowledgement is unconfirmed. Reconcile the original operation in Inbox') } : value);
+    setRefreshGeneration(value => value + 1);
+  };
+  const refreshLifecycle = async current => {
+    setLifecycleModal(value => value?.requestId === current.requestId ? { ...value, busy: true, error: '' } : value);
+    try {
+      const preview = current.kind === 'agent' ? await prepareAgentDelete({ agentId: current.itemId }) :
+        await prepareScheduleChange({ scheduleId: current.itemId, operation: current.operation });
+      setLifecycleModal(value => value?.requestId === current.requestId ? { ...value, preview, busy: false, scroll: preview.eligible ? undefined : 0 } : value);
+    } catch (error) { setLifecycleModal(value => value?.requestId === current.requestId ? { ...value, busy: false, error: clean(error.message) } : value); }
+  };
+  const openLifecycle = async (kind, item, operation = 'delete') => {
+    if (offline) { setNotice('Refresh the board connection before making changes'); return; }
+    if (kind === 'agent' ? !board.agentDeletionAvailable || !prepareAgentDelete || !deleteAgent :
+      !board.scheduleManagementAvailable || !prepareScheduleChange || !changeSchedule) { setNotice('Control unavailable. Upgrade the backend and TUI'); return; }
+    const requestId = randomUUID(); setDetail(null);
+    const current = { requestId, itemId: item.id, kind, operation, key: `human-${kind}-${operation}:${randomUUID()}`, field: 'reason',
+      reason: `Removed from the ${kind === 'agent' ? 'Agents' : 'Schedule'} TUI`, busy: true, confirm: false, error: '' };
+    setLifecycleModal(current); await refreshLifecycle(current);
+  };
+  const submitLifecycle = async current => {
+    setLifecycleModal({ ...current, busy: true, locked: true, error: '' });
+    try {
+      const result = current.kind === 'agent' ? await deleteAgent({ ...current.preview, key: current.key, reason: current.reason.trim() }) :
+        await changeSchedule({ ...current.preview, operation: current.operation, key: current.key, reason: current.reason.trim() });
+      if (result.state !== 'recorded' || (current.kind === 'agent' ? result.agent?.id !== current.preview.agentId || !result.agent?.deletedAt :
+        result.schedule?.id !== current.preview.scheduleId || (current.operation === 'delete' ? !result.schedule.cancelled || result.schedule.definition?.enabled !== false :
+          result.schedule.definition?.enabled !== (current.operation === 'resume')))) throw Error('Control acknowledgement does not match the confirmed item');
+      setLifecycleModal(null); setNotice(result.message); setRefreshGeneration(value => value + 1);
+    } catch (error) { lifecycleError(setLifecycleModal, current, error); }
+  };
+  const openScheduleCreation = async () => {
+    if (offline) { setNotice('Refresh the board connection before creating a schedule'); return; }
+    if (!board.scheduleManagementAvailable || !prepareScheduleCreation || !prepareScheduleCreate || !createSchedule) { setNotice('Schedule creation unavailable. Upgrade the backend and TUI'); return; }
+    const requestId = randomUUID();
+    setNewScheduleModal({ requestId, key: `human-schedule-create:${randomUUID()}`, busy: true, confirm: false, error: '',
+      field: 'id', id: '', instructions: '', cron: '0 9 * * *', timezone: 'Africa/Johannesburg', reviewPolicy: 'human', enabled: false, targetIndex: 0, nodeIndex: 0 });
+    try {
+      const candidates = await prepareScheduleCreation();
+      setNewScheduleModal(value => value?.requestId === requestId ? { ...value, candidates, intent: candidates.agents.length ? 'job' : 'reminder', busy: false } : value);
+    } catch (error) { setNewScheduleModal(value => value?.requestId === requestId ? { ...value, busy: false, error: clean(error.message) } : value); }
+  };
+  const previewNewSchedule = async current => {
+    setNewScheduleModal({ ...current, busy: true, error: '' });
+    try {
+      const preview = await prepareScheduleCreate({ payload: scheduleFormPayload(current) });
+      setNewScheduleModal(value => value?.requestId === current.requestId ? { ...value, preview, instructions: preview.definition.instructions,
+        cron: preview.definition.cron, busy: false, confirm: true, scroll: 0 } : value);
+    } catch (error) { setNewScheduleModal(value => value?.requestId === current.requestId ? { ...value, busy: false, error: clean(error.message) } : value); }
+  };
+  const submitNewSchedule = async current => {
+    setNewScheduleModal({ ...current, busy: true, locked: true, error: '' });
+    try {
+      const result = await createSchedule({ ...current.preview, key: current.key });
+      if (result.state !== 'recorded' || result.schedule?.id !== current.preview.id || result.schedule.definition?.enabled !== current.preview.definition.enabled)
+        throw Error('Schedule creation acknowledgement does not match its preview');
+      setNewScheduleModal(null); setNotice(result.message); setRefreshGeneration(value => value + 1);
+    } catch (error) { lifecycleError(setNewScheduleModal, current, error); }
   };
   const submit = async current => {
     const status = current.options[current.index]; setModal({ ...current, busy: true, error: '' });
@@ -538,7 +607,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   };
   useInput((input, key) => {
     if (native && view === 'grants') return;
-    if (modal || assignment || reviewModal || detail || decisionModal || settingsModal || renameModal) return;
+    if (modal || assignment || reviewModal || detail || decisionModal || settingsModal || renameModal || lifecycleModal || newScheduleModal) return;
     if (searching) {
       if (key.escape) { setSearching(false); setFilter(''); }
       else if (key.return) setSearching(false);
@@ -608,6 +677,15 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       if (row?.type !== 'agent') setNotice('Select an agent to rename'); else void openAgentRename(row.agent);
       return;
     }
+    if (native && view === 'schedules' && input === 'c') { void openScheduleCreation(); return; }
+    if (native && ['agents', 'schedules'].includes(view) && (input === 'x' || view === 'schedules' && input === 'p')) {
+      const row = rows[selectedIndex];
+      if (view === 'agents' && row?.type === 'agent') void openLifecycle('agent', row.agent);
+      else if (view === 'schedules' && row?.type === 'routine') void openLifecycle('schedule', row.routine,
+        input === 'x' ? 'delete' : row.routine.enabled === false || row.routine.state === 'paused' ? 'resume' : 'pause');
+      else setNotice(`Select ${view === 'agents' ? 'an agent' : 'a schedule'}`);
+      return;
+    }
     if (input === 'a') {
       if (native && !dispatchTask) { setNotice('Native execution handover is unavailable'); return; }
       const row = rows[selectedIndex];
@@ -670,7 +748,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     onView: delta => { setView(value => nativeBoardViews[(nativeBoardViews.indexOf(value) + delta + nativeBoardViews.length) % nativeBoardViews.length]); setSelected(0); setSelectedNativeId(null); },
     onQuit: () => { setQuitting(true); (onQuit ?? exit)(); } });
   const summary = taskCounts(board.tasks);
-  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal || settingsModal || renameModal);
+  const overlay = Boolean(modal || assignment || reviewModal || detail || decisionModal || settingsModal || renameModal || lifecycleModal || newScheduleModal);
   const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
   const nativeCounts = view === 'agents'
     ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
@@ -690,8 +768,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     ? [`✓ ${decisionReceipt.message}`, decisionReceipt.kind === 'question' ? 'Any required review will appear in this Inbox.' : decisionReceipt.title,
       'Esc dismiss acknowledgement · Tab view · Enter open · q quit']
     : [native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search',
-      native ? view === 'schedules' ? 'n run result notifications · PgUp/Dn · r refresh · q quit'
-        : view === 'agents' ? `${board.agentRenamingAvailable && renameAgent ? 'n rename · ' : ''}PgUp/Dn · r refresh · q quit`
+      native ? view === 'schedules' ? `${board.scheduleManagementAvailable && createSchedule ? 'c create · x delete · p pause/resume · ' : ''}n run result notifications · h cancelled · r refresh · q quit`
+        : view === 'agents' ? `${board.agentRenamingAvailable && renameAgent ? 'n rename · ' : ''}${board.agentDeletionAvailable && deleteAgent ? 'x delete inactive · ' : ''}PgUp/Dn · r refresh · q quit`
         : `h done · ${dispatchTask ? 'a assign · ' : ''}PgUp/Dn · r refresh · s status · q quit` : 'h done · i idle · r refresh · a assign · s status · q quit'])
     .flatMap(text => wrapBoardText(text, width));
   const bodyHeight = Math.max(1, height - header.length - footer.length - (native ? 3 : 2));
@@ -741,13 +819,21 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
       else { if (value?.reason !== undefined) setReviewFeedback(value.reason); setReviewModal(value); }
     }, submit: submitReview, width, height }) : null,
     detailView && !reviewModal && !decisionModal ? detailView.kind === 'agent'
-      ? h(AgentDetailModal, { detail: detailView, close: () => setDetail(null), rename: board.agentRenamingAvailable && renameAgent ? openAgentRename : undefined, width, height })
-      : h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, openAction: openInbox, review: prepareReview, openRunResultNotifications, width, height }) : null,
+      ? h(AgentDetailModal, { detail: detailView, close: () => setDetail(null), rename: board.agentRenamingAvailable && renameAgent ? openAgentRename : undefined,
+        remove: board.agentDeletionAvailable && deleteAgent ? agent => openLifecycle('agent', agent) : undefined, width, height })
+      : h(DetailModal, { detail: detailView, close: () => setDetail(null), openOccurrence, openAction: openInbox, review: prepareReview, openRunResultNotifications,
+        controlSchedule: board.scheduleManagementAvailable && changeSchedule ? (routine, operation) => openLifecycle('schedule', routine, operation) : undefined, width, height }) : null,
     renameModal ? h(AgentRenamePanel, { modal: renameModal, setModal: setRenameModal, submit: submitAgentRename, close: () => {
       setRenameModal(null);
       if (renameModal.locked) { setView('inbox'); setSelected(0); setSelectedNativeId(null); }
     }, width, height }) : null,
     settingsModal ? h(RunResultNotificationsPanel, { modal: settingsModal, setModal: setSettingsModal, submit: submitRunResultNotifications, width, height }) : null,
+    lifecycleModal ? h(LifecycleDeletePanel, { modal: lifecycleModal, setModal: setLifecycleModal, submit: submitLifecycle, refresh: refreshLifecycle, close: () => {
+      setLifecycleModal(null); if (lifecycleModal.locked) { setView('inbox'); setSelected(0); setSelectedNativeId(null); }
+    }, width, height }) : null,
+    newScheduleModal ? h(ScheduleCreatePanel, { modal: newScheduleModal, setModal: setNewScheduleModal, preview: previewNewSchedule, submit: submitNewSchedule, close: () => {
+      setNewScheduleModal(null); if (newScheduleModal.locked) { setView('inbox'); setSelected(0); setSelectedNativeId(null); }
+    }, width, height }) : null,
     decisionModal ? h(BoardDecisionModal, { modal: decisionModal, setModal: setDecisionModal, submit: submitDecision, width, height }) : null);
 }
 

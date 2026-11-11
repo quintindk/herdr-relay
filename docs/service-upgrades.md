@@ -99,6 +99,12 @@ Upgrade the backend and participating nodes to **0.2.7** before enabling
 **1** fences a switch to older code while a collaborative job remains active.
 Settled collaboration history and unrelated work do not create that fence.
 
+The inactive-agent controls introduced in **0.2.8** retain deleted identities and
+local binding fences under agent deletion compatibility protocol **1**. Upgrade
+the backend, TUI and owning node before using them. Once those records exist,
+switching either service to older code without that protocol is refused. This
+retains history rather than deleting it to permit a downgrade.
+
 ## 3. Deferred plugin reload
 
 Pending UI decisions, or unavailable decision inspection, defer only the plugin

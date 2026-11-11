@@ -111,6 +111,9 @@ export class NodeJournal {
           if (!old || JSON.parse(old.data).entity.revision <= event.revision) {
             this.db.prepare(`INSERT INTO cached_entities VALUES (?,?,?)
               ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data`).run(cacheKind, event.entityId, JSON.stringify({ entity: event.data, fetchedAt: now() }));
+            if (cacheKind === 'agent' && event.data.nodeId === this.nodeId && event.data.deletedAt)
+              this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+                .run(`agent-deleted:${event.entityId}`, JSON.stringify(event.data));
             // The backend owns confirmed display-name changes. Apply them to
             // local enrolment metadata, never to receiver identity or policy.
             if (cacheKind === 'agent' && event.data.nodeId === this.nodeId && Number.isSafeInteger(event.data.nameRevision) && event.data.nameRevision > 0) {
@@ -169,7 +172,8 @@ export class NodeJournal {
     });
   }
   work(id) { const row = this.db.prepare('SELECT data FROM work WHERE id=?').get(id); return row ? JSON.parse(row.data) : null; }
-  cached(kind) { return this.db.prepare('SELECT data FROM cached_entities WHERE kind=? ORDER BY id').all(kind).map(row => JSON.parse(row.data)); }
+  cached(kind) { return this.db.prepare('SELECT data FROM cached_entities WHERE kind=? ORDER BY id').all(kind).map(row => JSON.parse(row.data))
+    .filter(item => kind !== 'agent' || !item.entity.deletedAt); }
   receipt(key) {
     const row = this.db.prepare('SELECT data FROM outbox WHERE key=?').get(key);
     return row ? JSON.parse(row.data) : null;
@@ -186,6 +190,8 @@ export class NodeJournal {
   }
   works() { return this.db.prepare('SELECT data FROM work ORDER BY id').all().map(row => JSON.parse(row.data)); }
   assertReceiver(binding) {
+    requireValue(!this.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`agent-deleted:${binding.agentId}`),
+      'agent_deleted', 'Deleted agents cannot receive new work', 410);
     if (!binding.receiverGeneration) return;
     const row = this.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${binding.agentId}`);
     const receiver = row && JSON.parse(row.value);

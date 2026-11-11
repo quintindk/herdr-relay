@@ -52,6 +52,13 @@ jobs:
           assert.equal(report.auditVerified, true);
           assert.equal(report.vulnerabilities.total, 0);
           assert.equal(report.interactiveProvisioningProtocol, 1);
+          const lifecycle = report.nativeLifecycleVerification;
+          assert.ok(lifecycle, 'Installed human lifecycle controls must be verified');
+          for (const field of ['passed', 'realTuiKeyboard', 'humanScheduleCreate', 'humanScheduleDelete', 'inactiveAgentDelete',
+            'nodeCancellationAcknowledged', 'deletionFencedOnNode', 'historyRetained']) assert.equal(lifecycle[field], true, field);
+          assert.equal(lifecycle.modelTurnsStarted, 0);
+          assert.equal(lifecycle.userServicesTouched, false);
+          assert.equal(lifecycle.credentialsCopied, false);
           const handover = report.installerHandover;
           assert.ok(handover, 'Installer process regression evidence is required');
           assert.equal(handover.version, report.version);
@@ -67,6 +74,7 @@ jobs:
           assert.deepEqual(report.installedTuiVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2', '2.2.5']);
           for (const test of report.installedTuiVerifications) {
             assert.equal(test.passed && test.productionPackageTuiLoaded && test.sidebarMounted && test.scopedStatusReceived && test.runtimeCommandAndNotification, true);
+            assert.equal(test.statusClockMounted && test.homeStatusClockMounted, true);
             assert.equal(test.pluginLoadErrors, 0);
           }
           assert.deepEqual(report.installedCliBridgeVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2', '2.2.5']);

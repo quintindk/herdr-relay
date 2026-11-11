@@ -42,8 +42,8 @@ export class NativeDecisionJournal {
       requireValue(info.instanceId === instanceId, 'backend_identity_changed', 'Backend identity changed. The confirmed decision remains pending for inspection');
       const receipt = await api('POST', '/v1/commands', command);
       const p = command.payload;
-      const valid = receipt?.id === p.id && (command.action === 'agent.rename' ?
-         receipt.name === p.name && receipt.nameRevision === p.expectedNameRevision + 1 : command.action === 'grant.request_decide' ?
+       const valid = receipt?.id === p.id && (command.action === 'agent.rename' ?
+          receipt.name === p.name && receipt.nameRevision === p.expectedNameRevision + 1 : command.action === 'grant.request_decide' ?
         receipt.state === (p.decision === 'reject' ? 'rejected' : 'approved') && receipt.decision?.decision === p.decision && receipt.decision?.requestHash === p.requestHash :
         command.action === 'grant.repair_request' ? receipt.kind === 'interactive_repair' && receipt.state === 'awaiting_approval' &&
           receipt.operation?.preparationId === p.preparationId && receipt.requestHash === p.previewHash :
@@ -56,6 +56,14 @@ export class NativeDecisionJournal {
           receipt.cancellationReason === p.reason && receipt.administrativeDisposition?.kind === 'owner_handback' &&
           receipt.administrativeDisposition.assignmentWithdrawn === true && receipt.administrativeDisposition.nativeSettlementClaimed === false &&
           receipt.administrativeDisposition.successfulCompletionClaimed === false && receipt.administrativeDisposition.nativeProcessTerminationClaimed === false :
+        command.action === 'agent.delete' ? receipt.revision === p.expectedRevision + 1 && !!receipt.deletedAt &&
+          receipt.deletion?.reason === p.reason && receipt.deletion.nativeProcessTerminationClaimed === false :
+        command.action === 'schedule.install' ? receipt.revision === 1 && p.expectedRevision === 0 && receipt.appliedRevision === 0 &&
+          canonical(receipt.definition) === canonical(p.definition) :
+        command.action === 'schedule.cancel' ? receipt.revision === p.expectedRevision + 1 && receipt.cancelled === true &&
+          receipt.definition?.enabled === false && receipt.cancellationReason === p.reason :
+        ['schedule.pause', 'schedule.resume'].includes(command.action) ? receipt.revision === p.expectedRevision + 1 && !receipt.cancelled &&
+          receipt.definition?.enabled === (command.action === 'schedule.resume') :
         command.action === 'schedule.result_notifications' ? receipt.revision === p.expectedRevision + 1 &&
           canonical(receipt.definition?.runResultNotifications) === canonical(p.runResultNotifications) :
         command.action === 'question.answer'

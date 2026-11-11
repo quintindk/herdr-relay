@@ -30,10 +30,13 @@ shown as awaiting activation rather than Active.
 | / | Search |
 | PgUp/PgDn | Inspect a long selected card or scroll a detail viewport |
 | Home/End | Move to the beginning/end of detail content |
-| h | Include/exclude completed tasks |
+| h | Include/exclude completed tasks and cancelled schedules |
 | a | Open the human/agent assignment picker for a task |
 | s | Inspect eligible human task-status changes |
 | n | Rename the selected agent in Agents, or configure run result notifications from Schedule |
+| c in Schedule | Create a cron schedule for an existing interactive agent or a human reminder |
+| x in Agents / Schedule | Preview and confirm inactive-agent deletion or schedule cancellation |
+| p in Schedule | Preview and confirm pause/resume of the selected schedule |
 | v in Grants | Inspect and confirm revocation of the selected active permission |
 | p in Grants | Preview and request approval for a linked preparation repair |
 | [ / ] | Select the previous/next occurrence in cron detail |
@@ -83,6 +86,69 @@ the confirmed payload and retains the original operation in **Inbox**, where it
 can be reconciled without issuing another rename. Upgrade the backend and TUI to
 enable the action, and upgrade the owning node so its local enrolment labels also
 follow confirmed backend updates. A stopped node catches up after reconnection.
+
+## Delete an inactive agent
+
+In **Agents**, select an agent and press **x**, including from agent detail. Inspect
+the deletion preview, edit the reason, then use **Enter** to review and **Enter**
+again to apply. **Esc** backs out without submitting an unconfirmed change.
+
+Fresh available/busy receiving chats are protected. Offline, unknown or stale
+entries are eligible only after backend checks for recorded work and dependencies:
+
+- No outstanding executions, candidate reviews or open agent questions.
+- No pending messages, preparations or active provisioning/headless/review grants.
+- No remaining schedule references, including paused schedules. Cancel those
+  schedules first and wait for the owning node to acknowledge cancellation.
+
+A blocked preview lists the dependencies. **r** refreshes that preview after they
+are resolved. There is no force-delete or automatic cascade through permissions.
+The transaction rechecks the guards, so a newly assigned job can refuse deletion
+even after a clean preview.
+
+Deletion removes the agent from the current directory and prevents new Relay
+admission. It retains the agent ID, receiving-chat records, credentials and audit
+history. Its node excludes the binding after observing the deletion, including on
+restart. The original ID cannot be reused. No native process, chat, workspace or
+file is deleted, and unknown local effects are not declared settled.
+
+A node operator can delete only agents in its own node/workspace scope. Upgrade
+the backend, TUI and owning node for these controls. Retained deletion records
+require agent deletion compatibility protocol **1** for subsequent code switches.
+
+## Create and manage cron schedules
+
+In **Schedule**, press **c**. The editor offers:
+
+- An existing enrolled **interactive agent**, or a **human reminder** on a permitted
+  node. New independent headless workers keep their separate approved setup flow.
+- A unique name/ID without spaces, five-field numeric cron and an explicit IANA
+  timezone. The timezone defaults to **Africa/Johannesburg**.
+- Job instructions or reminder text, result review for agent jobs, and activation.
+  New definitions default to **Paused**. Reminders have no agent or result review.
+
+Use **Tab / Shift+Tab** to move fields, arrows or **Space** for choices, **Ctrl+U**
+to clear an editor and **Shift+Enter** for multiline instructions. **Enter** validates
+the draft and previews its next times and cron warnings. **Enter** again confirms
+the exact definition. A reused ID cannot silently edit or reactivate an old schedule.
+The next times are estimates, not admission reservations or a run-now command.
+
+From the schedule list or detail, **p** previews pause/resume and **x** previews
+deletion. Both require confirmation. Deletion permanently cancels future ticks
+after node acknowledgement, hides the trigger from the default list and keeps its
+past reports. **h** includes cancelled schedules. Already admitted work is not
+interrupted, and a disconnected node has not applied a change merely because the
+backend recorded it. The requested/applied revisions show that distinction.
+
+The joined node's human operator can manage only schedules on its own node and
+within its workspace scope. Daemon/worker credentials do not acquire these human
+controls. Existing **n** run-result notification settings remain separate.
+
+Confirmed creation, activation and deletion commands persist before publication.
+An unconfirmed reply locks the exact payload and key. Retry that original operation
+or reconcile it from **Inbox**. A definite refusal must be inspected and dismissed
+before taking a fresh decision. Historical receipts remain reconcilable even if a
+later human operation deleted the target agent.
 
 ## Inbox and Grants
 

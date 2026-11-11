@@ -59,6 +59,12 @@ three OpenCode hosts and real Herdr keyboard repair, approval and revocation. Th
 CI package job downloads checksum-pinned Herdr 0.9.5 into its private runner path.
 The publication gate checks this evidence rather than accepting a missing field.
 
+The package verifier also exercises the installed human lifecycle TUI: create a
+paused cron, cancel it, apply the owning node acknowledgement and delete the
+eligible inactive agent. It checks retained history and the node-side deletion
+fence without starting model turns or using live services/credentials. Publication
+requires this evidence under `nativeLifecycleVerification`.
+
 ## Push, CI, tag, publish
 
 While collecting fixes, keep the feature pull request in draft. Branch/PR CI may

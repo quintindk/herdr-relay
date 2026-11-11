@@ -80,6 +80,13 @@ try {
     const contextFiles = new Map();
     let workerIndexDigest;
     const loadBinding = async entry => {
+      if (receivers.isDeleted(entry.agentId)) return;
+      if (connectedAtStartup) {
+        try {
+          const agent = await api('GET', `/v1/agents/${encodeURIComponent(entry.agentId)}`);
+          if (agent.deletedAt) { receivers.markDeleted(agent); return; }
+        } catch (error) { if (error.status !== 404) throw error; }
+      }
       if (historicalBindings.has(entry.id)) return historicalBindings.get(entry.id);
       requireValue(['opencode-v2', 'opencode-v2-owned', 'hermes'].includes(entry.harness) && entry.agentId && entry.id,
         'invalid_binding', 'Explicit supported native binding required');
@@ -180,6 +187,8 @@ try {
       if (!entry.receiverGeneration) bindings.set(entry.agentId, configured);
     };
     const refreshReceivers = async () => {
+      for (const agentId of bindings.keys()) if (receivers.isDeleted(agentId)) bindings.delete(agentId);
+      for (const [identity, agentId] of nativeEndpoints) if (receivers.isDeleted(agentId)) nativeEndpoints.delete(identity);
       for (const entry of receivers.loadableBindings()) if (!historicalBindings.has(entry.id)) await loadBinding(entry);
       for (const enrolment of receivers.list('enrolment')) {
         const entry = receivers.resolve(enrolment.id);
@@ -189,7 +198,7 @@ try {
       }
       if (config.identityVersion === 2) {
         const sessions = {};
-        for (const binding of historicalBindings.values()) sessions[binding.identity.sessionId] = contextFiles.get(binding.id);
+        for (const binding of historicalBindings.values()) if (!receivers.isDeleted(binding.agentId)) sessions[binding.identity.sessionId] = contextFiles.get(binding.id);
         for (const binding of bindings.values()) if (binding.receiverGeneration) sessions[binding.identity.sessionId] = contextFiles.get(binding.id);
         const value = { nodeId: config.nodeId, sessions };
         const hash = digest(value);
@@ -255,6 +264,7 @@ try {
       if (closed) return;
       const resolveBinding = async (agentId, pinned) => {
         const binding = pinned?.bindingId ? historicalBindings.get(pinned.bindingId) : bindings.get(agentId);
+        if (receivers.isDeleted(agentId)) return null;
         if (binding && binding.agentId !== agentId) return null;
         const owned = ownedDefinitions.get(agentId);
         if (!owned || !binding) return binding;
@@ -314,6 +324,7 @@ try {
         });
         for (const [agentId, owned] of ownedDefinitions) {
           const binding = bindings.get(agentId);
+          if (!binding || receivers.isDeleted(agentId)) continue;
           if (binding.runtime?.relayPluginUpdatePending) {
             await binding.runtime.tryRelayPluginUpdate();
             journal.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
@@ -359,6 +370,7 @@ try {
           await api('POST', '/v1/commands', { key: `heartbeat:${lastHeartbeat}`, action: 'node.heartbeat', payload: nodeHeartbeatPayload(config.nodeId, info) });
           for (const [agentId, binding] of bindings) {
             const agent = await api('GET', `/v1/agents/${encodeURIComponent(agentId)}`);
+            if (agent.deletedAt) { receivers.markDeleted(agent); bindings.delete(agentId); continue; }
             let availability = 'unknown';
             try { availability = (await binding.native.snapshot()).idle ? 'available' : 'busy'; } catch {}
             await api('POST', '/v1/commands', { key: `advertise:${agentId}:${lastHeartbeat}`, action: 'agent.advertise',

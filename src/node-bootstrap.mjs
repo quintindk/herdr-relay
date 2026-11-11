@@ -5,9 +5,9 @@ import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
 // A human credential is separate from both the backend-root credential and the
 // node daemon credential. It may manage this node's enrolments and the same
 // human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
-export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'agent.rename', 'task.create', 'task.update', 'comment.create', 'reference.attach',
+export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'agent.rename', 'agent.delete', 'task.create', 'task.update', 'comment.create', 'reference.attach',
   'execution.request', 'execution.cancel', 'execution.handback', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
-  'occurrence.review', 'notification.acknowledge', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
+  'occurrence.review', 'notification.acknowledge', 'schedule.install', 'schedule.cancel', 'schedule.pause', 'schedule.resume', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 
 export function authoriseOperator(store, actor, action, payload) {
   if (!actor.scope) return;
@@ -25,24 +25,27 @@ export function authoriseOperator(store, actor, action, payload) {
       (scope.mode === 'localUser' || withinRoots(grant.directory, scope.roots)),
     'operator_scope_mismatch', 'Grant must stay within this node operator workspace scope', 403);
   }
-  if (action === 'schedule.result_notifications') {
-    const schedule = store.get('schedule', payload.id);
-    const directory = schedule.definition.targetFolder ?? (schedule.definition.targetAgentId ? store.get('agent', schedule.definition.targetAgentId).directory : null);
-    requireValue(schedule.definition.nodeId === scope.nodeId && (scope.mode === 'localUser' || canonicalDirectory(directory) && withinRoots(directory, scope.roots)),
-      'operator_scope_mismatch', 'Run result settings are outside this node operator workspace scope');
+  if (['schedule.install', 'schedule.cancel', 'schedule.pause', 'schedule.resume', 'schedule.result_notifications'].includes(action)) {
+    const schedule = action === 'schedule.install' ? { definition: payload.definition } : store.get('schedule', payload.id);
+    requireValue(schedule.definition && typeof schedule.definition === 'object', 'invalid_schedule', 'Schedule definition required');
+    // Historical receipts must remain reconcilable after the target is deleted.
+    // Fresh install/rename commands still reject deleted agents in apply().
+    const directory = schedule.definition.targetFolder ?? (schedule.definition.targetAgentId ? store.get('agent', schedule.definition.targetAgentId, true, true).directory : null);
+    requireValue(schedule.definition.nodeId === scope.nodeId && (schedule.definition.intent === 'reminder' || scope.mode === 'localUser' || canonicalDirectory(directory) && withinRoots(directory, scope.roots)),
+      'operator_scope_mismatch', 'Schedule is outside this node operator workspace scope', 403);
   }
-  if (action === 'agent.rename') {
-    const agent = store.get('agent', payload.id);
+  if (['agent.rename', 'agent.delete'].includes(action)) {
+    const agent = store.get('agent', payload.id, true, true);
     requireValue(agent.nodeId === scope.nodeId && (scope.mode === 'localUser' || canonicalDirectory(agent.directory) && withinRoots(agent.directory, scope.roots)),
-      'operator_scope_mismatch', 'Rename requires the operator for this agent\'s owning node and workspace', 403);
+      'operator_scope_mismatch', 'Use the operator for this agent\'s owning node and workspace', 403);
   }
   if (['agent.enrol', 'agent.attach', 'agent.relocate'].includes(action)) {
-    const nodeId = action === 'agent.enrol' ? payload.nodeId : store.get('agent', payload.id).nodeId;
+    const nodeId = action === 'agent.enrol' ? payload.nodeId : store.get('agent', payload.id, true, true).nodeId;
     requireValue(nodeId === scope.nodeId && canonicalDirectory(payload.directory) &&
       (scope.mode === 'localUser' || withinRoots(payload.directory, scope.roots)), 'operator_scope_mismatch', 'Enrolment is outside this operator\'s node/workspace scope', 403);
-    if (action === 'agent.relocate') requireValue(scope.mode === 'localUser' || withinRoots(store.get('agent', payload.id).directory, scope.roots),
+    if (action === 'agent.relocate') requireValue(scope.mode === 'localUser' || withinRoots(store.get('agent', payload.id, true, true).directory, scope.roots),
       'operator_scope_mismatch', 'Relocation requires authority over both the original and destination workspaces', 403);
-    if (action === 'agent.enrol' && !store.get('agent', payload.id, false)) {
+    if (action === 'agent.enrol' && !store.get('agent', payload.id, false, true)) {
       const usage = nodeEnrolmentUsage(store, nodeId);
       requireValue(usage.used < Math.min(scope.maxAgents, usage.reservationCeiling),
         'agent_limit', 'Node enrolment ceiling reached, including reserved preparations');

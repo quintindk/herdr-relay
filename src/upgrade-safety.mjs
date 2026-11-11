@@ -26,6 +26,8 @@ const interactiveProtocolWork = (requests, permissions = []) => [
     .map(request => ({ kind: 'repair_permission', id: request.id, state: request.state })),
 ];
 export function assertInteractiveUpgradeCompatibility(identity, release) {
+  requireValue(release.compatibility.agentDeletion === 1 || !identity.agentDeletionRecords?.length,
+    'upgrade_agent_deletion_protocol_required', 'Retained deleted-agent identities require agent deletion protocol 1. Older code cannot safely interpret these records. History must not be erased to allow a downgrade.', 409);
   requireValue(release.compatibility.interactiveProvisioning === 1 || !identity.interactiveProtocolWork?.length,
     'upgrade_interactive_protocol_required', 'Pending capacity-aware preparations, held reservations or repair approvals require interactive provisioning protocol 1. Settle or explicitly cancel and inspect them before switching to older code. History and unrelated work remain intact.', 409);
   requireValue(release.compatibility.collaboration === 1 || !identity.collaborationWork?.length,
@@ -49,7 +51,9 @@ export function inspectDatabase(path, role) {
       const instanceId = db.prepare("SELECT value FROM settings WHERE key='instance'").get()?.value;
       requireValue(instanceId, 'upgrade_state_invalid', 'Existing backend instance identity is missing');
       blockers.push(...backendMaintenanceBlockers(db));
-      return { instanceId, schema, blockers, collaborationWork: collaborationWork(db.prepare("SELECT data FROM entities WHERE kind='execution'").all().map(row => JSON.parse(row.data))),
+      return { instanceId, schema, blockers,
+        agentDeletionRecords: db.prepare("SELECT id FROM entities WHERE kind='agent' AND json_extract(data,'$.deletedAt') IS NOT NULL").all().map(row => row.id),
+        collaborationWork: collaborationWork(db.prepare("SELECT data FROM entities WHERE kind='execution'").all().map(row => JSON.parse(row.data))),
         interactiveProtocolWork: interactiveProtocolWork(
         db.prepare("SELECT data FROM entities WHERE kind='provision_request'").all().map(row => JSON.parse(row.data)),
         db.prepare("SELECT data FROM entities WHERE kind='grant_request'").all().map(row => JSON.parse(row.data))) };
@@ -89,7 +93,9 @@ export function inspectDatabase(path, role) {
     const permissions = db.prepare("SELECT data FROM cached_entities WHERE kind='grant_request'").all().map(row => JSON.parse(row.data).entity);
     const pendingRepairs = db.prepare("SELECT key,data FROM outbox WHERE state IN ('pending','conflict')").all()
       .filter(row => JSON.parse(row.data).command.action === 'interactive.repair_request').map(row => ({ kind: 'repair_publication', id: row.key, state: JSON.parse(row.data).state }));
-    return { ...identity, schema, blockers, collaborationWork: collaborationWork(db.prepare('SELECT data FROM work').all().map(row => JSON.parse(row.data).execution)),
+    return { ...identity, schema, blockers,
+      agentDeletionRecords: db.prepare("SELECT key FROM settings WHERE key LIKE 'agent-deleted:%'").all().map(row => row.key.slice('agent-deleted:'.length)),
+      collaborationWork: collaborationWork(db.prepare('SELECT data FROM work').all().map(row => JSON.parse(row.data).execution)),
       interactiveProtocolWork: [...interactiveProtocolWork(preparations, permissions), ...pendingRepairs],
       ...(refusedPublications.length ? { refusedPublications } : {}) };
   } finally { db.close(); }

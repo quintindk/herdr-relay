@@ -57,6 +57,7 @@ export async function publishHerdrInventory(api, { nodeId, socketPath, excludedW
         mode: 'interactive', capabilities: ['observation_only'],
       } });
     }
+    if (agent.deletedAt) continue;
     requireValue(agent.nodeId === nodeId && agent.capabilities.includes('observation_only'), 'agent_identity_changed', 'Observation record changed ownership');
     agent = await api('POST', '/v1/commands', { key: `observe:${id}:${agent.revision}`, action: 'agent.advertise', payload: {
       id, expectedRevision: agent.revision, availability: 'unknown', conversationId: item.agent_session.value,
