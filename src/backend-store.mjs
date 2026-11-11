@@ -15,6 +15,7 @@ import { runResultNotifications, runResultReport, scheduleRequester, OnlineRunRe
 import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
 import { agentName } from './agent-name.mjs';
 import { collaborationRequest, childTerminal } from './collaboration.mjs';
+import { requireDeletableAgent } from './agent-lifecycle.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -91,16 +92,22 @@ export class BackendStore {
     }
     if (policy.requester) this.afterCommit.push(() => this.runResultMessages.offer(this, report));
   }
-  get(kind, id, required = true) {
+  get(kind, id, required = true, includeDeleted = false) {
     const row = this.db.prepare('SELECT data FROM entities WHERE kind=? AND id=?').get(kind, id);
+    const entity = row ? JSON.parse(row.data) : null;
+    if (kind === 'agent' && entity?.deletedAt && !includeDeleted) {
+      requireValue(!required, 'agent_deleted', 'Agent was deleted. Its identity and history cannot be reused', 410);
+      return null;
+    }
     requireValue(row || !required, 'not_found', `Unknown ${kind}`, 404);
-    return row ? JSON.parse(row.data) : null;
+    return entity;
   }
-  all(kind) { return this.db.prepare('SELECT data FROM entities WHERE kind=? ORDER BY id').all(kind).map(row => JSON.parse(row.data)); }
+  all(kind, includeDeleted = false) { return this.db.prepare('SELECT data FROM entities WHERE kind=? ORDER BY id').all(kind)
+    .map(row => JSON.parse(row.data)).filter(item => includeDeleted || kind !== 'agent' || !item.deletedAt); }
   snapshot() {
     return this.transaction(() => ({ instanceId: this.instance, protocol: backendProtocol,
       collections: Object.fromEntries(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
-        .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision', 'message']).map(kind => [kind, this.all(kind)])),
+        .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision', 'message']).map(kind => [kind, this.all(kind, true)])),
       cursor: Buffer.from(JSON.stringify({ instance: this.instance,
         after: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq) })).toString('base64url'), fetchedAt: now() }));
   }
@@ -241,7 +248,7 @@ export class BackendStore {
   apply(actor, action, p, authority = {}) {
     if (!this.inTransaction) return this.transaction(() => this.apply(actor, action, p, authority));
     const created = (kind, input) => {
-      requireValue(validId(input.id) && !this.get(kind, input.id, false), 'identity_conflict', `Unique ${kind} identity required`, 409);
+      requireValue(validId(input.id) && !this.get(kind, input.id, false, true), 'identity_conflict', `Unique ${kind} identity required`, 409);
       return this.save(kind, { ...input, revision: 1, createdAt: now(), updatedAt: now() });
     };
     const changed = (kind, entity, patch) => this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
@@ -336,6 +343,16 @@ export class BackendStore {
       'enrolment_exists', 'This workspace already has an enrolled agent with that name', 409);
       return changed('agent', agent, { name, nameRevision: p.expectedNameRevision + 1 });
     }
+    if (action === 'agent.delete') {
+      this.ownerOnly(actor);
+      fields(p, ['id', 'expectedRevision', 'reason'], ['id', 'expectedRevision', 'reason']);
+      requireValue(validId(p.id), 'invalid_request', 'Exact bounded agent identity required');
+      const agent = this.get('agent', p.id); this.revision(agent, p.expectedRevision);
+      string(p.reason, 'reason', 2000); requireDeletableAgent(this, agent);
+      // Retain identity/history and make older code refuse new execution as well.
+      return changed('agent', agent, { deletedAt: now(), deletion: { userId: actor.id, reason: p.reason,
+        nativeProcessTerminationClaimed: false }, availability: 'offline', capabilities: [...new Set([...agent.capabilities, 'observation_only'])] });
+    }
     if (action === 'agent.attach' || action === 'agent.relocate') {
       if (!authority.interactiveRequest) this.ownerOnly(actor);
       const relocation = action === 'agent.relocate';
@@ -378,6 +395,12 @@ export class BackendStore {
     }
     if (action === 'agent.advertise') {
       fields(p, ['id', 'expectedRevision', 'availability', 'bindingRevision', 'conversationId'], ['id', 'expectedRevision', 'availability']);
+      const historical = this.get('agent', p.id, true, true);
+      if (historical.deletedAt) {
+        // Old nodes may still advertise a stale configured binding. Acknowledge
+        // without reviving it or preventing their other agents from refreshing.
+        this.nodeOnly(actor, historical.nodeId); return historical;
+      }
       const agent = this.agent(actor, p.id); this.revision(agent, p.expectedRevision);
       requireValue(['available', 'busy', 'offline', 'unknown'].includes(p.availability) &&
         (p.bindingRevision === undefined || Number.isSafeInteger(p.bindingRevision) && p.bindingRevision > 0) &&
@@ -1309,6 +1332,7 @@ export class BackendStore {
       after = value.after;
     }
     const items = this.db.prepare(`SELECT data FROM entities WHERE kind=? AND id>?
+      ${kind === 'agent' ? "AND json_extract(data,'$.deletedAt') IS NULL" : ''}
       ${taskId ? "AND json_extract(data,'$.taskId')=?" : ''}
       ${status ? "AND COALESCE(json_extract(data,'$.status'),json_extract(data,'$.state'))=?" : ''} ORDER BY id LIMIT ?`)
       .all(kind, after, ...(taskId ? [taskId] : []), ...(status ? [status] : []), limit + 1).map(row => JSON.parse(row.data));

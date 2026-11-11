@@ -5,13 +5,14 @@ import { RelayError, requireValue } from './protocol.mjs';
 import { interactiveAuthority } from './interactive-contract.mjs';
 import { headlessAuthority, headlessProbeId, headlessRunAuthority } from './headless-setup-contract.mjs';
 import { headlessExecutionScope, headlessReferenceLookup } from './headless-tasks.mjs';
-import { bootstrapNode } from './node-bootstrap.mjs';
+import { bootstrapNode, authoriseOperator } from './node-bootstrap.mjs';
 import { messageParticipant, queryMessages } from './agent-messages.mjs';
 import { existsSync } from 'node:fs';
 import { releaseVersion, compatibility } from './release-info.mjs';
 import { resolveTaskIdentity } from './task-identity.mjs';
 import { issueGrantApprovalSession, nodeGrantPolicy } from './grants.mjs';
 import { interactiveRepairPreview } from './interactive-repair.mjs';
+import { agentDeletionPreview } from './agent-lifecycle.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
@@ -38,9 +39,14 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { boundedCollaboration: true, interactiveRecovery: true, interactiveCapacity: true, interactiveGrantMatching: true, agentRename: true, agentWorkspaceRelocation: true, headlessConnectionRebind: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
+        features: { agentDeletion: true, humanScheduleManagement: true, boundedCollaboration: true, interactiveRecovery: true, interactiveCapacity: true, interactiveGrantMatching: true, agentRename: true, agentWorkspaceRelocation: true, headlessConnectionRebind: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
+      else if (req.method === 'GET' && /^\/v1\/agents\/[^/]+\/delete-preview$/.test(url.pathname)) {
+        const id = decodeURIComponent(url.pathname.split('/')[3]);
+        store.ownerOnly(actor); authoriseOperator(store, actor, 'agent.delete', { id });
+        result = { ...agentDeletionPreview(store, store.get('agent', id, true, true)), instanceId: store.instance };
+      }
       else if (req.method === 'GET' && /^\/v1\/command-receipts\/[^/]+$/.test(url.pathname)) {
         requireValue(url.searchParams.size === 1 && url.searchParams.has('executionId'), 'invalid_query', 'Exact owning execution required');
         result = store.commandReceipt(actor, decodeURIComponent(url.pathname.split('/')[3]), url.searchParams.get('executionId'));
@@ -82,7 +88,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
         const kind = plural.slice(0, -1);
         requireValue([...url.searchParams.keys()].every(key => ['cursor', 'taskId', 'status', 'limit'].includes(key)),
           'invalid_query', 'Unsupported collection filters');
-        result = id ? store.get(kind, decodeURIComponent(id)) : store.query(kind, {
+        result = id ? store.get(kind, decodeURIComponent(id), true, true) : store.query(kind, {
           cursor: url.searchParams.get('cursor') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });

@@ -10,6 +10,7 @@ production package name is `@herdr/relay-opencode`.
 | `tui.mjs` | Generated production ESM entrypoint |
 | `tui-setup.mjs` | Testable terminal setup, commands and lifecycle cleanup |
 | `attachment-sidebar.tsx` | Reactive selected-chat attachment status renderer |
+| `status-clock.mjs` | Local-time clock and bottom status-bar contributions |
 | `rpc.mjs` | Read-only runtime/status RPC and filtered notifications |
 | `cli-bridge.mjs` | Human interactive access to the installed native CLI |
 | `headless-grant-tools.mjs` | Own-node coordinator grant creation/revocation without an owner context |
@@ -22,6 +23,11 @@ production package name is `@herdr/relay-opencode`.
 The plugin IDs are `herdr.relay.server` and `herdr.relay.tui`. The read-only runtime
 RPC is `herdr.relay.runtime`. `/relay-status` inspects the selected chat's runtime;
 `/relay-diagnostic-confirm` is a disposable diagnostic, not task approval.
+
+The Home and session bottom status bars show the terminal host's local time as
+**HH:mm**, in 24-hour format without seconds. The clock updates on minute
+boundaries, uses the current theme and needs no Relay enrolment or backend access.
+Its timer is disposed with the rendered clock on navigation, plugin reload or disable.
 
 `relay_cli_help` exposes the installed native CLI reference. `relay_cli` calls that
 same executable for tasks, execution requests, schedules, node administration,

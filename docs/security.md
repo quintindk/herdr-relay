@@ -49,6 +49,19 @@ already started native processes stopped. Human handback withdraws an assignment
 returns an eligible task to Todo and preserves evidence; it does not claim process
 termination or native success.
 
+## Human lifecycle controls
+
+Human TUI lifecycle controls use the existing scoped operator, not a daemon or
+worker credential. Schedule creation/pause/resume/cancellation stays within its
+own node/workspace. Reminders deliver human notifications, not model work. New
+independent headless workers still require their separate approved setup.
+
+Inactive-agent deletion rechecks dependencies in the backend transaction, keeps
+an identity tombstone and fences the local receiver when observed. It does not
+kill a process, purge history, discard an uncertain effect or revoke permissions
+as an implicit cascade. Pending confirmations retain their original receipts
+and keys even after later lifecycle changes.
+
 ## Transport and failure
 
 Use authenticated transport to the backend. Non-loopback HTTP is not an implicit

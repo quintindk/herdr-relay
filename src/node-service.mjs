@@ -356,7 +356,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       if (path === '/agent/status') {
         requireValue(Object.keys(body).length === 0, 'invalid_request', 'Status takes no overrides');
         const row = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`receiver:${worker.agentId}`);
-        const receiver = row ? JSON.parse(row.value) : null;
+        const receiver = row ? { ...JSON.parse(row.value), ...(journal.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`agent-deleted:${worker.agentId}`) ? { state: 'deleted' } : {}) } : null;
         const enrolment = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`enrolment:${worker.agentId}`);
         const node = journal.cached('node').find(entry => entry.entity.id === journal.nodeId)?.entity;
         const works = journal.works().filter(w => !abandonedWork(w) && w.execution.targetAgentId === worker.agentId &&

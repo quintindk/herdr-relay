@@ -15,10 +15,17 @@ export class NativeReceivers {
     return value;
   }
   list(prefix) {
-    return this.journal.db.prepare('SELECT value FROM settings WHERE key LIKE ? ORDER BY key').all(`${prefix}:%`).map(row => JSON.parse(row.value));
+    return this.journal.db.prepare('SELECT value FROM settings WHERE key LIKE ? ORDER BY key').all(`${prefix}:%`).map(row => JSON.parse(row.value))
+      .filter(item => prefix !== 'enrolment' || !this.isDeleted(item.id));
+  }
+  isDeleted(agentId) { return !!this.get(`agent-deleted:${agentId}`); }
+  markDeleted(agent) {
+    requireValue(agent.deletedAt && agent.nodeId === this.journal.nodeId, 'agent_owner_changed', 'Deletion must belong to this node');
+    return this.put(`agent-deleted:${agent.id}`, agent);
   }
   enrol({ directory, name, transport, id }) {
     return this.journal.transaction(() => {
+      requireValue(!id || !this.isDeleted(id), 'agent_deleted', 'Deleted agent identities cannot be reused', 410);
       const existing = this.list('enrolment').find(e => e.directory === directory && e.name === name);
       if (existing) {
         requireValue(!id || existing.id === id, 'enrolment_exists', 'Select the existing enrolled identity explicitly');
@@ -38,6 +45,7 @@ export class NativeReceivers {
       operations.get(id).push(operation);
     }
     return this.list('native-binding').filter(binding => {
+      if (this.isDeleted(binding.agentId)) return false;
       const linked = operations.get(binding.id);
       if (!linked?.length || linked.some(operation => operation.state !== 'refused')) return true;
       // A rejected preparation is retained evidence, not a historical receiver.
@@ -58,6 +66,7 @@ export class NativeReceivers {
         requireValue(previous.digest === digest(request), 'operation_conflict', 'Attachment key has a different scope');
         return previous;
       }
+      requireValue(!this.isDeleted(agentId), 'agent_deleted', 'Deleted agents cannot attach or receive new work', 410);
       const current = this.receiver(agentId);
       requireValue((current?.generation ?? 0) === expectedGeneration && current?.state !== 'pending',
         'stale_binding', 'Receiving chat changed or an attachment needs reconciliation', 409);
@@ -171,6 +180,7 @@ export class NativeReceivers {
       const binding = this.get(`native-binding:${pinned.bindingId}`);
       return binding?.agentId === agentId ? binding : null;
     }
+    if (this.isDeleted(agentId)) return null;
     const receiver = this.receiver(agentId);
     return receiver?.state === 'active' ? this.get(`native-binding:${receiver.bindingId}`) : null;
   }

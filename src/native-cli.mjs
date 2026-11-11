@@ -235,7 +235,10 @@ export async function main(args) {
            prepareHandback: board.prepareHandback, handbackTask: board.handbackTask,
            detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions,
            prepareInteractiveRepair: board.prepareInteractiveRepair, requestInteractiveRepair: board.requestInteractiveRepair,
-          updateRunResultNotifications: board.updateRunResultNotifications, prepareAgentRename: board.prepareAgentRename, renameAgent: board.renameAgent });
+           updateRunResultNotifications: board.updateRunResultNotifications, prepareAgentRename: board.prepareAgentRename, renameAgent: board.renameAgent,
+           prepareAgentDelete: board.prepareAgentDelete, deleteAgent: board.deleteAgent, prepareScheduleCreation: board.prepareScheduleCreation,
+           prepareScheduleCreate: board.prepareScheduleCreate, createSchedule: board.createSchedule,
+           prepareScheduleChange: board.prepareScheduleChange, changeSchedule: board.changeSchedule });
       }
     } finally { journal.close(); }
     return;

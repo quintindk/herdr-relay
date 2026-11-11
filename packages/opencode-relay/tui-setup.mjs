@@ -6,8 +6,9 @@ import { registerHumanInbox } from './human-inbox.mjs';
 import { registerEnrolmentCommands } from './enrolment-commands.mjs';
 import { registerHerdrSession } from './herdr-session.mjs';
 import { registerAttachmentSidebar } from './attachment-sidebar.mjs';
+import { registerStatusClock } from './status-clock.mjs';
 
-export async function setupTui(ctx, { renderAttachment } = {}) {
+export async function setupTui(ctx, { renderAttachment, renderClock } = {}) {
     const clientId = randomUUID();
     const rpc = ctx.client.rpc(RelayRuntime);
     const location = ctx.location ?? ctx.data.location.default();
@@ -21,6 +22,9 @@ export async function setupTui(ctx, { renderAttachment } = {}) {
       const route = ctx.ui.router.current();
       return route.type === 'session' ? route.sessionID : null;
     };
+    let stopClock = () => {};
+    try { stopClock = registerStatusClock(ctx, { renderClock, record }); }
+    catch { record({ type: 'status_clock_unavailable' }); }
     let stopAttachment = () => {};
     try { stopAttachment = await registerAttachmentSidebar(ctx, { selectedSession: sessionId, record, renderAttachment }); }
     catch {
@@ -88,6 +92,7 @@ export async function setupTui(ctx, { renderAttachment } = {}) {
       if (closed) return;
       closed = true;
       decisions.dispose();
+      stopClock();
       stopAttachment();
       stopHumanInbox();
       stopEnrolment();

@@ -44,6 +44,11 @@ Creating a task captures work; it does not dispatch a model. For your own coding
 turn, record the task and continue rather than dispatching a redundant run to
 yourself.
 
+Human TUI controls: **Agents x** deletes an eligible inactive entry. **Schedule c**
+creates a cron for an existing interactive agent or human reminder, **p** toggles
+activation and **x** cancels future ticks. Preview/confirm, retain history and
+reconcile uncertain replies in Inbox. Independent headless setup stays separate.
+
 Discover peers with `relay_agents` and use exact inspected IDs. A collaborative
 handover authorises selected peers, a round budget and a deadline once. Under
 that job, `relay_delegate` requests peer work. Finish the native turn after the

@@ -34,14 +34,17 @@ function evidenceFixture(t) {
   assert.ok(script, 'Exercise the actual publication evidence gate without running publication');
   const versions = ['2.1.0', '2.1.2', '2.2.5'];
   const report = {
-    version: '0.2.5', sourceCommit: 'fixture-commit', sourceTreeClean: true, releaseVerified: true,
+    version: '0.2.8', sourceCommit: 'fixture-commit', sourceTreeClean: true, releaseVerified: true,
     auditVerified: true, vulnerabilities: { total: 0 }, interactiveProvisioningProtocol: 1,
-    installerHandover: { version: '0.2.5', passed: true, candidateProcessVerified: true, candidateOnlySetupExecuted: true,
+    nativeLifecycleVerification: { passed: true, realTuiKeyboard: true, humanScheduleCreate: true, humanScheduleDelete: true,
+      inactiveAgentDelete: true, nodeCancellationAcknowledged: true, deletionFencedOnNode: true, historyRetained: true,
+      modelTurnsStarted: 0, userServicesTouched: false, credentialsCopied: false },
+    installerHandover: { version: '0.2.8', passed: true, candidateProcessVerified: true, candidateOnlySetupExecuted: true,
       legacyBootstrapVerified: true, immutable022LimitationVerified: true, released023SinglePass: true,
       retryIdempotent: true, conflictRefused: true, allCandidateAuditsVerified: true, candidateAuditChecks: 6,
       legacyProductionActivationAllowed: false, syntheticFutureRelease: true, userServicesTouched: false, credentialsCopied: false },
     installedTuiVerifications: versions.map(runtime => ({ runtime, passed: true, productionPackageTuiLoaded: true,
-      sidebarMounted: true, scopedStatusReceived: true, runtimeCommandAndNotification: true, pluginLoadErrors: 0 })),
+      sidebarMounted: true, statusClockMounted: true, homeStatusClockMounted: true, scopedStatusReceived: true, runtimeCommandAndNotification: true, pluginLoadErrors: 0 })),
     installedCliBridgeVerifications: versions.map(runtime => ({ runtime, passed: true, realModelToolTurn: true,
       pluginInvokedActualCli: true, humanTaskCreated: true, existingPeerExecutionRequested: true, activeParentRequired: false })),
     installedAgentGrantVerifications: versions.map(runtime => ({ runtime, passed: true, grantIssuedByCoordinatorWithoutOwner: true,
@@ -54,9 +57,9 @@ function evidenceFixture(t) {
       keyboardLinkedRepairRequested: true, keyboardRepairApproved: true, keyboardGrantRevocationVerified: true, originalPreparationAndTaskPreserved: true, userServicesTouched: false },
   };
   const validate = value => {
-    writeFileSync(join(root, 'herdr-relay-0.2.5.tgz.verification.json'), JSON.stringify(value));
+    writeFileSync(join(root, 'herdr-relay-0.2.8.tgz.verification.json'), JSON.stringify(value));
     return execute(process.execPath, ['--input-type=module', '-e', script], { cwd: root, timeout: 10000,
-      env: { ...process.env, RELEASE_TAG: 'v0.2.5', SOURCE_COMMIT: 'fixture-commit' } });
+      env: { ...process.env, RELEASE_TAG: 'v0.2.8', SOURCE_COMMIT: 'fixture-commit' } });
   };
   return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications', 'installedInteractiveRecoveryVerifications'] };
 }
@@ -107,5 +110,24 @@ test('publication refuses absent or failed Herdr keyboard evidence and unsafe re
   }
   for (const field of ['userServicesTouched', 'credentialsCopied']) {
     const unsafe = structuredClone(report); unsafe.installedInteractiveRecoveryVerifications[0][field] = true; await assert.rejects(validate(unsafe), /AssertionError/);
+  }
+});
+
+test('publication refuses missing lifecycle/clock evidence and any live effects in the human-control fixture', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.nativeLifecycleVerification;
+  await assert.rejects(validate(missing), /AssertionError/);
+  for (const field of ['passed', 'realTuiKeyboard', 'humanScheduleCreate', 'humanScheduleDelete', 'inactiveAgentDelete',
+    'nodeCancellationAcknowledged', 'deletionFencedOnNode', 'historyRetained']) {
+    const failed = structuredClone(report); failed.nativeLifecycleVerification[field] = false;
+    await assert.rejects(validate(failed), /AssertionError/);
+  }
+  for (const field of ['statusClockMounted', 'homeStatusClockMounted']) {
+    const failed = structuredClone(report); failed.installedTuiVerifications[0][field] = false;
+    await assert.rejects(validate(failed), /AssertionError/);
+  }
+  for (const [field, value] of [['modelTurnsStarted', 1], ['userServicesTouched', true], ['credentialsCopied', true]]) {
+    const unsafe = structuredClone(report); unsafe.nativeLifecycleVerification[field] = value;
+    await assert.rejects(validate(unsafe), /AssertionError/);
   }
 });

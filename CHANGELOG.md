@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.8 — 11 November 2026
+
+- Show local 24-hour time as `HH:mm` in OpenCode's Home and session status bars.
+  Update on minute boundaries without replacing built-in status indicators.
+- Add human Schedule controls to create cron jobs for existing interactive agents
+  or human reminders, preview upcoming times, pause/resume and delete schedules.
+  Keep cancelled triggers and run history, with node acknowledgement required.
+- Delete eligible inactive agents from Agents after a revisioned preview and
+  confirmation. Protect recorded work, permissions and schedule dependencies.
+  Retain identity/history, fence node receivers and prevent automatic resurrection.
+- Preserve original operation keys and receipts for lost lifecycle acknowledgements.
+  Fence downgrades that cannot interpret retained deleted-agent identities.
+
 ## 0.2.7 — 10 November 2026
 
 - Carry collaboration permission, selected peers, round limit and deadline through

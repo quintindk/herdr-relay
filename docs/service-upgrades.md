@@ -23,11 +23,11 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-stable version **0.2.7**. Its release assets and verification report must be
+stable version **0.2.8**. Its release assets and verification report must be
 published before installation or a live upgrade:
 
 ```sh
-herdr-relay release install --version 0.2.7
+herdr-relay release install --version 0.2.8
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -53,15 +53,15 @@ skills or configuration.
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.2.7 --key stable-027-backend-host
-herdr-relay upgrade --services both --version 0.2.7 --key stable-027-backend-host --apply
+herdr-relay upgrade --services both --version 0.2.8 --key stable-028-backend-host
+herdr-relay upgrade --services both --version 0.2.8 --key stable-028-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.2.7 --key stable-027-node-host
-herdr-relay upgrade --services node --version 0.2.7 --key stable-027-node-host --apply
+herdr-relay upgrade --services node --version 0.2.8 --key stable-028-node-host
+herdr-relay upgrade --services node --version 0.2.8 --key stable-028-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -74,7 +74,7 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4 through 0.2.7 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through 0.2.8 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
 
 Upgrading enables the supported connection-rebind and workspace-relocation
@@ -94,10 +94,16 @@ preparations, held reservations or repair approvals remain outstanding. Settle o
 explicitly cancel and inspect those specific records first. Settled history and
 unrelated active executions do not block an otherwise compatible code switch.
 
-Upgrade the backend and participating nodes to **0.2.7** before enabling
+Upgrade the backend and participating nodes to **0.2.7 or later** before enabling
 [bounded collaboration](collaboration.md). Collaboration compatibility protocol
 **1** fences a switch to older code while a collaborative job remains active.
 Settled collaboration history and unrelated work do not create that fence.
+
+The inactive-agent controls introduced in **0.2.8** retain deleted identities and
+local binding fences under agent deletion compatibility protocol **1**. Upgrade
+the backend, TUI and owning node before using them. Once those records exist,
+switching either service to older code without that protocol is refused. This
+retains history rather than deleting it to permit a downgrade.
 
 ## 3. Deferred plugin reload
 

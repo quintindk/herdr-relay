@@ -7,6 +7,7 @@ import { runResultNotifications } from './run-result-notifications.mjs';
 import { agentName } from './agent-name.mjs';
 import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
 import { collaborationRequest } from './collaboration.mjs';
+import { nativeBoardLifecycle } from './native-board-lifecycle.mjs';
 
 export function boardLocalIdentity(context) {
   return context?.scope?.kind === 'node_operator' && context.nodeId === context.scope.nodeId && context.instanceId
@@ -107,6 +108,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     const next = preview && (!d.expiresAt || Date.parse(preview) < Date.parse(d.expiresAt)) ? preview : null;
     return { id: schedule.id, scheduleId: schedule.id, routineId: schedule.id, companyId: 'native', title: schedule.id,
       state, backendStatus: pending ? 'change pending' : 'applied', revision: schedule.revision, appliedRevision: schedule.appliedRevision,
+      enabled: d.enabled, cancelled: !!schedule.cancelled,
       intent: d.intent ?? 'job', executionMode: d.targetFolder ? 'interactive_folder' : d.targetConversationId ? 'interactive_exact' :
         agents.find(a => a.id === d.targetAgentId)?.standingGrant ? 'interactive_agent' : agents.find(a => a.id === d.targetAgentId)?.mode === 'interactive' ? 'interactive_exact' : 'headless',
       cron: d.cron ?? `at ${d.at}`, timezone: d.timezone ?? 'Africa/Johannesburg', nextRunAt: next ?? null, nextRunIsEstimate: true,
@@ -120,11 +122,13 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
              : `Requested revision ${schedule.revision}, applied ${schedule.appliedRevision ?? 0}. Local node owns admission and clock.` } };
   };
   const board = {
+    ...nativeBoardLifecycle(api, { decisionJournal, all }),
     async read(signal) {
       const { tasks, agents, nodes, schedules, inbox, attention, info, grants, nodePolicies, headless_setups } = await load(signal);
       return { companies: [{ id: 'native', name: 'Relay' }], projects: [], nodes, routines: schedules.map(s => routine(s, agents, headless_setups)),
         inbox, grants, grantsAvailable: !!info.features?.grantsManagement, collaborationAvailable: !!info.features?.boundedCollaboration,
-        interactiveRecoveryAvailable: !!info.features?.interactiveRecovery, agentRenamingAvailable: !!info.features?.agentRename, nodePolicies,
+        interactiveRecoveryAvailable: !!info.features?.interactiveRecovery, agentRenamingAvailable: !!info.features?.agentRename,
+        agentDeletionAvailable: !!info.features?.agentDeletion, scheduleManagementAvailable: !!info.features?.humanScheduleManagement, nodePolicies,
         tasks: tasks.map(t => ({ ...scoped(t), instanceId: info.instanceId, ...attention(t), responsibleName: t.responsibleUserId === info.userId ? 'You' : t.responsibleUserId })),
         showEmptyLocalBoard: false,
         localNode: localNode(nodes, info) ? { id: localNodeId, name: localNode(nodes, info).name ?? localNodeId } : null,
@@ -145,6 +149,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     async prepareAgentRename({ agentId }) {
       const [info, agent, identity] = await Promise.all([api('GET', '/v1/info'), api('GET', `/v1/agents/${encodeURIComponent(agentId)}`), api('GET', '/v1/identity')]);
       requireValue(info.features?.agentRename, 'backend_upgrade_required', 'Upgrade the backend to rename agents');
+      requireValue(!agent.deletedAt, 'agent_deleted', 'Deleted agents cannot be renamed or reactivated', 410);
       requireValue(identity.type === 'user' && identity.id === info.userId, 'forbidden', 'Human operator context required', 403);
       if (identity.scope) requireValue(identity.scope.kind === 'node_operator' && identity.scope.nodeId === agent.nodeId &&
         (identity.scope.mode === 'localUser' || canonicalDirectory(agent.directory) && withinRoots(agent.directory, identity.scope.roots ?? [])),

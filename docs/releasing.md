@@ -4,7 +4,7 @@ Release preparation does not publish, upgrade services, change live configuratio
 or reset state. Publication requires an explicit human instruction and an immutable
 version tag. Packages are distributed through GitHub Releases, not npm.
 
-This procedure targets **0.2.7**. Merging a pull request updates source, not the
+This procedure targets **0.2.8**. Merging a pull request updates source, not the
 published release. The versioned commands below require explicit publication
 authority and verified source. Never install unpublished assets.
 
@@ -39,11 +39,11 @@ RELAY_V2_BINARY=/absolute/opencode-2.1.2 \
 RELAY_V2_BASELINE_BINARY=/absolute/opencode-2.1.0 \
 RELAY_V2_LATEST_BINARY=/absolute/opencode-2.2.5 \
 HERDR_BINARY=/absolute/herdr-0.9.5 \
-node scripts/verify-package.mjs --release --output /private/artifacts/0.2.7
+node scripts/verify-package.mjs --release --output /private/artifacts/0.2.8
 ```
 
-Release assets for 0.2.7 are `herdr-relay-0.2.7.tgz`, `SHA256SUMS` and
-`herdr-relay-0.2.7.tgz.verification.json`. The report records the source commit,
+Release assets for 0.2.8 are `herdr-relay-0.2.8.tgz`, `SHA256SUMS` and
+`herdr-relay-0.2.8.tgz.verification.json`. The report records the source commit,
 cleanliness, timestamp, host checks, installer handover evidence and audit result.
 Different bytes at an existing artifact path or inconsistent checksums are refused.
 
@@ -57,6 +57,12 @@ Release certification also requires installed-package interactive recovery on al
 three OpenCode hosts and real Herdr keyboard repair, approval and revocation. The
 CI package job downloads checksum-pinned Herdr 0.9.5 into its private runner path.
 The publication gate checks this evidence rather than accepting a missing field.
+
+The package verifier also exercises the installed human lifecycle TUI: create a
+paused cron, cancel it, apply the owning node acknowledgement and delete the
+eligible inactive agent. It checks retained history and the node-side deletion
+fence without starting model turns or using live services/credentials. Publication
+requires this evidence under `nativeLifecycleVerification`.
 
 ## Push, CI, tag, publish
 
@@ -74,8 +80,8 @@ On an explicit publication request:
    clean-source provenance, supported-host checks and zero-finding audit.
 
 ```sh
-git tag -a v0.2.7 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.7"
-git push origin refs/tags/v0.2.7
+git tag -a v0.2.8 EXACT_VERIFIED_COMMIT -m "Herdr Relay 0.2.8"
+git push origin refs/tags/v0.2.8
 ```
 
 `.github/workflows/ci.yml` runs tests/package verification on branch pushes, pull
@@ -85,7 +91,7 @@ permissions; only the final publication job gets `contents: write`.
 
 The release job takes `docs/release-VERSION.md`, checks tag/version/source evidence
 and publishes all three assets. Versions with a prerelease suffix are prereleases.
-Stable version numbers such as 0.2.7 become releases only after explicit publication.
+Stable version numbers such as 0.2.8 become releases only after explicit publication.
 Stable releases become the latest release. Prereleases
 use `--prerelease --latest=false` and do not replace the stable selection.
 

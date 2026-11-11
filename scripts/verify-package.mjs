@@ -39,7 +39,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/release-setup.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
-  'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
+  'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/status-clock.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
   'src/native-cli-surface.mjs', 'packages/opencode-relay/headless-grant-tools.mjs',
    'src/grants.mjs', 'src/grants-view.mjs', 'src/grants-panel.mjs', 'src/task-board-dispatch.mjs',
@@ -47,7 +47,8 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/native-worker-api.mjs', 'src/native-observation-recovery.mjs', 'src/interactive-dispatch-reconciliation.mjs',
    'packages/opencode-relay/native-input.mjs', 'src/native-interaction.mjs', 'src/headless-contract.mjs',
    'src/node-headless-contract.mjs', 'src/headless-task-schema.mjs', 'src/publication-outcomes.mjs',
-    'src/node-recovery.mjs', 'src/node-recovery-cli.mjs', 'src/run-result-notifications.mjs',
+   'src/node-recovery.mjs', 'src/node-recovery-cli.mjs', 'src/run-result-notifications.mjs',
+   'src/agent-lifecycle.mjs', 'src/native-board-lifecycle.mjs', 'src/lifecycle-panels.mjs',
     'src/node-run-result-messages.mjs', 'src/run-result-notifications-panel.mjs',
      'packages/opencode-relay/run-result-notice.mjs', 'src/board-text.mjs', 'src/board-row-layout.mjs', 'src/board-detail-layout.mjs',
      'scripts/install-herdr-shortcut.py', 'scripts/toggle-board.py', 'scripts/native-board-launch.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
@@ -72,6 +73,12 @@ assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).r
   'The production package must declare the state-aware interactive provisioning compatibility protocol');
 const installerHandover = values['skip-audit'] ? null : await verifyInstallerHandover({ artifact, packageDirectory: installed });
 if (installerHandover) console.log(JSON.stringify({ installerHandover }, null, 2));
+assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).relayCompatibility?.agentDeletion, 1);
+const lifecycleOutput = execFileSync(process.execPath, ['scripts/verify-native-lifecycle.mjs', '--package', installed],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+process.stdout.write(lifecycleOutput);
+const nativeLifecycleVerification = JSON.parse(lifecycleOutput);
+assert.equal(nativeLifecycleVerification.passed, true);
 const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [], installedInteractiveRecoveryVerifications = [];
 const installedNativeInputVerifications = [];
 const installedHeadlessScopeVerifications = [];
@@ -80,9 +87,11 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
     '--binary', process.env[variable]], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
   process.stdout.write(output);
-  const { passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors } = JSON.parse(output);
+  const { passed, runtime, productionPackageTuiLoaded, sidebarMounted, statusClockMounted, homeStatusClockMounted,
+    scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors } = JSON.parse(output);
   assert.equal(runtime, version, `Expected exact ${version} host for ${variable}`);
-  installedTuiVerifications.push({ passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors });
+  installedTuiVerifications.push({ passed, runtime, productionPackageTuiLoaded, sidebarMounted, statusClockMounted, homeStatusClockMounted,
+    scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors });
   const bridgeOutput = execFileSync(process.execPath, ['scripts/verify-cli-bridge.mjs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
     env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
   process.stdout.write(bridgeOutput);
@@ -347,7 +356,7 @@ let onboarding;
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
   installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,
