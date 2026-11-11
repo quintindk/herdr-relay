@@ -1,8 +1,8 @@
 # Herdr Relay 0.2.8
 
-**Status: draft, not published.** Release date and final verification are pending.
-Branch preparation does not create a release tag, publish assets or upgrade live
-services. Published installation examples remain on **0.2.7** until release.
+Local-time OpenCode status-bar clock and human controls for agents and cron schedules.
+Release date: **11 November 2026**. Installation and live service upgrades remain
+separate operations from publication.
 
 ## OpenCode status-bar clock
 
@@ -39,12 +39,23 @@ services. Published installation examples remain on **0.2.7** until release.
 
 See [native board controls](task-board.md) for keys and safety boundaries.
 
-## Verification completed during implementation
+## Attachment recovery when upgrading from 0.2.6
+
+This release includes the **0.2.7** fix that excludes validated, unreferenced
+refused attachment bindings from node loading. On **0.2.6**, those rejected attempts
+can cause chat-alias conflicts and prevent unrelated receiving chats from refreshing.
+Accepted bindings, valid historical receivers and uncertain-effect evidence are
+retained. Do not delete the journal, re-enrol agents or replay their work to recover.
+Upgrade the Relay node to apply the fix. CLI activation alone does not update a
+running node.
+
+## Verification
 
 - 697 root regression tests and 149 plugin tests passed, with repository checks.
-- A production-only installed package rendered the clock on Home and session
-  screens in real OpenCode **2.1.0** and **2.2.6** terminals. Sidebar rendering and
-  scoped runtime commands continued to work, with no plugin-load errors.
+- Clean-source CI passed production-only installation on OpenCode **2.1.0, 2.1.2
+  and 2.2.5**, including clock rendering on Home/session screens, sidebar rendering
+  and scoped runtime commands, with no plugin-load errors. Supplemental terminal
+  checks also passed on **2.2.6**.
 - Unit checks cover local formatting, zero padding, midnight, delayed ticks,
   wall-clock changes, cleanup and partial slot-registration failure.
 - Installed-package CI now checks both clock locations and records their results
@@ -55,12 +66,14 @@ See [native board controls](task-board.md) for keys and safety boundaries.
   without model turns, live service changes or copied user credentials.
 - Lifecycle regressions cover scope enforcement, dependencies, stale previews,
   lost replies, retained receipts, node restart/offline fencing and narrow panes.
+- Candidate-owned installer handover, compatible active-work upgrade/rollback and
+  real Herdr **0.9.5** keyboard checks passed in CI. The fresh production audit
+  reported **zero vulnerabilities**.
 
-These implementation checks do not replace exact **0.2.8** package qualification
-on the supported OpenCode **2.1.0, 2.1.2 and 2.2.5** matrix, a fresh zero-finding
-production audit, compatible upgrade/rollback and isolated Herdr keyboard checks.
-Those remain release gates. Supplemental **2.2.6** coverage is not a replacement
-for the supported-host matrix.
+The tag workflow repeats all [release gates](releasing.md) on the exact release
+commit. The supplied verification report binds the package to its clean source,
+supported-host checks and fresh production audit. Isolated fixture success is not
+proof of production business-source access or physical multi-machine qualification.
 
 ## Compatibility and publication
 
@@ -74,7 +87,6 @@ and owning node before using it. Once deleted-agent identities are retained in a
 backend or node journal, code without that protocol cannot safely replace it.
 Do not erase history to make an older release appear compatible.
 
-Follow the [release procedure](releasing.md) for exact committed-source validation
-and explicitly authorised publication. Existing pinned installations do not gain
-the clock from a branch push. Installation and live service upgrades remain
-separate operations.
+Existing pinned installations do not gain new code from a branch push or GitHub
+publication. Follow [upgrades](service-upgrades.md) to install the intended release
+without resetting state or re-enrolling agents.

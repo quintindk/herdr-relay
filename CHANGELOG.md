@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.8 — Unreleased
+## 0.2.8 — 11 November 2026
 
 - Show local 24-hour time as `HH:mm` in OpenCode's Home and session status bars.
   Update on minute boundaries without replacing built-in status indicators.

@@ -4,10 +4,9 @@ Release preparation does not publish, upgrade services, change live configuratio
 or reset state. Publication requires an explicit human instruction and an immutable
 version tag. Packages are distributed through GitHub Releases, not npm.
 
-This procedure targets **0.2.8**, currently in draft preparation. Merging a pull
-request updates source, not the published release. The versioned commands below
-require explicit publication authority and verified source. Installation examples
-remain on published **0.2.7** until release. Never install unpublished assets.
+This procedure targets **0.2.8**. Merging a pull request updates source, not the
+published release. The versioned commands below require explicit publication
+authority and verified source. Never install unpublished assets.
 
 ## Required gates
 
@@ -43,7 +42,7 @@ HERDR_BINARY=/absolute/herdr-0.9.5 \
 node scripts/verify-package.mjs --release --output /private/artifacts/0.2.8
 ```
 
-Planned assets for 0.2.8 are `herdr-relay-0.2.8.tgz`, `SHA256SUMS` and
+Release assets for 0.2.8 are `herdr-relay-0.2.8.tgz`, `SHA256SUMS` and
 `herdr-relay-0.2.8.tgz.verification.json`. The report records the source commit,
 cleanliness, timestamp, host checks, installer handover evidence and audit result.
 Different bytes at an existing artifact path or inconsistent checksums are refused.
