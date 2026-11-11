@@ -39,7 +39,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/release-setup.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
-  'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/headless-shell.mjs',
+  'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/status-clock.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
   'src/native-cli-surface.mjs', 'packages/opencode-relay/headless-grant-tools.mjs',
    'src/grants.mjs', 'src/grants-view.mjs', 'src/grants-panel.mjs', 'src/task-board-dispatch.mjs',
@@ -80,9 +80,11 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
     '--binary', process.env[variable]], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
   process.stdout.write(output);
-  const { passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors } = JSON.parse(output);
+  const { passed, runtime, productionPackageTuiLoaded, sidebarMounted, statusClockMounted, homeStatusClockMounted,
+    scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors } = JSON.parse(output);
   assert.equal(runtime, version, `Expected exact ${version} host for ${variable}`);
-  installedTuiVerifications.push({ passed, runtime, productionPackageTuiLoaded, sidebarMounted, scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors });
+  installedTuiVerifications.push({ passed, runtime, productionPackageTuiLoaded, sidebarMounted, statusClockMounted, homeStatusClockMounted,
+    scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors });
   const bridgeOutput = execFileSync(process.execPath, ['scripts/verify-cli-bridge.mjs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
     env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
   process.stdout.write(bridgeOutput);

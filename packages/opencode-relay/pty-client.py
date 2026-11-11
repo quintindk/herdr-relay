@@ -39,7 +39,15 @@ try:
                 del output[:-100000]
             if b"\x1b[6n" in chunk:
                 os.write(master, b"\x1b[1;1R")
-        if time.monotonic() >= next_attempt and os.path.exists(config["evidenceFile"]):
+        if config.get("passiveEvent") and os.path.exists(config["evidenceFile"]):
+            with open(config["evidenceFile"], encoding="utf-8") as handle:
+                events = [json.loads(line) for line in handle if line.strip()]
+            event = next((event for event in events if all(event.get(key) == value
+                         for key, value in config["passiveEvent"].items())), None)
+            if event and str(event[config["outputField"]]).encode("utf-8") in output:
+                notified = True
+                break
+        if not config.get("passiveEvent") and time.monotonic() >= next_attempt and os.path.exists(config["evidenceFile"]):
             command = b"/relay-enrol" if config.get("enrol") else b"/relay-attach" if config.get("attach") else b"/relay-reminders" if config.get("reminder") else b"/relay-reviews" if config.get("review") else b"/relay-decisions" if config.get("proposals") else b"/relay-questions" if config.get("inbox") else b"/relay-diagnostic-confirm" if config.get("decision") else b"/relay-status"
             os.write(master, b"\x15" + command)
             time.sleep(0.5)

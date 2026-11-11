@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Show local 24-hour time as `HH:mm` in OpenCode's Home and session status bars.
+  Update on minute boundaries without replacing built-in status indicators.
+
 ## 0.2.7 — 10 November 2026
 
 - Carry collaboration permission, selected peers, round limit and deadline through
