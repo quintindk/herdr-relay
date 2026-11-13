@@ -11,6 +11,10 @@ import { NodeRunResultMessages } from '../src/node-run-result-messages.mjs';
 import { digest } from '../src/protocol.mjs';
 import { startNodeService } from '../src/node-service.mjs';
 import { call } from '../src/client.mjs';
+import { observeV2 } from '../packages/opencode-relay/native.mjs';
+import { localRunResultDeliveries } from '../src/node-run-result-deliveries.mjs';
+import { runResultDeliveryView } from '../src/run-result-notifications.mjs';
+import { recoveryInventory } from '../src/node-recovery.mjs';
 
 function fixture(t, policy, { disk = false, reviewPolicy = 'none' } = {}) {
   const root = disk ? mkdtempSync('/tmp/opencode/run-result-notifications-') : null;
@@ -48,7 +52,7 @@ function fixture(t, policy, { disk = false, reviewPolicy = 'none' } = {}) {
   f.api = async (method, path, body) => {
     if (path === '/v1/run-result-messages/take') return f.store.runResultMessages.take(f.store, f.node, body);
     if (path === '/v1/info') return { userId: 'owner', instanceId: f.store.instance, features: { runResultNotifications: true } };
-    if (path === '/v1/commands') return f.store.command(f.owner, body);
+    if (path === '/v1/commands') return f.store.command(body.action === 'run_result.delivery' ? f.node : f.owner, body);
     const [, , collection, id] = path.split('?')[0].split('/');
     if (id) return f.store.get(collection.slice(0, -1), decodeURIComponent(id));
     return { items: f.store.all(collection.slice(0, -1)), nextCursor: null };
@@ -245,15 +249,23 @@ function nodeFixture(t) {
   const f = fixture(t, { inbox: true, requester: true });
   const journal = new NodeJournal(':memory:', { nodeId: 'node', instanceId: f.store.instance }); t.after(() => journal.close());
   journal.db.prepare('INSERT INTO settings VALUES (?,?)').run('receiver:mason', JSON.stringify({ state: 'active', bindingId: 'receiver', generation: 1 }));
-  let busy = false, sends = 0, fail = false;
+  let busy = false, sends = 0, fail = false, terminal = true;
+  const transcript = [];
   const sent = [], binding = { id: 'receiver', agentId: 'mason', receiverGeneration: 1, identity: { sessionId: 'chat' },
-    native: { snapshot: async () => ({ idle: !busy, inbox: [], messages: [] }), send: async invocation => { sends++; sent.push(invocation); if (fail) throw Error('Lost reply'); } } };
+    observe: observeV2,
+    native: { snapshot: async () => ({ idle: !busy, inbox: [], messages: [...transcript] }), send: async invocation => {
+      sends++; sent.push(invocation); if (fail) throw Error('Lost reply');
+      transcript.push({ id: invocation.messageId, type: 'user', text: invocation.prompt });
+      if (terminal) transcript.push({ id: `idle-${sends}`, type: 'idle', outcome: 'succeeded' });
+      return { id: invocation.messageId };
+    } } };
   const messages = new NodeRunResultMessages();
-  return { ...f, journal, messages, binding, sent, busy: value => { busy = value; }, fail: () => { fail = true; }, sends: () => sends,
+  return { ...f, journal, messages, binding, sent, transcript, terminal: value => { terminal = value; },
+    busy: value => { busy = value; }, fail: () => { fail = true; }, sends: () => sends,
     tick: () => messages.tick(journal, f.api, async () => binding) };
 }
 
-test('busy online requester waits in memory, then receives one context-only service report; no native/durable message receipt', async t => {
+test('busy online requester waits in memory, then receives one context-only service report; audits are not a durable message queue', async t => {
   const f = nodeFixture(t); await f.tick(); f.busy(true); f.publish(); await f.tick();
   assert.equal(f.sends(), 0); assert.equal(f.messages.pending.size, 1);
   assert.equal(f.journal.db.prepare('SELECT COUNT(*) AS n FROM notices').get().n, 0);
@@ -261,6 +273,211 @@ test('busy online requester waits in memory, then receives one context-only serv
   assert.equal(f.sends(), 1); assert.match(f.sent[0].prompt, /not a human instruction/); assert.match(f.sent[0].prompt, /Do not resume prior work/);
   assert.match(f.sent[0].prompt, /Teams enumeration failed/); assert.equal(f.messages.pending.size, 0);
   assert.equal(f.journal.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 0);
+});
+
+test('first consumer poll preserves a fresh online result instead of treating registration as a restart', t => {
+  const f = fixture(t, { inbox: true, requester: true });
+  f.store.runResultMessages = new OnlineRunResultMessages();
+  const occurrence = f.publish();
+  const messages = f.take(f.node, 'first-live-consumer').items;
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].occurrenceId, occurrence.id);
+  assert.equal(f.store.get('run_result_delivery', `run-result:${occurrence.id}`).state, 'claimed');
+});
+
+test('queued native acceptance is not delivery; only its correlated successful terminal marks the report delivered', async t => {
+  const f = nodeFixture(t); await f.tick(); f.terminal(false); const occurrence = f.publish();
+  await f.tick();
+  const id = `run-result:${occurrence.id}`;
+  assert.equal(f.store.get('run_result_delivery', id).state, 'accepted');
+  await f.tick(); assert.equal(f.store.get('run_result_delivery', id).state, 'observed');
+  f.transcript.push({ id: 'actual-terminal', type: 'idle', outcome: 'succeeded' });
+  await f.tick();
+  const delivery = f.store.get('run_result_delivery', id);
+  assert.equal(delivery.state, 'delivered'); assert.equal(delivery.nativeTerminalId, 'actual-terminal');
+  assert.equal(delivery.nativeOutcome, 'succeeded'); assert.equal(delivery.replayAllowed, false);
+  assert.equal(f.sends(), 1);
+  assert.equal(runResultDeliveryView(f.store, occurrence).requesterDelivery.state, 'delivered');
+  assert.equal(runResultDeliveryView(f.store, f.store.all('notification')[0]).requesterDelivery.id, id);
+});
+
+test('a lost native reply can be resolved by observing the original message without resending', async t => {
+  const f = nodeFixture(t); await f.tick(); const occurrence = f.publish();
+  f.binding.native.send = async invocation => {
+    f.sent.push(invocation);
+    f.transcript.push({ id: invocation.messageId, type: 'user', text: invocation.prompt },
+      { id: 'late-terminal', type: 'idle', outcome: 'succeeded' });
+    throw Error('Lost native acknowledgement');
+  };
+  await f.tick(); assert.equal(f.store.get('run_result_delivery', `run-result:${occurrence.id}`).state, 'uncertain');
+  await f.tick(); await f.tick();
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.store.get('run_result_delivery', `run-result:${occurrence.id}`).state, 'delivered');
+});
+
+test('node restart may observe an attempted notification but cannot replay it or restore an unsent backlog', async t => {
+  const f = nodeFixture(t); await f.tick(); f.terminal(false); const occurrence = f.publish(); await f.tick();
+  const restarted = new NodeRunResultMessages();
+  f.transcript.push({ id: 'post-restart-terminal', type: 'idle', outcome: 'succeeded' });
+  await restarted.tick(f.journal, f.api, async () => f.binding);
+  assert.equal(f.sends(), 1);
+  assert.equal(f.store.get('run_result_delivery', `run-result:${occurrence.id}`).state, 'delivered');
+  f.busy(true); f.publish({ slot: '2026-10-28T07:00:00Z' });
+  await restarted.tick(f.journal, f.api, async () => f.binding);
+  f.busy(false);
+  await new NodeRunResultMessages().tick(f.journal, f.api, async () => f.binding);
+  assert.equal(f.sends(), 1);
+  assert.equal(localRunResultDeliveries(f.journal).find(item => item.state === 'dropped').reason, 'node_restarted_without_replay');
+});
+
+test('offline, overflow and known-consumer replacement retain explicit outcomes without replay or changing Inbox results', t => {
+  for (const mode of ['offline', 'overflow', 'replacement']) {
+    const f = fixture(t, { inbox: true, requester: true });
+    if (mode === 'offline') f.advertise('offline');
+    if (mode === 'overflow') f.store.runResultMessages.limit = 0;
+    const occurrence = f.publish();
+    if (mode === 'replacement') f.take(f.node, 'new-consumer');
+    const delivery = f.store.get('run_result_delivery', `run-result:${occurrence.id}`);
+    assert.equal(delivery.state, 'dropped'); assert.equal(delivery.replayAllowed, false);
+    assert.equal(delivery.reason, { offline: 'requester_not_online', overflow: 'backend_queue_full', replacement: 'node_consumer_changed' }[mode]);
+    assert.equal(f.store.all('notification').length, 1); assert.equal(f.store.get('occurrence', occurrence.id).state, 'completed');
+  }
+});
+
+test('delivery observations are node-scoped, identity-bound and cannot manufacture terminal delivery from an acknowledgement', async t => {
+  const f = nodeFixture(t); await f.tick(); f.terminal(false); const occurrence = f.publish(); await f.tick();
+  const delivery = f.store.get('run_result_delivery', `run-result:${occurrence.id}`);
+  const payload = { id: delivery.id, consumerId: delivery.consumerId, resultDigest: delivery.resultDigest,
+    nativeMessageId: delivery.nativeMessageId, state: 'observed', reason: 'native_message_observed' };
+  assert.throws(() => f.command(f.other, 'run_result.delivery', payload), { code: 'forbidden' });
+  assert.throws(() => f.command(f.owner, 'run_result.delivery', payload), { code: 'forbidden' });
+  assert.throws(() => f.command(f.node, 'run_result.delivery', { ...payload, consumerId: 'another-consumer' }), { code: 'run_result_delivery_identity_conflict' });
+  assert.throws(() => f.command(f.node, 'run_result.delivery', { ...payload, state: 'delivered' }), { code: 'invalid_run_result_delivery' });
+  assert.throws(() => f.command(f.node, 'run_result.delivery', { ...payload, state: 'dropped' }), { code: 'invalid_run_result_delivery' });
+});
+
+test('backend restart preserves diagnostics but does not restore online result queues or relabel uncertainty as success', t => {
+  const f = fixture(t, { inbox: true, requester: true }, { disk: true });
+  const queued = f.publish();
+  f.store.close(); f.store = new BackendStore(f.path);
+  assert.equal(f.store.get('run_result_delivery', `run-result:${queued.id}`).reason, 'backend_restarted_before_take');
+  f.publish({ slot: '2026-10-28T07:00:00Z' }); f.take();
+  const claimed = f.publish({ slot: '2026-10-28T08:00:00Z' }); f.take();
+  f.store.close(); f.store = new BackendStore(f.path);
+  const delivery = f.store.get('run_result_delivery', `run-result:${claimed.id}`);
+  assert.equal(delivery.state, 'uncertain'); assert.equal(delivery.reason, 'backend_restarted_after_take');
+  assert.equal(f.take().items.length, 0); assert.equal(f.store.all('notification').length, 3);
+});
+
+test('a lost diagnostic acknowledgement reconciles its immutable key before exactly one native send', async t => {
+  const f = nodeFixture(t); await f.tick(); const occurrence = f.publish();
+  let lose = true;
+  const keys = [];
+  const api = async (method, path, body) => {
+    const result = await f.api(method, path, body);
+    if (body?.action === 'run_result.delivery' && body.payload.state === 'sending') {
+      keys.push(body.key);
+      if (lose) { lose = false; throw Error('Lost diagnostic reply after commit'); }
+    }
+    return result;
+  };
+  await f.messages.tick(f.journal, api, async () => f.binding);
+  assert.equal(f.sends(), 0);
+  await f.messages.tick(f.journal, api, async () => f.binding);
+  await f.messages.tick(f.journal, api, async () => f.binding);
+  assert.ok(keys.length >= 2); assert.equal(new Set(keys).size, 1);
+  assert.equal(f.sends(), 1);
+  assert.equal(f.store.get('run_result_delivery', `run-result:${occurrence.id}`).state, 'delivered');
+});
+
+test('a mismatched diagnostic receipt cannot authorise the native send', async t => {
+  const f = nodeFixture(t); await f.tick(); f.publish();
+  const api = async (method, path, body) => {
+    const result = await f.api(method, path, body);
+    return body?.action === 'run_result.delivery' ? { ...result, consumerId: 'another-consumer' } : result;
+  };
+  await f.messages.tick(f.journal, api, async () => f.binding);
+  assert.equal(f.sends(), 0);
+  const delivery = localRunResultDeliveries(f.journal)[0];
+  assert.equal(delivery.publicationError, 'invalid_delivery_receipt');
+  assert.equal(delivery.sendAttempted, false); assert.ok(delivery.publications.length > 0);
+});
+
+test('a failed native presentation retains the completed sweep and unread Inbox result', async t => {
+  const f = nodeFixture(t); await f.tick(); f.terminal(false); const occurrence = f.publish(); await f.tick();
+  f.transcript.push({ id: 'failed-terminal', type: 'idle', outcome: 'failed' });
+  await f.tick();
+  const delivery = f.store.get('run_result_delivery', `run-result:${occurrence.id}`);
+  assert.equal(delivery.state, 'failed'); assert.equal(delivery.nativeOutcome, 'failed');
+  assert.equal(f.store.get('occurrence', occurrence.id).state, 'completed');
+  assert.equal(f.store.all('notification')[0].state, 'pending');
+});
+
+test('observation timeout remains uncertain without retry, and local diagnostics expose no prompt content', async t => {
+  const f = nodeFixture(t); await f.tick(); f.fail(); f.publish();
+  let clock = 0;
+  f.messages.deliveries.clock = () => clock; f.messages.deliveries.observationTimeoutMs = 10;
+  await f.tick(); clock = 20; await f.tick(); await f.tick();
+  assert.equal(f.sends(), 1);
+  const [delivery] = recoveryInventory(f.journal).resultDeliveries;
+  assert.equal(delivery.state, 'uncertain'); assert.equal(delivery.reason, 'native_observation_timeout');
+  assert.equal(delivery.replayAllowed, false);
+  assert.equal(delivery.invocation, undefined); assert.equal(delivery.prompt, undefined);
+  assert.doesNotMatch(JSON.stringify(delivery), /Teams enumeration failed|Relay run result notification/);
+});
+
+test('a replaced receiver is never used to observe or resend an old native attempt', async t => {
+  const f = nodeFixture(t); await f.tick(); f.terminal(false); f.publish(); await f.tick();
+  let replacementSends = 0;
+  const replacement = { ...f.binding, id: 'replacement', identity: { sessionId: 'replacement-chat' }, receiverGeneration: 2,
+    native: { ...f.binding.native, send: async () => { replacementSends++; } } };
+  await f.messages.tick(f.journal, f.api, async () => replacement);
+  assert.equal(f.sends(), 1); assert.equal(replacementSends, 0);
+  assert.equal(localRunResultDeliveries(f.journal)[0].reason, 'native_observer_unavailable');
+});
+
+test('receiver replacement during diagnostic admission prevents native send without claiming a definite delivery outcome', async t => {
+  const f = nodeFixture(t); await f.tick(); f.publish();
+  const api = async (method, path, body) => {
+    const result = await f.api(method, path, body);
+    if (body?.action === 'run_result.delivery' && body.payload.state === 'sending')
+      f.journal.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({ state: 'active', bindingId: 'replacement', generation: 2 }), 'receiver:mason');
+    return result;
+  };
+  await f.messages.tick(f.journal, api, async () => f.binding);
+  assert.equal(f.sends(), 0);
+  const record = localRunResultDeliveries(f.journal)[0];
+  assert.equal(record.state, 'uncertain'); assert.equal(record.reason, 'receiver_replaced');
+  assert.equal(record.sendAttempted, false); assert.equal(record.replayAllowed, false);
+});
+
+for (const skew of [-30000, 30000]) test(`a registered consumer uses backend presence time, not a requester-node clock skew of ${skew}ms`, async t => {
+  const f = nodeFixture(t); await f.tick(); f.publish();
+  // The backend has already admitted this fresh result using its own clock.
+  // Keep API timestamps authoritative while only the receiving node is skewed.
+  const taken = { ...f.take(f.node, f.messages.consumerId), observedAt: new Date().toISOString() };
+  const api = async (method, path, body) => path === '/v1/run-result-messages/take' ? taken : f.api(method, path, body);
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + skew;
+    await f.messages.tick(f.journal, api, async () => f.binding);
+  } finally { Date.now = originalNow; }
+  assert.equal(f.sends(), 1, 'A verified online receiving chat must not be discarded by another machine\'s wall clock');
+  assert.equal(localRunResultDeliveries(f.journal)[0].state, 'accepted');
+});
+
+test('backend-clock validation does not extend the online window across a delayed response', async t => {
+  const f = nodeFixture(t); await f.tick(); f.publish();
+  const taken = { ...f.take(f.node, f.messages.consumerId), observedAt: new Date().toISOString() };
+  let elapsed = 0;
+  f.messages.monotonicClock = () => elapsed;
+  const api = async (method, path, body) => {
+    if (path === '/v1/run-result-messages/take') { elapsed = 20000; return taken; }
+    return f.api(method, path, body);
+  };
+  await f.messages.tick(f.journal, api, async () => f.binding);
+  assert.equal(f.sends(), 0);
+  assert.equal(localRunResultDeliveries(f.journal)[0].reason, 'requester_changed_or_offline');
 });
 
 test('uncertain native sends are dropped without retry and cannot affect a completed result or persistent Inbox', async t => {

@@ -314,7 +314,14 @@ try {
     if (notificationMode) {
       const notice = (await owner('GET', '/v1/notifications')).items.find(item => item.kind === 'run_result' && item.occurrenceId === occurrence.id);
       assert.ok(notice); assert.equal(notice.summary, occurrence.summary); assert.equal(notice.requesterAgentId, coordinator.agentId);
-      await wait('online requester receives recorded cron report', async () => JSON.stringify(await client.session.context({ sessionID: session.id })).includes('RUN_RESULT_VISIBLE'));
+       await wait('online requester receives recorded cron report', async () => JSON.stringify(await client.session.context({ sessionID: session.id })).includes('RUN_RESULT_VISIBLE'));
+       const delivery = await wait('requester delivery has its correlated native terminal outcome', async () => {
+         const report = await owner('GET', `/v1/occurrences/${occurrence.id}`);
+         return report.requesterDelivery?.state === 'delivered' && report.requesterDelivery;
+       });
+       assert.equal(delivery.recipient.conversationId, session.id);
+       assert.equal(delivery.nativeOutcome, 'succeeded'); assert.ok(delivery.nativeTerminalId);
+       assert.equal(delivery.replayAllowed, false);
       assert.equal(runResultMessages, 1);
       assert.match(JSON.stringify(await client.session.context({ sessionID: session.id })), /Run result notifications authorise display and reads only/);
       assert.equal((await owner('GET', '/v1/snapshot')).collections.message.length, 0, 'No automatic reply or durable message queue');
@@ -390,7 +397,8 @@ try {
     legacyValidationRefusalDoesNotBlockActivation: legacyRefusalMode,
     operationSpecificHeadlessSchemasVerified: capabilityMode,
     headlessScopeInspectionVerified: true, emptyNativeScopeWithShellVerified: shellAllowed && !capabilityMode,
-    persistentRunResultInboxVerified: notificationMode, onlineOnlyRequesterResultVerified: notificationMode,
+     persistentRunResultInboxVerified: notificationMode, onlineOnlyRequesterResultVerified: notificationMode,
+     correlatedRequesterDeliveryOutcomeVerified: notificationMode,
     credentialsCopied: false, humanLoginRequired: false, userServicesTouched: false, fixture: root }, null, 2));
 } finally {
   await stopNode();

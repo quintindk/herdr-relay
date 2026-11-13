@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.9 — 13 November 2026
+
+- Preserve freshly published online result notices when a node registers its first
+  notification consumer. A known consumer replacement still drops pending notices.
+- Validate requester presence against backend time with monotonic elapsed time,
+  rather than dropping valid online notices because the receiving node's clock differs.
+- Record requester-delivery outcomes without creating a durable send queue or
+  replaying old results. Distinguish queued acceptance, observed messages, correlated
+  native completion, explicit drops and uncertain effects.
+- Observe the original native message after a lost reply or node restart without
+  resending it. Keep Inbox results and the scheduled worker's identity unchanged.
+- Expose delivery diagnostics in occurrence/result inspection and Inbox detail.
+
 ## 0.2.8 — 11 November 2026
 
 - Show local 24-hour time as `HH:mm` in OpenCode's Home and session status bars.

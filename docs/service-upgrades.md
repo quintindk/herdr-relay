@@ -23,11 +23,11 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-stable version **0.2.8**. Its release assets and verification report must be
+stable version **0.2.9**. Its release assets and verification report must be
 published before installation or a live upgrade:
 
 ```sh
-herdr-relay release install --version 0.2.8
+herdr-relay release install --version 0.2.9
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -53,15 +53,15 @@ skills or configuration.
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.2.8 --key stable-028-backend-host
-herdr-relay upgrade --services both --version 0.2.8 --key stable-028-backend-host --apply
+herdr-relay upgrade --services both --version 0.2.9 --key stable-029-backend-host
+herdr-relay upgrade --services both --version 0.2.9 --key stable-029-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.2.8 --key stable-028-node-host
-herdr-relay upgrade --services node --version 0.2.8 --key stable-028-node-host --apply
+herdr-relay upgrade --services node --version 0.2.9 --key stable-029-node-host
+herdr-relay upgrade --services node --version 0.2.9 --key stable-029-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -74,8 +74,13 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4 through 0.2.8 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through 0.2.9 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
+
+For 0.2.9 requester result-delivery fixes, upgrade both the backend and requester
+node. This enables backend-clock presence validation and correlated delivery
+outcomes without changing the sweep worker or replaying historical results. See
+[delivery diagnostics](run-result-notifications.md#inspect-delivery-outcomes).
 
 Upgrading enables the supported connection-rebind and workspace-relocation
 operations. It does not apply either recovery automatically. Preview and confirm

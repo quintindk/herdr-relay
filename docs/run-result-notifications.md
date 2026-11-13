@@ -36,15 +36,47 @@ comes from the platform-owned coordinator relationship, not the submitted report
 
 - Fresh requester and node heartbeats plus the exact enrolled receiving chat are
   required. Busy counts as online; an unknown/stale/offline receiver does not.
+- From 0.2.9, the node validates backend presence timestamps against the backend's
+  observed time plus monotonic request/processing time. Different machine wall clocks
+  do not turn an otherwise valid online receiver into an offline one. The 15-second
+  presence window is unchanged and is not extended by a node clock adjustment.
 - Online but busy delivery waits in bounded memory until safe. An offline or
   replaced receiving chat causes the notice to be dropped.
-- Backend/node restart drops transient messages. A lost transport/native send
-  reply is not retried. There are no durable delivery receipts, backlog replay,
-  delivery alarms or attempts to launch an offline agent.
+- Backend/node restart drops transient messages. Initial consumer registration
+  does not discard newly published online results; replacing a known consumer does.
+- Delivery diagnostics persist independently of the transient queue. A lost native
+  send reply is never resent. Relay may read the original message to establish its
+  outcome, including after node restart, without launching an offline agent.
 - The message is information only, never human authority or an execution grant.
   It asks the requester to present the report, not acknowledge it, resume earlier
   work or dispatch anything. No automatic reply chain is authorised.
 - Dropping the message cannot change a committed run or remove its Inbox entry.
+
+### Inspect delivery outcomes
+
+From 0.2.9, the existing occurrence inspection includes `requesterDelivery`:
+
+```sh
+herdr-relay native occurrence inspect OCCURRENCE_ID --context OPERATOR_JSON
+```
+
+Its identity pins the result digest, original requester/binding and deterministic
+native message ID. `queued`, `claimed` and `waiting` describe the online transport.
+`sending` records a single-send intent. `accepted` is only a native queue receipt,
+and `observed` means the original prompt appears in its exact transcript.
+`delivered` requires a correlated successful native terminal. `failed` records a
+failed/interrupted presentation, not a changed sweep outcome. `dropped` records a
+pre-send refusal/offline/overflow condition. `uncertain` retains an unknown effect
+or an unproven observation after transport loss, restart, conflict or timeout.
+
+Inbox detail shows this diagnostic state/reason without acknowledging the result.
+`herdr-relay node recover list` also exposes the latest 100 local `resultDeliveries`
+without exposing their prompt/report content. This inspection does not abandon work
+or replay a notification. Pending diagnostic publications retain their original keys.
+Delivery does not prove that the human read it or that business-source coverage was
+complete. Diagnostic records and idempotent observation receipts are **not a durable
+send queue**. They never authorise prompt replay, old-result backfill, re-enrolment,
+worker replacement or automatic acknowledgement.
 
 Only published completed/failed run results trigger reporting. Pending human
 review is not completion; accepted review can produce the completed result notice.

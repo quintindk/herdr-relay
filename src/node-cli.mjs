@@ -317,8 +317,8 @@ try {
         await tickAgentNotices(journal, api, resolveBinding);
         // Best-effort notices may inspect an already loaded receiver, never use
         // the work resolver's owned-runtime recovery/provisioning path.
-        await runResultMessages.tick(journal, api, async agentId => {
-          const binding = bindings.get(agentId);
+        await runResultMessages.tick(journal, api, async (agentId, pinned) => {
+          const binding = pinned?.bindingId ? historicalBindings.get(pinned.bindingId) : bindings.get(agentId);
           if (!binding || journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`retired-binding:${binding.id}`)) return null;
           try { binding.runtime?.verify(); return binding; } catch { return null; }
         });
