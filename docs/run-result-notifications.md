@@ -36,6 +36,10 @@ comes from the platform-owned coordinator relationship, not the submitted report
 
 - Fresh requester and node heartbeats plus the exact enrolled receiving chat are
   required. Busy counts as online; an unknown/stale/offline receiver does not.
+- From 0.2.9, the node validates backend presence timestamps against the backend's
+  observed time plus monotonic request/processing time. Different machine wall clocks
+  do not turn an otherwise valid online receiver into an offline one. The 15-second
+  presence window is unchanged and is not extended by a node clock adjustment.
 - Online but busy delivery waits in bounded memory until safe. An offline or
   replaced receiving chat causes the notice to be dropped.
 - Backend/node restart drops transient messages. Initial consumer registration

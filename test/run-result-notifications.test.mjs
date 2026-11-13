@@ -451,6 +451,35 @@ test('receiver replacement during diagnostic admission prevents native send with
   assert.equal(record.sendAttempted, false); assert.equal(record.replayAllowed, false);
 });
 
+for (const skew of [-30000, 30000]) test(`a registered consumer uses backend presence time, not a requester-node clock skew of ${skew}ms`, async t => {
+  const f = nodeFixture(t); await f.tick(); f.publish();
+  // The backend has already admitted this fresh result using its own clock.
+  // Keep API timestamps authoritative while only the receiving node is skewed.
+  const taken = { ...f.take(f.node, f.messages.consumerId), observedAt: new Date().toISOString() };
+  const api = async (method, path, body) => path === '/v1/run-result-messages/take' ? taken : f.api(method, path, body);
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + skew;
+    await f.messages.tick(f.journal, api, async () => f.binding);
+  } finally { Date.now = originalNow; }
+  assert.equal(f.sends(), 1, 'A verified online receiving chat must not be discarded by another machine\'s wall clock');
+  assert.equal(localRunResultDeliveries(f.journal)[0].state, 'accepted');
+});
+
+test('backend-clock validation does not extend the online window across a delayed response', async t => {
+  const f = nodeFixture(t); await f.tick(); f.publish();
+  const taken = { ...f.take(f.node, f.messages.consumerId), observedAt: new Date().toISOString() };
+  let elapsed = 0;
+  f.messages.monotonicClock = () => elapsed;
+  const api = async (method, path, body) => {
+    if (path === '/v1/run-result-messages/take') { elapsed = 20000; return taken; }
+    return f.api(method, path, body);
+  };
+  await f.messages.tick(f.journal, api, async () => f.binding);
+  assert.equal(f.sends(), 0);
+  assert.equal(localRunResultDeliveries(f.journal)[0].reason, 'requester_changed_or_offline');
+});
+
 test('uncertain native sends are dropped without retry and cannot affect a completed result or persistent Inbox', async t => {
   const f = nodeFixture(t); await f.tick(); const o = f.publish(); f.fail();
   await f.tick(); await f.tick(); assert.equal(f.sends(), 1);

@@ -6,8 +6,9 @@ import { NodeRunResultDeliveries } from './node-run-result-deliveries.mjs';
 // Persist diagnostic intent before a single send. A lost reply permits read-only
 // correlation, never reconstruction/replay of an online-only native message.
 export class NodeRunResultMessages {
-  constructor({ limit = 100, sendTimeoutMs = 2000, observationTimeoutMs, clock } = {}) {
+  constructor({ limit = 100, sendTimeoutMs = 2000, observationTimeoutMs, clock, monotonicClock = () => performance.now() } = {}) {
     this.pending = new Map(); this.limit = limit; this.consumerId = randomUUID(); this.sendTimeoutMs = sendTimeoutMs;
+    this.monotonicClock = monotonicClock;
     this.deliveries = new NodeRunResultDeliveries({ consumerId: this.consumerId, observationTimeoutMs, clock, limit });
   }
   async dropPending(journal, api, reason) {
@@ -20,9 +21,17 @@ export class NodeRunResultMessages {
   }
   async tick(journal, api, resolveBinding) {
     await this.deliveries.observe(journal, api, resolveBinding);
+    let onlineClock = Date.now;
     try {
-      const { items, epoch } = await api('POST', '/v1/run-result-messages/take', { consumerId: this.consumerId });
+      const requestStarted = this.monotonicClock();
+      const { items, epoch, observedAt } = await api('POST', '/v1/run-result-messages/take', { consumerId: this.consumerId });
       if (!Array.isArray(items) || typeof epoch !== 'string') { await this.dropPending(journal, api, 'invalid_take_response'); return; }
+      const backendTime = typeof observedAt === 'string' ? Date.parse(observedAt) : NaN;
+      // Presence timestamps belong to the backend's clock, not the receiving
+      // machine's wall clock. Include the whole request duration conservatively
+      // and use monotonic elapsed time so a node clock adjustment cannot extend
+      // the 15-second online window. Older backends retain legacy validation.
+      if (Number.isFinite(backendTime)) onlineClock = () => backendTime + this.monotonicClock() - requestStarted;
       if (this.epoch && this.epoch !== epoch) await this.dropPending(journal, api, 'backend_epoch_changed');
       this.epoch = epoch;
       for (const item of items) {
@@ -51,7 +60,7 @@ export class NodeRunResultMessages {
         const [agent, node] = await Promise.all([api('GET', `/v1/agents/${encodeURIComponent(recipient.agentId)}`),
           api('GET', `/v1/nodes/${encodeURIComponent(journal.nodeId)}`)]);
         const store = { owner: agent.ownerId, get: (kind, key) => kind === 'agent' && key === agent.id ? agent : kind === 'node' && key === node.id ? node : null };
-        if (recipient.nodeId !== journal.nodeId || !onlineRequester(store, recipient)) { await drop('requester_changed_or_offline'); continue; }
+        if (recipient.nodeId !== journal.nodeId || !onlineRequester(store, recipient, onlineClock())) { await drop('requester_changed_or_offline'); continue; }
         const binding = await resolveBinding(recipient.agentId);
         if (!binding || binding.id !== recipient.bindingId || binding.identity?.sessionId !== recipient.conversationId ||
           binding.receiverGeneration !== recipient.bindingRevision) { await drop('receiver_unavailable_or_replaced'); continue; }

@@ -153,6 +153,6 @@ export class OnlineRunResultMessages {
         this.pending.delete(id); items.push(report);
       }
     }
-    return { items, epoch: this.epoch };
+    return { items, epoch: this.epoch, observedAt: now() };
   }
 }

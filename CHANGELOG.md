@@ -4,6 +4,8 @@
 
 - Preserve freshly published online result notices when a node registers its first
   notification consumer. A known consumer replacement still drops pending notices.
+- Validate requester presence against backend time with monotonic elapsed time,
+  rather than dropping valid online notices because the receiving node's clock differs.
 - Record requester-delivery outcomes without creating a durable send queue or
   replaying old results. Distinguish queued acceptance, observed messages, correlated
   native completion, explicit drops and uncertain effects.
