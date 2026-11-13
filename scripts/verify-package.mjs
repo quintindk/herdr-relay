@@ -49,7 +49,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
    'src/node-headless-contract.mjs', 'src/headless-task-schema.mjs', 'src/publication-outcomes.mjs',
    'src/node-recovery.mjs', 'src/node-recovery-cli.mjs', 'src/run-result-notifications.mjs',
    'src/agent-lifecycle.mjs', 'src/native-board-lifecycle.mjs', 'src/lifecycle-panels.mjs',
-    'src/node-run-result-messages.mjs', 'src/run-result-notifications-panel.mjs',
+    'src/node-run-result-messages.mjs', 'src/node-run-result-deliveries.mjs', 'src/run-result-notifications-panel.mjs',
      'packages/opencode-relay/run-result-notice.mjs', 'src/board-text.mjs', 'src/board-row-layout.mjs', 'src/board-detail-layout.mjs',
      'scripts/install-herdr-shortcut.py', 'scripts/toggle-board.py', 'scripts/native-board-launch.mjs']) assert.ok(packed.files.some(f => f.path === path), `Missing runtime file: ${path}`);
 assert.ok(!packed.files.some(file => ['paperclip-final.json', 'paperclip-final-plan.json'].includes(file.path)), 'Private migration exports must never ship');
@@ -100,15 +100,22 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   installedCliBridgeVerifications.push({ runtime: bridge.runtime, passed: bridge.passed, realModelToolTurn: bridge.realModelToolTurn,
     pluginInvokedActualCli: bridge.pluginInvokedActualCli, humanTaskCreated: bridge.humanTaskCreated,
     existingPeerExecutionRequested: bridge.existingPeerExecutionRequested, activeParentRequired: bridge.activeParentRequired });
-  const grantOutput = execFileSync(process.execPath, ['scripts/verify-headless-setup.mjs', '--agent-grant', '--capabilities', '--shell'],
+  const grantOutput = execFileSync(process.execPath, ['scripts/verify-headless-setup.mjs', '--agent-grant', '--capabilities', '--shell', '--run-result-notifications'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
       env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
   process.stdout.write(grantOutput);
   const grant = JSON.parse(grantOutput);
   assert.equal(grant.runtimeVersion, version); assert.equal(grant.passed, true); assert.equal(grant.grantIssuedByCoordinatorWithoutOwner, true);
+  for (const field of ['actualCronFiringVerified', 'persistentRunResultInboxVerified', 'onlineOnlyRequesterResultVerified', 'correlatedRequesterDeliveryOutcomeVerified'])
+    assert.equal(grant[field], true, `Missing installed requester delivery gate: ${field}`);
+  assert.equal(grant.userServicesTouched, false); assert.equal(grant.credentialsCopied, false);
   installedAgentGrantVerifications.push({ runtime: grant.runtimeVersion, passed: grant.passed,
     grantIssuedByCoordinatorWithoutOwner: grant.grantIssuedByCoordinatorWithoutOwner, agentGrantRetryIdempotent: grant.agentGrantRetryIdempotent,
-    revocationPausedSchedule: grant.revocationPausedSchedule, readinessHadNoExternalEffects: grant.readinessHadNoExternalEffects });
+    revocationPausedSchedule: grant.revocationPausedSchedule, readinessHadNoExternalEffects: grant.readinessHadNoExternalEffects,
+    actualCronFiringVerified: grant.actualCronFiringVerified, persistentRunResultInboxVerified: grant.persistentRunResultInboxVerified,
+    onlineOnlyRequesterResultVerified: grant.onlineOnlyRequesterResultVerified,
+    correlatedRequesterDeliveryOutcomeVerified: grant.correlatedRequesterDeliveryOutcomeVerified,
+    userServicesTouched: grant.userServicesTouched, credentialsCopied: grant.credentialsCopied });
   const scopeOutput = execFileSync(process.execPath, ['scripts/verify-headless-setup.mjs', '--shell', '--mcp-denied'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
       env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });

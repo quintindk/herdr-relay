@@ -13,6 +13,7 @@ import { resolveTaskIdentity } from './task-identity.mjs';
 import { issueGrantApprovalSession, nodeGrantPolicy } from './grants.mjs';
 import { interactiveRepairPreview } from './interactive-repair.mjs';
 import { agentDeletionPreview } from './agent-lifecycle.mjs';
+import { runResultDeliveryView } from './run-result-notifications.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
@@ -92,6 +93,8 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
           cursor: url.searchParams.get('cursor') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });
+        if (['occurrence', 'notification'].includes(kind)) result = id ? runResultDeliveryView(store, result)
+          : { ...result, items: result.items.map(item => runResultDeliveryView(store, item)) };
       } else if (req.method === 'POST' && ['/v1/commands', '/v1/interactive-repair-preview', '/v1/grants/ui-session', '/v1/node-credentials', '/v1/node-credentials/rotate', '/v1/node-bootstrap', '/v1/headless/read', '/v1/run-result-messages/take'].includes(url.pathname)) {
         let size = 0;
         const chunks = [];

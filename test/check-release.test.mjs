@@ -48,7 +48,9 @@ function evidenceFixture(t) {
     installedCliBridgeVerifications: versions.map(runtime => ({ runtime, passed: true, realModelToolTurn: true,
       pluginInvokedActualCli: true, humanTaskCreated: true, existingPeerExecutionRequested: true, activeParentRequired: false })),
     installedAgentGrantVerifications: versions.map(runtime => ({ runtime, passed: true, grantIssuedByCoordinatorWithoutOwner: true,
-      agentGrantRetryIdempotent: true, revocationPausedSchedule: true, readinessHadNoExternalEffects: true })),
+      agentGrantRetryIdempotent: true, revocationPausedSchedule: true, readinessHadNoExternalEffects: true,
+      actualCronFiringVerified: true, persistentRunResultInboxVerified: true, onlineOnlyRequesterResultVerified: true,
+      correlatedRequesterDeliveryOutcomeVerified: true, userServicesTouched: false, credentialsCopied: false })),
     installedInteractiveRecoveryVerifications: versions.map(runtime => ({ runtime, passed: true, realModelToolTurn: true, scopedAgentTools: true,
       insufficientGrantQueuedApproval: true, admissionBeforeFilesystemEffects: true, linkedRepairApproved: true, originalPreparationRetained: true,
       realReceivingSessionVerified: true, existingTaskDispatchIdempotent: true, concurrentCapacityReservationVerified: true,
@@ -89,6 +91,16 @@ test('publication evidence refuses a failed 2.2.5 check even when every host is 
     const failed = structuredClone(report);
     failed[field].find(check => check.runtime === '2.2.5').passed = false;
     await assert.rejects(validate(failed), /AssertionError/);
+  }
+});
+
+test('publication refuses missing correlated requester delivery evidence and unsafe fixture effects on every supported host', async t => {
+  const { report, validate, versions } = evidenceFixture(t);
+  for (const runtime of versions) for (const field of ['actualCronFiringVerified', 'persistentRunResultInboxVerified', 'onlineOnlyRequesterResultVerified', 'correlatedRequesterDeliveryOutcomeVerified', 'userServicesTouched', 'credentialsCopied']) {
+    const invalid = structuredClone(report);
+    const test = invalid.installedAgentGrantVerifications.find(item => item.runtime === runtime);
+    test[field] = field === 'userServicesTouched' || field === 'credentialsCopied';
+    await assert.rejects(validate(invalid), /AssertionError/);
   }
 });
 

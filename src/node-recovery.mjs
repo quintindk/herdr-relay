@@ -10,6 +10,7 @@ import { definitivePublicationRefusal } from './publication-outcomes.mjs';
 import { defaultNodeConfig } from './native-onboarding.mjs';
 import { serviceLock } from './service-lock.mjs';
 import { upgradeDirectory } from './service-upgrade.mjs';
+import { localRunResultDeliveries } from './node-run-result-deliveries.mjs';
 
 const terminal = ['completed', 'cancelled', 'failed', 'rejected'];
 const revisionFencedActions = new Set(['execution.admit', 'execution.continue', 'execution.submit', 'execution.wait_children', 'execution.delay', 'question.ask']);
@@ -35,7 +36,14 @@ export function recoveryInventory(journal) {
       outcome: item.outcome ?? null, definitivelyRejected: Boolean(definitivePublicationRefusal(row)) };
   }), attachments: receivers.list('attachment').filter(item => item.state === 'refused').map(item => ({
     key: item.key, state: item.state, error: item.error, bindingId: item.binding.id, agentId: item.binding.agentId,
-    retired: Boolean(receivers.get(`retired-binding:${item.binding.id}`)) })) };
+    retired: Boolean(receivers.get(`retired-binding:${item.binding.id}`)) })),
+    resultDeliveries: localRunResultDeliveries(journal).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100)
+      .map(item => ({ id: item.id, occurrenceId: item.occurrenceId, scheduleId: item.scheduleId, recipient: item.recipient,
+        state: item.state, reason: item.reason, nativeMessageId: item.nativeMessageId,
+        sendAttempted: item.sendAttempted, replayAllowed: item.replayAllowed,
+        ...(item.nativeTerminalId ? { nativeTerminalId: item.nativeTerminalId, nativeOutcome: item.nativeOutcome } : {}),
+        ...(item.publicationError ? { publicationError: item.publicationError } : {}),
+        pendingOutcomePublications: item.publications.length })) };
 }
 
 async function workProof(journal, id, api, nodeId) {

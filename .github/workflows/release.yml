@@ -85,6 +85,10 @@ jobs:
           assert.deepEqual(report.installedAgentGrantVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2', '2.2.5']);
           for (const test of report.installedAgentGrantVerifications) {
             assert.equal(test.passed && test.grantIssuedByCoordinatorWithoutOwner && test.agentGrantRetryIdempotent && test.revocationPausedSchedule && test.readinessHadNoExternalEffects, true);
+            for (const field of ['actualCronFiringVerified', 'persistentRunResultInboxVerified', 'onlineOnlyRequesterResultVerified', 'correlatedRequesterDeliveryOutcomeVerified'])
+              assert.equal(test[field], true, `Missing requester delivery gate: ${field}`);
+            assert.equal(test.userServicesTouched, false);
+            assert.equal(test.credentialsCopied, false);
           }
           assert.deepEqual(report.installedInteractiveRecoveryVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2', '2.2.5']);
           for (const test of report.installedInteractiveRecoveryVerifications) {

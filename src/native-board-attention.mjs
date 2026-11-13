@@ -46,6 +46,7 @@ export function nativeAttention({ tasks, executions, questions, agents, nodes = 
     ...location(n.nodeId),
     ...(n.kind === 'run_result' ? { scheduleId: n.scheduleId, occurrenceId: n.occurrenceId, resultDigest: n.resultDigest,
       context: `Scheduled: ${n.intendedAt}. Result recorded: ${n.completedAt}. Run: ${n.occurrenceId}. ` +
+        (n.requesterDelivery ? `Requester delivery: ${n.requesterDelivery.state} (${n.requesterDelivery.reason}). ` : '') +
         (n.failure ? `Failure: ${n.failure.stage}/${n.failure.code}: ${n.failure.message}. ` : '') +
         'Execution outcome is not proof of complete business coverage.' } : {}),
     from: 'Relay', stateLabel: n.kind === 'run_result' ? `${n.outcome} · Unread result` : 'Needs acknowledgement', action: 'notification.acknowledge',

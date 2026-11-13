@@ -11,7 +11,8 @@ import { applyMessage } from './agent-messages.mjs';
 import { headlessTaskCommand, headlessTaskProbe } from './headless-tasks.mjs';
 import { applyGrantAction, nodeGrantPolicy } from './grants.mjs';
 import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
-import { runResultNotifications, runResultReport, scheduleRequester, OnlineRunResultMessages } from './run-result-notifications.mjs';
+import { runResultNotifications, runResultReport, scheduleRequester, OnlineRunResultMessages,
+  createRunResultDelivery, expireRunResultDeliveries, recordRunResultDelivery } from './run-result-notifications.mjs';
 import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTaskReference, indexTaskAliases, authoriseTaskReference, namespaceGrantId, referencePrefix } from './task-identity.mjs';
 import { agentName } from './agent-name.mjs';
 import { collaborationRequest, childTerminal } from './collaboration.mjs';
@@ -62,6 +63,7 @@ export class BackendStore {
     requireValue(this.owner === userId, 'backend_identity_mismatch', 'Backend belongs to another user');
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('instance', randomUUID());
     this.instance = this.db.prepare('SELECT value FROM settings WHERE key=?').get('instance').value;
+    expireRunResultDeliveries(this);
   }
 
   close() { this.db.close(); }
@@ -90,7 +92,10 @@ export class BackendStore {
         createdAt: now(), updatedAt: now() });
       this.event('notification.run_result', notification, actor, occurrence.id);
     }
-    if (policy.requester) this.afterCommit.push(() => this.runResultMessages.offer(this, report));
+    if (policy.requester) {
+      createRunResultDelivery(this, report);
+      this.afterCommit.push(() => this.runResultMessages.offer(this, report));
+    }
   }
   get(kind, id, required = true, includeDeleted = false) {
     const row = this.db.prepare('SELECT data FROM entities WHERE kind=? AND id=?').get(kind, id);
@@ -275,6 +280,7 @@ export class BackendStore {
     if (action.startsWith('grant.')) return applyGrantAction(this, actor, action, p, { created, changed });
     if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke', 'agent.headless_connection_rebind'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
+    if (action === 'run_result.delivery') return recordRunResultDelivery(this, actor, p);
     const taskDisposition = (taskId, status, causation) => {
       if (!taskId) return;
       const task = this.get('task', taskId);
