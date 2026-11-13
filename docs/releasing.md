@@ -4,7 +4,7 @@ Release preparation does not publish, upgrade services, change live configuratio
 or reset state. Publication requires an explicit human instruction and an immutable
 version tag. Packages are distributed through GitHub Releases, not npm.
 
-This procedure targets **0.2.9**, currently in preparation. Merging a pull request updates source, not the
+This procedure targets **0.2.9**. Merging a pull request updates source, not the
 published release. The versioned commands below require explicit publication
 authority and verified source. Never install unpublished assets.
 

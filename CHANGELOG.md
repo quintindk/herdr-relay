@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.9 — Unreleased
+## 0.2.9 — 13 November 2026
 
 - Preserve freshly published online result notices when a node registers its first
   notification consumer. A known consumer replacement still drops pending notices.
