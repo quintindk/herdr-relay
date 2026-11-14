@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.10 — Unreleased
+
+- Limit Inbox list message-body previews to five wrapped terminal lines, with
+  truncation dots. Keep full message text in scrollable details and search.
+- Add Inbox **m** to mark the selected informational result or reminder read
+  without opening details or requiring confirmation. Keep questions, reviews,
+  publications and permission decisions outside this shortcut.
+- Preserve the selected message across refresh/reorder and asynchronous read
+  acknowledgements. Reconcile uncertain reads with their original durable keys,
+  and validate the acknowledgement identity and revision before hiding an item.
+- Require real source and installed-package keyboard checks for the Inbox preview,
+  full details and direct read path before publication.
+
 ## 0.2.9 — 13 November 2026
 
 - Preserve freshly published online result notices when a node registers its first

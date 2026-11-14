@@ -34,6 +34,7 @@ node scripts/verify-agent-relocation.mjs
 node scripts/verify-headless-setup.mjs --legacy-contract-refusal --capabilities
 node scripts/verify-headless-setup.mjs --connection-rebind --contract-update --capabilities
 node scripts/verify-headless-setup.mjs --run-result-notifications --capabilities --shell
+node scripts/verify-inbox-read.mjs
 node scripts/verify-herdr-panel.mjs
 node scripts/verify-upgrade.mjs --active-work
 node scripts/verify-package.mjs

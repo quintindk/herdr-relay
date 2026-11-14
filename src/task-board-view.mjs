@@ -43,9 +43,11 @@ export function taskBoardColumns(columns, statusLabels = []) {
   return { title: available - status - gap, status, gap };
 }
 
-/** Lossless cell-aware lines for scrollable decision editors and previews. */
-export function wrapBoardText(value, columns) {
+/** Lossless cell-aware lines by default; maxLines bounds list-preview work. */
+export function wrapBoardText(value, columns, maxLines = Infinity) {
   columns = Math.max(1, Math.floor(columns) || 1);
+  maxLines = Math.max(0, Math.floor(maxLines) || 0);
+  if (!maxLines) return [];
   const lines = [];
   for (const paragraph of String(value ?? '').split(/\r?\n/)) {
     let segments = [], used = 0;
@@ -56,13 +58,16 @@ export function wrapBoardText(value, columns) {
         // only an unbroken token. Width is terminal cells, not UTF-16 length.
         const boundary = segments.findLastIndex(s => /\s/u.test(s)) + 1;
         const split = boundary || segments.length;
-        lines.push(segments.slice(0, split).join(''));
+        if (lines.push(segments.slice(0, split).join('')) >= maxLines) return lines;
         segments = segments.slice(split); used = segments.reduce((n, s) => n + cellWidth(s), 0);
-        if (segments.length && used + cells > columns) { lines.push(segments.join('')); segments = []; used = 0; }
+        if (segments.length && used + cells > columns) {
+          if (lines.push(segments.join('')) >= maxLines) return lines;
+          segments = []; used = 0;
+        }
       }
       segments.push(segment); used += cells;
     }
-    lines.push(segments.join(''));
+    if (lines.push(segments.join('')) >= maxLines) return lines;
   }
   return lines;
 }

@@ -59,6 +59,13 @@ jobs:
           assert.equal(lifecycle.modelTurnsStarted, 0);
           assert.equal(lifecycle.userServicesTouched, false);
           assert.equal(lifecycle.credentialsCopied, false);
+          const inbox = report.nativeInboxReadVerification;
+          assert.ok(inbox, 'Installed Inbox previews and direct read keyboard evidence are required');
+          for (const field of ['passed', 'realTuiKeyboard', 'fiveLinePreview', 'fullDetailsPreserved', 'directReadWithoutConfirmation',
+            'resultAndReminderRead', 'questionStillOpen', 'publishedResultPreserved']) assert.equal(inbox[field], true, field);
+          assert.equal(inbox.modelTurnsStarted, 0);
+          assert.equal(inbox.userServicesTouched, false);
+          assert.equal(inbox.credentialsCopied, false);
           const handover = report.installerHandover;
           assert.ok(handover, 'Installer process regression evidence is required');
           assert.equal(handover.version, report.version);

@@ -8,6 +8,7 @@ import { agentName } from './agent-name.mjs';
 import { canonicalDirectory, withinRoots } from './interactive-contract.mjs';
 import { collaborationRequest } from './collaboration.mjs';
 import { nativeBoardLifecycle } from './native-board-lifecycle.mjs';
+import { canMarkInboxRead } from './inbox-read.mjs';
 
 export function boardLocalIdentity(context) {
   return context?.scope?.kind === 'node_operator' && context.nodeId === context.scope.nodeId && context.instanceId
@@ -289,6 +290,24 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       const item = data.inbox.find(item => item.id === id);
       requireValue(item, 'decision_unavailable', 'This item changed or was resolved. Refresh Inbox');
       return item;
+    },
+    async markInboxRead({ item, key }) {
+      requireValue(decisionJournal, 'decision_storage_required', 'Durable read acknowledgement storage is required');
+      requireValue(canMarkInboxRead(item) && typeof item.entityId === 'string' && item.entityId &&
+        Number.isSafeInteger(item.revision) && item.revision > 0 && typeof item.instanceId === 'string' && item.instanceId && typeof key === 'string' && key,
+      'read_unavailable', 'Select an unread informational result or reminder');
+      const payload = { id: item.entityId, expectedRevision: item.revision };
+      const pending = decisionJournal.pending().find(record => record.command.action === 'notification.acknowledge' &&
+        record.command.payload.id === item.entityId);
+      requireValue(!pending || pending.state === 'pending' && pending.instance === item.instanceId && digest(pending.command.payload) === digest(payload),
+        'decision_pending', 'Inspect the original read acknowledgement in Inbox before deciding again');
+      const proposed = { key, action: 'notification.acknowledge', payload };
+      const command = pending?.command ?? decisionJournal.recorded(proposed, item.instanceId)?.command ?? proposed;
+      const receipt = await decisionJournal.submit(api, command, item.instanceId);
+      requireValue(receipt?.id === payload.id && receipt.state === 'acknowledged' && receipt.revision === payload.expectedRevision + 1,
+        'invalid_decision_receipt', 'Read acknowledgement is unconfirmed. Reconcile the original operation in Inbox', 502);
+      return { state: 'recorded', notificationId: receipt.id, key: command.key,
+        message: item.kind === 'run_result' ? 'Result marked read. Outcome and future runs are unchanged.' : 'Reminder marked read. No model turn started.' };
     },
     async decideInbox({ item, body, decision, reason, key }) {
       requireValue(decisionJournal, 'decision_storage_required', 'Durable human decision storage is required');

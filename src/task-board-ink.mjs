@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { buildBoardRows, buildAgentRows, wrapBoardText } from './task-board-view.mjs';
@@ -11,6 +11,7 @@ import { routineDetailLayout } from './board-detail-layout.mjs';
 import { layoutBoardRows, boardRowViewport } from './board-row-layout.mjs';
 import { AgentRenamePanel } from './agent-rename-panel.mjs';
 import { LifecycleDeletePanel, ScheduleCreatePanel, scheduleFormPayload } from './lifecycle-panels.mjs';
+import { canMarkInboxRead } from './inbox-read.mjs';
 
 const h = React.createElement;
 const statuses = ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'];
@@ -310,7 +311,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
     h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`));
 }
 
-export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, pendingDecisions,
+export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, markInboxRead, pendingDecisions,
   prepareAgentDelete, deleteAgent, prepareScheduleCreation, prepareScheduleCreate, createSchedule, prepareScheduleChange, changeSchedule,
   detailGrant, decideGrant, createGrant, prepareInteractiveRepair, requestInteractiveRepair, pendingGrantDecisions, updateRunResultNotifications, prepareAgentRename, renameAgent, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
@@ -325,6 +326,8 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const [renameModal, setRenameModal] = useState(null);
   const [lifecycleModal, setLifecycleModal] = useState(null), [newScheduleModal, setNewScheduleModal] = useState(null);
   const [decisionReceipt, setDecisionReceipt] = useState(null);
+  const readsInFlight = useRef(new Set());
+  const nativeSelection = useRef(null);
   const [offline, setOffline] = useState(''); const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState(0); const [modal, setModal] = useState(null);
   const [rowScroll, setRowScroll] = useState(0);
@@ -379,6 +382,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const nativeIndex = selectedNativeId ? rows.findIndex(row => row.id === selectedNativeId) : -1;
   const selectedIndex = native ? nativeIndex >= 0 ? nativeIndex : Math.min(selected, Math.max(0, rows.length - 1)) : rows[selected]?.type === 'section'
     ? Math.max(0, rows.findIndex((row, index) => index >= selected && row.type !== 'section')) : selected;
+  nativeSelection.current = { view, id: rows[selectedIndex]?.id, index: selectedIndex };
   useEffect(() => {
     if (native && nativeIndex < 0 && rows[selectedIndex]) setSelectedNativeId(rows[selectedIndex].id);
   }, [native, nativeIndex, rows, selectedIndex]);
@@ -400,6 +404,27 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     } catch (error) {
       setDecisionModal(value => value?.requestId === requestId ? { ...value, busy: false, error: decisionText(error.message) } : value);
     }
+  };
+  const markSelectedRead = async item => {
+    if (!canMarkInboxRead(item)) { setNotice('Select an informational result or reminder. Enter opens decisions.'); return; }
+    if (!markInboxRead) { setNotice('Mark as read is unavailable'); return; }
+    if (readsInFlight.current.has(item.entityId)) return;
+    readsInFlight.current.add(item.entityId);
+    setNotice('Marking item read…');
+    try {
+      const result = await markInboxRead({ item: { ...item }, key: `human-read:${randomUUID()}` });
+      if (result?.state !== 'recorded' || result.notificationId !== item.entityId) throw Error('Read acknowledgement is unconfirmed. Inspect Inbox.');
+      const publications = pendingDecisions?.();
+      const selection = nativeSelection.current;
+      if (selection.view === 'inbox' && selection.id === item.id) { setSelected(selection.index); setSelectedNativeId(null); }
+      setBoard(value => ({ ...value, inbox: [...(publications ?? []), ...(value.inbox ?? []).filter(entry =>
+        !(canMarkInboxRead(entry) && entry.entityId === item.entityId) && (!publications || entry.kind !== 'publication'))] }));
+      setNotice(result.message || 'Item marked read');
+      setRefreshGeneration(value => value + 1);
+    } catch (error) {
+      setNotice(clean(error.message || 'Read acknowledgement is unconfirmed. Inspect Inbox.'));
+      if (pendingDecisions) setBoard(value => ({ ...value, inbox: [...pendingDecisions(), ...(value.inbox ?? []).filter(entry => entry.kind !== 'publication')] }));
+    } finally { readsInFlight.current.delete(item.entityId); }
   };
   const submitDecision = async current => {
     setDecisionModal({ ...current, busy: true, locked: true, error: '' });
@@ -621,6 +646,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     if (input === 'i') { if (native) setNotice('All enrolled agents, including stale reports, are listed in Agents'); else setShowIdle(value => !value); return; }
     if (input === '/') { setSearching(true); return; }
     if (input === 'r') { setRefreshGeneration(value => value + 1); return; }
+    if (native && view === 'inbox' && input === 'm' && !key.ctrl && !key.meta) { void markSelectedRead(rows[selectedIndex]?.item); return; }
     if (native && key.tab) {
       const views = nativeBoardViews;
       setView(value => views[(views.indexOf(value) + (key.shift ? views.length - 1 : 1)) % views.length]);
@@ -770,6 +796,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     : [native ? 'j/k move · Enter open · Tab view · Space fold · / search' : 'j/k move · Enter/Tab detail · Space/←/→ fold · / search',
       native ? view === 'schedules' ? `${board.scheduleManagementAvailable && createSchedule ? 'c create · x delete · p pause/resume · ' : ''}n run result notifications · h cancelled · r refresh · q quit`
         : view === 'agents' ? `${board.agentRenamingAvailable && renameAgent ? 'n rename · ' : ''}${board.agentDeletionAvailable && deleteAgent ? 'x delete inactive · ' : ''}PgUp/Dn · r refresh · q quit`
+        : view === 'inbox' ? `${markInboxRead ? 'm mark read · ' : ''}PgUp/Dn · r refresh · q quit`
         : `h done · ${dispatchTask ? 'a assign · ' : ''}PgUp/Dn · r refresh · s status · q quit` : 'h done · i idle · r refresh · a assign · s status · q quit'])
     .flatMap(text => wrapBoardText(text, width));
   const bodyHeight = Math.max(1, height - header.length - footer.length - (native ? 3 : 2));

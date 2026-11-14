@@ -44,6 +44,8 @@ jobs:
       - name: Root regression tests (serial)
         run: node --test --test-concurrency=1 test/*.test.mjs
       - run: npm run test:v2
+      - name: Native Inbox previews and direct read keyboard verification
+        run: node scripts/verify-inbox-read.mjs
       - name: Interactive plugin to actual node CLI task hand-off
         run: node scripts/verify-cli-bridge.mjs
       - name: Interactive self-capture records a todo without self-dispatch

@@ -32,6 +32,14 @@ the notification only. It does not approve the candidate, complete a task, chang
 the cron, advance business coverage or start model work. Reports preserve partial
 coverage and failure diagnostics. See [run result notifications](run-result-notifications.md).
 
+From **0.2.10**, **m** in the Inbox list marks the selected informational result or reminder read
+without opening a confirmation dialog. Questions, reviews and publications are not
+handled by that shortcut. Only a confirmed acknowledgement removes the card, and
+unknown replies retain the original local operation for reconciliation.
+
+List previews are limited to five wrapped message-body lines. **Enter** opens the
+complete scrollable text, and search continues to match the full message.
+
 Acknowledging a reminder similarly starts no model turn. A published report and an
 external-message delivery receipt are different kinds of evidence.
 

@@ -39,6 +39,9 @@ function evidenceFixture(t) {
     nativeLifecycleVerification: { passed: true, realTuiKeyboard: true, humanScheduleCreate: true, humanScheduleDelete: true,
       inactiveAgentDelete: true, nodeCancellationAcknowledged: true, deletionFencedOnNode: true, historyRetained: true,
       modelTurnsStarted: 0, userServicesTouched: false, credentialsCopied: false },
+    nativeInboxReadVerification: { passed: true, realTuiKeyboard: true, fiveLinePreview: true, fullDetailsPreserved: true,
+      directReadWithoutConfirmation: true, resultAndReminderRead: true, questionStillOpen: true, publishedResultPreserved: true,
+      modelTurnsStarted: 0, userServicesTouched: false, credentialsCopied: false },
     installerHandover: { version: '0.2.8', passed: true, candidateProcessVerified: true, candidateOnlySetupExecuted: true,
       legacyBootstrapVerified: true, immutable022LimitationVerified: true, released023SinglePass: true,
       retryIdempotent: true, conflictRefused: true, allCandidateAuditsVerified: true, candidateAuditChecks: 6,
@@ -141,5 +144,19 @@ test('publication refuses missing lifecycle/clock evidence and any live effects 
   for (const [field, value] of [['modelTurnsStarted', 1], ['userServicesTouched', true], ['credentialsCopied', true]]) {
     const unsafe = structuredClone(report); unsafe.nativeLifecycleVerification[field] = value;
     await assert.rejects(validate(unsafe), /AssertionError/);
+  }
+});
+
+test('publication refuses missing Inbox preview/direct-read evidence and unsafe fixture effects', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.nativeInboxReadVerification;
+  await assert.rejects(validate(missing), /AssertionError/);
+  for (const field of ['passed', 'realTuiKeyboard', 'fiveLinePreview', 'fullDetailsPreserved', 'directReadWithoutConfirmation', 'resultAndReminderRead', 'questionStillOpen', 'publishedResultPreserved']) {
+    const invalid = structuredClone(report); invalid.nativeInboxReadVerification[field] = false;
+    await assert.rejects(validate(invalid), /AssertionError/);
+  }
+  for (const [field, value] of [['modelTurnsStarted', 1], ['userServicesTouched', true], ['credentialsCopied', true]]) {
+    const invalid = structuredClone(report); invalid.nativeInboxReadVerification[field] = value;
+    await assert.rejects(validate(invalid), /AssertionError/);
   }
 });

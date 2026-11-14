@@ -30,7 +30,7 @@ assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firec
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/native-agent-relocation.mjs', 'src/skill-install.mjs',
-  'src/agent-name.mjs', 'src/agent-rename-panel.mjs',
+   'src/agent-name.mjs', 'src/agent-rename-panel.mjs', 'src/inbox-read.mjs',
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
@@ -79,6 +79,11 @@ const lifecycleOutput = execFileSync(process.execPath, ['scripts/verify-native-l
 process.stdout.write(lifecycleOutput);
 const nativeLifecycleVerification = JSON.parse(lifecycleOutput);
 assert.equal(nativeLifecycleVerification.passed, true);
+const inboxReadOutput = execFileSync(process.execPath, ['scripts/verify-inbox-read.mjs', '--package', installed],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+process.stdout.write(inboxReadOutput);
+const nativeInboxReadVerification = JSON.parse(inboxReadOutput);
+assert.equal(nativeInboxReadVerification.passed, true);
 const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [], installedInteractiveRecoveryVerifications = [];
 const installedNativeInputVerifications = [];
 const installedHeadlessScopeVerifications = [];
@@ -363,7 +368,7 @@ let onboarding;
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, nativeInboxReadVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
   installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,

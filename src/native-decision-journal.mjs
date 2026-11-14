@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 import { canonical, digest, requireValue } from './protocol.mjs';
 import { collaborationReceiptMatches } from './collaboration.mjs';
 
+const entityFor = command => `${command.action}:${command.payload.kind ? `${command.payload.kind}:` : ''}${command.payload.id}`;
+
 // Human keyboard decisions only. Persist the exact authorised command before
 // sending it. A lost reply must never create a new decision or operation key.
 export class NativeDecisionJournal {
@@ -14,13 +16,23 @@ export class NativeDecisionJournal {
     this.db.exec(`CREATE TABLE IF NOT EXISTS decisions (
       key TEXT PRIMARY KEY, entity TEXT NOT NULL, instance TEXT NOT NULL, command TEXT NOT NULL,
       state TEXT NOT NULL, receipt TEXT, error TEXT);
-      CREATE UNIQUE INDEX IF NOT EXISTS outstanding_decision ON decisions(entity) WHERE state IN ('pending','conflict');`);
+      CREATE UNIQUE INDEX IF NOT EXISTS outstanding_decision ON decisions(entity) WHERE state IN ('pending','conflict');
+      CREATE INDEX IF NOT EXISTS decision_receipt_lookup ON decisions(entity,instance,state);`);
   }
   pending() { return this.db.prepare("SELECT * FROM decisions WHERE state IN ('pending','conflict') ORDER BY rowid").all()
     .map(row => ({ ...row, command: JSON.parse(row.command) })); }
   inspect(key) {
     const row = this.db.prepare('SELECT * FROM decisions WHERE key=?').get(key);
     return row ? { ...row, command: JSON.parse(row.command) } : null;
+  }
+  recorded(command, instanceId) {
+    const rows = this.db.prepare("SELECT * FROM decisions WHERE entity=? AND instance=? AND state='recorded' ORDER BY rowid DESC")
+      .all(entityFor(command), instanceId);
+    for (const row of rows) {
+      const saved = JSON.parse(row.command);
+      if (saved.action === command.action && canonical(saved.payload) === canonical(command.payload)) return { ...row, command: saved };
+    }
+    return null;
   }
   async submit(api, command, instanceId) {
     requireValue(instanceId, 'invalid_backend_response', 'Preview backend instance identity required');
@@ -31,7 +43,7 @@ export class NativeDecisionJournal {
       if (previous.state === 'recorded') return JSON.parse(previous.receipt);
       requireValue(previous.state === 'pending', 'decision_conflict', 'Decision requires inspection. It will not be reapplied automatically');
     } else {
-      const entity = `${command.action}:${command.payload.kind ? `${command.payload.kind}:` : ''}${command.payload.id}`;
+      const entity = entityFor(command);
       requireValue(!this.db.prepare("SELECT key FROM decisions WHERE entity=? AND state IN ('pending','conflict')").get(entity),
         'decision_pending', `A confirmed decision for this item is already pending. Reconcile it from ${command.action.startsWith('grant.') ? 'Grants' : 'Inbox'}`);
       this.db.prepare('INSERT INTO decisions(key,entity,instance,command,state) VALUES (?,?,?,?,?)')
@@ -68,7 +80,7 @@ export class NativeDecisionJournal {
           canonical(receipt.definition?.runResultNotifications) === canonical(p.runResultNotifications) :
         command.action === 'question.answer'
         ? receipt.status === 'answered' && receipt.answer?.body === p.body && receipt.answer.author?.type === 'user'
-        : command.action === 'notification.acknowledge' ? receipt.state === 'acknowledged'
+        : command.action === 'notification.acknowledge' ? receipt.state === 'acknowledged' && receipt.revision === p.expectedRevision + 1
           : command.action === 'execution.monitor_review' ? receipt.state === (p.decision === 'accept' ? 'waiting_time' : 'monitor_blocked')
             : receipt.state === (p.decision === 'accept' ? 'completed' : 'rejected') && receipt.review?.candidate === p.candidate && receipt.review.decision === p.decision);
       requireValue(valid, 'invalid_decision_receipt', 'Decision receipt is incomplete or does not match the confirmed item. Reconcile the original operation', 502);

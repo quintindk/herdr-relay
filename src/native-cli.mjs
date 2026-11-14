@@ -231,7 +231,7 @@ export async function main(args) {
         const { watchTaskBoardInk } = await import('./task-board-ink.mjs');
         await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask, detailRoutine: board.detailRoutine,
           detailAgent: board.detailAgent, statusTask: board.statusTask, reviewTask: board.reviewTask, detailInbox: board.detailInbox,
-           decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
+           decideInbox: board.decideInbox, markInboxRead: board.markInboxRead, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
            prepareHandback: board.prepareHandback, handbackTask: board.handbackTask,
            detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions,
            prepareInteractiveRepair: board.prepareInteractiveRepair, requestInteractiveRepair: board.requestInteractiveRepair,

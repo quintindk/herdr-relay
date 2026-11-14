@@ -1,5 +1,13 @@
 import { wrapBoardText, truncateBoardText, taskBoardColumns } from './task-board-view.mjs';
 
+export const inboxPreviewLineLimit = 5;
+export function inboxPreviewLines(value, columns) {
+  const lines = wrapBoardText(value, columns, inboxPreviewLineLimit + 1);
+  const preview = lines.slice(0, inboxPreviewLineLimit).map(line => truncateBoardText(line, columns));
+  if (lines.length > inboxPreviewLineLimit) preview[preview.length - 1] = truncateBoardText(`${preview.at(-1)}...`, columns);
+  return preview;
+}
+
 export function layoutBoardRows(rows, { columns, native, rowText, statusLabel }) {
   const width = Math.max(1, columns - (native ? 4 : 2));
   const table = taskBoardColumns(columns, rows.filter(row => row.type === 'task').map(row => statusLabel(row.task)));
@@ -22,7 +30,11 @@ export function layoutBoardRows(rows, { columns, native, rowText, statusLabel })
     } else if (row.type === 'group' || row.type === 'section') {
       return [{ text: truncateBoardText(rowText(row), width), heading: true }];
     } else fields = [rowText(row)];
-    return fields.flatMap((field, fieldIndex) => wrapBoardText(field, width).map(text => ({ text, heading: fieldIndex === 0 })));
+    return fields.flatMap((field, fieldIndex) => {
+      const preview = row.type === 'inbox' && fieldIndex === 1;
+      return (preview ? inboxPreviewLines(field, width) : wrapBoardText(field, width))
+        .map(text => ({ text, heading: fieldIndex === 0, ...(preview ? { preview: true } : {}) }));
+    });
   });
 }
 
