@@ -59,6 +59,11 @@ new human approval. Formal review follows the execution's explicit review policy
 Informational messages are not the work/delegation channel. Use the execution
 path for work that needs a peer to read files, run checks or return a deliverable.
 
+When asked for a plain human Inbox update, use `relay_owner_message` with
+`{key,subject?,body}` or the scoped CLI `work owner-message`. It creates no question,
+task, notification or recipient model turn. Use the original key after an uncertain
+reply. Headless workers must send during their accepted run, before submitting.
+
 ## Tool boundaries
 
 Use installed `relay_cli_help` for the current native command syntax. Arguments

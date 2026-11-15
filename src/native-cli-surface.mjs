@@ -22,6 +22,7 @@ export function nativeCliInvocation(args) {
 export function executionCliInvocation(args) {
   const [group, action] = args[0] === 'native' ? args.slice(1) : args;
   return args[0] === 'native' && (group === 'command' ||
+    group === 'work' && action === 'owner-message' ||
     ['task', 'comment', 'agent', 'node', 'execution', 'schedule', 'occurrence'].includes(group) && ['list', 'inspect'].includes(action) ||
     group === 'task' && ['resolve', 'edit', 'comment'].includes(action));
 }

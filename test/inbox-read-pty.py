@@ -60,7 +60,7 @@ try:
     until("RELAY / INBOX")
     until("KEEP_QUESTION_OPEN")
     send(b"m")
-    until("Select an informational result or reminder")
+    until("Select an unread message, informational result or reminder")
     send(b"/")
     until("Enter apply")
     send(b"preview-job" if kind == "result" else b"REMINDER_ENTRY")

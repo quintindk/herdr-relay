@@ -147,6 +147,18 @@ See [result notifications](run-result-notifications.md).
 
 ## Worker protocol and recovery
 
+For a plain, task-independent message to the human Inbox:
+
+```sh
+herdr-relay native work owner-message --context WORKER_JSON --key checkpoint-v1 --file message.json
+```
+
+The file contains `{ "subject": "Checkpoint reached", "body": "Full message" }`.
+Interactive enrolments need no active execution. Independent headless workers also
+pass `--execution ID --run ID` and must send before staging their outcome. The
+plugin equivalent is `relay_owner_message({key,subject?,body})`. This creates no
+question, notification or model turn. See [owner Inbox messages](owner-inbox-messages.md).
+
 ```sh
 herdr-relay native work read --context WORKER_JSON --execution EXECUTION_ID --run RUN_ID
 herdr-relay native work submit --context WORKER_JSON --execution EXECUTION_ID --run RUN_ID --key KEY --file result.json

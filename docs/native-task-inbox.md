@@ -4,6 +4,17 @@
 OpenCode human-decision commands use the same native backend records and revision
 checks. There is no external task-tracker board.
 
+## Plain messages
+
+From **0.2.10**, `relay_owner_message` and the scoped CLI `work owner-message` add a
+plain **Message** addressed to the human owner. It contains the agent's subject,
+full body and sender identity. It creates no question, task, approval, notification
+or model continuation. See [owner Inbox messages](owner-inbox-messages.md).
+
+**Enter** opens the full text. **m** in the list marks it read directly. In plain
+message details, **m** or **Enter** marks it read without confirmation. Opening and
+closing alone changes nothing. Messages retain their body and sender history.
+
 ## Questions
 
 Human-addressed questions appear in Inbox and the related task detail. Inspect the
@@ -32,7 +43,7 @@ the notification only. It does not approve the candidate, complete a task, chang
 the cron, advance business coverage or start model work. Reports preserve partial
 coverage and failure diagnostics. See [run result notifications](run-result-notifications.md).
 
-From **0.2.10**, **m** in the Inbox list marks the selected informational result or reminder read
+From **0.2.10**, **m** in the Inbox list marks the selected plain message, informational result or reminder read
 without opening a confirmation dialog. Questions, reviews and publications are not
 handled by that shortcut. Only a confirmed acknowledgement removes the card, and
 unknown replies retain the original local operation for reconciliation.

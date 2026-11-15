@@ -15,7 +15,7 @@ export function layoutBoardRows(rows, { columns, native, rowText, statusLabel })
     let fields;
     if (row.type === 'machine') fields = [`${row.local ? 'LOCAL · ' : ''}${row.expanded ? '▾' : '▸'} ${row.name}${row.machineName && row.machineName !== row.name ? ` / ${row.machineName}` : ''} · ${row.count}${row.count !== row.total ? `/${row.total}` : ''} ${row.total === 1 ? 'agent' : 'agents'}`];
     else if (row.type === 'agent') fields = [`  ${row.last ? '└─' : '├─'} ${row.agent.displayName || row.agent.name} · ${row.agent.mode || 'Unknown mode'} · ${row.agent.availabilityLabel || 'Unknown or stale'}`];
-    else if (row.type === 'inbox') fields = [`${row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'question' ? 'Question' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${row.item.title}`,
+    else if (row.type === 'inbox') fields = [`${row.item.kind === 'owner_message' ? 'Message' : row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'question' ? 'Question' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${row.item.title}`,
       row.item.summary, `${row.item.from || 'Relay'} · ${row.item.stateLabel}${row.item.locationLabel ? ` · ${row.item.locationLabel}` : ''}`, ''];
     else if (row.type === 'routine' && native) fields = [`${row.routine.title}  [${row.routine.state}]`, `${row.routine.cron} · ${row.routine.timezone}`,
       `Next (clock preview) ${row.routine.nextRunAt || 'none'} · ${row.routine.target || 'Unresolved target'}`, ''];

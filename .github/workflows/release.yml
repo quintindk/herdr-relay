@@ -66,6 +66,17 @@ jobs:
           assert.equal(inbox.modelTurnsStarted, 0);
           assert.equal(inbox.userServicesTouched, false);
           assert.equal(inbox.credentialsCopied, false);
+          const ownerInbox = report.nativeOwnerInboxVerification;
+          assert.ok(ownerInbox, 'Installed plain owner Inbox verification is required');
+          for (const field of ['passed', 'actualCliSend', 'realTuiKeyboard', 'plainOwnerMessage', 'senderPreserved', 'fiveLinePreview',
+            'fullDetailsPreserved', 'directReadWithoutConfirmation', 'createdNoWorkOrNotification']) assert.equal(ownerInbox[field], true, field);
+          assert.ok(ownerInbox.installedCoreTests >= 12);
+          assert.equal(ownerInbox.modelTurnsStarted, 0); assert.equal(ownerInbox.userServicesTouched, false); assert.equal(ownerInbox.credentialsCopied, false);
+          assert.deepEqual(report.installedOwnerMessageVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2', '2.2.5']);
+          for (const test of report.installedOwnerMessageVerifications) {
+            for (const field of ['passed', 'realOwnerMessageTool', 'plainOwnerInbox', 'ownerMessageRead', 'ownerMessageCreatedNoRecipientTurn', 'ownerMessageNoTaskOrNotification']) assert.equal(test[field], true, field);
+            assert.equal(test.userServicesTouched, false); assert.equal(test.credentialsCopied, false);
+          }
           const backups = report.upgradeBackupVerification;
           assert.ok(backups, 'Installed upgrade backup verification is required');
           for (const field of ['passed', 'installedPackage', 'walSnapshots', 'concurrentWriteSnapshot', 'checksumMismatchRefused',

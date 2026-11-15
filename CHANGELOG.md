@@ -1,7 +1,15 @@
 # Changelog
 
-## 0.2.10 — Unreleased
+## 0.2.10 — 15 November 2026
 
+- Add `relay_owner_message` and the scoped `native work owner-message` CLI for
+  plain, persistent human Inbox messages. Bind the sender and implicit owner,
+  retain full text/history and reconcile original keys without creating a task,
+  question, notification, reply chain or recipient model turn.
+- Support direct message read acknowledgement and exact active headless-run scope,
+  with installed CLI/plugin/TUI and real-model checks on all supported hosts.
+- Use fresh local IPC connections so a node restart cannot reuse a closed pooled
+  socket. Uncertain writes still require explicit original-key reconciliation.
 - Replace service-upgrade backup full-index integrity scans with WAL-safe SQLite
   snapshots and streaming SHA-256 copy verification. Validate each source once
   before stopping services, rather than rescanning whole databases during every

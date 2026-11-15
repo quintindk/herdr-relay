@@ -1,7 +1,7 @@
 const ended = e => ['completed', 'failed', 'cancelled', 'rejected'].includes(e.state);
 export const nativeAgentLabel = agent => agent?.name === 'Interactive Relay chat' && agent.directory && !(agent.nameRevision > 0)
   ? `${agent.directory.split('/').filter(Boolean).at(-1)} (interactive)` : agent?.name ?? 'Unknown agent';
-export function nativeAttention({ tasks, executions, questions, agents, nodes = [], occurrences, notifications, monitorResults, userId }) {
+export function nativeAttention({ tasks, executions, questions, agents, nodes = [], occurrences, notifications, owner_messages = [], monitorResults, userId }) {
   const taskById = new Map(tasks.map(t => [t.id, t]));
   const agentName = id => nativeAgentLabel(agents.find(a => a.id === id));
   const name = (taskId, scheduleId) => taskById.get(taskId)?.title ?? (scheduleId ? `Scheduled job: ${scheduleId}` : 'Task unavailable');
@@ -51,6 +51,12 @@ export function nativeAttention({ tasks, executions, questions, agents, nodes = 
         'Execution outcome is not proof of complete business coverage.' } : {}),
     from: 'Relay', stateLabel: n.kind === 'run_result' ? `${n.outcome} · Unread result` : 'Needs acknowledgement', action: 'notification.acknowledge',
     effect: n.kind === 'run_result' ? 'Mark this result read. This does not approve the work, change the outcome or start a run.' : 'Acknowledge this reminder. No model turn is started.' });
+  for (const message of owner_messages.filter(item => item.userId === userId && item.state === 'unread')) inbox.push({
+    id: `owner-message:${message.id}`, kind: 'owner_message', entityId: message.id, revision: message.revision,
+    title: message.subject, summary: message.body, from: message.sender.name, ...location(message.sender.nodeId),
+    senderAgentId: message.sender.agentId, createdAt: message.createdAt, stateLabel: 'Unread message',
+    context: 'Plain agent-authored message. No answer, approval or model continuation is requested.',
+    action: 'owner_message.read', effect: 'Mark this message read. Its full text and sender history remain unchanged.' });
   const attention = task => {
     const candidates = executions.filter(e => e.taskId === task.id).sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') ||
       (b.result?.sequence ?? 0) - (a.result?.sequence ?? 0) || b.id.localeCompare(a.id));

@@ -3,11 +3,11 @@
 Native tasks, agent collaboration and durable node services for **Herdr and
 OpenCode**. Relay owns its task backend. No external task tracker is required.
 
-**[0.2.9](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.9)** fixes first-poll
-and cross-node clock-skew losses in online run-result delivery, with explicit
-delivery diagnostics and original-message observation without replay. Install only
+**[0.2.10](https://github.com/quintindk/herdr-relay/releases/tag/v0.2.10)** adds plain
+agent-to-owner Inbox messages, compact five-line previews and direct mark-as-read,
+plus streaming-checksum upgrade backups and progress reporting. Install only
 published, verified release assets. Existing installations must be on
-**0.2.1-rc4 or later** to upgrade. See the [0.2.9 release notes](docs/release-0.2.9.md).
+**0.2.1-rc4 or later** to upgrade. See the [0.2.10 release notes](docs/release-0.2.10.md).
 
 ## What it does
 
@@ -19,6 +19,7 @@ published, verified release assets. Existing installations must be on
 - Node-owned cron schedules with persistent Inbox results and optional online-only
   requester messages. Reporting is separate from cron firing and business coverage.
 - A native terminal board: **Tasks, Agents, Inbox, Grants and Schedule**.
+- Plain persistent owner Inbox messages from agents, separate from questions and notifications.
 - A themed OpenCode attachment sidebar and a focused Herdr `prefix+t` panel.
 - Verified compatible upgrades, rollback and evidence-preserving recovery.
 
@@ -45,7 +46,7 @@ for managed skills and local Herdr panel setup.
 - **Two-agent work:** [Bounded collaboration](docs/collaboration.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
-- **Release details:** [0.2.9 release notes](docs/release-0.2.9.md) and
+- **Release details:** [0.2.10 release notes](docs/release-0.2.10.md) and
   [the changelog](CHANGELOG.md).
 
 Do not reset a backend, delete a journal or repeat bootstrap to perform an upgrade.
@@ -59,6 +60,7 @@ Published versions and their assets are immutable.
 | Authority, credentials and failure boundaries | [Security](docs/security.md) |
 | Durable agents and receiving chats | [Receiving chats](docs/native-receivers.md) |
 | Tasks, Inbox and result decisions | [Task Inbox](docs/native-task-inbox.md) |
+| Plain agent-to-owner correspondence | [Owner Inbox messages](docs/owner-inbox-messages.md) |
 | Task references and imported aliases | [Task identity](docs/native-task-references.md) |
 | Interactive peer preparation and dispatch | [Interactive provisioning](docs/native-interactive-provisioning.md) |
 | Blocked preparation and capacity recovery | [Interactive repair](docs/interactive-recovery.md) |

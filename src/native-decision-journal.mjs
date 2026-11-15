@@ -80,7 +80,8 @@ export class NativeDecisionJournal {
           canonical(receipt.definition?.runResultNotifications) === canonical(p.runResultNotifications) :
         command.action === 'question.answer'
         ? receipt.status === 'answered' && receipt.answer?.body === p.body && receipt.answer.author?.type === 'user'
-        : command.action === 'notification.acknowledge' ? receipt.state === 'acknowledged' && receipt.revision === p.expectedRevision + 1
+        : command.action === 'owner_message.read' ? receipt.state === 'read' && receipt.revision === p.expectedRevision + 1
+          : command.action === 'notification.acknowledge' ? receipt.state === 'acknowledged' && receipt.revision === p.expectedRevision + 1
           : command.action === 'execution.monitor_review' ? receipt.state === (p.decision === 'accept' ? 'waiting_time' : 'monitor_blocked')
             : receipt.state === (p.decision === 'accept' ? 'completed' : 'rejected') && receipt.review?.candidate === p.candidate && receipt.review.decision === p.decision);
       requireValue(valid, 'invalid_decision_receipt', 'Decision receipt is incomplete or does not match the confirmed item. Reconcile the original operation', 502);

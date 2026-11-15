@@ -27,12 +27,12 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     try { return await approvalApi(method, path, body); }
     catch (error) { if (error.status === 401) approvalSession = null; throw error; }
   };
-  const all = async (collection, signal) => {
+  const all = async (collection, signal, filters = {}) => {
     const items = [];
     const cursors = new Set(), ids = new Set();
     let cursor;
     do {
-      const page = await api('GET', `/v1/${collection}?${new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) })}`, undefined, { signal });
+      const page = await api('GET', `/v1/${collection}?${new URLSearchParams({ limit: '100', ...filters, ...(cursor ? { cursor } : {}) })}`, undefined, { signal });
       requireValue(page && Array.isArray(page.items), 'invalid_backend_response', 'Native board requires a complete collection page');
       for (const item of page.items) {
         requireValue(item && typeof item.id === 'string' && !ids.has(item.id), 'invalid_backend_response', 'Native board collection contains duplicate or invalid identities');
@@ -63,6 +63,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
     const [info, ...values] = await Promise.all([api('GET', '/v1/info', undefined, { signal }), ...collections.map(name => all(name, signal))]);
     requireValue(info.userId && info.instanceId, 'invalid_backend_response', 'Native board requires backend and human identity');
     const data = Object.fromEntries(collections.map((name, i) => [name, values[i]]));
+    data.owner_messages = info.features?.ownerInboxMessages ? await all('owner_messages', signal, { status: 'unread' }) : [];
     let grants = { pending: [], active: [], history: [] }, nodePolicies = {};
     if (info.features?.grantsManagement) {
       const names = ['provision_grants', 'headless_grants', 'task_reference_grants', 'review_grants', 'grant_requests', 'grant_decisions', 'provision_requests'];
@@ -295,19 +296,20 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       requireValue(decisionJournal, 'decision_storage_required', 'Durable read acknowledgement storage is required');
       requireValue(canMarkInboxRead(item) && typeof item.entityId === 'string' && item.entityId &&
         Number.isSafeInteger(item.revision) && item.revision > 0 && typeof item.instanceId === 'string' && item.instanceId && typeof key === 'string' && key,
-      'read_unavailable', 'Select an unread informational result or reminder');
+      'read_unavailable', 'Select an unread message, informational result or reminder');
       const payload = { id: item.entityId, expectedRevision: item.revision };
-      const pending = decisionJournal.pending().find(record => record.command.action === 'notification.acknowledge' &&
+      const pending = decisionJournal.pending().find(record => record.command.action === item.action &&
         record.command.payload.id === item.entityId);
       requireValue(!pending || pending.state === 'pending' && pending.instance === item.instanceId && digest(pending.command.payload) === digest(payload),
         'decision_pending', 'Inspect the original read acknowledgement in Inbox before deciding again');
-      const proposed = { key, action: 'notification.acknowledge', payload };
+      const proposed = { key, action: item.action, payload };
       const command = pending?.command ?? decisionJournal.recorded(proposed, item.instanceId)?.command ?? proposed;
       const receipt = await decisionJournal.submit(api, command, item.instanceId);
-      requireValue(receipt?.id === payload.id && receipt.state === 'acknowledged' && receipt.revision === payload.expectedRevision + 1,
+      requireValue(receipt?.id === payload.id && receipt.state === (item.kind === 'owner_message' ? 'read' : 'acknowledged') && receipt.revision === payload.expectedRevision + 1,
         'invalid_decision_receipt', 'Read acknowledgement is unconfirmed. Reconcile the original operation in Inbox', 502);
-      return { state: 'recorded', notificationId: receipt.id, key: command.key,
-        message: item.kind === 'run_result' ? 'Result marked read. Outcome and future runs are unchanged.' : 'Reminder marked read. No model turn started.' };
+      return { state: 'recorded', ...(item.kind === 'owner_message' ? { messageId: receipt.id } : { notificationId: receipt.id }), key: command.key,
+        message: item.kind === 'owner_message' ? 'Message marked read. Full text and sender history are retained.' :
+          item.kind === 'run_result' ? 'Result marked read. Outcome and future runs are unchanged.' : 'Reminder marked read. No model turn started.' };
     },
     async decideInbox({ item, body, decision, reason, key }) {
       requireValue(decisionJournal, 'decision_storage_required', 'Durable human decision storage is required');
@@ -317,7 +319,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
         await decisionJournal.retry(api, item.key);
         return { state: 'recorded', message: 'Original confirmed decision published.' };
       }
-      requireValue(!item.disabled && ['question.answer', 'execution.review', 'execution.monitor_review', 'occurrence.review', 'notification.acknowledge'].includes(item.action),
+      requireValue(!item.disabled && ['question.answer', 'execution.review', 'execution.monitor_review', 'occurrence.review', 'notification.acknowledge', 'owner_message.read'].includes(item.action),
         'decision_unavailable', 'This item does not permit a human decision');
       const payload = { id: item.entityId, expectedRevision: item.revision };
       if (item.kind === 'question') {
@@ -328,7 +330,7 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
           'invalid_review', 'Exact decision and review reason required');
         Object.assign(payload, { candidate: item.candidate, decision, reason: reason.trim() });
       }
-      if (item.action !== 'execution.monitor_review' && item.action !== 'notification.acknowledge') payload.source = {
+      if (!['execution.monitor_review', 'notification.acknowledge', 'owner_message.read'].includes(item.action)) payload.source = {
         conversationId: terminalId, messageId: `dialog:${key}`, digest: digest(payload),
       };
       await decisionJournal.submit(api, { key, action: item.action, payload }, item.instanceId);
@@ -336,7 +338,8 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
         ? decision === 'accept' ? 'Check accepted. Monitoring can continue within its existing window.' : 'Check rejected. Monitoring is blocked.'
         : item.action === 'occurrence.review' ? decision === 'accept' ? 'Scheduled result accepted.' : 'Scheduled result rejected. Future scheduled runs are unchanged.'
           : decision === 'accept' ? 'Result accepted. Task completed.' : 'Changes requested. Task returned to Todo; no new turn started.'
-        : item.kind === 'run_result' ? 'Result marked read. Outcome and future runs are unchanged.' : item.kind === 'reminder' ? 'Reminder acknowledged. No model turn started.' : item.effect;
+        : item.kind === 'owner_message' ? 'Message marked read. Full text and sender history are retained.' :
+          item.kind === 'run_result' ? 'Result marked read. Outcome and future runs are unchanged.' : item.kind === 'reminder' ? 'Reminder acknowledged. No model turn started.' : item.effect;
       return { state: 'recorded', message };
     },
     async updateRunResultNotifications({ scheduleId, expectedRevision, policy, key }) {

@@ -40,7 +40,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { agentDeletion: true, humanScheduleManagement: true, boundedCollaboration: true, interactiveRecovery: true, interactiveCapacity: true, interactiveGrantMatching: true, agentRename: true, agentWorkspaceRelocation: true, headlessConnectionRebind: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
+        features: { ownerInboxMessages: true, agentDeletion: true, humanScheduleManagement: true, boundedCollaboration: true, interactiveRecovery: true, interactiveCapacity: true, interactiveGrantMatching: true, agentRename: true, agentWorkspaceRelocation: true, headlessConnectionRebind: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/agents\/[^/]+\/delete-preview$/.test(url.pathname)) {
@@ -73,6 +73,15 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
           agentId: url.searchParams.get('agentId'), direction: url.searchParams.get('direction') ?? undefined,
           cursor: url.searchParams.get('cursor') ?? undefined, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
         });
+      }
+      else if (req.method === 'GET' && /^\/v1\/owner_messages(?:\/[^/]+)?$/.test(url.pathname)) {
+        store.ownerOnly(actor);
+        const id = url.pathname.split('/')[3];
+        requireValue([...url.searchParams.keys()].every(key => ['cursor', 'limit', 'status'].includes(key)) && (!id || url.searchParams.size === 0),
+          'invalid_query', 'Only owner message pagination or exact message inspection is supported');
+        result = id ? store.get('owner_message', decodeURIComponent(id)) : store.query('owner_message', {
+          cursor: url.searchParams.get('cursor') ?? undefined, status: url.searchParams.get('status') ?? undefined,
+          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined });
       }
       else if (req.method === 'GET' && url.pathname === '/v1/activity') result = store.activity({
         from: url.searchParams.get('from'), to: url.searchParams.get('to'), taskId: url.searchParams.get('taskId') ?? undefined,

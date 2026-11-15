@@ -42,6 +42,11 @@ function evidenceFixture(t) {
     nativeInboxReadVerification: { passed: true, realTuiKeyboard: true, fiveLinePreview: true, fullDetailsPreserved: true,
       directReadWithoutConfirmation: true, resultAndReminderRead: true, questionStillOpen: true, publishedResultPreserved: true,
       modelTurnsStarted: 0, userServicesTouched: false, credentialsCopied: false },
+    nativeOwnerInboxVerification: { passed: true, actualCliSend: true, realTuiKeyboard: true, plainOwnerMessage: true, senderPreserved: true,
+      fiveLinePreview: true, fullDetailsPreserved: true, directReadWithoutConfirmation: true, createdNoWorkOrNotification: true,
+      installedCoreTests: 12, modelTurnsStarted: 0, userServicesTouched: false, credentialsCopied: false },
+    installedOwnerMessageVerifications: versions.map(runtime => ({ runtime, passed: true, realOwnerMessageTool: true, plainOwnerInbox: true,
+      ownerMessageRead: true, ownerMessageCreatedNoRecipientTurn: true, ownerMessageNoTaskOrNotification: true, userServicesTouched: false, credentialsCopied: false })),
     upgradeBackupVerification: { passed: true, installedPackage: true, tests: 9, walSnapshots: true, concurrentWriteSnapshot: true,
       checksumMismatchRefused: true, interruptedCopyRefused: true, legacyBackupVerified: true, diskSpacePreflight: true,
       userServicesTouched: false, credentialsCopied: false },
@@ -69,7 +74,7 @@ function evidenceFixture(t) {
     return execute(process.execPath, ['--input-type=module', '-e', script], { cwd: root, timeout: 10000,
       env: { ...process.env, RELEASE_TAG: 'v0.2.8', SOURCE_COMMIT: 'fixture-commit' } });
   };
-  return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications', 'installedInteractiveRecoveryVerifications'] };
+  return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications', 'installedInteractiveRecoveryVerifications', 'installedOwnerMessageVerifications'] };
 }
 
 test('publication evidence accepts successful installed checks on all three exact OpenCode hosts', async t => {
@@ -175,6 +180,24 @@ test('publication refuses missing or failed installed checksum backup evidence, 
   }
   for (const [field, value] of [['tests', 0], ['userServicesTouched', true], ['credentialsCopied', true]]) {
     const invalid = structuredClone(report); invalid.upgradeBackupVerification[field] = value;
+    await assert.rejects(validate(invalid), /AssertionError/);
+  }
+});
+
+test('publication refuses absent or failed plain owner Inbox evidence and unsafe fixture effects', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.nativeOwnerInboxVerification; await assert.rejects(validate(missing), /AssertionError/);
+  for (const field of ['passed', 'actualCliSend', 'realTuiKeyboard', 'plainOwnerMessage', 'senderPreserved', 'fiveLinePreview',
+    'fullDetailsPreserved', 'directReadWithoutConfirmation', 'createdNoWorkOrNotification']) {
+    const invalid = structuredClone(report); invalid.nativeOwnerInboxVerification[field] = false;
+    await assert.rejects(validate(invalid), /AssertionError/);
+  }
+  for (const [field, value] of [['installedCoreTests', 0], ['modelTurnsStarted', 1], ['userServicesTouched', true], ['credentialsCopied', true]]) {
+    const invalid = structuredClone(report); invalid.nativeOwnerInboxVerification[field] = value;
+    await assert.rejects(validate(invalid), /AssertionError/);
+  }
+  for (const field of ['realOwnerMessageTool', 'plainOwnerInbox', 'ownerMessageRead', 'ownerMessageCreatedNoRecipientTurn', 'ownerMessageNoTaskOrNotification', 'userServicesTouched', 'credentialsCopied']) {
+    const invalid = structuredClone(report); invalid.installedOwnerMessageVerifications[0][field] = ['userServicesTouched','credentialsCopied'].includes(field);
     await assert.rejects(validate(invalid), /AssertionError/);
   }
 });

@@ -14,6 +14,7 @@ import { validateHeadlessTaskPayload } from './headless-task-schema.mjs';
 import { abandonedWork } from './node-journal.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
 import { previewHeadlessConnection, connectionRebindCommand } from './node-headless-connection.mjs';
+import { validateOwnerMessage } from './owner-messages.mjs';
 
 const preparationRecovery = Object.freeze({
   native_project_identity_changed: 'OpenCode reports a different project ID for this same chat. Preparation stopped before a request was queued. Ask the human to run /relay-attach in this existing chat and confirm the same Relay enrolment. Wait for confirmed attachment, then retry relay_interactive_prepare with the original ID, key and payload, reusing the existing worktree. Do not recreate the agent/worktree, use the backend-admin CLI or borrow credentials.',
@@ -59,6 +60,31 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       const currentReceiver = () => {
         requireValue(worker.bindingId && worker.bindingRevision, 'standing_enrolment_required', 'Stable agent enrolment required', 403);
         journal.assertReceiver({ id: worker.bindingId, agentId: worker.agentId, receiverGeneration: worker.bindingRevision });
+      };
+      const ownerMessage = async (input, work) => {
+        validateOwnerMessage(input);
+        requireValue(api && (await getBackendFeatures?.())?.ownerInboxMessages, 'backend_upgrade_required', 'Backend must support plain owner Inbox messages');
+        const incoming = journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all()
+          .some(row => { const notice = JSON.parse(row.data); return notice.kind === 'message' && notice.bindingId === worker.bindingId; });
+        requireValue(!incoming, 'message_reply_not_authorised', 'A peer message does not authorise forwarding messages to the owner', 403);
+        const scope = [worker.agentId, ...(work ? [work.id, work.execution.runId] : []), input.key];
+        const command = { key: `owner-message:${digest(scope)}`, action: 'owner_message.send', payload: {
+          id: `owner_message_${digest(scope)}`, senderAgentId: worker.agentId, sourceConversationId: worker.sessionId,
+          ...(work ? { executionId: work.id, runId: work.execution.runId } : { sourceBindingRevision: worker.bindingRevision }),
+          ...(input.subject !== undefined ? { subject: input.subject } : {}), body: input.body } };
+        journal.queue(command);
+        await journal.flush(async (method, path, body) => {
+          const result = await api(method, path, body);
+          if (method === 'POST' && path === '/v1/commands' && body.action === 'owner_message.send') {
+            const p = body.payload;
+            requireValue(result?.id === p.id && result.state === 'unread' && result.revision === 1 && result.authority === 'information_only' &&
+              result.sender?.agentId === p.senderAgentId && result.sender.conversationId === p.sourceConversationId &&
+              result.subject === (p.subject ?? 'Agent update') && result.body === p.body && typeof result.userId === 'string' && result.userId,
+            'invalid_owner_message_receipt', 'Owner message acknowledgement is unconfirmed. Reconcile the original key', 502);
+          }
+          return result;
+        });
+        return journal.receipt(command.key);
       };
       const ownsWork = work => work?.execution.targetAgentId === worker.agentId &&
         (!worker.sessionId || !work.nativeConversationId || work.nativeConversationId === worker.sessionId) &&
@@ -368,6 +394,12 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           obligations: works.map(w => ({ id: w.id, state: w.execution.state, localState: w.state, conversationId: w.nativeConversationId,
             observation: w.observation ?? null, recovery: w.recovery ?? null })) })); return;
       }
+      if (path === '/agent/owner-message') {
+        requireValue(!worker.headlessSetupId, 'headless_execution_inactive', 'Headless messages require their exact accepted run', 403);
+        currentReceiver();
+        const result = await ownerMessage(body);
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
+      }
       if (path === '/agent/message-send') {
         currentReceiver();
         requireValue(api && Object.keys(body).every(k => ['key', 'recipientAgentId', 'kind', 'subject', 'body', 'replyPolicy', 'replyToMessageId'].includes(k)) &&
@@ -572,6 +604,19 @@ export async function startNodeService({ journal, socketPath, workers, api, task
           requireValue(receipt?.state === 'recorded', 'publication_pending', 'Reconcile the original execution CLI key', 503);
           result = receipt.receipt;
         }
+      }
+      else if (path === '/work/owner-message') {
+        requireValue(api && worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
+          ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) &&
+          Object.keys(body).every(key => ['executionId', 'runId', 'inputRevision', 'key', 'payload'].includes(key)) && body.payload &&
+          Object.keys(body.payload).every(key => ['subject', 'body'].includes(key)),
+        'headless_execution_inactive', 'Exact active, unstaged headless execution required', 403);
+        const authority = await api('POST', '/v1/headless/read', { operation: 'permissions', executionId: work.id, runId: body.runId });
+        requireValue(authority.id === worker.headlessSetupId && authority.sessionId === worker.sessionId && !authority.readiness,
+          'headless_probe_forbidden', 'Readiness cannot send real owner messages', 403);
+        const current = await api('GET', `/v1/headless_setups/${worker.headlessSetupId}/authority`);
+        checkContract(current.setup, current.grant);
+        result = await ownerMessage({ ...body.payload, key: body.key }, work);
       }
       else if (path === '/work/read') result = { execution: work.execution, localState: work.state, inputRevision: work.interaction?.revision ?? null,
         answer: work.answer ?? null, cancellationRequested: work.execution.cancellationRequested };

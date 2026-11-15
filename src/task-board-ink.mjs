@@ -406,14 +406,14 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     }
   };
   const markSelectedRead = async item => {
-    if (!canMarkInboxRead(item)) { setNotice('Select an informational result or reminder. Enter opens decisions.'); return; }
+    if (!canMarkInboxRead(item)) { setNotice('Select an unread message, informational result or reminder. Enter opens decisions.'); return; }
     if (!markInboxRead) { setNotice('Mark as read is unavailable'); return; }
     if (readsInFlight.current.has(item.entityId)) return;
     readsInFlight.current.add(item.entityId);
     setNotice('Marking item read…');
     try {
       const result = await markInboxRead({ item: { ...item }, key: `human-read:${randomUUID()}` });
-      if (result?.state !== 'recorded' || result.notificationId !== item.entityId) throw Error('Read acknowledgement is unconfirmed. Inspect Inbox.');
+      if (result?.state !== 'recorded' || (result.messageId ?? result.notificationId) !== item.entityId) throw Error('Read acknowledgement is unconfirmed. Inspect Inbox.');
       const publications = pendingDecisions?.();
       const selection = nativeSelection.current;
       if (selection.view === 'inbox' && selection.id === item.id) { setSelected(selection.index); setSelectedNativeId(null); }
@@ -778,7 +778,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
   const localAgentCount = board.agents.filter(agent => board.localNode && agent.nodeId === board.localNode.id).length;
   const nativeCounts = view === 'agents'
     ? `${board.localNode ? `Local node: ${clean(board.localNode.name)} · ${localAgentCount} local` : 'Local node: not identified'} · ${board.agents.filter(a => a.mode === 'interactive').length} interactive   ${board.agents.filter(a => a.mode === 'headless').length} headless`
-    : view === 'inbox' ? `${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'run_result').length ?? 0} run results   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
+    : view === 'inbox' ? `${board.inbox?.some(i => i.kind === 'owner_message') ? `${board.inbox.filter(i => i.kind === 'owner_message').length} messages   ` : ''}${board.inbox?.filter(i => i.kind === 'question').length ?? 0} questions   ${board.inbox?.filter(i => i.kind === 'review').length ?? 0} reviews   ${board.inbox?.filter(i => i.kind === 'run_result').length ?? 0} run results   ${board.inbox?.filter(i => i.kind === 'reminder').length ?? 0} reminders`
       : view === 'schedules' ? `${board.routines.filter(r => r.state === 'active').length} active   ${board.routines.filter(r => r.state === 'paused').length} paused`
         : `${summary.open} open   ${summary.active} active   ${summary.blocked} blocked   ${summary.review} in review`;
   const emptyLabel = view === 'inbox' ? offline ? 'Inbox unavailable. Showing last known state.' : !loaded ? 'Loading inbox…' : 'No decisions need your attention.'
