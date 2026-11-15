@@ -1,5 +1,13 @@
 import { wrapBoardText, truncateBoardText, taskBoardColumns } from './task-board-view.mjs';
 
+export const inboxPreviewLineLimit = 5;
+export function inboxPreviewLines(value, columns) {
+  const lines = wrapBoardText(value, columns, inboxPreviewLineLimit + 1);
+  const preview = lines.slice(0, inboxPreviewLineLimit).map(line => truncateBoardText(line, columns));
+  if (lines.length > inboxPreviewLineLimit) preview[preview.length - 1] = truncateBoardText(`${preview.at(-1)}...`, columns);
+  return preview;
+}
+
 export function layoutBoardRows(rows, { columns, native, rowText, statusLabel }) {
   const width = Math.max(1, columns - (native ? 4 : 2));
   const table = taskBoardColumns(columns, rows.filter(row => row.type === 'task').map(row => statusLabel(row.task)));
@@ -7,7 +15,7 @@ export function layoutBoardRows(rows, { columns, native, rowText, statusLabel })
     let fields;
     if (row.type === 'machine') fields = [`${row.local ? 'LOCAL · ' : ''}${row.expanded ? '▾' : '▸'} ${row.name}${row.machineName && row.machineName !== row.name ? ` / ${row.machineName}` : ''} · ${row.count}${row.count !== row.total ? `/${row.total}` : ''} ${row.total === 1 ? 'agent' : 'agents'}`];
     else if (row.type === 'agent') fields = [`  ${row.last ? '└─' : '├─'} ${row.agent.displayName || row.agent.name} · ${row.agent.mode || 'Unknown mode'} · ${row.agent.availabilityLabel || 'Unknown or stale'}`];
-    else if (row.type === 'inbox') fields = [`${row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'question' ? 'Question' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${row.item.title}`,
+    else if (row.type === 'inbox') fields = [`${row.item.kind === 'owner_message' ? 'Message' : row.item.kind === 'run_result' ? 'Run result' : row.item.kind === 'review' ? 'Review' : row.item.kind === 'question' ? 'Question' : row.item.kind === 'reminder' ? 'Reminder' : 'Publication'} · ${row.item.title}`,
       row.item.summary, `${row.item.from || 'Relay'} · ${row.item.stateLabel}${row.item.locationLabel ? ` · ${row.item.locationLabel}` : ''}`, ''];
     else if (row.type === 'routine' && native) fields = [`${row.routine.title}  [${row.routine.state}]`, `${row.routine.cron} · ${row.routine.timezone}`,
       `Next (clock preview) ${row.routine.nextRunAt || 'none'} · ${row.routine.target || 'Unresolved target'}`, ''];
@@ -22,7 +30,11 @@ export function layoutBoardRows(rows, { columns, native, rowText, statusLabel })
     } else if (row.type === 'group' || row.type === 'section') {
       return [{ text: truncateBoardText(rowText(row), width), heading: true }];
     } else fields = [rowText(row)];
-    return fields.flatMap((field, fieldIndex) => wrapBoardText(field, width).map(text => ({ text, heading: fieldIndex === 0 })));
+    return fields.flatMap((field, fieldIndex) => {
+      const preview = row.type === 'inbox' && fieldIndex === 1;
+      return (preview ? inboxPreviewLines(field, width) : wrapBoardText(field, width))
+        .map(text => ({ text, heading: fieldIndex === 0, ...(preview ? { preview: true } : {}) }));
+    });
   });
 }
 

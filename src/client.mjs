@@ -1,9 +1,15 @@
 import { request } from 'node:http';
 import { RelayError } from './protocol.mjs';
+import { isAbsolute } from 'node:path';
 
 export function call(connection, method, path, body, { signal } = {}) {
+  if (!connection || typeof connection.socketPath !== 'string' || !isAbsolute(connection.socketPath) ||
+    typeof connection.token !== 'string' || !connection.token) throw new RelayError('invalid_worker_context',
+    'An exact scoped worker socket context is required, not an owner/backend context', 403);
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath: connection.socketPath, path, method, signal,
+    // This is local scoped IPC. A pooled socket can outlive a restarted node;
+    // open a fresh connection rather than retrying an uncertain write implicitly.
+    const req = request({ socketPath: connection.socketPath, path, method, signal, agent: false,
       headers: { Authorization: `Bearer ${connection.token}`, 'Content-Type': 'application/json' } }, res => {
       let text = '';
       res.setEncoding('utf8');

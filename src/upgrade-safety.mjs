@@ -38,13 +38,13 @@ const collaborationWork = executions => executions.filter(e => (e?.collaboration
   !['completed', 'failed', 'cancelled', 'rejected', 'in_review'].includes(e.state))
   .map(e => ({ kind: 'collaboration', id: e.id, state: e.state }));
 
-export function inspectDatabase(path, role) {
+export function inspectDatabase(path, role, { checkIntegrity = true } = {}) {
   requireValue(existsSync(path), 'upgrade_state_missing', 'Existing service database is required. Upgrade never initialises a new identity');
   const db = new DatabaseSync(path, { readOnly: true });
   try {
     const schema = db.prepare('PRAGMA user_version').get().user_version;
     requireValue(schema === (role === 'backend' ? 2 : 1), 'upgrade_incompatible', 'Unsupported service database schema');
-    requireValue(db.prepare('PRAGMA quick_check').get().quick_check === 'ok', 'upgrade_state_invalid', 'Database integrity check failed');
+    if (checkIntegrity) requireValue(db.prepare('PRAGMA quick_check(1)').get().quick_check === 'ok', 'upgrade_state_invalid', 'Database integrity check failed');
     const blockers = [];
     if (role === 'backend') {
       assertTaskIdentityIntegrity(db);
@@ -101,13 +101,13 @@ export function inspectDatabase(path, role) {
   } finally { db.close(); }
 }
 
-export function serviceIdentity(unit) {
+export function serviceIdentity(unit, options) {
   if (unit.role === 'backend') return { database: join(unit.statePath, 'backend.sqlite'), stateDirectory: unit.statePath,
-    files: [join(unit.statePath, 'owner.json')], ...inspectDatabase(join(unit.statePath, 'backend.sqlite'), 'backend') };
+    files: [join(unit.statePath, 'owner.json')], ...inspectDatabase(join(unit.statePath, 'backend.sqlite'), 'backend', options) };
   const config = JSON.parse(readFileSync(unit.statePath, 'utf8'));
   requireValue(config.identityVersion === 2 && typeof config.stateDirectory === 'string' && resolve(config.stateDirectory) === config.stateDirectory,
     'upgrade_state_invalid', 'Stable existing node configuration is required');
-  const result = inspectDatabase(join(config.stateDirectory, 'node.sqlite'), 'node');
+  const result = inspectDatabase(join(config.stateDirectory, 'node.sqlite'), 'node', options);
   requireValue(config.nodeId === result.nodeId, 'backend_identity_mismatch', 'Node config and journal identity differ');
   const pin = join(config.stateDirectory, 'backend-instance.json');
   requireValue(existsSync(pin) && JSON.parse(readFileSync(pin, 'utf8')).instanceId === result.instanceId,

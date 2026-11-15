@@ -4,7 +4,7 @@ import stringWidth from 'string-width';
 import { wrapBoardText, truncateBoardText } from '../src/task-board-view.mjs';
 import { appendBoardInput } from '../src/board-text.mjs';
 import { routineDetailLayout } from '../src/board-detail-layout.mjs';
-import { layoutBoardRows, boardRowViewport } from '../src/board-row-layout.mjs';
+import { layoutBoardRows, boardRowViewport, inboxPreviewLines } from '../src/board-row-layout.mjs';
 import { assignmentRows } from '../src/task-board-dispatch.mjs';
 
 for (const columns of [4, 18, 40, 74, 120]) test(`word wrapping preserves all text and terminal-cell boundaries at ${columns} columns`, () => {
@@ -36,15 +36,48 @@ test('cron detail maps every wrapped summary line to its occurrence without flat
   assert.ok(lines.slice(ranges[0].start, ranges[0].end).some(line => !line.text));
 });
 
-test('wrapped list rows retain text and selection through long cards and resize', () => {
+test('bounded Inbox cards retain their preview and selection through resize', () => {
   const rows = [{ type: 'inbox', item: { title: 'Long title '.repeat(12), summary: 'Full report '.repeat(150), stateLabel: 'Unread' } }];
   for (const columns of [24, 80]) {
     const blocks = layoutBoardRows(rows, { columns, native: true, rowText: () => '', statusLabel: () => '' });
+    assert.equal(blocks[0].filter(line => line.preview).length, 5);
     const collected = new Set();
     for (let offset = 0; offset < blocks[0].length; offset += 6) for (const line of boardRowViewport(blocks, 0, 7, offset)) {
       assert.equal(line.rowIndex, 0); assert.ok(stringWidth(line.text) <= columns - 4); collected.add(line.text);
     }
     assert.ok(blocks[0].every(line => collected.has(line.text)));
+  }
+});
+
+for (const columns of [1, 4, 18, 40, 74, 120]) test(`Inbox message previews are capped at five terminal lines at ${columns} columns`, () => {
+  for (const summary of [Array.from({ length: 30 }, (_, index) => `Line ${index + 1}`).join('\n'),
+    'Long single paragraph with words '.repeat(60), '界 e\u0301 👨‍👩‍👧‍👦 '.repeat(60), 'x'.repeat(800)]) {
+    const preview = inboxPreviewLines(summary, columns);
+    const full = wrapBoardText(summary, columns);
+    assert.equal(preview.length, Math.min(5, full.length));
+    assert.ok(preview.every(line => stringWidth(line) <= columns));
+    if (full.length > 5) assert.ok(preview.at(-1).endsWith('.'.repeat(Math.min(3, columns))));
+  }
+});
+
+test('short Inbox previews retain paragraphs without adding dots or changing the stored message', () => {
+  assert.deepEqual(inboxPreviewLines('First\n\nThird\nFourth\nFifth', 40), ['First', '', 'Third', 'Fourth', 'Fifth']);
+  const item = Object.freeze({ title: 'Result', summary: 'First\nSecond\nThird\nFourth\nFifth\nTAIL_NOT_IN_LIST', from: 'Relay', stateLabel: 'Unread' });
+  const rows = [{ type: 'inbox', item }, { type: 'inbox', item: { ...item, title: 'NEXT_ITEM' } }];
+  const blocks = layoutBoardRows(rows, { columns: 60, native: true, rowText: () => '', statusLabel: () => '' });
+  assert.equal(blocks[0].filter(line => line.preview).length, 5);
+  assert.ok(!blocks.flat().some(line => line.text.includes('TAIL_NOT_IN_LIST')));
+  assert.ok(blocks[1].some(line => line.text.includes('NEXT_ITEM')));
+  assert.ok(item.summary.endsWith('TAIL_NOT_IN_LIST'));
+});
+
+test('bounded wrapping matches the unbounded prefix while full detail wrapping remains lossless', () => {
+  const text = '\x1b[31mFirst paragraph\u202e\n\n' + 'Long source text 界 e\u0301 👨‍👩‍👧‍👦 '.repeat(100);
+  for (const columns of [4, 18, 40, 120]) {
+    const full = wrapBoardText(text, columns);
+    for (const limit of [0, 1, 5, 6, 12]) assert.deepEqual(wrapBoardText(text, columns, limit), full.slice(0, limit));
+    assert.ok(full.length > 12);
+    assert.ok(inboxPreviewLines(text, columns).every(line => !/[\x1b\u202e]/.test(line)));
   }
 });
 

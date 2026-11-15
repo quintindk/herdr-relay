@@ -23,11 +23,11 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-stable version **0.2.9**. Its release assets and verification report must be
+stable version **0.2.10**. Its release assets and verification report must be
 published before installation or a live upgrade:
 
 ```sh
-herdr-relay release install --version 0.2.9
+herdr-relay release install --version 0.2.10
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -53,15 +53,15 @@ skills or configuration.
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.2.9 --key stable-029-backend-host
-herdr-relay upgrade --services both --version 0.2.9 --key stable-029-backend-host --apply
+herdr-relay upgrade --services both --version 0.2.10 --key stable-0210-backend-host
+herdr-relay upgrade --services both --version 0.2.10 --key stable-0210-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.2.9 --key stable-029-node-host
-herdr-relay upgrade --services node --version 0.2.9 --key stable-029-node-host --apply
+herdr-relay upgrade --services node --version 0.2.10 --key stable-0210-node-host
+herdr-relay upgrade --services node --version 0.2.10 --key stable-0210-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -74,7 +74,7 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4 through 0.2.9 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through 0.2.10 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
 
 For 0.2.9 requester result-delivery fixes, upgrade both the backend and requester
@@ -136,8 +136,44 @@ audit. Unavailable audit/registry access is not a successful audit.
 
 It records intended changes and original bytes, sets maintenance guards, stops
 selected nodes before selected backends and repeats identity checks.
-SQLite backups use the online backup API and
-are integrity-checked; a live WAL database is not copied as an ordinary file.
+From **0.2.10**, each source receives one linear SQLite `quick_check` before
+shutdown. Fresh schema, identity, credential, reference and compatibility checks
+continue after stop and during health verification without repeating a whole-
+database scan. Routine status reads do not perform an integrity scan.
+Upgrade plans and rollback previews use fresh metadata without a whole-database
+scan. Structural source verification runs when the operation is applied, not
+once for preview and again for apply. A completed rollback retry returns its saved
+outcome without repeating that verification or restarting services.
+
+Backups use SQLite's online backup API with a pinned read snapshot, including
+committed WAL data. The private snapshot is made standalone, then copied with
+streaming SHA-256 calculation and a matching checksum read of the completed copy.
+Only a matching copy becomes the saved backup, with a private verification receipt.
+A live WAL database is never copied as an ordinary file or checked by hashing its
+main file alone. The extra private snapshot temporarily requires space for another
+copy of the database being backed up.
+Preflight checks that space requirement, including pages still held in the WAL,
+before the first service stop. It is an estimate, not a reservation against other
+processes filling the filesystem afterwards.
+
+Retries recheck the saved backup's checksum. Changed or missing verified backups
+are refused, not overwritten. Interrupted scratch files are not completed backups.
+An existing pre-0.2.10 backup without a checksum receipt receives one `quick_check`
+and identity check before sealing its checksum. No saved database is restored.
+
+This verifies byte-for-byte copying of a structurally checked SQLite snapshot. It
+does not claim the additional UNIQUE/index consistency checks of `integrity_check`,
+which are not required for a schema-compatible code switch. SQLite documents
+[`quick_check` as O(N), versus O(N log N) for `integrity_check`](https://sqlite.org/pragma.html#pragma_quick_check),
+and the [online backup API's snapshot consistency](https://sqlite.org/backup.html).
+
+Validation, SQLite snapshot, copy and checksum stages report progress to stderr.
+Snapshot/copy/checksum stages include completed and total bytes, throttled to avoid
+per-page logging. `upgrade status OPERATION_ID` exposes the latest saved `progress`
+once an apply operation exists. Stdout remains the final JSON result.
+
+These changes require the **0.2.10 upgrader process**. Installing or building newer
+code does not modify an already-running 0.2.9 upgrade or bypass its maintenance lock.
 
 Compatible switching preserves live owned native processes. Before stopping an old
 supervisor it applies the process-only systemd stop policy, rather than killing

@@ -17,6 +17,7 @@ import { backendSchema, taskIdentitySchema, assertTaskIdentityIntegrity, claimTa
 import { agentName } from './agent-name.mjs';
 import { collaborationRequest, childTerminal } from './collaboration.mjs';
 import { requireDeletableAgent } from './agent-lifecycle.mjs';
+import { applyOwnerMessage } from './owner-messages.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -280,6 +281,7 @@ export class BackendStore {
     if (action.startsWith('grant.')) return applyGrantAction(this, actor, action, p, { created, changed });
     if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke', 'agent.headless_connection_rebind'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
+    if (action.startsWith('owner_message.')) return applyOwnerMessage(this, actor, action, p, { created, changed });
     if (action === 'run_result.delivery') return recordRunResultDelivery(this, actor, p);
     const taskDisposition = (taskId, status, causation) => {
       if (!taskId) return;
@@ -1325,7 +1327,7 @@ export class BackendStore {
   }
 
   query(kind, { cursor, limit = 100, taskId, status } = {}) {
-    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'monitor_result', 'artifact', 'provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision'].includes(kind), 'invalid_query', 'Unknown collection');
+    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'owner_message', 'monitor_result', 'artifact', 'provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision'].includes(kind), 'invalid_query', 'Unknown collection');
     requireValue(Number.isSafeInteger(limit) && limit > 0 && limit <= 500 &&
       (!taskId || validId(taskId)) && (!status || typeof status === 'string' && status.length <= 100), 'invalid_query', 'Invalid collection scope');
     const scope = digest({ kind, limit, taskId: taskId ?? null, status: status ?? null });

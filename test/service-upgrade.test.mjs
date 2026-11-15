@@ -10,6 +10,8 @@ import { pluginUpgradeFiles } from '../src/upgrade-plugin.mjs';
 import { compatibility, releaseInfo } from '../src/release-info.mjs';
 import { readOpenCodeConfig } from '../src/opencode-config-file.mjs';
 import { serviceIdentity, identityFingerprint } from '../src/upgrade-safety.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { maintenanceCli } from '../src/upgrade-cli.mjs';
 
 function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/upgrade-');
@@ -222,6 +224,102 @@ test('upgrade switches backend/node/plugin/CLI together and preserves all identi
   const count = f.calls.length;
   assert.equal((await f.apply()).replayed, true); assert.equal(f.calls.length, count);
   await assert.rejects(f.apply({ version: '0.2.2' }), { code: 'operation_conflict' });
+});
+
+test('an upgrade validates each source once before stopping, uses checksum backups and keeps health/status out of full-database scans', async t => {
+  const f = fixture(t), checks = [], progress = [], prepare = DatabaseSync.prototype.prepare;
+  f.dependencies.progress = value => {
+    progress.push(value);
+    if (value.operationId) {
+      const record = JSON.parse(readFileSync(join(f.operation(value.operationId), 'operation.json')));
+      assert.equal(record.progress.step, value.step); assert.equal(record.progress.role, value.role);
+    }
+  };
+  DatabaseSync.prototype.prepare = function (sql) {
+    if (/PRAGMA\s+(quick_check|integrity_check)/i.test(sql)) checks.push({ sql, beforeStop: !f.calls.some(([action]) => action === 'stop') });
+    return prepare.call(this, sql);
+  };
+  try {
+    const result = await f.apply();
+    await installationStatus({ nodeConfig: f.nodeConfig }, { manager: f.manager });
+    assert.equal(checks.length, 2); assert.ok(checks.every(check => check.beforeStop && check.sql === 'PRAGMA quick_check(1)'));
+    for (const role of ['backend', 'node']) {
+      for (const step of ['source_quick_check', 'sqlite_snapshot', 'backup_copy', 'backup_checksum']) assert.ok(progress.some(value => value.role === role && value.step === step));
+      const receipt = JSON.parse(readFileSync(join(f.operation(result.operationId), `${role}-before-upgrade.sqlite.verification.json`)));
+      assert.match(receipt.sha256, /^[a-f0-9]{64}$/); assert.equal(receipt.identity.instanceId, f.store.instance);
+    }
+    assert.equal(JSON.parse(readFileSync(join(f.operation(result.operationId), 'operation.json'))).progress, null);
+  } finally { DatabaseSync.prototype.prepare = prepare; }
+});
+
+test('fast post-stop identity checks still refuse a changed database instance without switching code or recreating state', async t => {
+  const f = fixture(t), unit = f.states.get('herdr-relay-backend.service'), before = readFileSync(unit.path);
+  f.onStop = () => f.store.db.prepare("UPDATE settings SET value='changed-instance' WHERE key='instance'").run();
+  await assert.rejects(f.apply(), { code: 'upgrade_recovery_required' });
+  assert.deepEqual(readFileSync(unit.path), before);
+  assert.equal(f.store.db.prepare("SELECT value FROM settings WHERE key='instance'").get().value, 'changed-instance');
+  assert.equal(realpathSync(join(f.bin, 'herdr-relay')), join(f.previous, 'src/cli.mjs'));
+});
+
+test('structural database corruption is still refused by preflight before any service is stopped', async t => {
+  const f = fixture(t);
+  f.store.db.exec('CREATE TABLE corrupt_fixture (data BLOB); INSERT INTO corrupt_fixture VALUES (zeroblob(8192)); PRAGMA wal_checkpoint(TRUNCATE)');
+  const page = f.store.db.prepare("SELECT rootpage FROM sqlite_master WHERE name='corrupt_fixture'").get().rootpage;
+  const pageSize = f.store.db.prepare('PRAGMA page_size').get().page_size;
+  const path = join(f.backend, 'backend.sqlite'), bytes = readFileSync(path);
+  bytes[(page - 1) * pageSize] = 0; writeFileSync(path, bytes);
+  await assert.rejects(f.apply());
+  assert.equal(f.calls.some(([action]) => action === 'stop'), false);
+  assert.ok([...f.states.values()].every(state => state.active));
+});
+
+test('public upgrade CLI reports actual progress on stderr while preserving one JSON result on stdout and progress in status', async t => {
+  const f = fixture(t), out = [], errors = [], log = console.log, error = console.error;
+  console.log = value => out.push(value); console.error = value => errors.push(value);
+  try {
+    await maintenanceCli(['upgrade', '--services', 'both', '--version', f.input.version, '--key', f.input.key, '--apply',
+      '--config', f.nodeConfig, '--upgrade-dir', f.input.directory, '--config-dir', f.config, '--bin-dir', f.bin], f.dependencies);
+    assert.equal(out.length, 1);
+    const result = JSON.parse(out[0]); assert.equal(result.state, 'committed');
+    const events = errors.map(value => JSON.parse(value));
+    assert.ok(events.some(value => value.step === 'backup_copy' && value.totalBytes > 0));
+    assert.ok(events.some(value => value.step === 'backup_checksum' && value.bytes === value.totalBytes));
+    assert.ok(events.every(value => value.maintenance === 'upgrade' && !JSON.stringify(value).includes('token')));
+    const path = join(f.operation(result.operationId), 'operation.json'), record = JSON.parse(readFileSync(path));
+    const progress = { role: 'backend', step: 'backup_checksum', bytes: 4096, totalBytes: 8192, updatedAt: record.updatedAt };
+    writeFileSync(path, JSON.stringify({ ...record, progress }));
+    await maintenanceCli(['upgrade', 'status', result.operationId, '--upgrade-dir', f.input.directory], f.dependencies);
+    assert.deepEqual(JSON.parse(out.at(-1)).operations[0].progress, progress);
+  } finally { console.log = log; console.error = error; }
+});
+
+test('rollback preview remains read-only and does not rescan whole databases', async t => {
+  const f = fixture(t), result = await f.apply(), path = join(f.operation(result.operationId), 'operation.json');
+  const before = readFileSync(path), calls = f.calls.length, prepare = DatabaseSync.prototype.prepare;
+  DatabaseSync.prototype.prepare = function (sql) {
+    assert.doesNotMatch(sql, /PRAGMA\s+(quick_check|integrity_check)/i);
+    return prepare.call(this, sql);
+  };
+  try {
+    const preview = await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory }, f.dependencies);
+    assert.equal(preview.state, 'rollback_plan'); assert.deepEqual(readFileSync(path), before); assert.equal(f.calls.length, calls);
+  } finally { DatabaseSync.prototype.prepare = prepare; }
+});
+
+test('upgrade planning and a completed rollback retry do not perform whole-database verification', async t => {
+  const f = fixture(t), prepare = DatabaseSync.prototype.prepare;
+  const forbidScans = function (sql) { assert.doesNotMatch(sql, /PRAGMA\s+(quick_check|integrity_check)/i); return prepare.call(this, sql); };
+  DatabaseSync.prototype.prepare = forbidScans;
+  try { assert.equal((await serviceUpgrade(f.input, f.dependencies)).sourceIntegrityCheck, 'on_apply'); }
+  finally { DatabaseSync.prototype.prepare = prepare; }
+  const result = await f.apply();
+  await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies);
+  const calls = f.calls.length;
+  DatabaseSync.prototype.prepare = forbidScans;
+  try {
+    assert.equal((await serviceUpgrade({ rollback: result.operationId, directory: f.input.directory, apply: true }, f.dependencies)).replayed, true);
+    assert.equal(f.calls.length, calls);
+  } finally { DatabaseSync.prototype.prepare = prepare; }
 });
 
 test('node-only upgrade needs no backend-root credential and does not restart the backend', async t => {

@@ -11,15 +11,15 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
   const item = modal.item;
   const accent = item.kind === 'review' ? 'magenta' : item.kind === 'question' ? 'yellow' : 'cyan';
   const actions = item.disabled || item.kind === 'question' ? [] : item.kind === 'review'
-    ? ['Accept result', 'Request changes'] : item.kind === 'run_result' ? ['Mark result read'] : item.kind === 'reminder' ? ['Acknowledge reminder']
+    ? ['Accept result', 'Request changes'] : item.kind === 'owner_message' ? ['Mark message read'] : item.kind === 'run_result' ? ['Mark result read'] : item.kind === 'reminder' ? ['Acknowledge reminder']
       : [item.action === 'dismiss' ? 'Dismiss refused decision' : 'Retry original decision'];
   const { width: w, height: size } = modalSize(width, height);
   const columns = Math.max(1, w - 6);
   const lines = value => wrapBoardText(value, columns);
   const titleRows = Math.min(2, lines(item.title).length);
   const choices = actions.flatMap((action, index) => lines(`${item.kind === 'review' ? modal.index === index ? '● ' : '○ ' : ''}[ ${action} ]`).map(text => ({ text, index })));
-  const hint = modal.busy ? 'Publishing confirmed decision…' : modal.locked ? 'Enter retry original decision · Esc close'
-    : modal.stage === 'inspect' ? '↑↓ scroll · PgUp/PgDn · Home/End · Enter open · Esc later'
+  const hint = modal.busy ? item.kind === 'owner_message' ? 'Marking message read…' : 'Publishing confirmed decision…' : modal.locked ? 'Enter retry original decision · Esc close'
+    : modal.stage === 'inspect' ? item.kind === 'owner_message' ? '↑↓ scroll · PgUp/PgDn · Home/End · m/Enter mark read · Esc close' : '↑↓ scroll · PgUp/PgDn · Home/End · Enter open · Esc later'
       : modal.stage === 'edit' ? item.kind === 'review' && modal.field === 'decision' ? 'PgUp/PgDn scroll · ↑↓ choose · Tab reason · Enter reason'
         : w < 80 ? '↑↓/PgUp/PgDn · Enter preview · Esc cancel' : `↑↓/PgUp/PgDn scroll · Home/End · ${item.kind === 'review' ? 'Tab decision' : 'Type answer'} · Enter preview`
         : '↑↓/PgUp/PgDn scroll · Home/End · Enter confirm · Esc back';
@@ -53,6 +53,7 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
       setModal(value => ({ ...value, manualScroll: true, scroll: Math.max(0, Math.min(maxScroll, next)) })); return;
     }
     if (modal.stage === 'inspect') {
+      if (item.kind === 'owner_message' && (key.return || input === 'm' && !key.ctrl && !key.meta)) { void submit(modal); return; }
       if (input === 't') { setModal(value => ({ ...value, technical: !value.technical, scroll: 0 })); return; }
       if (key.downArrow || input === 'j') setModal(value => ({ ...value, index: Math.min(actions.length - 1, value.index + 1) }));
       if (key.upArrow || input === 'k') setModal(value => ({ ...value, index: Math.max(0, value.index - 1) }));

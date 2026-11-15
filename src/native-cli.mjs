@@ -68,6 +68,8 @@ Worker commands use scoped worker credentials, never an owner context.
 Payload files contain the exact native backend fields documented by each command.
 Task-independent messaging: work message-send|messages|message uses --context PRIVATE_WORKER_JSON,
 with --key for sends and --file for message/query fields. No task/execution/run is required.
+Plain owner Inbox: work owner-message --context PRIVATE_WORKER_JSON --key KEY --file MESSAGE_JSON
+with {subject?,body}. Headless workers also supply --execution ID --run ID. No question, notification or model turn is created.
 Enrolment never starts/restarts OpenCode or grants permissions. Start the node separately.
 Run-now for an existing native cron is not implemented. Use an explicit execution request.
 Pause must be acknowledged by the owner node. Already admitted work is not interrupted.`;
@@ -231,7 +233,7 @@ export async function main(args) {
         const { watchTaskBoardInk } = await import('./task-board-ink.mjs');
         await watchTaskBoardInk(board.read, { inspectTask: board.inspectTask, detailTask: board.detailTask, detailRoutine: board.detailRoutine,
           detailAgent: board.detailAgent, statusTask: board.statusTask, reviewTask: board.reviewTask, detailInbox: board.detailInbox,
-           decideInbox: board.decideInbox, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
+           decideInbox: board.decideInbox, markInboxRead: board.markInboxRead, pendingDecisions: board.pendingDecisions, dispatchTask: board.dispatchTask,
            prepareHandback: board.prepareHandback, handbackTask: board.handbackTask,
            detailGrant: board.detailGrant, decideGrant: board.decideGrant, createGrant: board.createGrant, pendingGrantDecisions: board.pendingGrantDecisions,
            prepareInteractiveRepair: board.prepareInteractiveRepair, requestInteractiveRepair: board.requestInteractiveRepair,

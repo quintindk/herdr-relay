@@ -6,15 +6,15 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { launchOwnedV2 } from './owned-runtime.mjs';
-import { startBackend } from '../../src/backend-service.mjs';
-import { nativeBackendClient } from '../../src/backend-client.mjs';
-import { enrolInteractive } from '../../src/native-enrol.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
-const here = dirname(fileURLToPath(import.meta.url)), root = mkdtempSync('/tmp/opencode/relay-messages-smoke-');
+const packageDirectory = process.env.RELAY_PACKAGE_DIRECTORY ?? join(dirname(fileURLToPath(import.meta.url)), '../..');
+const here = join(packageDirectory, 'packages/opencode-relay'), root = mkdtempSync('/tmp/opencode/relay-messages-smoke-');
+const [{ launchOwnedV2 }, { startBackend }, { nativeBackendClient }, { enrolInteractive }] = await Promise.all([
+  'packages/opencode-relay/owned-runtime.mjs', 'src/backend-service.mjs', 'src/backend-client.mjs', 'src/native-enrol.mjs',
+].map(path => import(pathToFileURL(join(packageDirectory, path)).href)));
 const workspace = join(root, 'workspace'), state = join(root, 'node');
 mkdirSync(workspace); mkdirSync(state);
 let runtime, backend, daemon, sender, recipient, requests = 0, log = '';
@@ -33,14 +33,15 @@ const model = createServer(async (req, res) => {
   const user = input.messages[index], text = typeof user.content === 'string' ? user.content : JSON.stringify(user.content);
   const sentTools = input.messages.slice(index + 1).filter(m => m.role === 'tool');
   const sending = text.includes('MESSAGE_SMOKE_SEND');
+  const ownerSending = text.includes('OWNER_MESSAGE_SMOKE');
   const replying = text.includes('Relay permits at most ONE');
   const forbiddenReply = text.includes('Relay does not authorise a reply') && text.includes('Relay peer');
   const parentId = text.match(/Relay peer \w+ message ([A-Za-z0-9_-]+)\./)?.[1];
-  const name = sentTools.length === 0 ? (sending || replying || forbiddenReply ? 'relay_message_send' : 'relay_messages') :
+  const name = ownerSending ? sentTools.length === 0 ? 'relay_owner_message' : null : sentTools.length === 0 ? (sending || replying || forbiddenReply ? 'relay_message_send' : 'relay_messages') :
     sentTools.length === 1 && (sending || replying || forbiddenReply) ? 'relay_messages' : null;
   const tool = name && input.tools?.find(t => t.function?.name.endsWith(name));
   if (name) assert.ok(tool, `Missing native tool ${name}`);
-  const args = name === 'relay_message_send' ? sending ? { key: 'native-status', recipientAgentId: recipient.agentId,
+  const args = name === 'relay_owner_message' ? { key: 'owner-checkpoint', subject: 'Owner message fixture', body: 'Plain persistent Inbox update. No question, notification or action requested.' } : name === 'relay_message_send' ? sending ? { key: 'native-status', recipientAgentId: recipient.agentId,
     kind: 'status', subject: 'Connectivity recovered', body: 'Bridge running. Workload readiness is still unverified. No action requested.' }
     : { key: replying ? 'permitted-once' : 'forbidden-chain', recipientAgentId: replying ? sender.agentId : recipient.agentId,
       replyToMessageId: parentId, replyPolicy: 'none', body: 'Informational fixture response, not work authority.' }
@@ -81,6 +82,18 @@ try {
     await wait('node ready', () => log.includes('"state":"running"'));
   };
   await start();
+  const ownerBefore = await runtime.client.message.list({ sessionID: recipient.sessionId, order: 'asc', limit: 100 });
+  await runtime.client.session.prompt({ sessionID: sender.sessionId,
+    text: 'OWNER_MESSAGE_SMOKE. Call relay_owner_message once to send the owner a plain Inbox checkpoint. No task, question, notification or peer message.' });
+  const ownerMessage = await wait('owner Inbox message', async () => (await owner('GET', '/v1/owner_messages')).items[0]);
+  await wait('owner message sender idle', async () => !(await runtime.client.session.active())[sender.sessionId]);
+  assert.equal(ownerMessage.state, 'unread'); assert.equal(ownerMessage.sender.agentId, sender.agentId);
+  assert.equal((await owner('GET', '/v1/notifications')).items.length, 0);
+  const recipientAfterOwnerMessage = await runtime.client.message.list({ sessionID: recipient.sessionId, order: 'asc', limit: 100 });
+  assert.deepEqual(recipientAfterOwnerMessage.data.map(message => message.id), ownerBefore.data.map(message => message.id));
+  await owner('POST', '/v1/commands', { key: 'owner-message-read', action: 'owner_message.read', payload: { id: ownerMessage.id, expectedRevision: 1 } });
+  assert.equal((await owner('GET', `/v1/owner_messages/${ownerMessage.id}`)).body, ownerMessage.body);
+  assert.equal((await owner('GET', `/v1/owner_messages/${ownerMessage.id}`)).state, 'read');
   await runtime.client.session.prompt({ sessionID: sender.sessionId,
     text: 'MESSAGE_SMOKE_SEND. Send one informational status update using relay_message_send, then inspect your sent inbox. Do not create a task or dispatch work.' });
   const message = await wait('message delivered', async () => (await owner('GET', `/v1/messages?agentId=${sender.agentId}&direction=sent`)).items.find(m => m.state === 'delivered'));
@@ -103,7 +116,10 @@ try {
   assert.equal((await owner('GET', `/v1/messages?agentId=${sender.agentId}&direction=sent`)).items.length, 1);
   console.log(JSON.stringify({ passed: true, runtime: (await runtime.client.server.info()).version, model: 'deterministic fixture',
     realNativeMessageSendTool: true, recipientInboxRead: true, taskIndependent: true, nativeDeliveryReceipt: true,
-    restartDidNotDuplicate: true, permittedReplies: 1, replyToReplyRefused: true, physicalMachines: 1, actualHuman: false, state: root }, null, 2));
+    restartDidNotDuplicate: true, permittedReplies: 1, replyToReplyRefused: true,
+    realOwnerMessageTool: true, plainOwnerInbox: true, ownerMessageRead: true, ownerMessageCreatedNoRecipientTurn: true,
+    ownerMessageNoTaskOrNotification: true, userServicesTouched: false, credentialsCopied: false,
+    physicalMachines: 1, actualHuman: false, state: root }, null, 2));
 } finally {
   await stop(); await runtime?.stop(); await backend?.close();
   model.closeAllConnections(); await new Promise(resolve => model.close(resolve));

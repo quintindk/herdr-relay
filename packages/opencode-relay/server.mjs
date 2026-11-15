@@ -180,6 +180,19 @@ const plugin = {
           ], additionalProperties: false },
           execute: ({ operation, key, ...input }, context) => agent(context, `interactive-repair-${operation}`,
             operation === 'preview' ? input : { key, payload: input }) });
+        editor.add({ name: 'relay_owner_message',
+          description: 'Send the human owner a plain, persistent Inbox message using an immutable retry key. Not a question, task, approval or run notification. No reply, model turn or execution is created. Current interactive enrolments need no active assignment. Headless workers require their exact accepted, uncancelled, non-readiness run and must send before submitting their outcome.',
+          options: { codemode: false }, input: { type: 'object', properties: {
+            key: { type: 'string', minLength: 1, maxLength: 100 }, subject: { type: 'string', minLength: 1, maxLength: 256 },
+            body: { type: 'string', minLength: 1, maxLength: 16000 },
+          }, required: ['key', 'body'], additionalProperties: false }, async execute({ key, ...payload }, context) {
+            const connection = workerConnection(ctx.options, context.sessionID);
+            if (connection.headlessSetupId) {
+              await assertNotRunResultNotice(ctx, context);
+              return worker(context, 'owner-message', { key, payload });
+            }
+            return agent(context, 'owner-message', { key, ...payload });
+          } });
         editor.add({ name: 'relay_message_send',
           description: 'Send informational peer messages with an immutable retry key. An incoming once envelope permits its one reply; other incoming messages do not. Messages are not work dispatch: use job delegation for collaboration.',
           options: { codemode: false }, input: { type: 'object', properties: {

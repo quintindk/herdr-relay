@@ -152,6 +152,20 @@ later human operation deleted the target agent.
 
 ## Inbox and Grants
 
+From **0.2.10**, Inbox list cards show at most **five wrapped lines of message body**, with dots
+when more text exists. Titles and sender/status remain visible. **Enter** opens the
+full scrollable message; search still matches the complete stored text.
+
+Plain agent-to-owner correspondence appears as **Message**, not a question or
+notification. See [owner Inbox messages](owner-inbox-messages.md) for the plugin
+tool and CLI. In plain message details, **m** or **Enter** marks it read directly.
+
+Press **m** in the Inbox list to mark the selected plain message, informational run result or
+reminder read **without confirmation**. This shortcut never answers questions,
+approves/rejects work, retries/dismisses publications or makes permission decisions.
+The card disappears only after its read acknowledgement is confirmed. Unknown
+outcomes retain their original publication in Inbox for reconciliation.
+
 See [task Inbox semantics](native-task-inbox.md). Questions and reviews bind the
 exact inspected item/revision/candidate. **Mark result read** only acknowledges
 informational reporting; it does not approve work, change a cron or start a run.

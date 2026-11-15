@@ -7,7 +7,7 @@ import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
 // human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
 export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'agent.rename', 'agent.delete', 'task.create', 'task.update', 'comment.create', 'reference.attach',
   'execution.request', 'execution.cancel', 'execution.handback', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
-  'occurrence.review', 'notification.acknowledge', 'schedule.install', 'schedule.cancel', 'schedule.pause', 'schedule.resume', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
+  'occurrence.review', 'notification.acknowledge', 'owner_message.read', 'schedule.install', 'schedule.cancel', 'schedule.pause', 'schedule.resume', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 
 export function authoriseOperator(store, actor, action, payload) {
   if (!actor.scope) return;

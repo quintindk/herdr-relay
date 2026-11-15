@@ -30,7 +30,7 @@ assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firec
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/native-agent-relocation.mjs', 'src/skill-install.mjs',
-  'src/agent-name.mjs', 'src/agent-rename-panel.mjs',
+   'src/agent-name.mjs', 'src/agent-rename-panel.mjs', 'src/inbox-read.mjs', 'src/upgrade-backup.mjs', 'src/owner-messages.mjs',
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
@@ -79,9 +79,37 @@ const lifecycleOutput = execFileSync(process.execPath, ['scripts/verify-native-l
 process.stdout.write(lifecycleOutput);
 const nativeLifecycleVerification = JSON.parse(lifecycleOutput);
 assert.equal(nativeLifecycleVerification.passed, true);
+const inboxReadOutput = execFileSync(process.execPath, ['scripts/verify-inbox-read.mjs', '--package', installed],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+process.stdout.write(inboxReadOutput);
+const nativeInboxReadVerification = JSON.parse(inboxReadOutput);
+assert.equal(nativeInboxReadVerification.passed, true);
+const ownerInboxOutput = execFileSync(process.execPath, ['scripts/verify-owner-inbox.mjs', '--package', installed],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+process.stdout.write(ownerInboxOutput);
+const nativeOwnerInboxVerification = JSON.parse(ownerInboxOutput);
+assert.equal(nativeOwnerInboxVerification.passed, true);
+const ownerTestsOutput = execFileSync(process.execPath, ['--test', '--test-reporter=tap', 'test/owner-messages.test.mjs'],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed } });
+process.stdout.write(ownerTestsOutput);
+const ownerTests = Number(ownerTestsOutput.match(/^# tests (\d+)$/m)?.[1]);
+assert.ok(ownerTests >= 12); assert.match(ownerTestsOutput, new RegExp(`^# pass ${ownerTests}$`, 'm'));
+assert.match(ownerTestsOutput, /^# fail 0$/m); assert.match(ownerTestsOutput, /^# skipped 0$/m);
+nativeOwnerInboxVerification.installedCoreTests = ownerTests;
+const backupOutput = execFileSync(process.execPath, ['--test', '--test-reporter=tap', 'test/upgrade-backup.test.mjs'],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed } });
+process.stdout.write(backupOutput);
+const backupTests = Number(backupOutput.match(/^# tests (\d+)$/m)?.[1]);
+assert.ok(backupTests >= 9);
+assert.match(backupOutput, new RegExp(`^# pass ${backupTests}$`, 'm'));
+assert.match(backupOutput, /^# fail 0$/m); assert.match(backupOutput, /^# skipped 0$/m);
+const upgradeBackupVerification = { passed: true, installedPackage: true, tests: backupTests,
+  walSnapshots: true, concurrentWriteSnapshot: true, checksumMismatchRefused: true, interruptedCopyRefused: true,
+  legacyBackupVerified: true, diskSpacePreflight: true, userServicesTouched: false, credentialsCopied: false };
 const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [], installedInteractiveRecoveryVerifications = [];
 const installedNativeInputVerifications = [];
 const installedHeadlessScopeVerifications = [];
+const installedOwnerMessageVerifications = [];
 for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']]) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
@@ -92,6 +120,14 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
   assert.equal(runtime, version, `Expected exact ${version} host for ${variable}`);
   installedTuiVerifications.push({ passed, runtime, productionPackageTuiLoaded, sidebarMounted, statusClockMounted, homeStatusClockMounted,
     scopedStatusReceived, runtimeCommandAndNotification, pluginLoadErrors });
+  const ownerMessageOutput = execFileSync(process.execPath, ['packages/opencode-relay/smoke-messages.mjs'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
+  process.stdout.write(ownerMessageOutput);
+  const ownerMessage = JSON.parse(ownerMessageOutput);
+  assert.equal(ownerMessage.runtime, version);
+  for (const field of ['passed', 'realOwnerMessageTool', 'plainOwnerInbox', 'ownerMessageRead', 'ownerMessageCreatedNoRecipientTurn', 'ownerMessageNoTaskOrNotification']) assert.equal(ownerMessage[field], true, field);
+  assert.equal(ownerMessage.userServicesTouched, false); assert.equal(ownerMessage.credentialsCopied, false);
+  installedOwnerMessageVerifications.push(ownerMessage);
   const bridgeOutput = execFileSync(process.execPath, ['scripts/verify-cli-bridge.mjs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
     env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
   process.stdout.write(bridgeOutput);
@@ -363,7 +399,7 @@ let onboarding;
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, nativeInboxReadVerification, nativeOwnerInboxVerification, installedOwnerMessageVerifications, upgradeBackupVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
   installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,
