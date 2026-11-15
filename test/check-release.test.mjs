@@ -42,6 +42,9 @@ function evidenceFixture(t) {
     nativeInboxReadVerification: { passed: true, realTuiKeyboard: true, fiveLinePreview: true, fullDetailsPreserved: true,
       directReadWithoutConfirmation: true, resultAndReminderRead: true, questionStillOpen: true, publishedResultPreserved: true,
       modelTurnsStarted: 0, userServicesTouched: false, credentialsCopied: false },
+    upgradeBackupVerification: { passed: true, installedPackage: true, tests: 9, walSnapshots: true, concurrentWriteSnapshot: true,
+      checksumMismatchRefused: true, interruptedCopyRefused: true, legacyBackupVerified: true, diskSpacePreflight: true,
+      userServicesTouched: false, credentialsCopied: false },
     installerHandover: { version: '0.2.8', passed: true, candidateProcessVerified: true, candidateOnlySetupExecuted: true,
       legacyBootstrapVerified: true, immutable022LimitationVerified: true, released023SinglePass: true,
       retryIdempotent: true, conflictRefused: true, allCandidateAuditsVerified: true, candidateAuditChecks: 6,
@@ -157,6 +160,21 @@ test('publication refuses missing Inbox preview/direct-read evidence and unsafe 
   }
   for (const [field, value] of [['modelTurnsStarted', 1], ['userServicesTouched', true], ['credentialsCopied', true]]) {
     const invalid = structuredClone(report); invalid.nativeInboxReadVerification[field] = value;
+    await assert.rejects(validate(invalid), /AssertionError/);
+  }
+});
+
+test('publication refuses missing or failed installed checksum backup evidence, incomplete tests and unsafe fixture effects', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.upgradeBackupVerification;
+  await assert.rejects(validate(missing), /AssertionError/);
+  for (const field of ['passed', 'installedPackage', 'walSnapshots', 'concurrentWriteSnapshot', 'checksumMismatchRefused',
+    'interruptedCopyRefused', 'legacyBackupVerified', 'diskSpacePreflight']) {
+    const invalid = structuredClone(report); invalid.upgradeBackupVerification[field] = false;
+    await assert.rejects(validate(invalid), /AssertionError/);
+  }
+  for (const [field, value] of [['tests', 0], ['userServicesTouched', true], ['credentialsCopied', true]]) {
+    const invalid = structuredClone(report); invalid.upgradeBackupVerification[field] = value;
     await assert.rejects(validate(invalid), /AssertionError/);
   }
 });

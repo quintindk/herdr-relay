@@ -74,6 +74,11 @@ against the installed package must show five-line list previews, complete detail
 direct result/reminder acknowledgement without confirmation, an untouched question
 and preserved published results. No model turn or user service may be started.
 
+`upgradeBackupVerification` must also pass against the installed package: committed
+WAL snapshots, concurrent writes, checksum refusal, interrupted-copy recovery,
+legacy backups and snapshot/copy disk-space preflight. Existing source-only evidence
+does not substitute for this check.
+
 ## Push, CI, tag, publish
 
 While collecting fixes, keep the feature pull request in draft. Branch/PR CI may

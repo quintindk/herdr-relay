@@ -30,7 +30,7 @@ assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firec
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/native-agent-relocation.mjs', 'src/skill-install.mjs',
-   'src/agent-name.mjs', 'src/agent-rename-panel.mjs', 'src/inbox-read.mjs',
+   'src/agent-name.mjs', 'src/agent-rename-panel.mjs', 'src/inbox-read.mjs', 'src/upgrade-backup.mjs',
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
@@ -84,6 +84,16 @@ const inboxReadOutput = execFileSync(process.execPath, ['scripts/verify-inbox-re
 process.stdout.write(inboxReadOutput);
 const nativeInboxReadVerification = JSON.parse(inboxReadOutput);
 assert.equal(nativeInboxReadVerification.passed, true);
+const backupOutput = execFileSync(process.execPath, ['--test', '--test-reporter=tap', 'test/upgrade-backup.test.mjs'],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed } });
+process.stdout.write(backupOutput);
+const backupTests = Number(backupOutput.match(/^# tests (\d+)$/m)?.[1]);
+assert.ok(backupTests >= 9);
+assert.match(backupOutput, new RegExp(`^# pass ${backupTests}$`, 'm'));
+assert.match(backupOutput, /^# fail 0$/m); assert.match(backupOutput, /^# skipped 0$/m);
+const upgradeBackupVerification = { passed: true, installedPackage: true, tests: backupTests,
+  walSnapshots: true, concurrentWriteSnapshot: true, checksumMismatchRefused: true, interruptedCopyRefused: true,
+  legacyBackupVerified: true, diskSpacePreflight: true, userServicesTouched: false, credentialsCopied: false };
 const installedTuiVerifications = [], installedCliBridgeVerifications = [], installedAgentGrantVerifications = [], installedInteractiveRecoveryVerifications = [];
 const installedNativeInputVerifications = [];
 const installedHeadlessScopeVerifications = [];
@@ -368,7 +378,7 @@ let onboarding;
 const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['audit', '--omit=dev', '--json'], { cwd: consumer, encoding: 'utf8' }));
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
-  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, nativeInboxReadVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
+  cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, nativeInboxReadVerification, upgradeBackupVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
   installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,

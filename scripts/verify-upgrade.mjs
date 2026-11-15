@@ -175,7 +175,8 @@ try {
     options: { ownerContextFile: joined.operatorContextFile, notificationSessionId: sender.sessionId } }] }), { mode: 0o600 });
   const request = { services: ['backend', 'node'], version: candidate.version, key: 'real-upgrade', nodeConfig: joined.configFile,
     directory: join(root, 'upgrades'), configDirectory: nativeConfig, binDirectory: bin, apply: true };
-  const upgradeDependencies = { manager, stageRelease: async () => candidate,
+  const upgradeProgress = [];
+  const upgradeDependencies = { manager, stageRelease: async () => candidate, progress: value => upgradeProgress.push(value),
     health: async (...args) => { if (failCandidate && args[4] && args[1].release.version === candidate.version) throw Error('Intentional health failure'); return verifyServiceHealth(...args); },
     healthAttempts: 20, healthDelay: 100 };
   // Both schemas are unchanged. Prove compatible rollback without restoring data.
@@ -189,8 +190,23 @@ try {
   failCandidate = false;
   const pendingForm = await runtime.client.session.form.create({ sessionID: sender.sessionId, title: 'Fixture pending decision',
     fields: [{ type: 'boolean', key: 'fixture', title: 'Fixture only', required: true }] });
+  const progressStart = upgradeProgress.length;
   const result = await serviceUpgrade({ ...request, key: 'compatible-pending-form' }, upgradeDependencies);
   assert.equal(result.state, 'committed'); assert.equal(result.pluginReloadDeferred.reason, 'upgrade_pending_decisions');
+  const currentProgress = upgradeProgress.slice(progressStart);
+  assert.equal(currentProgress.filter(value => value.step === 'source_quick_check').length, 2);
+  const verifyBackups = direction => {
+    for (const role of ['backend', 'node']) {
+      const path = join(request.directory, 'operations', result.operationId, `${role}-before-${direction}.sqlite`);
+      const receipt = JSON.parse(readFileSync(`${path}.verification.json`));
+      assert.equal(receipt.sha256, hashBytes(readFileSync(path)));
+      assert.equal(receipt.identity.instanceId, oldInfo.instanceId);
+      assert.equal(receipt.identity.nodeId, role === 'node' ? joined.nodeId : null);
+    }
+  };
+  verifyBackups('upgrade');
+  for (const role of ['backend', 'node']) for (const step of ['sqlite_snapshot', 'backup_copy', 'backup_checksum'])
+    assert.ok(currentProgress.some(value => value.role === role && value.step === step && value.bytes === value.totalBytes && value.bytes > 0));
   assert.equal((await runtime.client.session.form.get({ sessionID: sender.sessionId, formID: pendingForm.id })).state.status, 'pending');
   await runtime.client.session.form.cancel({ sessionID: sender.sessionId, formID: pendingForm.id }); // Own fixture only, never a user approval.
   const finished = await serviceUpgrade({ resume: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
@@ -223,6 +239,7 @@ try {
   assert.equal(recorded.operations[0].phase, 'committed');
   await owner('POST', '/v1/commands', { key: 'later-task', action: 'task.create', payload: { id: 'later-task', title: 'Must survive rollback' } });
   await serviceUpgrade({ rollback: result.operationId, directory: request.directory, apply: true }, upgradeDependencies);
+  verifyBackups('rollback');
   assert.equal((await owner('GET', '/v1/tasks/later-task')).title, 'Must survive rollback');
   assert.match((await owner('GET', '/v1/tasks/keep-task')).reference, /^REL-[1-9][0-9]*$/);
   assert.match((await owner('GET', '/v1/tasks/later-task')).reference, /^REL-[1-9][0-9]*$/);
@@ -242,6 +259,7 @@ try {
     realOpenCodeChatsPreserved: true, backendInstanceAndNodeIdentityPreserved: true, credentialsUnchanged: true,
     taskDataAndPostUpgradeEditsPreserved: true, nodeOnlyDidNotRestartBackend: true, messageDeliveryBeforeAndAfterPassed: true,
     explicitCompatibleNodeRollbackPassed: true, explicitCompatibleBackendRollbackPassed: true, failedHealthAutomaticRollbackPassed: true,
+    installedUpgradeChecksumCopiesVerified: true, upgradeProgressVerified: true,
     databasesRestored: false,
     activeOwnedModelSurvivedSupervisorUpgrade: activeWork, activeExecutionContinuedWithoutReplay: activeWork, conflictingPublicationsPreservedWithoutReplay: activeWork,
     userServicesTouched: false, userChatsTouched: false, physicalMachines: 1, state: root }, null, 2));

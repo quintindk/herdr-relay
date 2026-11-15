@@ -2,6 +2,13 @@
 
 ## 0.2.10 — Unreleased
 
+- Replace service-upgrade backup full-index integrity scans with WAL-safe SQLite
+  snapshots and streaming SHA-256 copy verification. Validate each source once
+  before stopping services, rather than rescanning whole databases during every
+  identity/health/status check. Keep schema, identity and compatibility checks fresh.
+- Report upgrade validation, snapshot, copy and checksum progress on stderr and
+  in saved operation status. Reuse checksum-verified backups, refuse changed or
+  partial copies and retain pre-0.2.10 backup recovery without repeating index scans.
 - Limit Inbox list message-body previews to five wrapped terminal lines, with
   truncation dots. Keep full message text in scrollable details and search.
 - Add Inbox **m** to mark the selected informational result or reminder read

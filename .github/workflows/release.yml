@@ -66,6 +66,13 @@ jobs:
           assert.equal(inbox.modelTurnsStarted, 0);
           assert.equal(inbox.userServicesTouched, false);
           assert.equal(inbox.credentialsCopied, false);
+          const backups = report.upgradeBackupVerification;
+          assert.ok(backups, 'Installed upgrade backup verification is required');
+          for (const field of ['passed', 'installedPackage', 'walSnapshots', 'concurrentWriteSnapshot', 'checksumMismatchRefused',
+            'interruptedCopyRefused', 'legacyBackupVerified', 'diskSpacePreflight']) assert.equal(backups[field], true, field);
+          assert.ok(backups.tests >= 9);
+          assert.equal(backups.userServicesTouched, false);
+          assert.equal(backups.credentialsCopied, false);
           const handover = report.installerHandover;
           assert.ok(handover, 'Installer process regression evidence is required');
           assert.equal(handover.version, report.version);
