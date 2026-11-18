@@ -170,6 +170,12 @@ Neither condition permits switching providers or models automatically. Provider
 authentication, rate-limit and retained-history errors still surface normally.
 An interrupted or uncertain business request is never replayed because of a login.
 
+From 0.2.12, managed headless runs send earlier Responses text and tool results
+inline without old connection-bound item IDs or encrypted checkpoints. The saved
+OpenCode transcript and in-run tool context are unchanged. A change during an
+active run may still make that run fail. `provider_history_connection_mismatch`
+identifies that provider rejection without publishing the raw error body.
+
 The owning node also recognises old authentication-only setup blocks, including
 `model_connection_changed` and `model_integration_mismatch`. Once access returns,
 it retries bounded setup readiness without the coordinator or a grant rewrite.
@@ -186,6 +192,7 @@ Verify automatic connection changes with the isolated real-host gate:
 
 ```sh
 node scripts/verify-headless-setup.mjs --connection-change --cron --capabilities --shell
+node scripts/verify-headless-setup.mjs --connection-bound-responses --capabilities --shell
 ```
 
 ### Updating approved instructions

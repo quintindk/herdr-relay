@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.12 — 18 November 2026
+
+- Stop carrying connection-bound Responses item IDs into later managed headless
+  runs. Keep visible history, the current run's tool context and the saved native
+  transcript. A provider rejection still settles the original run without replay.
+- Report a safe, specific diagnostic when a provider rejects an item from another
+  connection, without publishing its raw error body.
+
 ## 0.2.11 — 18 November 2026
 
 - Always use the active OpenCode connection for a headless job's approved provider

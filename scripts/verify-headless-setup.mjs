@@ -24,15 +24,16 @@ import { HeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
 
 process.umask(0o077);
 const flags = new Set(['--capabilities', '--agent-grant', '--run-result-notifications', '--cron', '--legacy-contract-refusal',
-  '--contract-update', '--connection-change', '--mcp-denied', '--shell', '--shell-denied']);
+  '--contract-update', '--connection-change', '--connection-bound-responses', '--mcp-denied', '--shell', '--shell-denied']);
 for (const flag of process.argv.slice(2)) assert.ok(flags.has(flag), `Unsupported flag: ${flag}`);
 const capabilityMode = process.argv.includes('--capabilities');
 const agentGrantMode = process.argv.includes('--agent-grant');
 const notificationMode = process.argv.includes('--run-result-notifications');
-const cronMode = process.argv.includes('--cron') || notificationMode;
+const responsesMode = process.argv.includes('--connection-bound-responses');
+const cronMode = process.argv.includes('--cron') || notificationMode || responsesMode;
 const legacyRefusalMode = process.argv.includes('--legacy-contract-refusal');
 const contractMode = process.argv.includes('--contract-update') || legacyRefusalMode;
-const connectionChangeMode = process.argv.includes('--connection-change');
+const connectionChangeMode = process.argv.includes('--connection-change') || responsesMode;
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
@@ -44,6 +45,21 @@ let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden
 let runResultMessages = 0;
 const modelAuthHeaders = [];
 let requestsBeforeConnectionChange = 0;
+const responseOwners = new Map();
+let responseSequence = 0, portableHistorySeen = false, currentToolReferenceSeen = false;
+const sendResponses = (req, res, tool, args, text) => {
+  const sequence = ++responseSequence;
+  const item = tool
+    ? { type: 'function_call', id: `fc_fixture_${sequence}`, call_id: `call_fixture_${sequence}`, name: tool, arguments: JSON.stringify(args), status: 'completed' }
+    : { type: 'message', id: `msg_fixture_${sequence}`, role: 'assistant', content: [{ type: 'output_text', text, annotations: [] }], status: 'completed' };
+  responseOwners.set(item.id, req.headers.authorization);
+  const response = { id: `resp_fixture_${sequence}`, object: 'response', status: 'completed', model: 'fixture', output: [item] };
+  res.setHeader('content-type', 'text/event-stream');
+  for (const event of [{ type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response }]) {
+    res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  }
+  res.end();
+};
 const mcpSessions = [];
 const mcp = createServer(async (req, res) => {
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
@@ -66,7 +82,29 @@ const mcp = createServer(async (req, res) => {
 const model = createServer(async (req, res) => {
   modelAuthHeaders.push(req.headers.authorization);
   let body = ''; for await (const chunk of req) body += chunk;
-  const input = JSON.parse(body), last = input.messages.findLastIndex(m => m.role === 'user');
+  const request = JSON.parse(body);
+  if (responsesMode) {
+    assert.equal(req.url, '/v1/responses');
+    assert.ok(Array.isArray(request.input));
+    const foreign = request.input.some(item => responseOwners.has(item.id) && responseOwners.get(item.id) !== req.headers.authorization);
+    if (foreign) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'input item does not belong to this connection', type: 'authentication_error' } }));
+      return;
+    }
+    const start = request.input.findLastIndex(item => item.role === 'user');
+    if (req.headers.authorization === 'Bearer replacement-fixture-key') {
+      portableHistorySeen ||= request.input.slice(0, start).some(item => item.type === 'function_call' && !item.id && item.name === 'relay_work_submit') &&
+        request.input.slice(0, start).some(item => item.role === 'assistant' && JSON.stringify(item.content).includes('Fixture done.'));
+      currentToolReferenceSeen ||= request.input.slice(start + 1).some(item => item.type === 'function_call' && responseOwners.get(item.id) === req.headers.authorization);
+    }
+  }
+  const input = responsesMode ? {
+    messages: [{ role: 'system', content: request.instructions }, ...request.input.flatMap(item => item.role ? [item] :
+      item.type === 'function_call_output' ? [{ role: 'tool', content: item.output }] : [])],
+    tools: request.tools?.filter(tool => tool.type === 'function').map(tool => ({ function: tool })),
+  } : request;
+  const last = input.messages.findLastIndex(m => m.role === 'user');
   if (JSON.stringify(input.messages[last]?.content).includes('Relay run result notification.')) {
     const called = input.messages.slice(last + 1).filter(message => message.role === 'tool').length;
     if (called === 0) runResultMessages++;
@@ -74,8 +112,10 @@ const model = createServer(async (req, res) => {
     // Deliberately adversarial fixture: the notification must not authorise a
     // coordinator reply, even though its normal interactive tools are present.
     const reply = called === 0 && input.tools?.find(tool => tool.function.name.endsWith('relay_message_send'));
+    const args = { key: 'must-not-send', recipientAgentId: grantProposal.requesterAgentId, body: 'Unauthorised automatic acknowledgement' };
+    if (responsesMode) return sendResponses(req, res, reply?.function.name, args, 'RUN_RESULT_VISIBLE: The recorded cron result is available. This is not a new task.');
     const delta = reply ? { role: 'assistant', tool_calls: [{ index: 0, id: 'notice-reply', type: 'function', function: {
-      name: reply.function.name, arguments: JSON.stringify({ key: 'must-not-send', recipientAgentId: grantProposal.requesterAgentId, body: 'Unauthorised automatic acknowledgement' }),
+      name: reply.function.name, arguments: JSON.stringify(args),
     } }] } : { role: 'assistant', content: 'RUN_RESULT_VISIBLE: The recorded cron result is available. This is not a new task.' };
     const base = { id: 'notice-model', created: 1, model: 'fixture', object: 'chat.completion.chunk' };
     res.setHeader('content-type', 'text/event-stream');
@@ -113,6 +153,7 @@ const model = createServer(async (req, res) => {
     name === 'relay_headless_grant' ? { key: 'grant-once', payload: grantProposal } : name === 'relay_mcp_call' ? { tool: mcpStep === 0 ? 'records_read' : 'actions_send', arguments: mcpStep === 0 ? { query: 'Fixture only' } : { recipient: 'fixture-only' },
     ...(capabilityMode ? { sourceNamespace: 'external:record' } : {}) } : name === 'relay_shell_call' ? { command: `printf '%s' 'shell-fixture' > '${shellOutput}'` } : ['relay_headless_capabilities', 'relay_headless_permissions', 'relay_headless_scope', 'relay_mcp_tools'].includes(name) ? {} :
     { key: probe ? 'ready' : 'job', candidate: probe ? 'headless-readiness' : 'fixture-job', summary: 'Native capability and result submission verified.' };
+  if (responsesMode) return sendResponses(req, res, tool?.function.name, args, 'Fixture done.');
   const delta = tool ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${called}`, type: 'function', function: { name: tool.function.name, arguments: JSON.stringify(args) } }] }
     : { role: 'assistant', content: 'Fixture done.' };
   const base = { id: 'setup-model', created: 1, model: 'fixture', object: 'chat.completion.chunk' };
@@ -149,7 +190,7 @@ try {
   runtime = await launchOwnedV2({ directory: join(root, 'runtime'), workspace,
     executable: process.env.RELAY_V2_BINARY ?? resolve('packages/opencode-relay/node_modules/.bin/opencode2'),
     config: { plugins: [{ package: join(packageDirectory, 'packages/opencode-relay'), options: { workerDirectory: state } }],
-      model: 'openai/fixture', compaction: { auto: false }, providers: { openai: { package: '@ai-sdk/openai-compatible',
+       model: 'openai/fixture', compaction: { auto: false }, providers: { openai: { package: responsesMode ? '@opencode/ai/providers/openai-compatible/responses' : '@ai-sdk/openai-compatible',
         settings: { baseURL: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'fixture-only' }, models: { fixture: { name: 'Fixture', limit: { context: 8192, output: 512 } } } } },
       mcp: { servers: { records: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false },
         ...(cronMode ? { actions: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false } } : {}) } } } });
@@ -186,10 +227,13 @@ try {
   // Discovery may be injected by the fixture node through its standard registration file.
   writeFileSync(registration, JSON.stringify({ url: runtime.descriptor.origin, password, version: (await client.server.info()).version, pid: runtime.descriptor.pid }));
   config.headless = { serviceRegistration: registration }; writeFileSync(joined.configFile, JSON.stringify(config));
+  // Leave time for readiness and the sign-in switch before the first fixture tick.
+  // Johannesburg's whole-hour offset leaves the minute field unchanged.
+  const cron = responsesMode ? `${new Date(Date.now() + 80_000).getUTCMinutes()} * * * *` : cronMode ? '* * * * *' : '0 7-18 * * 1-5';
   grantProposal = { id: 'approved-job-grant', requesterAgentId: coordinator.agentId, nodeId: joined.nodeId, name: 'approved-worker', directory: workspace,
     model: { providerID: 'openai', id: 'fixture' },
     permissions: { mcp: !mcpDenied, shell: shellAllowed }, contract: '.opencode/skills/approved-job/SKILL.md',
-    schedule: { id: 'approved-job-weekdays', cron: cronMode ? '* * * * *' : '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none',
+    schedule: { id: 'approved-job-weekdays', cron, timezone: 'Africa/Johannesburg', reviewPolicy: 'none',
       ...(notificationMode ? { runResultNotifications: { inbox: true, requester: true } } : {}) },
     ...(capabilityMode ? { capabilities: { sourceNamespaces: ['external:record'], taskActions: ['task.create', 'task.update', 'comment.create', 'reference.attach'],
       artifacts: { receipts: 'artifacts/receipts', state: 'artifacts/state.json', history: 'artifacts/history', runs: 'artifacts/runs', summaries: 'artifacts/summaries' } } } : {}) };
@@ -380,6 +424,12 @@ try {
     assert.ok(headers.length, 'Business model requests must run after the connection changes');
     assert.ok(headers.every(header => header === 'Bearer replacement-fixture-key'), 'Native inference must use the active replacement connection, not the old key');
   }
+  if (responsesMode) {
+    assert.ok(portableHistorySeen, 'Previous text and tool calls must be carried without the old connection item IDs');
+    assert.ok(currentToolReferenceSeen, 'Current tool continuations must retain their own connection item IDs');
+    assert.ok((await client.session.context({ sessionID: approvedSetup.sessionId })).some(message => message.type === 'assistant' &&
+      message.content.some(part => responseOwners.get(part.native?.itemId) === 'Bearer fixture-authorised-key')), 'Original provider IDs must remain in the native transcript');
+  }
   if (contractMode) assert.equal(revisedContextSeen, true);
   await stopNode(); await startNode(joined.configFile);
   const restored = await call(worker, 'POST', '/agent/headless-status', { id });
@@ -410,7 +460,8 @@ try {
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
     exactContractApprovalAndActivation: contractMode, revisedInstructionsInNativeModelContext: revisedContextSeen,
     automaticActiveProviderConnectionVerified: connectionChangeMode, activeConnectionUsedForNativeModelRequests: connectionChangeMode,
-    connectionChangePreservedWorkerSessionScopeAndSchedule: connectionChangeMode, coordinatorArchivedDuringConnectionChange: connectionChangeMode && !notificationMode,
+     connectionChangePreservedWorkerSessionScopeAndSchedule: connectionChangeMode, coordinatorArchivedDuringConnectionChange: connectionChangeMode && !notificationMode,
+     connectionBoundResponsesHistoryVerified: responsesMode,
     legacyValidationRefusalDoesNotBlockActivation: legacyRefusalMode,
     operationSpecificHeadlessSchemasVerified: capabilityMode,
     headlessScopeInspectionVerified: true, emptyNativeScopeWithShellVerified: shellAllowed && !capabilityMode,

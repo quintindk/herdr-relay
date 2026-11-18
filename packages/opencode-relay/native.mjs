@@ -77,6 +77,16 @@ export class NativeOpenCodeV2 {
   }
 }
 
+function nativeFailure(error) {
+  if (error.message === 'Unknown execution') return { stage: 'context', code: 'scheduled_execution_missing',
+    message: 'Backend execution admission was missing before native context preparation.' };
+  if (error.type === 'provider.auth' && error.status === 401 && /^input item(?: ID)? does not belong to this connection\.?$/i.test(error.message))
+    return { stage: 'native', code: 'provider_history_connection_mismatch',
+      message: 'The model provider rejected a saved conversation item from another connection. The failed run was not replayed.' };
+  return { stage: 'native', code: /^[a-z][a-z0-9_]{0,95}$/.test(error.type ?? '') ? error.type : 'native_error',
+    message: 'Native execution failed. Inspect the exact terminal receipt on the destination.' };
+}
+
 export function observeV2(snapshot, invocation) {
   const index = snapshot.messages.findIndex(message => message.id === invocation.messageId);
   if (index < 0) return { state: 'uncertain', reason: 'message_not_observed' };
@@ -146,8 +156,5 @@ export function observeV2(snapshot, invocation) {
     message.type === 'assistant' && message.content.some(part => part.type === 'tool' && ['running', 'streaming'].includes(part.state.status)));
   if (activeTool) return { state: 'observed', reason: 'awaiting_tool_settlement' };
   return { state: 'finished', messageId: terminal.id, outcome: terminal.outcome,
-    ...(terminal.error ? { error: terminal.error.type, failure: terminal.error.message === 'Unknown execution'
-      ? { stage: 'context', code: 'scheduled_execution_missing', message: 'Backend execution admission was missing before native context preparation.' }
-      : { stage: 'native', code: /^[a-z][a-z0-9_]{0,95}$/.test(terminal.error.type ?? '') ? terminal.error.type : 'native_error',
-        message: 'Native execution failed. Inspect the exact terminal receipt on the destination.' } } : {}) };
+    ...(terminal.error ? { error: terminal.error.type, failure: nativeFailure(terminal.error) } : {}) };
 }
