@@ -19,7 +19,7 @@ export async function headlessToolScope(ctx, context, { connection = workerConne
     'headless_scope_mismatch', 'Calls must stay in the approved session and workspace', 403);
   requireValue(session.model?.providerID === scope.model.providerID && session.model?.id === scope.model.id,
     'headless_model_changed', 'Session must retain its authorised model', 403);
-  return { scope, worker, run };
+  return { scope, worker, run, sourceMessageId: current.sourceMessageId };
 }
 
 export async function syncHeadlessPermissions(ctx, context, scope, catalog) {

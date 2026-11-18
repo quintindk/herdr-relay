@@ -46,6 +46,14 @@ test('native failure diagnostics retain useful stage/code without exposing provi
   assert.equal(missing.failure.code, 'scheduled_execution_missing'); assert.equal(missing.failure.stage, 'context');
   const provider = observeV2(snapshot([user, { ...terminal, outcome: 'failed', error: { type: 'provider', message: 'secret-token and private response' } }]), invocation);
   assert.equal(provider.failure.code, 'provider'); assert.doesNotMatch(JSON.stringify(provider), /secret-token|private response/);
+  for (const message of ['input item does not belong to this connection', 'Input item ID does not belong to this connection.']) {
+    const error = { type: 'provider.auth', status: 401, message, response: { body: 'private provider body' } };
+    const receipt = observeV2(snapshot([user, { ...terminal, outcome: 'failed', error }]), invocation);
+    assert.equal(receipt.failure.code, 'provider_history_connection_mismatch');
+    assert.doesNotMatch(JSON.stringify(receipt), /private provider body/);
+  }
+  const unauthorised = observeV2(snapshot([user, { ...terminal, outcome: 'failed', error: { type: 'provider.auth', status: 401, message: 'Expired login' } }]), invocation);
+  assert.notEqual(unauthorised.failure.code, 'provider_history_connection_mismatch');
 });
 
 test('versioned snapshot traverses native pages and rejects changed identity', async () => {

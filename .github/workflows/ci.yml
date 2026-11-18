@@ -84,6 +84,8 @@ jobs:
         run: node scripts/verify-headless-setup.mjs --contract-update --capabilities --legacy-contract-refusal
       - name: Automatic active sign-in change with the coordinator archived and unchanged worker, instructions and cron
         run: node scripts/verify-headless-setup.mjs --connection-change --contract-update --capabilities
+      - name: Headless cron after a Responses sign-in change with retained history
+        run: node scripts/verify-headless-setup.mjs --connection-bound-responses --capabilities --shell
       - name: Actual headless cron admission, granted effects and result publication
         run: node scripts/verify-headless-setup.mjs --cron --capabilities --shell --run-result-notifications
       - name: Headless MCP denied without connector permissions

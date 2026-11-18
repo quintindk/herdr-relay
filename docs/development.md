@@ -33,6 +33,7 @@ node scripts/verify-headless-setup.mjs --shell --mcp-denied
 node scripts/verify-agent-relocation.mjs
 node scripts/verify-headless-setup.mjs --legacy-contract-refusal --capabilities
 node scripts/verify-headless-setup.mjs --connection-change --contract-update --capabilities
+node scripts/verify-headless-setup.mjs --connection-bound-responses --capabilities --shell
 node scripts/verify-headless-setup.mjs --run-result-notifications --capabilities --shell
 node scripts/verify-inbox-read.mjs
 node scripts/verify-owner-inbox.mjs
