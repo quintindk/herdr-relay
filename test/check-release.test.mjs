@@ -62,6 +62,10 @@ function evidenceFixture(t) {
       agentGrantRetryIdempotent: true, revocationPausedSchedule: true, readinessHadNoExternalEffects: true,
       actualCronFiringVerified: true, persistentRunResultInboxVerified: true, onlineOnlyRequesterResultVerified: true,
       correlatedRequesterDeliveryOutcomeVerified: true, userServicesTouched: false, credentialsCopied: false })),
+    installedHeadlessResponsesVerifications: versions.map(runtime => ({ runtime, passed: true, actualCronFiringVerified: true,
+      nativeResultSubmission: true, connectionBoundResponsesHistoryVerified: true, activeConnectionUsedForNativeModelRequests: true,
+      connectionChangePreservedWorkerSessionScopeAndSchedule: true, coordinatorArchivedDuringConnectionChange: true,
+      userServicesTouched: false, credentialsCopied: false })),
     installedInteractiveRecoveryVerifications: versions.map(runtime => ({ runtime, passed: true, realModelToolTurn: true, scopedAgentTools: true,
       insufficientGrantQueuedApproval: true, admissionBeforeFilesystemEffects: true, linkedRepairApproved: true, originalPreparationRetained: true,
       realReceivingSessionVerified: true, existingTaskDispatchIdempotent: true, concurrentCapacityReservationVerified: true,
@@ -74,7 +78,8 @@ function evidenceFixture(t) {
     return execute(process.execPath, ['--input-type=module', '-e', script], { cwd: root, timeout: 10000,
       env: { ...process.env, RELEASE_TAG: 'v0.2.8', SOURCE_COMMIT: 'fixture-commit' } });
   };
-  return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications', 'installedInteractiveRecoveryVerifications', 'installedOwnerMessageVerifications'] };
+  return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications',
+    'installedHeadlessResponsesVerifications', 'installedInteractiveRecoveryVerifications', 'installedOwnerMessageVerifications'] };
 }
 
 test('publication evidence accepts successful installed checks on all three exact OpenCode hosts', async t => {
@@ -111,6 +116,19 @@ test('publication refuses missing correlated requester delivery evidence and uns
     const invalid = structuredClone(report);
     const test = invalid.installedAgentGrantVerifications.find(item => item.runtime === runtime);
     test[field] = field === 'userServicesTouched' || field === 'credentialsCopied';
+    await assert.rejects(validate(invalid), /AssertionError/);
+  }
+});
+
+test('publication refuses missing or failed installed Responses cron evidence and unsafe fixture effects', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.installedHeadlessResponsesVerifications;
+  await assert.rejects(validate(missing), /Installed Responses cron evidence is required/);
+  for (const [field, value] of [['actualCronFiringVerified', false], ['nativeResultSubmission', false],
+    ['connectionBoundResponsesHistoryVerified', false], ['activeConnectionUsedForNativeModelRequests', false],
+    ['connectionChangePreservedWorkerSessionScopeAndSchedule', false], ['coordinatorArchivedDuringConnectionChange', false],
+    ['userServicesTouched', true], ['credentialsCopied', true]]) {
+    const invalid = structuredClone(report); invalid.installedHeadlessResponsesVerifications[0][field] = value;
     await assert.rejects(validate(invalid), /AssertionError/);
   }
 });

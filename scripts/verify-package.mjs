@@ -34,7 +34,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
-  'src/headless-permissions.mjs', 'packages/opencode-relay/headless-mcp.mjs',
+  'src/headless-permissions.mjs', 'packages/opencode-relay/headless-mcp.mjs', 'packages/opencode-relay/headless-history.mjs',
   'src/task-identity.mjs',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/release-setup.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
@@ -111,7 +111,8 @@ const installedTuiVerifications = [], installedCliBridgeVerifications = [], inst
 const installedNativeInputVerifications = [];
 const installedHeadlessScopeVerifications = [];
 const installedOwnerMessageVerifications = [];
-for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']]) {
+const supportedHosts = [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']];
+for (const [variable, version] of supportedHosts) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
   const output = execFileSync(process.execPath, ['scripts/verify-installed-tui.mjs', '--package', installed,
     '--binary', process.env[variable]], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
@@ -183,6 +184,22 @@ for (const [variable, version] of [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASE
     installedNativeInputVerifications.push({ runtime: native.runtime, passed: native.passed, ...Object.fromEntries(fields.map(field => [field, native[field]])) });
   }
 }
+// Every fixture has its own HOME, backend, node and local Responses server.
+// Run them concurrently so the three real cron ticks don't queue behind one another.
+const installedHeadlessResponsesVerifications = await Promise.all(supportedHosts.filter(([variable]) => process.env[variable]).map(async ([variable, version]) => {
+  const { stdout } = await promisify(execFile)(process.execPath, ['scripts/verify-headless-setup.mjs', '--connection-bound-responses', '--capabilities', '--shell'], {
+    encoding: 'utf8', timeout: 210000, env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] },
+  });
+  process.stdout.write(stdout);
+  const { runtimeVersion: runtime, ...result } = JSON.parse(stdout);
+  assert.equal(runtime, version);
+  const fields = ['passed', 'actualCronFiringVerified', 'nativeResultSubmission', 'connectionBoundResponsesHistoryVerified',
+    'activeConnectionUsedForNativeModelRequests', 'connectionChangePreservedWorkerSessionScopeAndSchedule', 'coordinatorArchivedDuringConnectionChange'];
+  for (const field of fields) assert.equal(result[field], true, `Missing installed Responses cron gate on ${version}: ${field}`);
+  assert.equal(result.userServicesTouched, false); assert.equal(result.credentialsCopied, false);
+  return { runtime, ...Object.fromEntries(fields.map(field => [field, result[field]])),
+    userServicesTouched: result.userServicesTouched, credentialsCopied: result.credentialsCopied };
+}));
 let herdrPanelVerification = null;
 if (!values['skip-audit']) {
   const panelOutput = execFileSync(process.execPath, ['scripts/verify-herdr-panel.mjs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
@@ -401,7 +418,8 @@ const audit = values['skip-audit'] ? null : JSON.parse(execFileSync('npm', ['aud
 if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
   cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, nativeInboxReadVerification, nativeOwnerInboxVerification, installedOwnerMessageVerifications, upgradeBackupVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
-  installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, herdrPanelVerification, nativeBackendStarted: true,
+  installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, installedHeadlessResponsesVerifications,
+  herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,
   skillInstallPassed: true, cliSkillSyncPassed: !values['skip-audit'],
