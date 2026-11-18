@@ -5,11 +5,12 @@ import { validateHeadlessCapabilities } from './headless-capabilities.mjs';
 import { validateHeadlessPermissions } from './headless-permissions.mjs';
 import { requestContractUpdate, acknowledgeContractUpdate } from './headless-contract.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
-import { applyConnectionRebind } from './headless-connection.mjs';
 
 const fields = (p, keys, required = keys) => requireValue(p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).every(k => keys.includes(k)) && required.every(k => Object.hasOwn(p, k)), 'invalid_headless_setup', 'Missing or unsupported headless setup fields');
 const text = (s, max = 256) => requireValue(typeof s === 'string' && s.trim() && s.length <= max && !/[\x00-\x1f]/.test(s), 'invalid_headless_setup', 'Bounded text required');
 export const setupTerminal = ['ready', 'blocked'];
+export const headlessAccessBlockers = ['model_connection_changed', 'model_integration_mismatch', 'model_connection_unavailable',
+  'integration_inspection_unavailable', 'model_unavailable'];
 export const headlessProbeId = setup => `probe_${setup.id}_${setup.attempt ?? 1}`;
 
 function grantActor(store, actor, grant, requester) {
@@ -53,7 +54,7 @@ export function headlessRunAuthority(store, actor, p) {
 export function applyHeadlessSetup(store, actor, action, p, { created, changed, requester: source }) {
   if (action === 'headless.contract_request') return requestContractUpdate(store, actor, p, { created });
   if (action === 'headless.contract_applied') return acknowledgeContractUpdate(store, actor, p, changed);
-  if (['agent.headless_grant', 'agent.headless_revoke', 'agent.headless_connection_rebind'].includes(action)) {
+  if (['agent.headless_grant', 'agent.headless_revoke'].includes(action)) {
     fields(p, ['agentId', 'conversationId', 'bindingRevision', 'payload']);
     const requester = store.agent(actor, p.agentId);
     store.nodeOnly(actor, requester.nodeId);
@@ -73,11 +74,6 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed, 
     store.event(operation, result, actor, result.id);
     return result;
   }
-  if (action === 'headless.connection_rebind') {
-    const { setup, grant } = headlessAuthority(store, actor, p.setupId);
-    grantActor(store, actor, grant, source);
-    return applyConnectionRebind(store, actor, p, setup, grant, changed);
-  }
   if (action === 'headless.grant') {
     fields(p, ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'permissions', 'contract', 'schedule', 'expiresAt', 'capabilities'], ['id', 'requesterAgentId', 'nodeId', 'name', 'directory', 'model', 'permissions', 'contract', 'schedule']);
     requireValue(canonicalDirectory(p.directory), 'invalid_headless_setup', 'Canonical workspace required');
@@ -87,7 +83,9 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed, 
     for (const key of ['id', 'name', 'requesterAgentId', 'nodeId']) text(p[key]);
     const requester = store.get('agent', p.requesterAgentId); store.get('node', p.nodeId);
     requireValue(requester.nodeId === p.nodeId && requester.mode === 'interactive' && requester.standingGrant, 'headless_requester_scope', 'An enrolled coordinator on the destination node is required');
-    fields(p.model, ['providerID', 'id', 'integrationID', 'connectionId']); for (const v of Object.values(p.model)) text(v);
+    // Older grants may retain creation-time connection references. They are
+    // metadata only: runtime access always follows the approved provider.
+    fields(p.model, ['providerID', 'id', 'integrationID', 'connectionId'], ['providerID', 'id']); for (const v of Object.values(p.model)) text(v);
     requireValue(typeof p.contract === 'string' && /^\.opencode\/skills\/[A-Za-z0-9_-]+\/SKILL\.md$/.test(p.contract), 'invalid_headless_setup', 'Workspace skill contract required');
     fields(p.schedule, ['id', 'cron', 'timezone', 'reviewPolicy', 'runResultNotifications'], ['id', 'cron', 'timezone', 'reviewPolicy']); text(p.schedule.id);
     runResultNotifications(p.schedule.runResultNotifications);
@@ -144,6 +142,19 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed, 
       ...(p.runResultNotifications !== undefined || grant.schedule.runResultNotifications !== undefined ?
         { runResultNotifications: runResultNotifications(p.runResultNotifications ?? grant.schedule.runResultNotifications) } : {}) });
   }
+  if (action === 'headless.retry_access') {
+    fields(p, ['id', 'expectedRevision']);
+    const { setup } = headlessAuthority(store, actor, p.id);
+    store.nodeOnly(actor, setup.nodeId); store.revision(setup, p.expectedRevision);
+    requireValue(setup.state === 'blocked' && headlessAccessBlockers.includes(setup.blocker),
+      'headless_access_retry_ineligible', 'Only authentication or model-availability blocks can recover automatically');
+    const probe = store.get('execution', headlessProbeId(setup), false);
+    requireValue(!probe || ['completed', 'cancelled', 'failed', 'rejected'].includes(probe.state),
+      'headless_probe_unsettled', 'Settle the previous readiness execution before another readiness attempt');
+    const schedule = store.get('schedule', setup.scheduleId, false);
+    requireValue(!schedule?.cancelled, 'schedule_cancelled', 'Cancelled schedules cannot recover automatically');
+    return changed('headless_setup', setup, { state: 'requested', blocker: null, attempt: (setup.attempt ?? 1) + 1 });
+  }
   fields(p, ['id', 'receipt', 'reason'], ['id']);
   const setup = store.get('headless_setup', p.id); store.nodeOnly(actor, setup.nodeId);
   if (action === 'headless.block') {
@@ -190,19 +201,19 @@ export function applyHeadlessSetup(store, actor, action, p, { created, changed, 
         supplied.taskDigest === proof.digest && /^[a-f0-9]{64}$/.test(supplied.fileDigest) && supplied.digest === digest({ task: proof.digest, files: supplied.fileDigest }),
       'headless_capabilities_unverified', 'Confirmed proof for the exact granted task/artifact capabilities required');
     } else requireValue(!p.receipt.capabilities, 'headless_capability_not_authorised', 'Grants without native capabilities do not authorise task/artifact writes');
-    if (setup.connectionRebind) {
-      const schedule = store.get('schedule', setup.scheduleId);
-      requireValue(!schedule.cancelled && schedule.definition.nodeId === setup.nodeId && schedule.definition.targetAgentId === setup.agentId,
-        'headless_scope_mismatch', 'Connection recovery cannot replace or retarget the original schedule');
+    const schedule = store.get('schedule', setup.scheduleId, false);
+    if (setup.connectionRebind || schedule) {
+      requireValue(schedule && !schedule.cancelled && schedule.definition.nodeId === setup.nodeId && schedule.definition.targetAgentId === setup.agentId,
+        'headless_scope_mismatch', 'Access recovery cannot replace or retarget the original schedule');
       return changed('headless_setup', setup, { state: 'ready', blocker: null, readiness: p.receipt,
-        connectionRebind: { ...setup.connectionRebind, state: 'ready', readyAt: new Date().toISOString() } });
+        ...(setup.connectionRebind ? { connectionRebind: { ...setup.connectionRebind, state: 'ready', readyAt: new Date().toISOString() } } : {}) });
     }
-    const schedule = store.apply(actor, 'schedule.install', { id: setup.scheduleId, definition: { nodeId: setup.nodeId, targetAgentId: setup.agentId,
+    const installed = store.apply(actor, 'schedule.install', { id: setup.scheduleId, definition: { nodeId: setup.nodeId, targetAgentId: setup.agentId,
       instructions: `Perform the authorised job contract at ${grant.directory}/${grant.contract}. Read that exact skill and submit the native Relay result. Inspect relay_headless_permissions.${grant.permissions.mcp ? ' MCP is allowed: use relay_mcp_tools and relay_mcp_call, including write-capable tools. Follow provider idempotency rules and never automatically repeat uncertain effects.' : ' MCP is denied.'}${grant.permissions.shell ? ' Native shell is allowed through relay_shell_call with the native shell input schema. This is full OS-user access, including file writes outside artifact paths. It is not a sandbox. Never inspect/copy credentials or use an owner context as an authentication workaround.' : ' Native shell is denied.'}${grant.capabilities ? ' Use native task/artifact capabilities only in their explicit scopes. Business policy belongs to the job contract.' : ''} Generic execute and native file-write tools remain denied.`,
       cron: grant.schedule.cron, timezone: grant.schedule.timezone, reviewPolicy: 'none', enabled: true,
       ...(setup.runResultNotifications !== undefined ? { runResultNotifications: setup.runResultNotifications } : {}) } }, { headlessSetup: setup });
-    store.event('schedule.install', schedule, actor, setup.id);
-    return changed('headless_setup', setup, { state: 'ready', readiness: p.receipt, scheduleRevision: schedule.revision });
+    store.event('schedule.install', installed, actor, setup.id);
+    return changed('headless_setup', setup, { state: 'ready', readiness: p.receipt, scheduleRevision: installed.revision });
   }
   requireValue(false, 'invalid_action', 'Unknown headless setup action');
 }

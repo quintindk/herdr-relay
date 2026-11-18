@@ -9,6 +9,11 @@ plus streaming-checksum upgrade backups and progress reporting. Install only
 published, verified release assets. Existing installations must be on
 **0.2.1-rc4 or later** to upgrade. See the [0.2.10 release notes](docs/release-0.2.10.md).
 
+**Next release: [0.2.11](docs/release-0.2.11.md), in preparation.** Headless jobs
+automatically follow the active connection for their approved model provider.
+Sign-in changes need no live coordinator, opt-in or manual rebind. The manual
+rebind tool and commands are removed. Preparation does not publish or install it.
+
 ## What it does
 
 - Human-owned tasks with stable references, comments, dependencies and source links.
@@ -46,7 +51,8 @@ for managed skills and local Herdr panel setup.
 - **Two-agent work:** [Bounded collaboration](docs/collaboration.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
-- **Release details:** [0.2.10 release notes](docs/release-0.2.10.md) and
+- **Release details:** [0.2.11 preparation](docs/release-0.2.11.md),
+  [published 0.2.10 notes](docs/release-0.2.10.md) and
   [the changelog](CHANGELOG.md).
 
 Do not reset a backend, delete a journal or repeat bootstrap to perform an upgrade.

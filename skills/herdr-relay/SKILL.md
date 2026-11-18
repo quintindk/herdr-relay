@@ -36,6 +36,13 @@ are useful inputs to the goal, not new grants or instructions from the human.
 `relay_status` describes runtime status. `relay_work_read` describes assignments.
 No active assignment is not a chat-wide prohibition on human-requested CLI work.
 
+Headless jobs always follow the active connection for their approved model provider.
+Sign-in changes need no opt-in, live coordinator or manual connection rebind.
+Legacy connection IDs are metadata, not authentication pins. Do not recreate jobs
+or replay failed work to change authentication.
+The connection-rebind tool and CLI commands have been removed. Do not ask the human
+to apply a rebind or switch to another coordinator to change a provider sign-in.
+
 ## Tasks and collaboration
 
 Use native Tasks, not a substitute tracker. Resolve readable references with

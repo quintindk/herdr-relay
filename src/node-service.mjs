@@ -13,7 +13,6 @@ import { inspectContract, previewContractUpdate } from './node-headless-contract
 import { validateHeadlessTaskPayload } from './headless-task-schema.mjs';
 import { abandonedWork } from './node-journal.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
-import { previewHeadlessConnection, connectionRebindCommand } from './node-headless-connection.mjs';
 import { validateOwnerMessage } from './owner-messages.mjs';
 
 const preparationRecovery = Object.freeze({
@@ -34,7 +33,7 @@ async function preparationModel(worker, getNativeModel) {
 
 // Worker credentials are exact agent scopes. They confer neither owner backend
 // access nor authority over a different node's execution.
-export async function startNodeService({ journal, socketPath, workers, api, tasks, resolveBinding, getNativeModel, getHeadlessConnections, getHeadlessAccess, getHeadlessRecoveryConnection, getBackendFeatures, maintenance = () => false }) {
+export async function startNodeService({ journal, socketPath, workers, api, tasks, resolveBinding, getNativeModel, getHeadlessConnections, getHeadlessAccess, getBackendFeatures, maintenance = () => false }) {
   tasks ??= api ? { ...nativeTasksProvider(api), type: 'native' } : null;
   requireValue(!existsSync(socketPath), 'socket_exists', 'Node socket already exists. Verify the old service before removing it');
   const server = createServer(async (req, res) => {
@@ -53,7 +52,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       catch { throw new RelayError('invalid_json', 'JSON request required'); }
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
       const path = new URL(req.url, 'http://node').pathname;
-    const readOnly = ['/agent/interactive-repair-preview', '/agent/headless-connection-preview', '/agent/interactive-reconcile-preview', '/agent/headless-contract-preview', '/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
+    const readOnly = ['/agent/interactive-repair-preview', '/agent/interactive-reconcile-preview', '/agent/headless-contract-preview', '/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
         '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/task-identity', '/agent/comments', '/agent/relations',
         '/agent/questions', '/agent/messages', '/agent/message', '/agent/headless-status', '/agent/headless-grants', '/agent/headless-access', '/agent/headless-connections'];
       requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
@@ -94,34 +93,6 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         if (!op) { requireValue(!setup.contract, 'job_contract_missing', 'Pinned instruction state is missing'); return; }
         return inspectContract(journal, setup, grant);
       };
-      if (['/agent/headless-connection-preview', '/agent/headless-connection-rebind'].includes(path)) {
-        currentReceiver();
-        requireValue(api && !worker.headlessSetupId && (await getBackendFeatures?.())?.headlessConnectionRebind,
-          'backend_upgrade_required', 'A connection-rebind capable backend and the original interactive coordinator are required');
-        requireValue(Object.keys(body).every(k => ['setupId', 'key', 'previewHash'].includes(k)) && typeof body.setupId === 'string',
-          'invalid_connection_rebind', 'Exact setup and connection preview required');
-        const apply = path.endsWith('rebind'), key = `connection-rebind:${worker.agentId}:${body.key}`;
-        const previous = apply && journal.receipt(key);
-        if (previous) {
-          requireValue(previous.command.payload.payload.setupId === body.setupId && previous.command.payload.payload.previewHash === body.previewHash,
-            'operation_conflict', 'Connection recovery key or preview changed');
-          await journal.flush(api);
-          res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(journal.receipt(key))); return;
-        }
-        requireValue(!journal.works().some(w => !abandonedWork(w) && ownsWork(w) && !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state)) &&
-          !journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain')").all().some(row => JSON.parse(row.data).bindingId === worker.bindingId),
-        'headless_human_context_required', 'Assigned work and peer notices cannot authorise connection recovery', 403);
-        const preview = await previewHeadlessConnection(journal, api, worker, body.setupId, getHeadlessRecoveryConnection);
-        let result = preview;
-        if (apply) {
-          requireValue(typeof body.key === 'string' && /^[A-Za-z0-9:_.-]{1,100}$/.test(body.key) && body.previewHash === preview.previewHash,
-            'stale_connection_preview', 'An immutable key and unchanged connection preview hash are required');
-          journal.queue({ key, action: 'agent.headless_connection_rebind', payload: { agentId: worker.agentId,
-            conversationId: worker.sessionId, bindingRevision: worker.bindingRevision, payload: connectionRebindCommand(preview) } });
-          await journal.flush(api); result = journal.receipt(key);
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
-      }
       if (['/agent/headless-contract-preview', '/agent/headless-contract-request'].includes(path)) {
         currentReceiver();
         requireValue(api && !worker.headlessSetupId && (await getBackendFeatures?.())?.headlessContractRevisions,
@@ -558,6 +529,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         }
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
+      requireValue(path.startsWith('/work/'), 'not_found', 'Unknown node route', 404);
       let work = journal.work(body.executionId);
       requireValue(ownsWork(work) && work.execution.runId === body.runId,
         'forbidden', 'Exact current worker execution required', 403);

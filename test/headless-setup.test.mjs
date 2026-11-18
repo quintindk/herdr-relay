@@ -52,6 +52,19 @@ test('new grants require boolean MCP and shell permissions and reject connector-
   assert.equal(f.store.all('headless_setup').length, 0); assert.equal(f.store.all('schedule').length, 0);
 });
 
+test('grants require the provider/model only and accept legacy connection metadata without rewriting it', t => {
+  const f = fixture(t), model = { providerID: 'provider', id: 'model' };
+  const grant = f.command(f.owner, 'provider-model', 'headless.grant', { ...f.grant, model });
+  assert.deepEqual(grant.model, model);
+  const legacy = f.command(f.owner, 'legacy-model', 'headless.grant', { ...f.grant, id: 'legacy-grant' });
+  assert.deepEqual(legacy.model, f.grant.model);
+  for (const [index, invalid] of [{ id: 'model' }, { providerID: 'provider' }, { ...model, connectionId: '' },
+    { ...model, account: 'unapproved-field' }].entries()) {
+    assert.throws(() => f.command(f.owner, `bad-model-${index}`, 'headless.grant', { ...f.grant, id: `invalid-${index}`, model: invalid }),
+      { code: 'invalid_headless_setup' });
+  }
+});
+
 test('only successful probe evidence activates one schedule, and revocation pauses it without borrowing owner context', t => {
   const f = fixture(t), { command: c, owner, node, grant, request, store } = f;
   grant.schedule.runResultNotifications = { inbox: true, requester: false };
@@ -95,7 +108,7 @@ test('connection checks pin only the model, expose no secrets and do not couple 
     credential: { list: () => assert.fail('Credential list includes secrets') }, model: { list: async () => ({ data: [{ providerID: 'provider', id: 'model' }] }) },
     mcp: { list: async () => ({ data: [{ name: 'arbitrary', status: { status } }] }) }, tool: { hook() {}, list: async () => [{ id: 'arbitrary_read', options: { namespace: 'arbitrary' } }] } };
   const result = await checkHeadlessAccess(ctx, refs); assert.equal(result.allowed, true); assert.doesNotMatch(JSON.stringify(result), /NEVER-EXPOSE/);
-  active = 'other'; assert.equal((await checkHeadlessAccess(ctx, refs)).blocker, 'model_connection_changed');
+  active = 'other'; assert.deepEqual(await checkHeadlessAccess(ctx, refs), result, 'The same provider automatically uses its active sign-in');
   active = 'selected'; status = 'needs_auth'; const unavailable = await checkHeadlessAccess(ctx, refs);
   assert.equal(unavailable.allowed, true); assert.deepEqual(unavailable.mcpToolIds, []);
 });

@@ -9,7 +9,7 @@
   generation. Directory visibility and matching display names confer no authority.
 - An accepted execution receives its own worker scope. It cannot borrow a human
   operator credential to escape that scope.
-- Headless grants name the original coordinator, job contract, model connection,
+- Headless grants name the original coordinator, job contract, provider and model,
   tool permissions and optional task/artefact capabilities.
 
 Keep credential/configuration files outside the checkout with mode `0600`. Never
@@ -34,6 +34,13 @@ execution; unrelated notices do not acquire that execution's authority.
 MCP permission is a general capability, including write-capable and subsequently
 configured tools. It is not a per-connector read-only sandbox. MCP authentication
 remains separate from Relay grant approval.
+
+All headless jobs follow the current active OpenCode connection for their approved
+provider. A changed account, credential ID or authentication client is accepted
+automatically, without an opt-in or original coordinator. The active account can
+therefore receive the job's model prompts and incur its model usage. Legacy
+connection references are historical metadata, not security boundaries. This does
+not permit another provider/model, revive revoked grants or change tool permissions.
 
 Explicit native shell permission is **full OS-user process/filesystem access**,
 including writes outside the workspace. Artefact-path restrictions apply to the
