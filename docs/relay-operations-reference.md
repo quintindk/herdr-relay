@@ -140,7 +140,7 @@ running release's supported commands.
 - `relay_headless_connections` discovers non-secret existing model/MCP
   connection references, not authority. An enrolled interactive coordinator can use
   `relay_headless_grant` to create its own node/workspace grant with explicit job
-  contract, model connection, MCP/shell permissions and schedule. No backend-owner
+  contract, provider/model, MCP/shell permissions and schedule. No backend-owner
   context, parent execution or manual transfer to the backend host is needed.
   Requester, node and workspace are inferred; supplied values must match. Use a
   stable key and reconcile existing grants before creating another operation.
@@ -155,22 +155,21 @@ running release's supported commands.
   OpenCode service. No credential store is copied and no second login is needed.
   Model, native permission inspection and result submission must actually pass before
   activation. A request receipt or `awaiting_schedule_ack` is not successful setup.
-- A stale model sign-in is not model unavailability. `model_connection_changed`
-  means the current active credential identity differs from the pinned connection.
-  Under explicit human instruction, the original destination-local coordinator
-  uses `relay_headless_connection` to preview, then apply with `setupId`, an immutable
-  `key` and the exact `previewHash`. CLI: `headless connection-preview|connection-rebind
-  --file JSON`. The backend must advertise `headlessConnectionRebind`; older nodes
-  require a Relay upgrade, not a credential workaround or OpenCode restart.
-  This changes only the connection pin for the same provider/integration/model,
-  preserving worker, session, permissions, instructions, cron and notifications.
-  Inspect status for fresh readiness and the next firing. Readiness is not a sweep.
-  Never replace the setup, replay failed business work or clear uncertain evidence.
+- All headless jobs automatically follow the active connection for their approved
+  provider/model, including a changed account or authentication client. No opt-in,
+  original coordinator, manual rebind, grant rewrite or schedule recreation is needed.
+  Legacy connection references are metadata only. The node also recovers old
+  authentication-only setup blocks once access returns, using bounded readiness
+  and backend `activeProviderConnections` support. Paused schedules remain paused.
+  Missing/unhealthy active authentication or a missing approved model still blocks
+  access. Never fall back to another provider/model, replace a setup, replay failed
+  business work or clear uncertain evidence. Manual connection-rebind tools and
+  commands have been removed.
 - Headless grants explicitly allow or deny MCP as a capability. Use
   `relay_headless_permissions`, `relay_mcp_tools` and `relay_mcp_call`, not a connector-specific bridge. MCP allowed
   includes write-capable and subsequently configured tools. It grants no native
   shell, arbitrary file writes or generic Code Mode execution. Do not use those
-  as workarounds. Revoked grants, changed model connections and changed contracts
+  as workarounds. Revoked grants, unavailable provider access and changed contracts
   fail closed. Do not automatically repeat uncertain external effects.
 - A separate `permissions.shell:true` explicitly allows `relay_shell_call` using
   the native shell schema. This is full OS-user access, including writes outside
@@ -297,7 +296,7 @@ running release's supported commands.
   must match its native history. Selection alone grants no work or operator access.
   Model control is recorded separately from human input and fences stale outcomes.
   Scheduled/headless jobs, standing monitors and profile/workspace changes remain
-  excluded. Never use this policy to change a headless model or authentication pin.
+  excluded. Never use this policy to change a headless provider/model or permissions.
 - For an older `concurrent_native_input` conflict, use
   `relay_interactive_reconcile` to preview the exact execution, then apply its
   returned hash under a current human request and immutable key. It retains the

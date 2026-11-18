@@ -34,7 +34,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'skills/herdr-relay/SKILL.md', 'skills/relay-work/SKILL.md',
   'src/headless-setup-contract.mjs', 'src/node-headless-setup.mjs', 'src/headless-setup-wait.mjs', 'packages/opencode-relay/headless-access.mjs',
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
-  'src/headless-permissions.mjs', 'src/headless-connection.mjs', 'src/node-headless-connection.mjs', 'packages/opencode-relay/headless-mcp.mjs',
+  'src/headless-permissions.mjs', 'packages/opencode-relay/headless-mcp.mjs',
   'src/task-identity.mjs',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/release-setup.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
@@ -60,7 +60,8 @@ const sha = path => createHash('sha256').update(readFileSync(path)).digest('hex'
 if (existsSync(artifact)) assert.equal(sha(artifact), sha(join(staging, packed.filename)), 'This version already has different artifact bytes. Increment the candidate version; never overwrite a release artifact.');
 else copyFileSync(join(staging, packed.filename), artifact, constants.COPYFILE_EXCL);
 assert.ok(!packed.files.some(file => ['src/remote.mjs', 'src/remote-adapter.mjs'].includes(file.path)), 'Retired SSH execution is still packaged');
-assert.ok(!packed.files.some(file => ['src/task-identity-migration.mjs', 'scripts/migrate-task-references.mjs', 'src/native-board-cli.mjs'].includes(file.path)), 'Retired migration or duplicate entrypoints must never ship');
+assert.ok(!packed.files.some(file => ['src/task-identity-migration.mjs', 'scripts/migrate-task-references.mjs', 'src/native-board-cli.mjs',
+  'src/headless-connection.mjs', 'src/node-headless-connection.mjs'].includes(file.path)), 'Retired migrations, duplicate entrypoints or manual connection-rebind handlers must never ship');
 assert.ok(!packed.files.some(file => /scripts\/(?:upgrade-baseline-fixture|historical-upgrade-fixture)\.mjs$/.test(file.path)), 'Test-only baseline installer must never ship');
 assert.ok(!packed.files.some(file => file.path === 'scripts/verify-installer-handover.mjs'), 'Synthetic future-release regression tooling must not ship');
 mkdirSync(consumer);

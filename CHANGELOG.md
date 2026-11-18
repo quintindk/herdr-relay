@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.11 — 18 November 2026
+
+- Always use the active OpenCode connection for a headless job's approved provider
+  and model. Account, credential and authentication-client changes need no opt-in,
+  original coordinator, manual rebind, grant rewrite or schedule recreation.
+- Accept provider/model-only grants. Existing integration and connection references
+  remain readable as historical metadata, not authentication pins. Follow healthy
+  credential and environment connections without resolving or copying secrets.
+- Let the owning node recover authentication-only setup blocks when access returns.
+  Preserve worker/session identities, paused schedules, revocation, permissions and
+  existing work. Never retry failed business effects or unrelated readiness failures.
+- Remove the manual connection-rebind tool, CLI commands and node/backend handlers.
+  Update the managed skill and operational guides to use automatic authentication.
+
 ## 0.2.10 — 15 November 2026
 
 - Add `relay_owner_message` and the scoped `native work owner-message` CLI for

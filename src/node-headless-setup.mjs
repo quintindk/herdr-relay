@@ -5,7 +5,7 @@ import { NativeReceivers } from './native-receivers.mjs';
 import { nativeConnection } from './native-enrol.mjs';
 import { writePrivateJson } from './private-files.mjs';
 import { HeadlessAccess, accessReferences } from '../packages/opencode-relay/headless-access.mjs';
-import { setupTerminal, headlessProbeId } from './headless-setup-contract.mjs';
+import { setupTerminal, headlessProbeId, headlessAccessBlockers } from './headless-setup-contract.mjs';
 import { headlessSessionPermissions } from './headless-permissions.mjs';
 import { inspectContract } from './node-headless-contract.mjs';
 
@@ -20,7 +20,8 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
   const records = new NativeReceivers(journal);
   const native = dependencies.native ?? (() => nativeConnection({ serviceRegistration: config.headless?.serviceRegistration }));
   for (const setup of records.list('headless-setup')) {
-    if (setupTerminal.includes(setup.state)) continue;
+    const recoveringAccess = setup.state === 'blocked' && headlessAccessBlockers.includes(setup.blocker);
+    if (setupTerminal.includes(setup.state) && !recoveringAccess) continue;
     let op = records.get(`headless-op:${setup.id}`) ?? { phase: 'requested', attempt: setup.attempt ?? 1 };
     if ((setup.attempt ?? 1) > (op.attempt ?? 1)) op = { ...op, attempt: setup.attempt, phase: op.binding ? 'binding' : 'requested' };
     const save = patch => { op = records.put(`headless-op:${setup.id}`, { ...op, ...patch }); };
@@ -41,6 +42,19 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
       requireValue(existsSync(contract) && realpathSync(contract) === contract && statSync(contract).isFile(), 'job_contract_missing', 'Exact workspace job skill must exist without symlink redirection');
       const contractDigest = digest(readFileSync(contract, 'utf8'));
       requireValue(!op.contractDigest || op.contractDigest === contractDigest, 'job_contract_changed', 'Job contract changed during setup; do not activate against stale approval');
+      if (recoveringAccess) {
+        // The owning node recovers access without a live coordinator or grant
+        // rewrite. Never retry a business run or an unrelated readiness failure.
+        if (!(await api('GET', '/v1/info')).features?.activeProviderConnections) continue;
+        const existing = async path => {
+          try { return await api('GET', path); } catch (error) { if (error.status !== 404) throw error; return null; }
+        };
+        const probe = await existing(`/v1/executions/${headlessProbeId(setup)}`);
+        if (probe && !['completed', 'cancelled', 'failed', 'rejected'].includes(probe.state)) continue;
+        if ((await existing(`/v1/schedules/${setup.scheduleId}`))?.cancelled) continue;
+        await command('headless.retry_access', { id: setup.id, expectedRevision: setup.revision });
+        save({ blocker: null }); continue;
+      }
       if (op.phase === 'requested') {
         const permissions = headlessSessionPermissions(grant, (check.mcpToolIds ?? []).map(id => ({ id })));
         let session;
@@ -100,6 +114,7 @@ export async function tickHeadlessSetups(journal, api, config, load, resolveBind
       }
     } catch (error) {
       if (['headless_publication_pending', 'headless_not_ready'].includes(error.code)) continue;
+      if (recoveringAccess && (!error.code || error.status >= 500 || [...headlessAccessBlockers, 'headless_grant_inactive', 'headless_probe_unsettled'].includes(error.code))) continue;
       const blocker = /^[a-z][a-z0-9_]{1,95}$/.test(error.code ?? '') ? error.code : 'native_setup_unavailable';
       // No raw errors, provider bodies, credential material or MCP content is published.
       await command('headless.block', { id: setup.id, reason: blocker });

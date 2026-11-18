@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { BackendStore } from '../src/backend-store.mjs';
 import { NodeJournal } from '../src/node-journal.mjs';
-import { headlessAuthority, headlessProbeId } from '../src/headless-setup-contract.mjs';
-import { connectionRebindCommand } from '../src/node-headless-connection.mjs';
-import { tickHeadlessSetups } from '../src/node-headless-setup.mjs';
+import { headlessAuthority, headlessProbeId, headlessRunAuthority, headlessAccessBlockers } from '../src/headless-setup-contract.mjs';
+import { assertHeadlessAccess, tickHeadlessSetups } from '../src/node-headless-setup.mjs';
+import { checkHeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
 import { tickAutomation, reconcileScheduleDefinitions } from '../src/node-automation.mjs';
 import { startNodeService } from '../src/node-service.mjs';
 import { call } from '../src/client.mjs';
@@ -41,31 +42,35 @@ async function fixture(t) {
     sessionPermissions: [{ action: '*', resource: '*', effect: 'deny' }] };
   journal.db.prepare('INSERT INTO settings VALUES (?,?)').run(`headless-op:${setup.id}`, JSON.stringify({ binding, attempt: 1, phase: 'ready', contractDigest: digest('Approved sweep instructions') }));
   const api = async (method, path, body) => {
+    if (path === '/v1/headless/read') return headlessRunAuthority(store, node, body);
     if (method === 'POST') return store.command(node, body);
-    if (path === '/v1/info') return { features: { headlessConnectionRebind: true, headlessSetup: true, scheduledHeadlessAdmission: true, headlessContractRevisions: true } };
+    if (path === '/v1/info') return { features: { activeProviderConnections: true, headlessSetup: true, scheduledHeadlessAdmission: true, headlessContractRevisions: true } };
     if (path.startsWith('/v1/events')) return store.events({ cursor: new URL(path, 'http://fixture').searchParams.get('cursor') ?? undefined });
     if (path.endsWith('/authority')) return headlessAuthority(store, node, path.split('/')[3]);
     const [, , collection, id] = path.split('/'); return store.get(collection.slice(0, -1), decodeURIComponent(id));
   };
   await journal.poll(api); reconcileScheduleDefinitions(journal); await journal.flush(api);
   journal.save({ id: firstProbe.id, state: 'settled', execution: completed });
-  const f = { root, store, owner, node, command, grant, setup, journal, api, binding, contract, active: 'current-sign-in', idle: true, access: true, modelAvailable: true, sends: 0 };
+  const f = { root, store, owner, node, command, grant, setup, journal, api, binding, contract, active: 'current-sign-in',
+    integrationID: grant.model.integrationID, idle: true, access: true, modelAvailable: true, sends: 0 };
+  const accessContext = { session: { hook() {}, update() {} }, tool: { hook() {}, list: async () => [] },
+    provider: { get: async () => ({ data: { integrationID: f.integrationID } }) },
+    integration: { connection: { active: async () => f.access ? { type: 'credential', id: f.active } : null } },
+    model: { list: async () => ({ data: f.modelAvailable ? [{ providerID: grant.model.providerID, id: grant.model.id }] : [] }) },
+    mcp: { list: async () => ({ data: [] }) } };
   const client = { session: {
     get: async () => ({ id: identity.sessionId, projectID: identity.projectId, location: { directory: root }, time: { created: identity.createdAt }, model: { providerID: grant.model.providerID, id: grant.model.id } }),
     active: async () => f.idle ? {} : { [identity.sessionId]: {} }, inbox: { list: async () => [] },
     create: () => assert.fail('Never create another worker session'), update: () => assert.fail('Never change session permissions or model'),
   }, message: { list: async () => ({ data: [], cursor: { next: null } }) }, rpc: () => ({
     inspect: async () => ({ models: f.modelAvailable ? [{ ...grant.model, connectionId: f.active }] : [], servers: [] }),
-    check: async refs => ({ allowed: f.access && refs.model.connectionId === f.active, blocker: f.access ? 'model_connection_changed' : 'model_connection_unavailable', accessDigest: digest(refs), mcpToolIds: [] }),
+    check: refs => checkHeadlessAccess(accessContext, refs),
   }) };
   f.native = async () => ({ client, url: binding.url });
   const worker = { agentId: 'mason', sessionId: 'coordinator-session', bindingId: 'coordinator-binding', bindingRevision: 1, socketPath: join(root, 'node.sock'), token: 'worker' };
   const service = await startNodeService({ journal, api, socketPath: worker.socketPath, workers: [worker], getBackendFeatures: async () => (await api('GET', '/v1/info')).features,
-    getHeadlessRecoveryConnection: f.native, getHeadlessAccess: async () => {
-      assert.equal(store.get('headless_grant', grant.id).model.connectionId, f.active); return {};
-    } });
-  Object.assign(f, { worker, preview: () => call(worker, 'POST', '/agent/headless-connection-preview', { setupId: setup.id }),
-    apply: async (preview, key = 'rebind') => call(worker, 'POST', '/agent/headless-connection-rebind', { setupId: setup.id, previewHash: preview.previewHash, key }),
+    getHeadlessAccess: () => assertHeadlessAccess(api, client, setup.id, root) });
+  Object.assign(f, { client, worker,
     tick: async () => { await journal.poll(api); await tickHeadlessSetups(journal, api, { identityVersion: 2 }, async entry => {
       assert.deepEqual(entry, binding); return binding;
     }, async () => ({ ...binding, native: { snapshot: async () => f.probeSnapshot } }), { native: f.native }); },
@@ -85,102 +90,103 @@ async function fixture(t) {
   return f;
 }
 
-test('connection recovery preserves the existing worker, native session, permissions, instructions, cron and reporting', async t => {
-  const f = await fixture(t), beforeGrant = structuredClone(f.grant), beforeSetup = structuredClone(f.setup), beforeSchedule = f.store.get('schedule', 'sweep');
-  const failed = { id: 'failed-business-run', state: 'settled', execution: { id: 'failed-business-run', state: 'failed', targetAgentId: f.setup.agentId },
-    invocation: { messageId: 'original-failed-prompt', runId: 'failed-run', prompt: 'Do not replay this business work' }, observation: { state: 'finished', outcome: 'failed', messageId: 'failed-idle' } };
-  f.journal.save(failed);
-  const before = f.journal.db.prepare('SELECT * FROM work WHERE id=?').get(failed.id);
-  const preview = await f.preview();
-  assert.equal(preview.fromConnectionId, 'old-sign-in'); assert.equal(preview.toConnectionId, 'current-sign-in');
-  assert.equal(f.store.get('headless_grant', f.grant.id).revision, 1, 'Preview is read-only');
-  const receipt = await f.apply(preview); assert.equal(receipt.state, 'recorded');
-  const rebound = f.store.get('headless_setup', f.setup.id), grant = f.store.get('headless_grant', f.grant.id);
-  assert.equal(grant.model.connectionId, f.active); assert.equal(grant.revision, 2); assert.equal(rebound.grantRevision, 2);
-  assert.equal(rebound.state, 'requested'); assert.equal(rebound.attempt, 2);
-  f.command('business-task', 'task.create', { id: 'business-task', title: 'Must not start during readiness' });
-  assert.throws(() => f.command('business-request', 'execution.request', { id: 'business-request', taskId: 'business-task', taskRevision: 1,
-    targetAgentId: f.setup.agentId, instructions: 'Must wait for readiness' }), { code: 'headless_not_ready' });
-  for (const field of ['id', 'agentId', 'sessionId', 'bindingId', 'grantId', 'scheduleId', 'contract', 'appliedContractRevision']) assert.deepEqual(rebound[field], beforeSetup[field]);
-  for (const field of ['permissions', 'capabilities', 'contract', 'schedule', 'expiresAt', 'issuedBy', 'directory', 'requesterAgentId']) assert.deepEqual(grant[field], beforeGrant[field]);
-  assert.deepEqual(f.store.get('schedule', 'sweep'), beforeSchedule);
-  await f.tick(); await f.tick(); f.completeProbe(); await f.tick();
-  const ready = f.store.get('headless_setup', f.setup.id);
-  assert.equal(ready.state, 'ready'); assert.equal(ready.connectionRebind.state, 'ready');
-  assert.equal(ready.readiness.nativeTerminalId, 'probe-idle');
-  assert.deepEqual(f.store.get('schedule', 'sweep'), beforeSchedule, 'Readiness must not reinstall or revise the schedule');
-  assert.deepEqual(f.journal.db.prepare('SELECT * FROM work WHERE id=?').get(failed.id), before);
-  assert.equal(readFileSync(join(f.root, f.contract), 'utf8'), 'Approved sweep instructions');
-  assert.equal(f.store.all('headless_grant').length, 1); assert.equal(f.store.all('headless_setup').length, 1);
-  const retry = await f.apply(preview); assert.deepEqual(retry, receipt);
-  assert.equal(f.store.get('headless_setup', f.setup.id).attempt, 2);
-  const status = await call(f.worker, 'POST', '/agent/headless-status', { id: f.setup.id });
-  assert.equal(status.state, 'ready'); assert.ok(Date.parse(status.nextFiring) > Date.now());
-});
-
-test('rebind preview and apply reject stale sign-ins, scope changes, native activity and unsettled publications', async t => {
-  const f = await fixture(t), preview = await f.preview();
-  f.active = 'another-sign-in'; await assert.rejects(f.apply(preview), { code: 'stale_connection_preview' });
-  f.active = 'current-sign-in'; f.idle = false; await assert.rejects(f.preview(), { code: 'headless_rebind_busy' });
-  f.idle = true; f.modelAvailable = false; await assert.rejects(f.preview(), { code: 'model_connection_unavailable' });
-  f.modelAvailable = true;
-  const payload = connectionRebindCommand(preview);
-  assert.throws(() => f.command('expand', 'headless.connection_rebind', { ...payload, permissions: { shell: true } }), { code: 'invalid_connection_rebind' });
-  f.journal.save({ id: 'uncertain', state: 'uncertain', execution: { state: 'failed', targetAgentId: f.setup.agentId } });
-  await assert.rejects(f.preview(), { code: 'headless_rebind_busy' });
-  f.journal.save({ id: 'uncertain', state: 'settled', execution: { state: 'failed', targetAgentId: f.setup.agentId } });
-  f.journal.queue({ key: 'uncertain-write', action: 'headless.task', payload: { executionId: 'uncertain' } });
-  await assert.rejects(f.preview(), { code: 'headless_rebind_busy' });
-  assert.equal(f.store.get('headless_grant', f.grant.id).model.connectionId, 'old-sign-in');
-});
-
-test('backend fences wrong coordinators, revocation, stale schedule revisions and unsettled executions atomically', async t => {
-  const f = await fixture(t), preview = await f.preview(), payload = connectionRebindCommand(preview);
-  assert.throws(() => f.command('node-bypass', 'headless.connection_rebind', payload, f.node), { code: 'forbidden' });
-  assert.throws(() => f.command('wrong-chat', 'agent.headless_connection_rebind', { agentId: 'mason', conversationId: 'other', bindingRevision: 1, payload }, f.node), { code: 'headless_requester_scope' });
-  f.store.save('execution', { id: 'active', revision: 1, state: 'accepted', targetAgentId: f.setup.agentId });
-  assert.throws(() => f.command('active', 'headless.connection_rebind', payload), { code: 'headless_rebind_busy' });
-  f.store.save('execution', { id: 'active', revision: 2, state: 'failed', targetAgentId: f.setup.agentId });
-  f.command('pause', 'schedule.pause', { id: 'sweep', expectedRevision: 1 });
-  assert.throws(() => f.command('stale-schedule', 'headless.connection_rebind', payload), { code: 'stale_revision' });
-  f.command('revoke', 'headless.revoke', { id: f.grant.id, expectedRevision: 1 });
-  assert.throws(() => f.command('revoked', 'headless.connection_rebind', payload), { code: 'headless_grant_inactive' });
-  assert.equal(f.store.get('headless_grant', f.grant.id).model.connectionId, 'old-sign-in');
-});
-
-test('lost committed rebind replies reconcile the same key without another attempt or credential change', async t => {
-  const f = await fixture(t), preview = await f.preview();
-  const original = f.journal.flush.bind(f.journal); let lost = false;
-  f.journal.flush = async api => original(async (method, path, body) => {
-    const result = await api(method, path, body);
-    if (body?.action === 'agent.headless_connection_rebind' && !lost) { lost = true; throw Error('Lost committed reply'); }
-    return result;
-  });
-  await assert.rejects(f.apply(preview), { code: 'node_error' });
-  assert.equal(f.journal.receipt('connection-rebind:mason:rebind').state, 'pending');
-  assert.equal(f.store.get('headless_setup', f.setup.id).attempt, 2);
-  assert.equal((await f.apply(preview)).state, 'recorded');
-  assert.equal(f.store.get('headless_setup', f.setup.id).attempt, 2);
-  assert.equal(f.store.get('headless_grant', f.grant.id).revision, 2);
-});
-
-test('readiness failure keeps the original schedule fenced and paused settings are never resumed', async t => {
+test('active provider authentication changes need no rebind, idle boundary, clean outbox or live coordinator', async t => {
   const f = await fixture(t);
-  f.command('pause', 'schedule.pause', { id: 'sweep', expectedRevision: 1 });
-  const before = f.store.get('schedule', 'sweep'), preview = await f.preview();
-  await f.apply(preview); f.access = false; await f.tick();
-  assert.equal(f.store.get('headless_setup', f.setup.id).state, 'blocked');
-  assert.deepEqual(f.store.get('schedule', 'sweep'), before);
-  f.access = true;
-  f.command('retry-readiness', 'headless.request', { grantId: f.grant.id, requesterAgentId: 'mason', sourceConversationId: 'coordinator-session', sourceBindingRevision: 1, retry: true }, f.node);
-  await f.tick(); await f.tick(); f.completeProbe(); await f.tick();
-  assert.equal(f.store.get('headless_setup', f.setup.id).state, 'ready');
-  assert.deepEqual(f.store.get('schedule', 'sweep'), before);
-  assert.equal((await call(f.worker, 'POST', '/agent/headless-status', { id: f.setup.id })).nextFiring, null);
+  const before = { grant: f.store.get('headless_grant', f.grant.id), setup: f.store.get('headless_setup', f.setup.id), schedule: f.store.get('schedule', 'sweep') };
+  f.journal.db.prepare("DELETE FROM settings WHERE key='receiver:mason'").run();
+  f.idle = false;
+  f.store.save('execution', { id: 'existing-business', revision: 1, state: 'accepted', targetAgentId: f.setup.agentId });
+  f.journal.save({ id: 'existing-business', state: 'uncertain', execution: f.store.get('execution', 'existing-business'), invocation: { messageId: 'original-prompt' } });
+  f.journal.queue({ key: 'uncertain-business-effect', action: 'headless.task', payload: { executionId: 'existing-business' } });
+  const work = f.journal.db.prepare('SELECT * FROM work WHERE id=?').get('existing-business');
+  const publication = f.journal.db.prepare('SELECT * FROM outbox WHERE key=?').get('uncertain-business-effect');
+  for (const [integrationID, active] of [['github-copilot', 'second-sign-in'], ['replacement-auth-client', 'third-sign-in']]) {
+    f.integrationID = integrationID; f.active = active;
+    assert.equal((await assertHeadlessAccess(f.api, f.client, f.setup.id, f.root)).check.allowed, true);
+  }
+  assert.deepEqual(f.store.get('headless_grant', f.grant.id), before.grant);
+  assert.deepEqual(f.store.get('headless_setup', f.setup.id), before.setup);
+  assert.deepEqual(f.store.get('schedule', 'sweep'), before.schedule);
+  assert.deepEqual(f.journal.db.prepare('SELECT * FROM work WHERE id=?').get('existing-business'), work);
+  assert.deepEqual(f.journal.db.prepare('SELECT * FROM outbox WHERE key=?').get('uncertain-business-effect'), publication);
 });
 
-test('connection recovery skips pre-readiness pending ticks and backend admission rejects their replay', async t => {
-  const f = await fixture(t), preview = await f.preview(); await f.apply(preview);
+test('an unchanged cron admits its next run after changing the active connection with the coordinator offline', async t => {
+  const f = await fixture(t), beforeGrant = f.store.get('headless_grant', f.grant.id), beforeSetup = f.store.get('headless_setup', f.setup.id);
+  f.journal.db.prepare("DELETE FROM settings WHERE key='receiver:mason'").run();
+  f.active = 'replacement-sign-in'; f.integrationID = 'replacement-auth-client';
+  const local = JSON.parse(f.journal.db.prepare("SELECT data FROM schedules WHERE id='sweep'").get().data);
+  const snapshot = { idle: true, inbox: [], messages: [] };
+  const binding = { ...f.binding, native: { snapshot: async () => snapshot, send: async () => {
+    await assertHeadlessAccess(f.api, f.client, f.setup.id, f.root); f.sends++;
+  } }, observe: () => ({ state: 'running' }) };
+  await tickAutomation(f.journal, async () => binding, Date.parse(local.nextAt), f.api);
+  const id = `occurrence_${digest(['sweep', local.nextAt])}`;
+  assert.equal(f.store.get('execution', id).state, 'accepted'); assert.equal(f.sends, 1);
+  assert.equal(f.journal.work(id).invocation.messageId.startsWith('msg_'), true);
+  assert.deepEqual(f.store.get('headless_grant', f.grant.id), beforeGrant);
+  assert.deepEqual(f.store.get('headless_setup', f.setup.id), beforeSetup);
+  assert.equal(f.store.get('schedule', 'sweep').revision, 1);
+});
+
+test('the node automatically recovers legacy auth-only blocks without its coordinator or changing paused schedules', async t => {
+  for (const reason of headlessAccessBlockers) await t.test(reason, async t => {
+    const f = await fixture(t);
+    f.journal.db.prepare("DELETE FROM settings WHERE key='receiver:mason'").run();
+    f.command('pause', 'schedule.pause', { id: 'sweep', expectedRevision: 1 });
+    const schedule = f.store.get('schedule', 'sweep'), grant = f.store.get('headless_grant', f.grant.id);
+    f.command('auth-block', 'headless.block', { id: f.setup.id, reason }, f.node);
+    await f.tick();
+    const requested = f.store.get('headless_setup', f.setup.id);
+    assert.equal(requested.state, 'requested'); assert.equal(requested.attempt, 2);
+    assert.deepEqual(f.store.get('headless_grant', f.grant.id), grant);
+    await f.tick(); await f.tick(); f.completeProbe(); await f.tick();
+    const ready = f.store.get('headless_setup', f.setup.id);
+    assert.equal(ready.state, 'ready'); assert.equal(ready.agentId, f.setup.agentId); assert.equal(ready.sessionId, f.setup.sessionId);
+    assert.equal(ready.connectionRebind, undefined);
+    assert.deepEqual(f.store.get('schedule', 'sweep'), schedule);
+    assert.equal(f.store.all('headless_setup').length, 1); assert.equal(f.store.all('headless_grant').length, 1);
+  });
+});
+
+test('automatic access recovery leaves revoked grants, cancelled schedules, unsettled readiness and other failures alone', async t => {
+  for (const condition of ['unavailable', 'revoked', 'cancelled', 'unsettled', 'other-failure']) await t.test(condition, async t => {
+    const f = await fixture(t), reason = condition === 'other-failure' ? 'readiness_execution_failed' : 'model_connection_changed';
+    f.command('auth-block', 'headless.block', { id: f.setup.id, reason }, f.node);
+    if (condition === 'unavailable') f.access = false;
+    if (condition === 'revoked') f.command('revoke', 'headless.revoke', { id: f.grant.id, expectedRevision: 1 });
+    if (condition === 'cancelled') f.command('cancel', 'schedule.cancel', { id: 'sweep', expectedRevision: 1, reason: 'Human cancelled' });
+    if (condition === 'unsettled') {
+      const probe = f.store.get('execution', headlessProbeId(f.setup));
+      f.store.save('execution', { ...probe, state: 'accepted' });
+    }
+    const before = f.store.get('headless_setup', f.setup.id), publications = f.journal.db.prepare('SELECT count(*) n FROM outbox').get().n;
+    await f.tick(); await f.tick();
+    assert.deepEqual(f.store.get('headless_setup', f.setup.id), before);
+    assert.equal(f.journal.db.prepare('SELECT count(*) n FROM outbox').get().n, publications);
+  });
+});
+
+test('backend access recovery is owning-node-only, revisioned and cannot retry other failures or active probes', async t => {
+  const f = await fixture(t);
+  let blocked = f.command('auth-block', 'headless.block', { id: f.setup.id, reason: 'model_connection_changed' }, f.node);
+  const payload = { id: blocked.id, expectedRevision: blocked.revision };
+  assert.throws(() => f.command('owner-retry', 'headless.retry_access', payload), { code: 'forbidden' });
+  assert.throws(() => f.command('stale-retry', 'headless.retry_access', { ...payload, expectedRevision: 1 }, f.node), { code: 'stale_revision' });
+  const probe = f.store.get('execution', headlessProbeId(f.setup));
+  f.store.save('execution', { ...probe, state: 'accepted' });
+  assert.throws(() => f.command('active-retry', 'headless.retry_access', payload, f.node), { code: 'headless_probe_unsettled' });
+  f.store.save('execution', probe);
+  blocked = f.command('other-block', 'headless.block', { id: f.setup.id, reason: 'readiness_execution_failed' }, f.node);
+  assert.throws(() => f.command('other-retry', 'headless.retry_access', { ...payload, expectedRevision: blocked.revision }, f.node), { code: 'headless_access_retry_ineligible' });
+});
+
+test('pre-upgrade connection-recovery records still fence old ticks without retaining a rebind operation', async t => {
+  const f = await fixture(t);
+  const historical = f.store.save('headless_setup', { ...f.setup, revision: f.setup.revision + 1, state: 'requested', attempt: 2,
+    connectionRebind: { state: 'checking' } });
+  f.store.event('headless.connection_rebind', historical, f.node, 'historical-recovery');
+  await f.journal.poll(f.api);
   const local = JSON.parse(f.journal.db.prepare('SELECT data FROM schedules WHERE id=?').get('sweep').data);
   const intendedAt = new Date(Date.now() - 30000).toISOString(), id = `occurrence_${digest(['sweep', intendedAt])}`;
   const occurrence = { id, scheduleId: 'sweep', intendedAt, definition: local.definition, state: 'pending' };
@@ -198,5 +204,45 @@ test('connection recovery skips pre-readiness pending ticks and backend admissio
   const nextAt = JSON.parse(f.journal.db.prepare('SELECT data FROM schedules WHERE id=?').get('sweep').data).nextAt;
   const nextId = `occurrence_${digest(['sweep', nextAt])}`;
   const next = f.command('new-admission', 'schedule.admit', { ...admission, id: nextId, intendedAt: nextAt, runId: `run_${digest(nextId)}` }, f.node);
-  assert.equal(next.state, 'accepted'); assert.equal(next.grantRevision, 2);
+  assert.equal(next.state, 'accepted'); assert.equal(next.grantRevision, 1);
+});
+
+test('removed rebind endpoints and backend commands cannot enqueue or mutate work', async t => {
+  const f = await fixture(t), before = f.store.get('headless_setup', f.setup.id);
+  const count = f.journal.db.prepare('SELECT count(*) n FROM outbox').get().n;
+  for (const path of ['/agent/headless-connection-preview', '/agent/headless-connection-rebind']) {
+    await assert.rejects(call(f.worker, 'POST', path, { setupId: f.setup.id }), { code: 'not_found' });
+  }
+  for (const action of ['headless.connection_rebind', 'agent.headless_connection_rebind']) {
+    assert.throws(() => f.command(`removed-${action}`, action, { setupId: f.setup.id }, f.node));
+  }
+  assert.deepEqual(f.store.get('headless_setup', f.setup.id), before);
+  assert.equal(f.journal.db.prepare('SELECT count(*) n FROM outbox').get().n, count);
+});
+
+test('removed connection-preview and connection-rebind CLI commands have no compatibility alias', () => {
+  for (const command of ['connection-preview', 'connection-rebind']) {
+    const result = spawnSync(process.execPath, ['src/cli.mjs', 'headless', command, '--file', '/never-read-removed-command.json'],
+      { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.equal(JSON.parse(result.stderr).code, 'invalid_request');
+    assert.doesNotMatch(result.stderr, /ENOENT|owner|credential/i, 'Removed commands fail before reading files or selecting credentials');
+  }
+});
+
+test('a lost automatic recovery reply reconciles without another setup attempt or a grant rewrite', async t => {
+  const f = await fixture(t);
+  f.command('auth-block', 'headless.block', { id: f.setup.id, reason: 'model_connection_changed' }, f.node);
+  const original = f.journal.flush.bind(f.journal); let lost = false;
+  f.journal.flush = async api => original(async (method, path, body) => {
+    const result = await api(method, path, body);
+    if (body?.action === 'headless.retry_access' && !lost) { lost = true; throw Error('Lost committed reply'); }
+    return result;
+  });
+  await f.tick();
+  assert.equal(lost, true);
+  assert.equal(f.store.get('headless_setup', f.setup.id).attempt, 2);
+  await f.tick();
+  assert.equal(f.store.get('headless_setup', f.setup.id).attempt, 2);
+  assert.equal(f.store.get('headless_grant', f.grant.id).revision, 1);
 });

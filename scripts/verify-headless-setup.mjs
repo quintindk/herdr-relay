@@ -20,15 +20,19 @@ import { nativeBoard } from '../src/native-board.mjs';
 import { NativeDecisionJournal } from '../src/native-decision-journal.mjs';
 import { digest } from '../src/protocol.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import { HeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
 
 process.umask(0o077);
+const flags = new Set(['--capabilities', '--agent-grant', '--run-result-notifications', '--cron', '--legacy-contract-refusal',
+  '--contract-update', '--connection-change', '--mcp-denied', '--shell', '--shell-denied']);
+for (const flag of process.argv.slice(2)) assert.ok(flags.has(flag), `Unsupported flag: ${flag}`);
 const capabilityMode = process.argv.includes('--capabilities');
 const agentGrantMode = process.argv.includes('--agent-grant');
 const notificationMode = process.argv.includes('--run-result-notifications');
 const cronMode = process.argv.includes('--cron') || notificationMode;
 const legacyRefusalMode = process.argv.includes('--legacy-contract-refusal');
 const contractMode = process.argv.includes('--contract-update') || legacyRefusalMode;
-const rebindMode = process.argv.includes('--connection-rebind');
+const connectionChangeMode = process.argv.includes('--connection-change');
 const mcpDenied = process.argv.includes('--mcp-denied');
 const shellAllowed = process.argv.includes('--shell'), shellMode = shellAllowed || process.argv.includes('--shell-denied');
 const root = mkdtempSync('/tmp/opencode/relay-headless-setup-'), workspace = join(root, 'workspace'), state = join(root, 'node');
@@ -38,6 +42,8 @@ mkdirSync(workspace); mkdirSync(state); mkdirSync(join(workspace, '.opencode/ski
 writeFileSync(join(workspace, '.opencode/skills/approved-job/SKILL.md'), 'Inspect the approved fixture only. Submit a native result.');
 let reads = 0, writes = 0, runtime, backend, daemon, log = '', shellDeniedHidden = false, grantProposal, contractProposal, contractPreviewHash, revisedContextSeen = false;
 let runResultMessages = 0;
+const modelAuthHeaders = [];
+let requestsBeforeConnectionChange = 0;
 const mcpSessions = [];
 const mcp = createServer(async (req, res) => {
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
@@ -58,6 +64,7 @@ const mcp = createServer(async (req, res) => {
   res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: result ?? {} }));
 });
 const model = createServer(async (req, res) => {
+  modelAuthHeaders.push(req.headers.authorization);
   let body = ''; for await (const chunk of req) body += chunk;
   const input = JSON.parse(body), last = input.messages.findLastIndex(m => m.role === 'user');
   if (JSON.stringify(input.messages[last]?.content).includes('Relay run result notification.')) {
@@ -83,7 +90,8 @@ const model = createServer(async (req, res) => {
     assert.match(JSON.stringify(input.messages.filter(m => m.role === 'system')), /REVISED_CONTRACT_FIXTURE/);
     assert.match(JSON.stringify(input.messages.filter(m => m.role === 'system')), /PINNED_PROTOCOL_FIXTURE/); revisedContextSeen = true;
   }
-  if (agentGrantMode && !grantTurn && !contractTurn) assert.equal(Boolean(input.tools?.some(t => ['relay_headless_grant', 'relay_headless_revoke', 'relay_headless_connection'].includes(t.function.name))), false,
+  assert.equal(input.tools?.some(t => t.function.name === 'relay_headless_connection'), false, 'The removed connection-rebind tool must never be advertised');
+  if (agentGrantMode && !grantTurn && !contractTurn) assert.equal(Boolean(input.tools?.some(t => ['relay_headless_grant', 'relay_headless_revoke'].includes(t.function.name))), false,
     'Headless workers must not acquire coordinator grant-management tools');
   if (!grantTurn && shellMode && !shellAllowed) {
     assert.equal(input.tools?.some(t => ['shell', 'relay_shell_call'].includes(t.function.name)), false, 'Denied shell must not be advertised');
@@ -146,11 +154,19 @@ try {
       mcp: { servers: { records: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false },
         ...(cronMode ? { actions: { type: 'remote', url: `http://127.0.0.1:${mcp.address().port}/mcp`, oauth: false } } : {}) } } } });
   const client = runtime.client;
+  // Provider integrations are registered lazily on newer OpenCode hosts. Only
+  // retry catalogue reads while that exact disposable provider initialises.
+  const provider = await wait('fixture model provider registration', async () => {
+    try { return (await client.provider.get({ providerID: 'openai', location: { directory: workspace } })).data; }
+    catch (error) {
+      if (error._tag !== 'ProviderNotFoundError') throw error;
+      await client.provider.list({ location: { directory: workspace } }); return null;
+    }
+  });
   const integrations = (await client.integration.list({ location: { directory: workspace } })).data;
   const modelIntegration = integrations.find(i => i.id === 'openai');
   assert.ok(modelIntegration, `Fixture model integration missing; available IDs: ${integrations.map(i => i.id).join(',')}`);
   await client.integration.connect.key({ integrationID: modelIntegration.id, key: 'fixture-authorised-key', location: { directory: workspace } });
-  const provider = (await client.provider.get({ providerID: 'openai', location: { directory: workspace } })).data;
   assert.ok(provider.integrationID, 'Fixture provider must expose an integration reference');
   const integration = (await client.integration.get({ integrationID: provider.integrationID, location: { directory: workspace } })).data;
   const connectionId = integration.connections.find(c => c.type === 'credential').id;
@@ -171,7 +187,7 @@ try {
   writeFileSync(registration, JSON.stringify({ url: runtime.descriptor.origin, password, version: (await client.server.info()).version, pid: runtime.descriptor.pid }));
   config.headless = { serviceRegistration: registration }; writeFileSync(joined.configFile, JSON.stringify(config));
   grantProposal = { id: 'approved-job-grant', requesterAgentId: coordinator.agentId, nodeId: joined.nodeId, name: 'approved-worker', directory: workspace,
-    model: { providerID: 'openai', id: 'fixture', integrationID: provider.integrationID, connectionId },
+    model: { providerID: 'openai', id: 'fixture' },
     permissions: { mcp: !mcpDenied, shell: shellAllowed }, contract: '.opencode/skills/approved-job/SKILL.md',
     schedule: { id: 'approved-job-weekdays', cron: cronMode ? '* * * * *' : '0 7-18 * * 1-5', timezone: 'Africa/Johannesburg', reviewPolicy: 'none',
       ...(notificationMode ? { runResultNotifications: { inbox: true, requester: true } } : {}) },
@@ -257,38 +273,33 @@ try {
       finally { db.close(); }
     }
   }
-  if (rebindMode) {
+  if (connectionChangeMode) {
     const beforeGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
     const beforeSetup = await owner('GET', `/v1/headless_setups/${id}`);
     const beforeSchedule = await owner('GET', `/v1/schedules/${result.scheduleId}`);
     const nodePid = daemon.pid, nativePid = (await client.server.info()).pid;
+    if (!notificationMode) {
+      await client.session.update({ sessionID: session.id, archived: true });
+      assert.ok((await client.session.get({ sessionID: session.id })).time.archived, 'The original coordinator is archived before the sign-in changes');
+    }
+    requestsBeforeConnectionChange = modelAuthHeaders.length;
     // Replace only a disposable fixture sign-in through the native API. Never
     // enumerate secret credentials or change the user's authentication.
     await client.integration.connect.key({ integrationID: provider.integrationID, key: 'replacement-fixture-key', label: 'Replacement fixture sign-in', location: { directory: workspace } });
     const current = await wait('replacement sign-in identity', async () => {
-      const { models } = await call(worker, 'POST', '/agent/headless-connections', {});
+      const { models } = await client.rpc(HeadlessAccess).inspect({}, { location: { directory: workspace } });
       return models.find(m => m.providerID === 'openai' && m.id === 'fixture' && m.connectionId !== connectionId);
     });
-    const blocked = await call(worker, 'POST', '/agent/headless-status', { id });
-    assert.equal(blocked.state, 'blocked'); assert.equal(blocked.blocker, 'model_connection_changed');
-    const preview = await call(worker, 'POST', '/agent/headless-connection-preview', { setupId: id });
-    assert.equal(preview.fromConnectionId, connectionId); assert.equal(preview.toConnectionId, current.connectionId);
-    const payload = { setupId: id, previewHash: preview.previewHash, key: 'connection-once' };
-    const applied = await call(worker, 'POST', '/agent/headless-connection-rebind', payload);
-    assert.equal(applied.state, 'recorded');
-    const ready = await waitHeadlessSetup(worker, applied);
-    assert.equal(ready.state, 'ready', JSON.stringify(ready)); assert.ok(ready.nextFiring);
-    assert.equal(ready.connectionRebind.state, 'ready');
+    assert.notEqual(current.connectionId, connectionId);
+    const access = await client.rpc(HeadlessAccess).check({ model: grantProposal.model, permissions: grantProposal.permissions }, { location: { directory: workspace } });
+    assert.equal(access.allowed, true, JSON.stringify(access));
     const afterGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
     const afterSetup = await owner('GET', `/v1/headless_setups/${id}`);
-    assert.equal(afterGrant.model.connectionId, current.connectionId); assert.equal(afterGrant.revision, beforeGrant.revision + 1);
-    for (const field of ['permissions', 'capabilities', 'contract', 'schedule', 'expiresAt']) assert.deepEqual(afterGrant[field], beforeGrant[field]);
-    for (const field of ['agentId', 'sessionId', 'bindingId', 'grantId', 'scheduleId', 'contract', 'appliedContractRevision']) assert.deepEqual(afterSetup[field], beforeSetup[field]);
+    assert.deepEqual(afterGrant, beforeGrant, 'Connection changes must not rewrite a grant');
+    assert.deepEqual(afterSetup, beforeSetup, 'An already-ready worker needs no rebind or new readiness attempt');
     assert.deepEqual(await owner('GET', `/v1/schedules/${result.scheduleId}`), beforeSchedule);
-    await call(worker, 'POST', '/agent/headless-connection-rebind', payload);
-    assert.equal((await owner('GET', `/v1/headless_setups/${id}`)).attempt, afterSetup.attempt);
     assert.equal(daemon.pid, nodePid); assert.equal((await client.server.info()).pid, nativePid);
-    assert.equal(reads, 0); assert.equal(writes, 0, 'Connection readiness must not execute business tools');
+    assert.equal(reads, 0); assert.equal(writes, 0, 'A sign-in change must not execute business tools');
     assert.equal(existsSync(shellOutput), false);
   }
   // A second server is configured after approval/setup. The boolean MCP grant
@@ -363,7 +374,12 @@ try {
     assert.equal(rejected.length, 1); assert.equal(rejected[0].state.status, 'error');
   }
   const unchangedGrant = await owner('GET', '/v1/headless_grants/approved-job-grant');
-  assert.equal(unchangedGrant.revision, rebindMode ? 2 : 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
+  assert.equal(unchangedGrant.revision, 1); assert.equal(unchangedGrant.permissions.mcp, !mcpDenied);
+  if (connectionChangeMode) {
+    const headers = modelAuthHeaders.slice(requestsBeforeConnectionChange);
+    assert.ok(headers.length, 'Business model requests must run after the connection changes');
+    assert.ok(headers.every(header => header === 'Bearer replacement-fixture-key'), 'Native inference must use the active replacement connection, not the old key');
+  }
   if (contractMode) assert.equal(revisedContextSeen, true);
   await stopNode(); await startNode(joined.configFile);
   const restored = await call(worker, 'POST', '/agent/headless-status', { id });
@@ -393,7 +409,8 @@ try {
     nativeResultSubmission: true, actualCronFiringVerified: cronMode, scheduleAppliedAndNextFiring: true, nodeRestartRetainedWorkerAndSchedule: true, revocationPausedSchedule: true, nodeRestartRequired: false,
     scopedTaskAndFileCanaries: capabilityMode, grantIssuedByCoordinatorWithoutOwner: agentGrantMode, agentGrantRetryIdempotent: agentGrantMode,
     exactContractApprovalAndActivation: contractMode, revisedInstructionsInNativeModelContext: revisedContextSeen,
-    connectionRebindReadinessAndNextFiring: rebindMode, connectionRebindPreservedWorkerSessionScopeAndSchedule: rebindMode,
+    automaticActiveProviderConnectionVerified: connectionChangeMode, activeConnectionUsedForNativeModelRequests: connectionChangeMode,
+    connectionChangePreservedWorkerSessionScopeAndSchedule: connectionChangeMode, coordinatorArchivedDuringConnectionChange: connectionChangeMode && !notificationMode,
     legacyValidationRefusalDoesNotBlockActivation: legacyRefusalMode,
     operationSpecificHeadlessSchemasVerified: capabilityMode,
     headlessScopeInspectionVerified: true, emptyNativeScopeWithShellVerified: shellAllowed && !capabilityMode,

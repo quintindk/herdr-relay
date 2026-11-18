@@ -34,7 +34,7 @@ modifies user services. Existing failed occurrences remain historical evidence.
 An enrolled interactive coordinator can issue its own grant on its own node and
 workspace. No backend-owner context or manual transfer to the backend host is
 required. The explicit grant records the coordinator, node, worker, contract,
-model connection, capability permissions and schedule:
+model provider, model, capability permissions and schedule:
 
 ```json
 {
@@ -45,9 +45,7 @@ model connection, capability permissions and schedule:
   "directory": "/workspace/job",
   "model": {
     "providerID": "EXISTING_PROVIDER_ID",
-    "id": "EXISTING_MODEL_ID",
-    "integrationID": "EXISTING_MODEL_INTEGRATION_ID",
-    "connectionId": "EXISTING_ACTIVE_CREDENTIAL_ID"
+    "id": "EXISTING_MODEL_ID"
   },
   "permissions": { "mcp": true, "shell": false },
   "contract": ".opencode/skills/approved-job/SKILL.md",
@@ -111,7 +109,10 @@ workaround.
 
 `relay_headless_connections` lists non-secret model connection references and
 currently connected MCP server/tool names. Discovery grants no permission. Model
-identity is pinned to an existing active credential reference. MCP access uses
+provider and model remain fixed, but authentication always follows that provider's
+current active connection. There is no connection-ID pin or opt-in policy. Legacy
+`integrationID` and `connectionId` fields are accepted as historical metadata and
+do not restrict sign-in changes. MCP access uses
 the already authenticated transports managed by OpenCode, without copying their
 credentials, caches or login state. There is no per-MCP connection pin in the
 boolean capability.
@@ -149,48 +150,43 @@ step, not merely inspection. Await the destination's applied schedule revision;
 
 ## Runtime tools and enforcement
 
-### Rebinding a stale model sign-in
+### Automatic active-provider authentication
 
-`model_connection_changed` means the provider has a healthy active sign-in whose
-identity differs from the grant's pinned connection. It is not proof that the
-model is missing. `model_connection_unavailable` means no healthy active sign-in
-was found. `model_unavailable` is a separate model-catalogue failure.
+**Normal sign-in changes no longer require a rebind.** Every access check resolves
+the approved provider's current integration and active connection in the worker's
+existing OpenCode location. OAuth, key, external-credential and environment
+connections follow OpenCode's active selection. No credentials are enumerated,
+resolved or copied by Relay, and no other provider or model is selected as fallback.
 
-Do not retry setup, resume cron or restart OpenCode to change this pin. Under an
-explicit human recovery request, use the **original coordinator on the destination
-node**:
+This applies to all existing and new grants. Changing the account, connection ID
+or authentication client for the same provider needs no original coordinator,
+permission prompt, idle boundary, grant revision or additional readiness run for
+an already-ready worker. Instructions, capabilities, worker/session identity,
+schedule activation and notification settings are unchanged.
 
-```text
-relay_headless_connection({operation:"preview", setupId:"EXISTING_SETUP_ID"})
-relay_headless_connection({operation:"apply", setupId:"EXISTING_SETUP_ID",
-  key:"sign-in-rebind-v1", previewHash:"EXACT_PREVIEW_HASH"})
-relay_headless_status({id:"EXISTING_SETUP_ID"})
+`model_connection_unavailable` means that provider has no healthy active connection.
+`model_unavailable` means the approved model is absent from the current catalogue.
+Neither condition permits switching providers or models automatically. Provider
+authentication, rate-limit and retained-history errors still surface normally.
+An interrupted or uncertain business request is never replayed because of a login.
+
+The owning node also recognises old authentication-only setup blocks, including
+`model_connection_changed` and `model_integration_mismatch`. Once access returns,
+it retries bounded setup readiness without the coordinator or a grant rewrite.
+This requires backend `activeProviderConnections` support. Existing readiness must
+settle first. Revoked grants, cancelled schedules, changed instructions and unrelated
+readiness failures are not recovered by this path. Paused schedules remain paused.
+
+There is no manual connection-rebind tool, CLI command or node/backend handler.
+Existing connection references and historical recovery receipts remain readable,
+but no job requires them to be updated for a sign-in change. Do not recreate a
+worker or replay failed work to change authentication.
+
+Verify automatic connection changes with the isolated real-host gate:
+
+```sh
+node scripts/verify-headless-setup.mjs --connection-change --cron --capabilities --shell
 ```
-
-CLI equivalents are `headless connection-preview --file JSON` and `headless
-connection-rebind --file JSON`. Preview takes `{setupId}`. Apply also takes `key`
-and `previewHash`. Both require the original enrolled coordinator connector, not
-an operator-context override. The backend must advertise `headlessConnectionRebind`
-and the destination node/plugin must support the operation. Upgrade those Relay
-components first when unavailable. Never borrow another machine's connection.
-
-Preview inspects the original authenticated native service and its exact idle
-session, the current active connection for the **unchanged provider, integration
-and model**, instructions and unsettled work. It exposes no credential values.
-Apply checks the exact setup/grant/schedule revisions and preview hash. Only the
-grant's connection identity changes. The worker, session, permissions, capability
-paths, approved instructions, expiry, cron and notification settings remain intact.
-
-Fresh bounded readiness must pass before new business admissions. It performs
-permission inspection, approved isolated canaries and native result submission,
-not a sweep or an external MCP/shell effect. The existing schedule is not
-reinstalled or automatically resumed if paused. Inspect `state`, `connectionRebind`
-and `nextFiring` after readiness. A next-firing preview is not proof of an actual run.
-Earlier pending ticks are retained as skipped records. Failed business runs,
-uncertain effects and recovery evidence are never replayed or erased. Unsettled
-work must be reconciled separately, not cancelled implicitly to force a rebind.
-After an uncertain reply, reconcile the same key and payload instead of issuing
-a replacement grant or another recovery operation.
 
 ### Updating approved instructions
 
@@ -259,8 +255,8 @@ Isolated real-host gate: `node scripts/verify-headless-setup.mjs --contract-upda
 - `relay_mcp_call` selects an exact current MCP tool ID and invokes the native
   transport. Built-ins and prefix lookalikes cannot be selected as MCP tools.
 - Permission checks, accepted run/session/binding, current grant, cancellation,
-  expiry, contract hash and model connection are checked before dispatch, including
-  a fresh check after asynchronous permission evaluation. No cached authority is
+  expiry, contract hash and active provider availability are checked before dispatch,
+  including a fresh check after asynchronous permission evaluation. No cached authority is
   used when the backend is unavailable.
 - Direct namespaced tool calls cannot bypass the bridge. Core namespace collisions
   and permission aliases to native capabilities fail closed. Native tool namespaces
@@ -282,9 +278,10 @@ herdr-relay headless revoke --file /private/revoke.json \
 ```
 
 Revocation pauses the schedule and rejects new admissions/tool dispatch. It cannot
-undo an external effect or stop a process already dispatched. Model credential changes or contract
-changes also block access. New servers/tools inherit MCP permission intentionally;
-they do not require a server-specific grant amendment.
+undo an external effect or stop a process already dispatched. Unavailable provider
+authentication or unapproved contract changes also block access. Changing an active
+sign-in for the same approved provider does not. New servers/tools inherit MCP
+permission intentionally. They do not require a server-specific grant amendment.
 
 Verification uses isolated real OpenCode services, deterministic models and
 disposable MCP transports, including reads, writes, later-added tools and MCP

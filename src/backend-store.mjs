@@ -279,7 +279,7 @@ export class BackendStore {
     }
     if (action.startsWith('interactive.')) return applyInteractive(this, actor, action, p, { created, changed, grantResume: authority.grantResume });
     if (action.startsWith('grant.')) return applyGrantAction(this, actor, action, p, { created, changed });
-    if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke', 'agent.headless_connection_rebind'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
+    if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     if (action.startsWith('owner_message.')) return applyOwnerMessage(this, actor, action, p, { created, changed });
     if (action === 'run_result.delivery') return recordRunResultDelivery(this, actor, p);

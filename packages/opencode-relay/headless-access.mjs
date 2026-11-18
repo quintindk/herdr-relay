@@ -3,8 +3,9 @@ import { digest } from '../../src/protocol.mjs';
 import { validateHeadlessPermissions } from '../../src/headless-permissions.mjs';
 
 const string = { type: 'string', minLength: 1, maxLength: 256 };
-const model = { type: 'object', properties: { providerID: string, id: string, integrationID: string, connectionId: string }, required: ['providerID', 'id', 'integrationID', 'connectionId'], additionalProperties: false };
+const model = { type: 'object', properties: { providerID: string, id: string, integrationID: string, connectionId: string }, required: ['providerID', 'id'], additionalProperties: false };
 const permissions = { type: 'object', properties: { mcp: { type: 'boolean' }, shell: { type: 'boolean' } }, required: ['mcp'], additionalProperties: false };
+const availableConnection = active => active && ['credential', 'env'].includes(active.type) && !active.status;
 export const HeadlessAccess = Rpc.define({ id: 'herdr.relay.headless.access', methods: {
   inspect: { input: { type: 'object', properties: {}, additionalProperties: false }, output: { type: 'object', properties: {
     models: { type: 'array', items: model },
@@ -38,7 +39,7 @@ export async function inspectHeadlessConnections(ctx) {
   const models = [];
   for (const provider of providers.filter(provider => provider.integrationID)) {
     const active = await ctx.integration.connection.active(provider.integrationID);
-    if (!active || active.type !== 'credential' || active.status) continue;
+    if (!availableConnection(active)) continue;
     for (const candidate of candidates.filter(candidate => candidate.providerID === provider.id)) models.push({ providerID: provider.id, id: candidate.id, integrationID: provider.integrationID, connectionId: active.id ?? active.name });
   }
   const catalog = await nativeMcpTools(ctx);
@@ -47,7 +48,8 @@ export async function inspectHeadlessConnections(ctx) {
   return { models, servers };
 }
 
-export const accessReferences = grant => ({ model: grant.model, permissions: validateHeadlessPermissions(grant.permissions) });
+export const accessReferences = grant => ({ model: { providerID: grant.model.providerID, id: grant.model.id },
+  permissions: validateHeadlessPermissions(grant.permissions) });
 
 export async function nativeShellTool(ctx) {
   const tool = (await ctx.tool.list()).find(tool => tool.id === 'shell' && !tool.options?.namespace && (!tool.options?.permission || tool.options.permission === 'shell'));
@@ -55,22 +57,24 @@ export async function nativeShellTool(ctx) {
   return tool;
 }
 
-// Model credential identity remains explicit. MCP is a general capability, not
-// an integration/server/tool whitelist. No credential listing/resolution occurs.
+// The provider/model is approved, not a particular sign-in. Resolve that provider's
+// active connection on every check, including for grants with legacy connection
+// metadata. Never enumerate, resolve or copy credentials, or select another provider.
 export async function checkHeadlessAccess(ctx, refs) {
-  const blocked = blocker => ({ allowed: false, blocker, accessDigest: digest(refs) });
+  let access = refs;
+  const blocked = blocker => ({ allowed: false, blocker, accessDigest: digest(access) });
   try {
-    const policy = validateHeadlessPermissions(refs.permissions);
+    access = accessReferences(refs);
+    const policy = access.permissions;
     if (!ctx.integration?.connection?.active || !ctx.session?.hook || !ctx.tool?.hook || !ctx.session?.update) return blocked('headless_plugin_upgrade_required');
     const provider = (await ctx.provider.get({ providerID: refs.model.providerID })).data;
-    if (provider?.integrationID !== refs.model.integrationID) return blocked('model_integration_mismatch');
-    const active = await ctx.integration.connection.active(refs.model.integrationID);
-    if (!active || active.type !== 'credential' || active.status) return blocked('model_connection_unavailable');
-    if (active.id !== refs.model.connectionId) return blocked('model_connection_changed');
+    if (!provider?.integrationID) return blocked('model_connection_unavailable');
+    const active = await ctx.integration.connection.active(provider.integrationID);
+    if (!availableConnection(active)) return blocked('model_connection_unavailable');
     const models = (await ctx.model.list()).data;
     if (!models.some(model => model.providerID === refs.model.providerID && model.id === refs.model.id)) return blocked('model_unavailable');
     const catalog = policy.mcp ? await nativeMcpTools(ctx) : { tools: [] };
     if (policy.shell) await nativeShellTool(ctx);
-    return { allowed: true, blocker: 'none', accessDigest: digest(refs), mcpToolIds: catalog.tools.map(tool => tool.id) };
+    return { allowed: true, blocker: 'none', accessDigest: digest(access), mcpToolIds: catalog.tools.map(tool => tool.id) };
   } catch (error) { return blocked(['mcp_namespace_conflict', 'mcp_permission_alias_forbidden', 'native_shell_unavailable', 'invalid_headless_permissions'].includes(error.code) ? error.code : 'integration_inspection_unavailable'); }
 }
