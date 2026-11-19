@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.13 — 19 November 2026
 
 - Accept structured native OpenCode `agent-switched` events and built-in
   `opencode.plan` `<system-reminder>` synthetics in verified interactive chats
