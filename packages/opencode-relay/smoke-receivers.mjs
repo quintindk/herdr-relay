@@ -179,6 +179,9 @@ try {
           assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
         }
         if (legacyRecovery) {
+          // Stop the daemon before seeding a synthetic legacy row into its SQLite
+          // journal so an in-flight tick cannot overwrite state='conflict'.
+          await stopDaemon();
           const work = journal.work(sent.execution.id), { interactive, interactiveModelSelection, interactiveAgentSelection, initialModel, initialAgent, ...invocation } = work.invocation;
           const messages = (await runtime.client.message.list({ sessionID: sessionId, order: 'asc', limit: 100 })).data;
           const conflictType = agentSwitch && !modelSwitch ? 'agent-switched' : modelSwitch ? 'model-switched' : 'user';
@@ -187,6 +190,7 @@ try {
               conflictType === 'model-switched' ? messages.findLast(m => m.type === 'model-switched').id :
                 messages.find(m => m.type === 'user' && m.text === 'there is a per account cost too...').id,
             inputType: conflictType } });
+          await startDaemon();
           await runtime.client.session.prompt({ sessionID: sessionId, text: 'RECOVER_OWNERSHIP_FIXTURE: Preview and apply recovery of this existing assignment. Do not redispatch or replay it.', delivery: 'steer' });
           await runtime.client.session.wait({ sessionID: sessionId });
           await wait('explicit inspected legacy recovery', () => journal.work(sent.execution.id)?.interactiveOwnership === true && journal.work(sent.execution.id)?.state === 'native_finished');
