@@ -170,8 +170,8 @@ for (const [variable, version] of supportedHosts) {
   assert.equal(recovery.runtime, version); assert.equal(recovery.passed, true);
   installedInteractiveRecoveryVerifications.push(recovery);
   for (const [script, flags, fields] of [
-    ['packages/opencode-relay/smoke-receivers.mjs', ['--model-switch'], ['interactiveModelSelectionVerified', 'firstTaskDeliveryExactlyOnce']],
-    ['packages/opencode-relay/smoke-receivers.mjs', ['--model-switch', '--legacy-recovery'], ['explicitHistoricalModelRecoveryVerified', 'firstTaskDeliveryExactlyOnce']],
+    ['packages/opencode-relay/smoke-receivers.mjs', ['--model-switch', '--agent-switch'], ['interactiveModelSelectionVerified', 'interactiveAgentSelectionVerified', 'firstTaskDeliveryExactlyOnce']],
+    ['packages/opencode-relay/smoke-receivers.mjs', ['--model-switch', '--agent-switch', '--legacy-recovery'], ['explicitHistoricalModelRecoveryVerified', 'explicitHistoricalAgentRecoveryVerified', 'firstTaskDeliveryExactlyOnce']],
     ['packages/opencode-relay/smoke-receivers.mjs', ['--native-continuation'], ['nativeStreamContinuationVerified', 'executionScopedCliCommentVerified', 'firstTaskDeliveryExactlyOnce']],
     ['scripts/verify-cli-bridge.mjs', ['--completion-steering'], ['ownedCompletionPreservedLatestHuman']],
   ]) {

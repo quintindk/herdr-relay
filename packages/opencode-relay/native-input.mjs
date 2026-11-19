@@ -42,8 +42,23 @@ export function continuationInput(message, preceding) {
     (finish === 'error' ? typeof previous.error?.type === 'string' && !!previous.error.type : !previous.error);
 }
 
+// Upstream: anomalyco/opencode v2.2.5, packages/core/src/plugin/plan.ts.
+const planEnterPrefix = '<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n';
+const planEnterSuffix = '\n\nDo not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\n</system-reminder>';
+const planLeaveText = '<system-reminder>\nYou are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active.\n</system-reminder>';
+
+export function planReminderInput(message) {
+  if (message?.type !== 'synthetic' || message.metadata !== undefined || message.description !== undefined ||
+    !Number.isSafeInteger(message.time?.created) || message.time.created <= 0 || typeof message.text !== 'string') return false;
+  if (message.text === planLeaveText) return true;
+  if (!message.text.startsWith(planEnterPrefix) || !message.text.endsWith(planEnterSuffix)) return false;
+  const directory = message.text.slice(planEnterPrefix.length, message.text.length - planEnterSuffix.length);
+  return directory.length <= 4096 && directory.startsWith('/') && directory.endsWith('/.opencode/plan') &&
+    !directory.includes('\n') && !/[\x00-\x1f]/.test(directory);
+}
+
 export function supportingInput(message, preceding) {
-  return instructionInput(message) || completionInput(message, preceding) || continuationInput(message, preceding);
+  return instructionInput(message) || completionInput(message, preceding) || continuationInput(message, preceding) || planReminderInput(message);
 }
 
 // Native user input is collaboration only inside a verified interactive binding.
@@ -51,6 +66,18 @@ export function supportingInput(message, preceding) {
 export function humanInput(message) {
   return message?.type === 'user' && typeof message.text === 'string' && !!message.text.trim() &&
     !message.metadata?.herdrRelayInvocation && !message.metadata?.synthetic && !message.metadata?.notification && !message.metadata?.source;
+}
+
+export function agentReference(value) {
+  return typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value) ? value : null;
+}
+
+// Native primary-agent selection (e.g. Tab between build/plan or initial TUI
+// commit on a Home-created session) is local UI control, not a foreign prompt.
+export function agentSelectionInput(message) {
+  return message?.type === 'agent-switched' && Number.isSafeInteger(message.time?.created) && message.time.created > 0 &&
+    !message.metadata?.source && !message.metadata?.herdrRelayInvocation && !message.metadata?.synthetic && !message.metadata?.notification &&
+    !!agentReference(message.agent) && (message.previous === undefined || !!agentReference(message.previous));
 }
 
 export function modelReference(value) {

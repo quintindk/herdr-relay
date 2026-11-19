@@ -92,6 +92,33 @@ test('completions across Relay, foreign and identity boundaries cannot recover a
   }
 });
 
+test('native agent switches and Plan reminders preserve human or execution CLI provenance without granting authority alone', async () => {
+  const empty = fixture();
+  empty.messages = [{ id: 'agent-only', type: 'agent-switched', agent: 'plan', time: { created: 1 } }, { id: 'assistant', type: 'assistant', content: [] }];
+  await assert.rejects(empty.invoke({ args: ['native', 'task', 'create'] }), /human-source/);
+  const f = fixture();
+  const planLeave = '<system-reminder>\nYou are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active.\n</system-reminder>';
+  f.messages.splice(1, 0,
+    { id: 'started', type: 'assistant', content: [{ type: 'tool', name: 'subagent', state: { status: 'completed', metadata: { sessionID: 'ses_owned' }, content: [] } }] },
+    { id: 'to-plan', type: 'agent-switched', agent: 'plan', previous: 'build', time: { created: 2 } },
+    { id: 'to-build', type: 'agent-switched', agent: 'build', previous: 'plan', time: { created: 3 } },
+    { id: 'follow-up', type: 'user', text: 'Continue in build mode', time: { created: 4 } },
+    { id: 'plan-leave', type: 'synthetic', time: { created: 5 }, text: planLeave },
+    { id: 'completion', type: 'synthetic', metadata: { source: 'subagent', childID: 'ses_owned', state: 'completed' } });
+  const humanResult = await f.invoke({ args: ['native', 'task', 'create'] });
+  assert.equal(JSON.parse(humanResult.content).sourceMessageId, 'follow-up');
+  const assigned = fixture();
+  assigned.messages = [
+    { id: 'assigned', type: 'user', text: 'Assigned review', time: { created: 1 }, metadata: { herdrRelayInvocation: 'assigned' } },
+    { id: 'mid-turn-switch', type: 'agent-switched', agent: 'build', time: { created: 2 } },
+    { id: 'assistant', type: 'assistant', content: [] },
+  ];
+  assigned.current = { execution: { id: 'execution', runId: 'run', state: 'accepted', cancellationRequested: false }, sourceMessageId: 'assigned' };
+  const execResult = await assigned.invoke({ args: ['native', 'task', 'comment', '--key', 'c1', '--file', '{payload}'], payload: { taskId: 'task', body: 'Note' } });
+  assert.equal(JSON.parse(execResult.content).sourceMessageId, 'assigned');
+  assert.equal(assigned.calls[0].operatorContextFile, undefined);
+});
+
 test('native model control can preserve completion correlation but never substitutes for a subsequent human input', async () => {
   const f = fixture(), selection = { id: 'model', type: 'model-switched', time: { created: 2 },
     model: { providerID: 'fixture', id: 'second' }, previous: { providerID: 'fixture', id: 'first' } };

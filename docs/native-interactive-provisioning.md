@@ -208,13 +208,19 @@ later instructions were completed, and native success alone is never a submitted
 Relay result.
 
 Only verified interactive receiver bindings use this policy. Scheduled/headless
-work, standing monitors, other Relay invocations, peer notifications and profile/
+work, standing monitors, other Relay invocations, peer notifications and
 workspace identity changes do not gain human steering or operator authority.
 A different assignment remains a separate work decision. The runtime does not
 guess task switches from keywords.
 
-New interactive invocations capture the native model selection. A structured
-`model-switched` event can be acknowledged by a subsequent genuine human message
+New interactive invocations capture the native OpenCode primary agent and model
+selection. Structured `agent-switched` events (such as `Tab` switches between
+`build`, `plan` and custom primary agents, or initial TUI selection on a
+Home-created chat) plus OpenCode's built-in `opencode.plan` `<system-reminder>`
+synthetics are accepted within that verified interactive chat when the live
+session agent matches, updating the input revision without pausing the run or
+requiring separate human acknowledgement. A structured `model-switched` event
+can be acknowledged by a subsequent genuine human message
 in that same chat. The observer checks the model-reference chain and the current
 session selection, then records model control evidence separately from the human
 input IDs. Variant changes count as model selections too. Selecting a model alone
@@ -222,16 +228,16 @@ does not authorise continuation, expand business scope or provide operator acces
 Native model availability/authentication and granted headless model pins are not
 changed by this policy.
 
-A selection without a later human message, mismatched current model, missing
-selection event or malformed/foreign control evidence fails closed. The latest
-human message still needs its own terminal, and model changes alter the input
-revision so old staged outcomes cannot be published as current work.
+A model selection without a later human message, mismatched current model or
+agent, missing selection event or malformed/foreign control evidence fails closed.
+The latest human message still needs its own terminal, and agent or model changes
+alter the input revision so old staged outcomes cannot be published as current work.
 
 Owned background shell/subagent completions preserve the latest human CLI source
 across ordinary follow-ups. Ownership is correlated against successful native tool
 receipts in the same input segment, including tools started before that follow-up.
 Completion text and IDs merely mentioned in a tool prompt cannot establish ownership.
-Peer, uncorrelated synthetic and profile/workspace boundaries remain fenced.
+Peer, uncorrelated synthetic and workspace boundaries remain fenced.
 A question-tool answer is not a new native human source. It cannot repair a hard
 boundary or substitute for separate human approval.
 
@@ -272,12 +278,13 @@ prompt, submit a result, close a task or cancel/redispatch work. Continue in the
 same chat under the recovered assignment. A subsequent steering message changes
 the preview and must be inspected before applying it.
 
-The same preview/apply flow handles retained model-switch conflicts on invocations
-created before model acknowledgement was supported. Its preview includes the exact
-native model selections and subsequent human input. Apply retains the original
-invocation and conflict and enables acknowledgement on that existing assignment.
-An upgrade alone does not silently adopt a retained model-switch conflict. A peer
-notice, profile/workspace change or uncertain publication cannot authorise recovery.
+The same preview/apply flow handles retained model-switch and legacy
+agent-switch conflicts. Its preview includes the exact native selections and
+subsequent human input. Apply retains the original invocation and conflict and
+enables acknowledgement on that existing assignment. Current interactive
+assignments automatically adopt verified `agent-switched` events in place
+without prompt replay. A peer notice, workspace change or uncertain publication
+cannot authorise recovery.
 
 An earlier task's answered question can leave a separate `continuation_ready`
 execution on the same receiver. Do not replay its question or let recovery
