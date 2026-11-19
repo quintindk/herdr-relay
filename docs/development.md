@@ -26,8 +26,9 @@ from checkout imports; a successful plain Node.js import does not prove renderin
 node scripts/verify-cli-bridge.mjs
 node scripts/verify-cli-bridge.mjs --completion-steering
 node scripts/verify-interactive-recovery.mjs
-node packages/opencode-relay/smoke-receivers.mjs --model-switch
-node packages/opencode-relay/smoke-receivers.mjs --model-switch --legacy-recovery
+node packages/opencode-relay/smoke-receivers.mjs --model-switch --agent-switch
+node packages/opencode-relay/smoke-receivers.mjs --model-switch --agent-switch --legacy-recovery
+node packages/opencode-relay/smoke-receivers.mjs --agent-switch --legacy-recovery
 node packages/opencode-relay/smoke-receivers.mjs --native-continuation
 node scripts/verify-headless-setup.mjs --shell --mcp-denied
 node scripts/verify-agent-relocation.mjs

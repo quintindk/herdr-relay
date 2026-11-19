@@ -70,6 +70,10 @@ function evidenceFixture(t) {
       insufficientGrantQueuedApproval: true, admissionBeforeFilesystemEffects: true, linkedRepairApproved: true, originalPreparationRetained: true,
       realReceivingSessionVerified: true, existingTaskDispatchIdempotent: true, concurrentCapacityReservationVerified: true,
       ordinaryEnrolmentCannotStealReservation: true, humanGrantRevocationVerified: true, herdrPlacementFixture: true, userServicesTouched: false, credentialsCopied: false })),
+    installedNativeInputVerifications: versions.flatMap(runtime => [
+      { runtime, passed: true, interactiveModelSelectionVerified: true, interactiveAgentSelectionVerified: true, firstTaskDeliveryExactlyOnce: true },
+      { runtime, passed: true, explicitHistoricalModelRecoveryVerified: true, explicitHistoricalAgentRecoveryVerified: true, firstTaskDeliveryExactlyOnce: true },
+    ]),
     herdrPanelVerification: { passed: true, realHerdrServer: true, candidateInstallerHandover: true, stagedPackageAuditVerified: true,
       keyboardLinkedRepairRequested: true, keyboardRepairApproved: true, keyboardGrantRevocationVerified: true, originalPreparationAndTaskPreserved: true, userServicesTouched: false },
   };
@@ -152,6 +156,12 @@ test('publication refuses absent or failed Herdr keyboard evidence and unsafe re
   for (const field of ['userServicesTouched', 'credentialsCopied']) {
     const unsafe = structuredClone(report); unsafe.installedInteractiveRecoveryVerifications[0][field] = true; await assert.rejects(validate(unsafe), /AssertionError/);
   }
+  const missingAgentInput = structuredClone(report);
+  missingAgentInput.installedNativeInputVerifications[0].interactiveAgentSelectionVerified = false;
+  await assert.rejects(validate(missingAgentInput), /AssertionError/);
+  const missingAgentRecovery = structuredClone(report);
+  missingAgentRecovery.installedNativeInputVerifications[1].explicitHistoricalAgentRecoveryVerified = false;
+  await assert.rejects(validate(missingAgentRecovery), /AssertionError/);
 });
 
 test('publication refuses missing lifecycle/clock evidence and any live effects in the human-control fixture', async t => {

@@ -291,11 +291,14 @@ running release's supported commands.
 - Ordinary human corrections in a verified interactive chat steer its current
   assignment, including after a native idle boundary. Do not routinely cancel or
   redispatch it. A native successful turn is not a submitted Relay result.
-- New interactive runs can acknowledge a structured native model selection through
+- Verified interactive chats accept structured OpenCode `agent-switched` events
+  and built-in `opencode.plan` `<system-reminder>` synthetics when the live
+  session agent matches, updating the input revision without pausing the run.
+  New interactive runs can also acknowledge a structured native model selection through
   a subsequent genuine human message in the same chat. The current model/variant
   must match its native history. Selection alone grants no work or operator access.
-  Model control is recorded separately from human input and fences stale outcomes.
-  Scheduled/headless jobs, standing monitors and profile/workspace changes remain
+  Agent and model controls are recorded separately from human input and fence stale outcomes.
+  Scheduled/headless jobs, standing monitors and workspace changes remain
   excluded. Never use this policy to change a headless provider/model or permissions.
 - For an older `concurrent_native_input` conflict, use
   `relay_interactive_reconcile` to preview the exact execution, then apply its

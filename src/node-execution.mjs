@@ -179,7 +179,9 @@ export async function tickNode(journal, api, resolveBinding) {
       if (!snapshot.idle || snapshot.inbox?.length) continue;
       const invocation = { runId: execution.runId, messageId: `msg_${digest([execution.id, execution.runId])}`, priorMessageIds: snapshot.messages.map(message => message.id),
         ...(binding.prepareInvocation?.(snapshot) ?? {}),
-        ...(binding.interactive && !binding.headlessSetupId && !execution.monitor ? { interactive: true, interactiveModelSelection: true,
+        ...(binding.interactive && !binding.headlessSetupId && !execution.monitor ? { interactive: true,
+          interactiveModelSelection: true, interactiveAgentSelection: true,
+          ...(snapshot.agent ? { initialAgent: snapshot.agent } : {}),
           ...(snapshot.model ? { initialModel: snapshot.model } : {}) } : {}),
         prompt: `Relay execution ${execution.id}, run ${execution.runId}.\n${execution.instructions}\n` +
           (work.answer ? `Clarification answer: ${work.answer.body}\n` : '') +

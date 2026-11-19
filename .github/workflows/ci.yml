@@ -62,10 +62,12 @@ jobs:
         run: node packages/opencode-relay/smoke-receivers.mjs --native-continuation
       - name: Human steering, explicit historical recovery and independent human operations
         run: node packages/opencode-relay/smoke-receivers.mjs --legacy-recovery
-      - name: Interactive model selection and same-assignment human acknowledgement
-        run: node packages/opencode-relay/smoke-receivers.mjs --model-switch
-      - name: Exact historical model-switch recovery without prompt replay
-        run: node packages/opencode-relay/smoke-receivers.mjs --model-switch --legacy-recovery
+      - name: Interactive model and agent selection with Plan-mode reminders
+        run: node packages/opencode-relay/smoke-receivers.mjs --model-switch --agent-switch
+      - name: Exact historical model and agent-switch recovery without prompt replay
+        run: node packages/opencode-relay/smoke-receivers.mjs --model-switch --agent-switch --legacy-recovery
+      - name: Isolated agent-switch and Plan-mode recovery without model switch
+        run: node packages/opencode-relay/smoke-receivers.mjs --agent-switch --legacy-recovery
       - name: Owned background completion preserves the latest human CLI source
         run: node scripts/verify-cli-bridge.mjs --completion-steering
       - name: Native task-independent message smoke

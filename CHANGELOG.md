@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.13 — 19 November 2026
+
+- Accept structured native OpenCode `agent-switched` events and built-in
+  `opencode.plan` `<system-reminder>` synthetics in verified interactive chats
+  without pausing the active assignment. Recover existing `agent-switched`
+  conflicts in place without prompt replay, and support explicit
+  `relay_interactive_reconcile` preview and apply on legacy invocations.
+
 ## 0.2.12 — 18 November 2026
 
 - Stop carrying connection-bound Responses item IDs into later managed headless

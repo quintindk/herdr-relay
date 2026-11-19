@@ -27,9 +27,10 @@ mkdirSync(workspace); mkdirSync(state);
 const binary = process.env.RELAY_V2_BINARY ?? join(here, 'node_modules/.bin/opencode2');
 const legacyRecovery = process.argv.includes('--legacy-recovery');
 const modelSwitch = process.argv.includes('--model-switch');
+const agentSwitch = process.argv.includes('--agent-switch');
 const nativeContinuation = process.argv.includes('--native-continuation');
 const interruptedTasks = new Set();
-const steering = process.argv.includes('--steering') || legacyRecovery || modelSwitch;
+const steering = process.argv.includes('--steering') || legacyRecovery || modelSwitch || agentSwitch;
 assert.ok(!nativeContinuation || !steering, 'Native stream continuation uses its own fixture mode');
 const firstMessage = process.argv.includes('--first-message') || steering || nativeContinuation;
 const tuiOnly = process.argv.includes('--tui-only') || firstMessage;
@@ -58,7 +59,7 @@ const model = createServer(async (req, res) => {
   let tools = input.messages.slice(last + 1).filter(m => m.role === 'tool');
   const source = JSON.stringify(input.messages[last]?.content) ?? '';
   const taskId = /Read task [^\n]+ \(([^)]+)\),/.exec(source.replaceAll('\\n', '\n'))?.[1];
-  const latestUser = input.messages.findLastIndex(m => m.role === 'user');
+  const latestUser = input.messages.findLastIndex(m => m.role === 'user' && !JSON.stringify(m.content).includes('<system-reminder>'));
   const human = JSON.stringify(input.messages[latestUser]?.content);
   const recovering = legacyRecovery && human.includes('RECOVER_OWNERSHIP_FIXTURE');
   const closing = steering && human.includes('CLOSE_OLD_FIXTURE'), powerBi = steering && human.includes('POWER_BI_STEERING_FIXTURE');
@@ -164,27 +165,48 @@ try {
         await wait('first corrected native terminal', () => journal.work(sent.execution.id)?.state === 'native_finished');
         assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
         const firstTerminal = journal.work(sent.execution.id).observation.messageId;
+        if (agentSwitch) {
+          await runtime.client.session.switchAgent({ sessionID: sessionId, agent: 'plan' });
+          await wait('agent selection to plan observed without conflict', () => {
+            const currentWork = journal.work(sent.execution.id);
+            return currentWork?.state !== 'conflict' && currentWork?.interaction?.agentSelections?.at(-1)?.agent === 'plan';
+          });
+          assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
+        }
         if (modelSwitch) {
           await runtime.client.session.switchModel({ sessionID: sessionId, model: { providerID: 'receiver-fixture', id: 'replacement' } });
           await wait('model selection acknowledgement fence', () => journal.work(sent.execution.id)?.observation?.modelChange === 'human_acknowledgement_required');
           assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
         }
         if (legacyRecovery) {
-          const work = journal.work(sent.execution.id), { interactive, interactiveModelSelection, initialModel, ...invocation } = work.invocation;
+          // Stop the daemon before seeding a synthetic legacy row into its SQLite
+          // journal so an in-flight tick cannot overwrite state='conflict'.
+          await stopDaemon();
+          const work = journal.work(sent.execution.id), { interactive, interactiveModelSelection, interactiveAgentSelection, initialModel, initialAgent, ...invocation } = work.invocation;
           const messages = (await runtime.client.message.list({ sessionID: sessionId, order: 'asc', limit: 100 })).data;
+          const conflictType = agentSwitch && !modelSwitch ? 'agent-switched' : modelSwitch ? 'model-switched' : 'user';
           journal.save({ ...work, interaction: undefined, invocation, state: 'conflict', observation: { state: 'conflict', reason: 'concurrent_native_input',
-            inputId: modelSwitch ? messages.findLast(m => m.type === 'model-switched').id : messages.find(m => m.type === 'user' && m.text === 'there is a per account cost too...').id,
-            inputType: modelSwitch ? 'model-switched' : 'user' } });
+            inputId: conflictType === 'agent-switched' ? messages.findLast(m => m.type === 'agent-switched').id :
+              conflictType === 'model-switched' ? messages.findLast(m => m.type === 'model-switched').id :
+                messages.find(m => m.type === 'user' && m.text === 'there is a per account cost too...').id,
+            inputType: conflictType } });
+          await startDaemon();
           await runtime.client.session.prompt({ sessionID: sessionId, text: 'RECOVER_OWNERSHIP_FIXTURE: Preview and apply recovery of this existing assignment. Do not redispatch or replay it.', delivery: 'steer' });
           await runtime.client.session.wait({ sessionID: sessionId });
           await wait('explicit inspected legacy recovery', () => journal.work(sent.execution.id)?.interactiveOwnership === true && journal.work(sent.execution.id)?.state === 'native_finished');
         }
+        if (agentSwitch) await runtime.client.session.switchAgent({ sessionID: sessionId, agent: 'build' });
         await runtime.client.session.prompt({ sessionID: sessionId, text: 'POWER_BI_STEERING_FIXTURE: Investigate the report too.', delivery: 'steer' });
         await runtime.client.session.wait({ sessionID: sessionId });
         await wait('post-idle steering terminal', () => journal.work(sent.execution.id)?.observation.messageId !== firstTerminal && journal.work(sent.execution.id)?.state === 'native_finished');
         assert.equal((await owner('GET', `/v1/executions/${sent.execution.id}`)).state, 'accepted');
         const current = await call(connection, 'POST', '/work/current', { sessionId });
         assert.equal(current.blocked, false);
+        if (agentSwitch) {
+          assert.deepEqual(current.interaction.agentSelections.map(s => s.agent), ['plan', 'build']);
+          assert.equal((await runtime.client.session.get({ sessionID: sessionId })).agent, 'build');
+          assert.equal(journal.work(sent.execution.id).invocation.messageId, current.sourceMessageId);
+        }
         if (modelSwitch) {
           assert.equal(current.interaction.modelSelections.length, 1);
           assert.equal((await runtime.client.session.get({ sessionID: sessionId })).model.id, 'replacement');
@@ -205,6 +227,13 @@ try {
       assert.match(prompts[0].text, /first prompt/);
       assert.ok(messages.some(message => message.type === 'synthetic' && message.metadata?.instruction?.paths?.includes(join(workspace, 'nested/AGENTS.md'))),
         'The actual native file tool must load nested AGENTS instructions during the owned execution');
+      if (agentSwitch) {
+        assert.deepEqual(messages.filter(m => m.type === 'agent-switched').map(m => m.agent), ['plan', 'build']);
+        assert.ok(messages.some(m => m.type === 'synthetic' && m.text?.includes('You are in Plan mode.')),
+          'Real OpenCode plan switch must emit its Plan-mode synthetic reminder');
+        assert.ok(messages.some(m => m.type === 'synthetic' && m.text?.includes('You are NO LONGER in Plan mode.')),
+          'Real OpenCode build switch must emit its Plan-exit synthetic reminder');
+      }
       if (nativeContinuation) {
         assert.ok(interruptedTasks.has(task.id));
         const index = messages.findIndex(message => message.type === 'synthetic' &&
@@ -353,6 +382,7 @@ try {
     postIdleSteeringTerminalVerified: steering, separateHumanTaskClosureVerified: steering,
     explicitHistoricalInputRecoveryVerified: legacyRecovery,
     interactiveModelSelectionVerified: modelSwitch, explicitHistoricalModelRecoveryVerified: modelSwitch && legacyRecovery,
+    interactiveAgentSelectionVerified: agentSwitch, explicitHistoricalAgentRecoveryVerified: agentSwitch && legacyRecovery,
     nativeStreamContinuationVerified: nativeContinuation,
     keyboardEnrolAndAttach: keyboardCommands, automaticTuiNewChat: keyboardCommands,
     landingScreenCommands: keyboardCommands && landing, scopedHumanOperator: keyboardCommands && process.argv.includes('--scoped-operator'), state: root }, null, 2));

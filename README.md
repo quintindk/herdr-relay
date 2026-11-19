@@ -3,11 +3,13 @@
 Native tasks, agent collaboration and durable node services for **Herdr and
 OpenCode**. Relay owns its task backend. No external task tracker is required.
 
-**[0.2.12](docs/release-0.2.12.md)** fixes headless cron runs rejected by Copilot
-after a sign-in change. Existing workers and schedules keep their OpenCode
-conversations without sending stale provider item IDs on later runs. Install
-only published, verified assets from [GitHub Releases](https://github.com/quintindk/herdr-relay/releases).
-Existing installations must be on **0.2.1-rc4 or later** to upgrade.
+**[0.2.13](docs/release-0.2.13.md)** removes interactive `agent-switched` input
+conflicts when switching OpenCode primary agents (`Tab` between `build`, `plan`
+and custom agents, or initial TUI selection on a Home-created chat) and accepts
+built-in `opencode.plan` `<system-reminder>` synthetics without pausing the
+active assignment. Install only published, verified assets from
+[GitHub Releases](https://github.com/quintindk/herdr-relay/releases). Existing
+installations must be on **0.2.1-rc4 or later** to upgrade.
 
 ## What it does
 
@@ -46,8 +48,8 @@ for managed skills and local Herdr panel setup.
 - **Two-agent work:** [Bounded collaboration](docs/collaboration.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
-- **Release details:** [0.2.12 notes](docs/release-0.2.12.md),
-  [0.2.11 notes](docs/release-0.2.11.md) and
+- **Release details:** [0.2.13 notes](docs/release-0.2.13.md),
+  [0.2.12 notes](docs/release-0.2.12.md) and
   [the changelog](CHANGELOG.md).
 
 Do not reset a backend, delete a journal or repeat bootstrap to perform an upgrade.

@@ -28,7 +28,7 @@ function fixture(t) {
     const [, , collection, id] = path.split('/'); return store.get(collection.slice(0, -1), id);
   };
   f.binding = { id: 'binding', agentId: 'agent', interactive: true, receiverGeneration: 1, identity: { sessionId: 'session' },
-    observe: observeV2, native: { snapshot: async () => ({ messages: f.messages, idle: f.idle, inbox: [], ...(f.model ? { model: structuredClone(f.model) } : {}) }), send: async invocation => {
+    observe: observeV2, native: { snapshot: async () => ({ messages: f.messages, idle: f.idle, inbox: [], ...(f.agent ? { agent: f.agent } : {}), ...(f.model ? { model: structuredClone(f.model) } : {}) }), send: async invocation => {
       f.sends++; f.messages.push({ id: invocation.messageId, text: invocation.prompt, type: 'user', metadata: { herdrRelayInvocation: invocation.messageId } }); f.idle = false;
     } } };
   f.resolve = async () => f.binding;
@@ -357,6 +357,99 @@ test('standing monitors and headless bindings never acquire interactive model ac
     f.idle = true; await f.tick();
     const blocked = f.journal.work('current');
     assert.equal(blocked.state, 'conflict'); assert.equal(f.sends, 1);
+    await assert.rejects(previewInteractiveRecovery(f.journal, f.binding, blocked), { code: 'recovery_ineligible' });
+  }
+});
+
+test('interactive agent switches and Plan reminders never pause active assignments, and REL-423-style conflicts recover in place without replay', async t => {
+  const f = fixture(t);
+  f.model = { providerID: 'fixture', id: 'first' };
+  f.request(); await f.tick();
+  const original = f.journal.work('current');
+  const { interactiveAgentSelection, initialAgent, ...pre0213Invocation } = original.invocation;
+  const planEnter = '<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n/home/fixture/.opencode/plan\n\nDo not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\n</system-reminder>';
+  const planLeave = '<system-reminder>\nYou are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active.\n</system-reminder>';
+  // Reproduce REL-423: 0.2.12 invocation paused on agent-switched before any new human message.
+  f.agent = 'plan';
+  f.messages.push(
+    { id: 'agent-switch-plan', type: 'agent-switched', time: { created: 1 }, agent: 'plan' },
+    { id: 'plan-enter', type: 'synthetic', time: { created: 2 }, text: planEnter },
+    { id: 'paused-idle', type: 'idle', outcome: 'succeeded' });
+  f.idle = true;
+  f.journal.save({ ...original, invocation: pre0213Invocation, interaction: undefined, state: 'conflict',
+    staged: { kind: 'result', key: 'stale-before-switch', runId: original.execution.runId, inputRevision: 'old-rev',
+      payload: { candidate: 'stale', summary: 'Before agent switch' } },
+    observation: { state: 'conflict', reason: 'concurrent_native_input', inputId: 'agent-switch-plan', inputType: 'agent-switched' } });
+  await f.tick();
+  const unblocked = f.journal.work('current');
+  assert.equal(unblocked.state, 'native_finished');
+  assert.equal(unblocked.recovery.previousObservation.inputId, 'agent-switch-plan');
+  assert.equal(unblocked.staged, null);
+  assert.equal(unblocked.supersededOutcomes[0].key, 'stale-before-switch');
+  assert.equal(f.store.get('execution', 'current').state, 'accepted');
+  assert.equal(f.sends, 1, 'Recovery must never replay the original invocation');
+  // Switch from plan -> build with human continuation and submit result cleanly.
+  f.agent = 'build';
+  f.messages.push(
+    { id: 'agent-switch-build', type: 'agent-switched', time: { created: 3 }, previous: 'plan', agent: 'build' },
+    { id: 'plan-leave', type: 'synthetic', time: { created: 4 }, text: planLeave },
+    { id: 'open-deck', type: 'user', text: 'Open the downloaded deck and finish the review' });
+  f.idle = false;
+  const worker = { socketPath: join(f.root, 'agent-switch.sock'), token: 'worker', agentId: 'agent', sessionId: 'session', bindingId: 'binding', bindingRevision: 1 };
+  const service = await startNodeService({ journal: f.journal, api: f.api, socketPath: worker.socketPath, workers: [worker], resolveBinding: f.resolve });
+  t.after(() => service.close());
+  const current = await call(worker, 'POST', '/work/current', { sessionId: 'session' });
+  assert.equal(current.blocked, false);
+  assert.deepEqual(current.interaction.agentSelections.map(s => s.agent), ['plan', 'build']);
+  await call(worker, 'POST', '/work/submit', { executionId: 'current', runId: current.execution.runId,
+    inputRevision: current.inputRevision, key: 'done', payload: { candidate: 'opco-roles', summary: 'Verified deck and mapped OpCo roles' } });
+  f.messages.push({ id: 'final-idle', type: 'idle', outcome: 'succeeded' }); f.idle = true;
+  await f.tick(); await f.tick();
+  assert.equal(f.store.get('execution', 'current').state, 'completed');
+  assert.equal(f.sends, 1);
+});
+
+test('explicit interactive recovery preview and apply handle legacy or fenced agent-switched conflicts and refuse mismatched session agents', async t => {
+  const f = fixture(t);
+  f.agent = 'build';
+  f.request(); await f.tick();
+  const original = f.journal.work('current'), { interactive, interactiveAgentSelection, ...legacy } = original.invocation;
+  f.agent = 'Orchestrator';
+  f.messages.push(
+    { id: 'agent-switch', type: 'agent-switched', time: { created: 1 }, previous: 'build', agent: 'Orchestrator' },
+    { id: 'human-recovery', type: 'user', text: 'Reconcile the agent switch and continue' });
+  f.journal.save({ ...original, invocation: legacy, interaction: undefined, state: 'conflict',
+    observation: { state: 'conflict', reason: 'concurrent_native_input', inputId: 'agent-switch', inputType: 'agent-switched' } });
+  await f.tick();
+  assert.equal(f.journal.work('current').state, 'conflict', 'Pre-interactive legacy invocations still require explicit human recovery');
+  const worker = { socketPath: join(f.root, 'recover-agent.sock'), token: 'worker', agentId: 'agent', sessionId: 'session', bindingId: 'binding', bindingRevision: 1 };
+  const service = await startNodeService({ journal: f.journal, api: f.api, socketPath: worker.socketPath, workers: [worker], resolveBinding: f.resolve });
+  t.after(() => service.close());
+  f.agent = 'wrong-agent';
+  await assert.rejects(call(worker, 'POST', '/agent/interactive-reconcile-preview', { executionId: 'current' }), { code: 'recovery_ineligible' });
+  f.agent = 'Orchestrator';
+  const preview = await call(worker, 'POST', '/agent/interactive-reconcile-preview', { executionId: 'current' });
+  assert.equal(preview.observation.interaction.agentSelections[0].id, 'agent-switch');
+  const receipt = await call(worker, 'POST', '/agent/interactive-reconcile-apply', {
+    executionId: 'current', key: 'recover-agent', previewHash: preview.previewHash, sourceMessageId: 'human-recovery' });
+  assert.equal(receipt.promptReplayed, false); assert.equal(receipt.localState, 'observing');
+  assert.equal(f.journal.work('current').interactiveAgentSelection, true);
+  assert.equal(f.sends, 1);
+});
+
+test('standing monitors and headless bindings reject agent-switched events and refuse recovery', async t => {
+  for (const kind of ['monitor', 'headless']) {
+    const f = fixture(t);
+    f.agent = 'plan';
+    if (kind === 'headless') f.binding.headlessSetupId = 'setup';
+    f.request(kind === 'monitor' ? { monitor: { startsAt: new Date(Date.now() - 1000).toISOString(),
+      endsAt: new Date(Date.now() + 60000).toISOString(), intervalSec: 10 } } : {});
+    await f.tick();
+    f.messages.push({ id: 'agent-switch', type: 'agent-switched', time: { created: 1 }, agent: 'plan' },
+      { id: 'terminal', type: 'idle', outcome: 'succeeded' });
+    f.idle = true; await f.tick();
+    const blocked = f.journal.work('current');
+    assert.equal(blocked.state, 'conflict'); assert.equal(blocked.observation.inputType, 'agent-switched');
     await assert.rejects(previewInteractiveRecovery(f.journal, f.binding, blocked), { code: 'recovery_ineligible' });
   }
 });
