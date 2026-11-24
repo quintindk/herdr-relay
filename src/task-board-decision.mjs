@@ -3,11 +3,12 @@ import { Box, Text, useInput } from 'ink';
 import { stripVTControlCharacters } from 'node:util';
 import { wrapBoardText } from './task-board-view.mjs';
 import { BoardText, modalSize, appendBoardInput } from './board-text.mjs';
+import { copyTextToClipboard } from './clipboard.mjs';
 
 const h = React.createElement;
 export const decisionText = value => stripVTControlCharacters(String(value ?? '')).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, ' ')
   .replace(/[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, '');
-export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
+export function BoardDecisionModal({ modal, setModal, submit, width, height, copyToClipboard = copyTextToClipboard }) {
   const item = modal.item;
   const accent = item.kind === 'review' ? 'magenta' : item.kind === 'question' ? 'yellow' : 'cyan';
   const actions = item.disabled || item.kind === 'question' ? [] : item.kind === 'review'
@@ -19,11 +20,14 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
   const titleRows = Math.min(2, lines(item.title).length);
   const choices = actions.flatMap((action, index) => lines(`${item.kind === 'review' ? modal.index === index ? '● ' : '○ ' : ''}[ ${action} ]`).map(text => ({ text, index })));
   const hint = modal.busy ? item.kind === 'owner_message' ? 'Marking message read…' : 'Publishing confirmed decision…' : modal.locked ? 'Enter retry original decision · Esc close'
-    : modal.stage === 'inspect' ? item.kind === 'owner_message' ? '↑↓ scroll · PgUp/PgDn · Home/End · m/Enter mark read · Esc close' : '↑↓ scroll · PgUp/PgDn · Home/End · Enter open · Esc later'
+    : modal.stage === 'inspect' ? item.kind === 'owner_message'
+      ? w < 80 ? '↑↓/PgUp/PgDn · c copy · m read · Esc close' : '↑↓ scroll · PgUp/PgDn · Home/End · c copy · m/Enter mark read · Esc close'
+      : w < 80 ? '↑↓/PgUp/PgDn · c copy · Enter open · Esc' : '↑↓ scroll · PgUp/PgDn · Home/End · c copy · Enter open · Esc later'
       : modal.stage === 'edit' ? item.kind === 'review' && modal.field === 'decision' ? 'PgUp/PgDn scroll · ↑↓ choose · Tab reason · Enter reason'
         : w < 80 ? '↑↓/PgUp/PgDn · Enter preview · Esc cancel' : `↑↓/PgUp/PgDn scroll · Home/End · ${item.kind === 'review' ? 'Tab decision' : 'Type answer'} · Enter preview`
         : '↑↓/PgUp/PgDn scroll · Home/End · Enter confirm · Esc back';
-  const statusText = modal.error ? 'Error: inspect details above' : modal.stage === 'confirm' ? 'Confirm this exact decision' : modal.stage === 'edit' ? `${modal.text.length}/4000` : '';
+  const statusText = modal.error ? 'Error: inspect details above' : modal.stage === 'confirm' ? 'Confirm this exact decision'
+    : modal.stage === 'edit' ? `${modal.text.length}/4000` : modal.copyNotice ?? '';
   const hintRows = lines(hint).length, statusRows = statusText ? lines(statusText).length : 0;
   const viewport = Math.max(1, size - 2 - titleRows - choices.length - hintRows - statusRows - 1);
   const effect = item.kind === 'review' ? modal.index === 0 ? item.acceptEffect : item.rejectEffect : item.effect;
@@ -42,7 +46,7 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
     if (key.ctrl && input === 't') { setModal(value => ({ ...value, technical: !value.technical, scroll: 0 })); return; }
     if (key.escape) {
       if (modal.stage !== 'confirm' || modal.locked) setModal(null);
-      else setModal(value => ({ ...value, stage: ['question', 'review'].includes(item.kind) ? 'edit' : 'inspect', field: 'text', error: '', scroll: 0 }));
+      else setModal(value => ({ ...value, stage: ['question', 'review'].includes(item.kind) ? 'edit' : 'inspect', field: 'text', error: '', copyNotice: '', scroll: 0 }));
       return;
     }
     const choosingDecision = modal.stage === 'edit' && item.kind === 'review' && modal.field === 'decision';
@@ -53,11 +57,17 @@ export function BoardDecisionModal({ modal, setModal, submit, width, height }) {
       setModal(value => ({ ...value, manualScroll: true, scroll: Math.max(0, Math.min(maxScroll, next)) })); return;
     }
     if (modal.stage === 'inspect') {
+      if (input === 'c' && !key.ctrl && !key.meta && !item.disabled && typeof item.summary === 'string' && item.summary.length > 0) {
+        const result = copyToClipboard(item.summary);
+        setModal(value => ({ ...value, copyNotice: result?.ok ? 'Copied message to clipboard' : '',
+          error: result?.ok ? '' : result?.error || 'Clipboard unavailable', ...(result?.ok ? {} : { manualScroll: false }) }));
+        return;
+      }
       if (item.kind === 'owner_message' && (key.return || input === 'm' && !key.ctrl && !key.meta)) { void submit(modal); return; }
       if (input === 't') { setModal(value => ({ ...value, technical: !value.technical, scroll: 0 })); return; }
       if (key.downArrow || input === 'j') setModal(value => ({ ...value, index: Math.min(actions.length - 1, value.index + 1) }));
       if (key.upArrow || input === 'k') setModal(value => ({ ...value, index: Math.max(0, value.index - 1) }));
-      if (key.return && actions.length) setModal(value => ({ ...value, stage: ['question', 'review'].includes(item.kind) ? 'edit' : 'confirm', scroll: 0 }));
+      if (key.return && actions.length) setModal(value => ({ ...value, stage: ['question', 'review'].includes(item.kind) ? 'edit' : 'confirm', copyNotice: '', scroll: 0 }));
       return;
     }
     if (modal.stage === 'confirm') { if (key.return) void submit(modal); return; }

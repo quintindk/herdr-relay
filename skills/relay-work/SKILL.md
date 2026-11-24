@@ -31,6 +31,11 @@ compatibility: opencode
   an old prompt. Ordinary human steering continues a verified interactive job.
 - Direct tools recheck current input. CLI worker mutations use the returned
   `inputRevision`. Worker context does not provide human operator authority.
+- During an accepted interactive execution, use `relay_cli` with
+  `native task attachments|download|attach` on your assigned task only. Download
+  to an explicit `--output` in the workspace and attach deliverables from that
+  workspace with an immutable `--key`. Do not detach or use paths outside the
+  anchored workspace or under Relay state/configuration.
 - Shell/MCP permissions are separate from native task/artifact permissions. Empty
   native scopes do not restrict already-granted shell/MCP work. Use the native
   headless bridges; shell is full OS-user access, not a path sandbox.

@@ -38,7 +38,7 @@ export async function tickAgentNotices(journal, api, resolveBinding) {
       const snapshot = await binding.native.snapshot();
       if (!snapshot.idle || snapshot.inbox?.length) continue;
       const invocation = { messageId: `msg_${digest(['notice', notice.id])}`, priorMessageIds: snapshot.messages.map(message => message.id),
-        ...(binding.prepareInvocation?.(snapshot) ?? {}), createdAt: now(),
+        ...(binding.prepareInvocation?.(snapshot) ?? {}), createdAt: now(), noticeKind: notice.kind ?? 'question',
         prompt: (permission ? `Relay Grants outcome for saved interactive request ${permission.id}: ${permission.state}.\n` +
           `This is recorded permission evidence, not a new human instruction or peer request. Read relay_interactive_status for this exact request. ` +
           `Continue only the original authorised workflow if the preparation is ready. Do not repeat preparation or start unrelated work. A rejection does not permit the operation.\n` :

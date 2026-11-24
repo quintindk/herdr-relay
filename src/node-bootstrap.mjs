@@ -5,7 +5,7 @@ import { nodeEnrolmentUsage } from './interactive-capacity.mjs';
 // A human credential is separate from both the backend-root credential and the
 // node daemon credential. It may manage this node's enrolments and the same
 // human's task/inbox decisions and local headless grants, but cannot bootstrap nodes.
-export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'agent.rename', 'agent.delete', 'task.create', 'task.update', 'comment.create', 'reference.attach',
+export const nodeOperatorActions = Object.freeze(['agent.enrol', 'agent.attach', 'agent.relocate', 'agent.rename', 'agent.delete', 'task.create', 'task.update', 'task.attach', 'task.detach', 'comment.create', 'reference.attach',
   'execution.request', 'execution.cancel', 'execution.handback', 'execution.review', 'execution.monitor_review', 'question.answer', 'question.forward', 'question.close',
   'occurrence.review', 'notification.acknowledge', 'owner_message.read', 'schedule.install', 'schedule.cancel', 'schedule.pause', 'schedule.resume', 'schedule.result_notifications', 'review.grant', 'review.revoke', 'headless.grant', 'headless.revoke']);
 

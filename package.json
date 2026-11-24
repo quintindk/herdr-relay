@@ -1,6 +1,6 @@
 {
   "name": "herdr-relay",
-  "version": "0.2.13",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "description": "Durable native tasks, agent collaboration and node services for Herdr and OpenCode",
@@ -11,6 +11,7 @@
   "files": [
     "src",
     "packages/opencode-relay/*.mjs",
+    "!packages/opencode-relay/smoke*.mjs",
     "packages/opencode-relay/*.tsx",
     "packages/opencode-relay/package.json",
     "packages/opencode-relay/package-lock.json",

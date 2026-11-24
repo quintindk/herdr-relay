@@ -2,7 +2,7 @@
 
 This guide is for a **new native installation**. Existing RC4 installations must
 use [service upgrades](service-upgrades.md), not bootstrap/reset or re-enrolment.
-Examples target stable version **0.2.13** on
+Examples target stable version **0.3.0** on
 [GitHub releases](https://github.com/quintindk/herdr-relay/releases).
 Install only after its published assets and verification report are available.
 Already-published older installers have the bootstrap boundary described below.
@@ -28,8 +28,8 @@ and a successful zero-vulnerability production audit.
 ```sh
 umask 077
 sha256sum -c SHA256SUMS
-npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.2.13.tgz
-herdr-relay release install --version 0.2.13
+npm install --global --omit=dev --ignore-scripts /absolute/download/herdr-relay-0.3.0.tgz
+herdr-relay release install --version 0.3.0
 herdr-relay --version
 ```
 
@@ -56,9 +56,9 @@ sha256sum -c SHA256SUMS
 mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
 BOOTSTRAP=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/relay-bootstrap-XXXXXX")
 npm install --prefix "$BOOTSTRAP" --omit=dev --ignore-scripts --no-audit --no-fund \
-  /absolute/download/herdr-relay-0.2.13.tgz
+  /absolute/download/herdr-relay-0.3.0.tgz
 npm audit --prefix "$BOOTSTRAP" --omit=dev
-node "$BOOTSTRAP/node_modules/herdr-relay/src/cli.mjs" release install --version 0.2.13
+node "$BOOTSTRAP/node_modules/herdr-relay/src/cli.mjs" release install --version 0.3.0
 ```
 
 Stop if a checksum, install or audit command fails. Use a user-owned npm
@@ -93,6 +93,10 @@ Defaults are loopback port 3210 and
 is `herdr-relay-backend.service`. Existing state is reused, never silently cleared.
 Keep the root owner credential on this host. Back up existing installations before
 explicit maintenance; do not install a fresh backend over an identity mismatch.
+
+[Task attachment](task-attachments.md) content lives in `blobs/` alongside
+`backend.sqlite`, outside SQLite snapshots. Back up both for full-state recovery.
+Upgrading from a supported 0.2.x release to 0.3.0 needs no SQLite migration.
 
 ## 3. Establish authenticated ingress for remote nodes
 

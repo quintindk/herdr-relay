@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { promisify, stripVTControlCharacters } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 const packageDirectory = resolve(process.env.RELAY_PACKAGE_DIRECTORY ?? fileURLToPath(new URL('../', import.meta.url)));
 const [{ startBackend }, { BackendStore }, { nativeBackendClient }, { bootstrapNode }, { NodeJournal }, { NativeDecisionJournal },
   { startNodeService }, { call }, { nativeBoard }, { headlessSessionPermissions }, { default: plugin }] = await Promise.all([
@@ -14,6 +15,66 @@ const [{ startBackend }, { BackendStore }, { nativeBackendClient }, { bootstrapN
 ].map(path => import(pathToFileURL(join(packageDirectory, path)).href)));
 
 const execute = promisify(execFile);
+
+// The simulated keyboard uses the checkout's Ink/React renderer. Installed
+// keyboard coverage runs separately through the real CLI in verify-owner-inbox.
+if (!process.env.RELAY_PACKAGE_DIRECTORY) {
+  const [{ default: React }, { render }, { TaskBoardInkApp }] = await Promise.all([
+    import('react'), import('ink-testing-library'), import('../src/task-board-ink.mjs'),
+  ]);
+  const frame = instance => stripVTControlCharacters(instance.lastFrame() ?? '');
+  const input = async (instance, key) => { instance.stdin.write(key); await delay(45); };
+  const waitFor = async (instance, pattern) => {
+    const until = Date.now() + 3000;
+    while (!pattern.test(frame(instance)) && Date.now() < until) await delay(20);
+    assert.match(frame(instance), pattern);
+  };
+  async function open(t, board, copyToClipboard, writes) {
+    const instance = render(React.createElement(TaskBoardInkApp, {
+      read: board.read, detailInbox: board.detailInbox, copyToClipboard,
+      markInboxRead: async (...args) => writes.push(args), decideInbox: async (...args) => writes.push(args),
+      interval: 60000, width: 100, height: 28,
+    }));
+    t.after(() => instance.unmount());
+    await waitFor(instance, /Inbox \(1\)/);
+    for (const [key, pattern] of [['\t', /RELAY \/ AGENTS/], ['\t', /RELAY \/ INBOX/], ['\r', /c copy|0\/4000/]]) {
+      await input(instance, key);
+      await waitFor(instance, pattern);
+    }
+    return instance;
+  }
+
+  for (const result of [{ ok: true, method: 'fixture' }, { ok: false, error: 'Clipboard unavailable in this terminal' }]) {
+    test(`Inbox message detail copies the exact body and reports ${result.ok ? 'success' : 'failure'} without marking it read`, async t => {
+      const f = await fixture(t), writes = [], copies = [];
+      const body = `  First line with trailing space \n\n${Array.from({ length: 28 }, (_, i) => `Retained line ${i}`).join('\n')}\nFinal 📎 line  `;
+      const { receipt: message } = await f.send('clipboard', { body });
+      const instance = await open(t, f.board, text => { copies.push(text); return result; }, writes);
+      assert.match(frame(instance), /c copy/);
+      await input(instance, 'c');
+      await waitFor(instance, result.ok ? /Copied message to clipboard/ : /Clipboard unavailable in this terminal/);
+      assert.deepEqual(copies, [message.body]);
+      await input(instance, '\x1b');
+      await waitFor(instance, /\[Inbox \(1\)\]/);
+      assert.doesNotMatch(frame(instance), /c copy|Copied message to clipboard|Clipboard unavailable/);
+      assert.deepEqual(writes, []);
+      assert.equal(f.store.get('owner_message', message.id).state, 'unread');
+      assert.equal(f.store.get('owner_message', message.id).revision, 1);
+    });
+  }
+
+  test('Inbox question answer editing treats c as text, not a clipboard shortcut', async t => {
+    const item = { id: 'question:one', kind: 'question', title: 'Which option?', summary: 'Choose one option.', stateLabel: 'Open' };
+    const board = { read: async () => ({ companies: [], agents: [], projects: [], tasks: [], routines: [], inbox: [item] }), detailInbox: async () => item };
+    const writes = [], copies = [];
+    const instance = await open(t, board, text => copies.push(text), writes);
+    await input(instance, 'c');
+    assert.match(frame(instance), /c▏/);
+    assert.match(frame(instance), /1\/4000/);
+    assert.deepEqual(copies, []);
+    assert.deepEqual(writes, []);
+  });
+}
 async function fixture(t, { diskJournal = false } = {}) {
   const root = mkdtempSync('/tmp/opencode/owner-messages-'), backend = await startBackend({ database: ':memory:' });
   const store = backend.store, ownerToken = store.bootstrap().token, owner = store.authenticate(ownerToken);

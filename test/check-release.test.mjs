@@ -47,6 +47,9 @@ function evidenceFixture(t) {
       installedCoreTests: 12, modelTurnsStarted: 0, userServicesTouched: false, credentialsCopied: false },
     installedOwnerMessageVerifications: versions.map(runtime => ({ runtime, passed: true, realOwnerMessageTool: true, plainOwnerInbox: true,
       ownerMessageRead: true, ownerMessageCreatedNoRecipientTurn: true, ownerMessageNoTaskOrNotification: true, userServicesTouched: false, credentialsCopied: false })),
+    installedTaskAttachmentVerifications: versions.map(runtime => ({ runtime, passed: true, twoNodeOperatorAttachVerified: true,
+      isolatedHostFixture: true, workerScopedDownloadAndAttachVerified: true, operatorDownloadDeliverableVerified: true,
+      detachAndBlobGcVerified: true, userServicesTouched: false, credentialsCopied: false })),
     upgradeBackupVerification: { passed: true, installedPackage: true, tests: 9, walSnapshots: true, concurrentWriteSnapshot: true,
       checksumMismatchRefused: true, interruptedCopyRefused: true, legacyBackupVerified: true, diskSpacePreflight: true,
       userServicesTouched: false, credentialsCopied: false },
@@ -83,7 +86,8 @@ function evidenceFixture(t) {
       env: { ...process.env, RELEASE_TAG: 'v0.2.8', SOURCE_COMMIT: 'fixture-commit' } });
   };
   return { report, validate, versions, fields: ['installedTuiVerifications', 'installedCliBridgeVerifications', 'installedAgentGrantVerifications',
-    'installedHeadlessResponsesVerifications', 'installedInteractiveRecoveryVerifications', 'installedOwnerMessageVerifications'] };
+    'installedHeadlessResponsesVerifications', 'installedInteractiveRecoveryVerifications', 'installedOwnerMessageVerifications',
+    'installedTaskAttachmentVerifications'] };
 }
 
 test('publication evidence accepts successful installed checks on all three exact OpenCode hosts', async t => {
@@ -134,6 +138,21 @@ test('publication refuses missing or failed installed Responses cron evidence an
     ['userServicesTouched', true], ['credentialsCopied', true]]) {
     const invalid = structuredClone(report); invalid.installedHeadlessResponsesVerifications[0][field] = value;
     await assert.rejects(validate(invalid), /AssertionError/);
+  }
+});
+
+test('publication refuses absent or failed installed task attachment evidence and unsafe fixture effects', async t => {
+  const { report, validate } = evidenceFixture(t);
+  const missing = structuredClone(report); delete missing.installedTaskAttachmentVerifications;
+  await assert.rejects(validate(missing), /Installed task attachment evidence is required/);
+  for (const field of ['twoNodeOperatorAttachVerified', 'isolatedHostFixture', 'workerScopedDownloadAndAttachVerified',
+    'operatorDownloadDeliverableVerified', 'detachAndBlobGcVerified']) {
+    const failed = structuredClone(report); failed.installedTaskAttachmentVerifications[0][field] = false;
+    await assert.rejects(validate(failed), new RegExp(`Missing task attachment gate on 2\\.1\\.0: ${field}`));
+  }
+  for (const field of ['userServicesTouched', 'credentialsCopied']) {
+    const unsafe = structuredClone(report); unsafe.installedTaskAttachmentVerifications[0][field] = true;
+    await assert.rejects(validate(unsafe), /AssertionError/);
   }
 });
 

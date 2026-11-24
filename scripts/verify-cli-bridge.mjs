@@ -90,7 +90,8 @@ try {
     journal.db.prepare('INSERT INTO settings VALUES (?,?)').run('receiver:source', JSON.stringify({ state: 'active', bindingId: worker.bindingId, generation: 1 }));
     nodeService = await startNodeService({ journal, socketPath: worker.socketPath, workers: [worker], api: owner.withToken(credential.token) });
   }
-  await runtime.client.session.prompt({ sessionID: source.id, ...(noticeRead ? { id: 'msg_approval_notice_fixture', metadata: { herdrRelayInvocation: 'msg_approval_notice_fixture' } } : {}), text: noticeRead ?
+  await runtime.client.session.prompt({ sessionID: source.id, ...(noticeRead ? { id: 'msg_approval_notice_fixture',
+    metadata: { herdrRelayInvocation: 'msg_approval_notice_fixture', herdrRelayNotice: 'permission' } } : {}), text: noticeRead ?
     'Relay permission outcome for saved preparation. This is approval evidence, not a human instruction or active execution. Inspect the missing execution and existing task without dispatching anything.' : completionSteering ?
     'Start the harmless owned background shell fixture, then finish this turn. Wait for my follow-up before capturing the saved task.' : selfCapture ?
     'Capture a todo for yourself and continue this interactive conversation. Do not send it back to yourself or create an execution. No new model turn is needed.' :

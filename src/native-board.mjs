@@ -373,8 +373,10 @@ export function nativeBoard(api, { decisionJournal, localNodeId, localInstanceId
       const [{ tasks, executions, questions, attention, inbox, info }, comments] = await Promise.all([load(), all('comments')]);
       const task = tasks.find(t => t.id === taskId);
       requireValue(task, 'task_missing', 'Task not found');
+      const attachments = info.features?.taskAttachments ? await all('task_attachments', undefined, { taskId }) : undefined;
       const execution = executions.filter(e => e.taskId === taskId && e.result).sort((a, b) => (b.result.sequence ?? 0) - (a.result.sequence ?? 0))[0];
       return { task: { ...scoped(task), ...attention(task), responsibleName: task.responsibleUserId === info.userId ? 'You' : task.responsibleUserId }, actions: inbox.filter(i => i.taskId === taskId),
+        ...(attachments !== undefined ? { attachments } : {}),
         activity: [...questions.filter(q => q.taskId === taskId).map(q => `${q.status === 'answered' ? 'Answered' : 'Question'}: ${q.prompt}${q.answer ? ` — ${q.answer.body}` : ''}`),
           ...executions.filter(e => e.taskId === taskId && e.review).map(e => `Review ${e.review.decision}: ${e.review.reason}`)],
         revision: task.revision, comments: comments.filter(c => c.taskId === taskId).map(c => ({ ...c,

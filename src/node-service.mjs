@@ -1,4 +1,6 @@
 import { createServer } from 'node:http';
+import { Transform, finished } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { chmodSync, existsSync, unlinkSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { headlessArtifactOperation, recordHeadlessObservation, probeHeadlessArtifacts } from './headless-artifacts.mjs';
@@ -6,7 +8,7 @@ import { headlessProbeId } from './headless-setup-contract.mjs';
 import { digest, requireValue, RelayError, canonical } from './protocol.mjs';
 import { nativeTasksProvider } from './tasks-provider.mjs';
 import { herdrInventory } from './node-discovery.mjs';
-import { nativeReadApi } from './native-worker-api.mjs';
+import { executionAttachmentReceiptKey, nativeReadApi } from './native-worker-api.mjs';
 import { reconcileDispatchIdentity, refusedDispatchErrors, dispatchReceipt } from './interactive-dispatch-reconciliation.mjs';
 import { reconcileInteractiveWork, previewInteractiveRecovery, applyInteractiveRecovery } from './native-interaction.mjs';
 import { inspectContract, previewContractUpdate } from './node-headless-contract.mjs';
@@ -14,6 +16,8 @@ import { validateHeadlessTaskPayload } from './headless-task-schema.mjs';
 import { abandonedWork } from './node-journal.mjs';
 import { runResultNotifications } from './run-result-notifications.mjs';
 import { validateOwnerMessage } from './owner-messages.mjs';
+import { MAX_ATTACHMENT_BYTES, validateAttachmentSize, validateSha256 } from './task-attachments.mjs';
+import { attachmentReceiptPath } from './attachment-transport.mjs';
 
 const preparationRecovery = Object.freeze({
   native_project_identity_changed: 'OpenCode reports a different project ID for this same chat. Preparation stopped before a request was queued. Ask the human to run /relay-attach in this existing chat and confirm the same Relay enrolment. Wait for confirmed attachment, then retry relay_interactive_prepare with the original ID, key and payload, reusing the existing worktree. Do not recreate the agent/worktree, use the backend-admin CLI or borrow credentials.',
@@ -36,12 +40,108 @@ async function preparationModel(worker, getNativeModel) {
 export async function startNodeService({ journal, socketPath, workers, api, tasks, resolveBinding, getNativeModel, getHeadlessConnections, getHeadlessAccess, getBackendFeatures, maintenance = () => false }) {
   tasks ??= api ? { ...nativeTasksProvider(api), type: 'native' } : null;
   requireValue(!existsSync(socketPath), 'socket_exists', 'Node socket already exists. Verify the old service before removing it');
-  const server = createServer(async (req, res) => {
+  const handle = async (req, res) => {
     try {
-      const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
+      const auth = req.headersDistinct.authorization;
+      requireValue(auth?.length === 1, 'unauthorised', 'Single worker credential required', 401);
+      const token = auth[0].match(/^Bearer (.+)$/)?.[1] ?? '';
       const worker = workers.find(item => digest(item.token) === digest(token));
       requireValue(worker && token, 'unauthorised', 'Worker credential required', 401);
+      const url = new URL(req.url, 'http://node'), path = url.pathname;
+      const continueRequest = () => { if (req.headers.expect?.toLowerCase() === '100-continue') res.writeContinue(); };
+      const ownsWork = work => work?.execution.targetAgentId === worker.agentId &&
+        (!worker.sessionId || !work.nativeConversationId || work.nativeConversationId === worker.sessionId) &&
+        (!worker.bindingId || work.bindingId === worker.bindingId);
+      const lookupWork = async ({ executionId, runId, inputRevision }, { read = false, scoped = false, checkBinding } = {}) => {
+        let work = journal.work(executionId);
+        requireValue(ownsWork(work) && work.execution.runId === runId, 'forbidden', 'Exact current worker execution required', 403);
+        requireValue(!abandonedWork(work) || read, 'work_abandoned', 'This invocation was administratively abandoned; it cannot dispatch effects or submit a result', scoped ? 403 : undefined);
+        if (resolveBinding) {
+          const binding = await resolveBinding(worker.agentId, work);
+          if (binding) {
+            checkBinding?.(binding);
+            work = await reconcileInteractiveWork(journal, binding, work);
+          }
+        }
+        if (work.interaction && !read) requireValue(inputRevision === work.interaction.revision ||
+          inputRevision === undefined && work.interaction.inputIds.length === 0,
+        'stale_input_revision', 'Human input changed. Read the current execution before acting', scoped ? 403 : 409);
+        return work;
+      };
+      const verifyExecutionScope = async ({ executionId, runId, sourceMessageId, inputRevision }) => {
+        const active = allowed => requireValue(allowed, 'execution_source_required',
+          'Native CLI requires this exact active interactive execution, not a human operator context', 403);
+        active(api && !worker.headlessSetupId && worker.mode !== 'headless');
+        const work = await lookupWork({ executionId, runId, inputRevision }, { scoped: true,
+          checkBinding: binding => active(binding.interactive !== false) });
+        active(work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
+          !work.execution.monitor && !work.execution.localOccurrence &&
+          ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && sourceMessageId && sourceMessageId === work.invocation?.messageId);
+        return work;
+      };
+      const checkMaintenance = () => requireValue(!maintenance(), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
+      const clientLifetime = () => {
+        const controller = new AbortController();
+        res.once('close', () => { if (!res.writableFinished) controller.abort(); });
+        return controller;
+      };
+      if (req.method === 'GET' && path === '/work/task-attachment-content') {
+        const keys = [...url.searchParams.keys()];
+        const p = Object.fromEntries(url.searchParams);
+        requireValue(new Set(keys).size === keys.length && keys.every(key => ['executionId', 'runId', 'sourceMessageId', 'taskId', 'id', 'inputRevision'].includes(key)) &&
+          p.executionId && p.runId && p.sourceMessageId && p.taskId && p.id && p.inputRevision !== '', 'invalid_query', 'Exact attachment and execution scope required');
+        const controller = clientLifetime();
+        const work = await verifyExecutionScope(p);
+        requireValue(p.taskId === work.execution.taskId, 'execution_cli_scope', 'Execution CLI can only download attachments from its assigned task', 403);
+        const { stream, sha256, size } = await api.downloadAttachment(p.taskId, p.id, { signal: controller.signal });
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(size), 'X-Content-SHA256': sha256, 'Cache-Control': 'no-store' });
+        await pipeline(stream, res);
+        return;
+      }
+      if (req.method === 'PUT' && path === '/work/blob') {
+        // Scope checks and upstream cleanup can finish before a late reset.
+        req.on('error', () => {});
+        checkMaintenance();
+        requireValue(url.searchParams.size === 0, 'invalid_query', 'Blob upload takes no query parameters');
+        req.setTimeout(30000, () => req.destroy());
+        const header = name => {
+          const values = req.headersDistinct[name];
+          requireValue(!values || values.length === 1 && values[0], 'invalid_request', `Invalid ${name} header`);
+          return values?.[0];
+        };
+        const sha256 = validateSha256(header('x-relay-sha256')), length = header('content-length');
+        requireValue(/^\d+$/.test(length ?? ''), 'invalid_attachment', 'Content-Length must be a non-negative integer');
+        const size = validateAttachmentSize(Number(length));
+        const executionId = header('x-relay-execution-id'), runId = header('x-relay-run-id'), sourceMessageId = header('x-relay-source-message-id');
+        const taskId = header('x-relay-task-id'), inputRevision = header('x-relay-input-revision');
+        requireValue(executionId && runId && sourceMessageId && taskId, 'invalid_request', 'Exact execution and task headers required');
+        const controller = clientLifetime();
+        const work = await verifyExecutionScope({ executionId, runId, sourceMessageId, inputRevision });
+        requireValue(taskId === work.execution.taskId, 'execution_cli_scope', 'Execution CLI can only upload attachments to its assigned task', 403);
+        let bytes = 0;
+        const capped = new Transform({ transform(chunk, encoding, callback) {
+          bytes += chunk.length;
+          if (bytes > MAX_ATTACHMENT_BYTES) return callback(new RelayError('blob_too_large', 'Attachment exceeds the size limit', 413));
+          if (bytes > size) return callback(new RelayError('blob_size_mismatch', 'Upload exceeds Content-Length'));
+          callback(null, chunk);
+        } });
+        const stopWatching = finished(req, { readable: true, writable: false }, error => {
+          if (error) capped.destroy(error);
+        });
+        try {
+          // Keep req alive on validation/upstream errors so the caller gets the refusal.
+          const upload = api.uploadBlob(sha256, capped, { size, signal: controller.signal });
+          // Refuse maintenance and bad worker scope before the client's first
+          // body write can race the final response on the UNIX socket.
+          continueRequest();
+          req.pipe(capped);
+          const result = await upload;
+          res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result));
+        } finally { stopWatching(); req.unpipe(capped); capped.destroy(); }
+        return;
+      }
       requireValue(req.method === 'POST', 'invalid_request', 'POST required');
+      continueRequest();
       let size = 0;
       const chunks = [];
       for await (const chunk of req) {
@@ -51,11 +151,10 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       try { body = JSON.parse(Buffer.concat(chunks).toString()); }
       catch { throw new RelayError('invalid_json', 'JSON request required'); }
       requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_request', 'Object required');
-      const path = new URL(req.url, 'http://node').pathname;
-    const readOnly = ['/agent/interactive-repair-preview', '/agent/interactive-reconcile-preview', '/agent/headless-contract-preview', '/agent/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
+      const readOnly = ['/agent/interactive-repair-preview', '/agent/interactive-reconcile-preview', '/agent/headless-contract-preview', '/agent/native-api', '/work/native-api', '/work/current', '/work/read', '/work/children', '/agent/interactive-context', '/agent/interactive-grants', '/agent/interactive-status',
         '/agent/status', '/agent/schedules', '/agent/notifications', '/agent/tasks', '/agent/agents', '/agent/task', '/agent/task-identity', '/agent/comments', '/agent/relations',
         '/agent/questions', '/agent/messages', '/agent/message', '/agent/headless-status', '/agent/headless-grants', '/agent/headless-access', '/agent/headless-connections'];
-      requireValue(!maintenance() || readOnly.includes(path), 'maintenance', 'Node upgrade maintenance is active. Retry the same immutable operation afterwards', 503);
+      if (!readOnly.includes(path)) checkMaintenance();
       const currentReceiver = () => {
         requireValue(worker.bindingId && worker.bindingRevision, 'standing_enrolment_required', 'Stable agent enrolment required', 403);
         journal.assertReceiver({ id: worker.bindingId, agentId: worker.agentId, receiverGeneration: worker.bindingRevision });
@@ -85,9 +184,6 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         });
         return journal.receipt(command.key);
       };
-      const ownsWork = work => work?.execution.targetAgentId === worker.agentId &&
-        (!worker.sessionId || !work.nativeConversationId || work.nativeConversationId === worker.sessionId) &&
-        (!worker.bindingId || work.bindingId === worker.bindingId);
       const checkContract = (setup, grant) => {
         const op = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`headless-op:${setup.id}`);
         if (!op) { requireValue(!setup.contract, 'job_contract_missing', 'Pinned instruction state is missing'); return; }
@@ -530,40 +626,41 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
       requireValue(path.startsWith('/work/'), 'not_found', 'Unknown node route', 404);
-      let work = journal.work(body.executionId);
-      requireValue(ownsWork(work) && work.execution.runId === body.runId,
-        'forbidden', 'Exact current worker execution required', 403);
-      requireValue(!abandonedWork(work) || path === '/work/read', 'work_abandoned', 'This invocation was administratively abandoned; it cannot dispatch effects or submit a result');
-      if (resolveBinding) {
-        const binding = await resolveBinding(worker.agentId, work);
-        if (binding) work = await reconcileInteractiveWork(journal, binding, work);
-      }
-      if (work.interaction && path !== '/work/read') requireValue(body.inputRevision === work.interaction.revision ||
-        body.inputRevision === undefined && work.interaction.inputIds.length === 0,
-        'stale_input_revision', 'Human input changed. Read the current execution before acting', 409);
+      const work = path === '/work/native-api' ? await verifyExecutionScope(body) : await lookupWork(body, { read: path === '/work/read' });
       let result;
       if (path === '/work/native-api') {
-        requireValue(api && !worker.headlessSetupId && work.execution.state === 'accepted' && !work.execution.cancellationRequested && !work.staged &&
-          ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && body.sourceMessageId === work.invocation?.messageId &&
-          Object.keys(body).every(key => ['executionId', 'runId', 'sourceMessageId', 'inputRevision', 'request'].includes(key)),
+        requireValue(Object.keys(body).every(key => ['executionId', 'runId', 'sourceMessageId', 'inputRevision', 'request'].includes(key)),
         'execution_source_required', 'Native CLI requires this exact active interactive execution, not a human operator context', 403);
         const request = body.request;
         requireValue(request && Object.keys(request).every(key => ['method', 'path', 'body'].includes(key)) &&
           typeof request.path === 'string' && request.path.startsWith('/v1/'), 'invalid_request', 'Bounded native API request required');
         const target = new URL(request.path, 'http://relay');
         requireValue(target.origin === 'http://relay' && !target.hash && !request.path.includes('\\'), 'invalid_request', 'Native API path required');
+        const scopedKey = key => `execution-cli:${digest([work.id, body.runId, key])}`;
         if (request.method === 'GET') {
-          result = await nativeReadApi(api, request, worker);
+          const key = executionAttachmentReceiptKey(target, request);
+          if (key === undefined) result = await nativeReadApi(api, request, worker, { taskId: work.execution.taskId ?? null });
+          else {
+            const scoped = scopedKey(key);
+            result = journal.receipt(scoped)?.state === 'recorded' ? { state: 'recorded' }
+              : await api('GET', attachmentReceiptPath(scoped));
+          }
         } else {
           requireValue(request.method === 'POST' && request.path === '/v1/commands' && request.body &&
             Object.keys(request.body).every(key => ['key', 'action', 'payload'].includes(key)), 'forbidden', 'Native execution mutation required', 403);
           const command = request.body, p = command.payload;
           requireValue(typeof command.key === 'string' && command.key.trim() && command.key.length <= 128 && p &&
             (command.action === 'comment.create' && p.taskId === work.execution.taskId ||
+              command.action === 'task.attach' && p.taskId === work.execution.taskId && !work.execution.monitor && !work.execution.localOccurrence ||
               command.action === 'task.update' && p.id === work.execution.taskId || command.action === 'execution.progress' && p.id === work.id),
-          'execution_cli_scope', 'Execution CLI may comment/update only its assigned task or report its own progress. Task creation, dispatch and administration require separate authority', 403);
-          const key = `execution-cli:${digest([work.id, body.runId, command.key])}`;
-          journal.queue({ ...command, key });
+          'execution_cli_scope', 'Execution CLI may comment on, update or attach to its assigned task, or report its own progress. Task creation, dispatch and administration require separate authority', 403);
+          checkMaintenance();
+          const key = scopedKey(command.key);
+          try { journal.queue({ ...command, key }); }
+          catch (error) {
+            if (command.action === 'task.attach' && error.code === 'operation_conflict') throw new RelayError(error.code, error.message, 409);
+            throw error;
+          }
           try { await journal.flush(api); } catch (error) {
             const receipt = journal.receipt(key);
             if (receipt?.state === 'conflict') {
@@ -729,10 +826,14 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       } else throw new RelayError('not_found', 'Unknown worker route', 404);
       res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result));
     } catch (error) {
+      if (res.destroyed || res.headersSent) { if (!res.destroyed) res.destroy(); return; }
+      if (req.method === 'PUT' && !req.complete) res.setHeader('Connection', 'close');
       res.writeHead(error instanceof RelayError ? error.status : 500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ code: error.code ?? 'node_error', message: error instanceof RelayError ? error.message : 'Node request failed' }));
     }
-  });
+  };
+  const server = createServer(handle);
+  server.on('checkContinue', handle);
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
   chmodSync(socketPath, 0o600);
   let closing;

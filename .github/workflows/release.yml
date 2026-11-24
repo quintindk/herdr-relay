@@ -77,6 +77,16 @@ jobs:
             for (const field of ['passed', 'realOwnerMessageTool', 'plainOwnerInbox', 'ownerMessageRead', 'ownerMessageCreatedNoRecipientTurn', 'ownerMessageNoTaskOrNotification']) assert.equal(test[field], true, field);
             assert.equal(test.userServicesTouched, false); assert.equal(test.credentialsCopied, false);
           }
+          assert.ok(Array.isArray(report.installedTaskAttachmentVerifications), 'Installed task attachment evidence is required');
+          assert.deepEqual(report.installedTaskAttachmentVerifications.map(test => test.runtime).sort(), ['2.1.0', '2.1.2', '2.2.5']);
+          for (const test of report.installedTaskAttachmentVerifications) {
+            for (const field of ['passed', 'twoNodeOperatorAttachVerified', 'isolatedHostFixture',
+              'workerScopedDownloadAndAttachVerified', 'operatorDownloadDeliverableVerified', 'detachAndBlobGcVerified']) {
+              assert.equal(test[field], true, `Missing task attachment gate on ${test.runtime}: ${field}`);
+            }
+            assert.equal(test.userServicesTouched, false);
+            assert.equal(test.credentialsCopied, false);
+          }
           const backups = report.upgradeBackupVerification;
           assert.ok(backups, 'Installed upgrade backup verification is required');
           for (const field of ['passed', 'installedPackage', 'walSnapshots', 'concurrentWriteSnapshot', 'checksumMismatchRefused',

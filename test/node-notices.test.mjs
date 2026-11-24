@@ -7,16 +7,23 @@ test('addressed question delivers one bounded initiating-agent turn and refuses 
   const journal = new NodeJournal(':memory:', { nodeId: 'desktop', instanceId: 'backend' });
   const question = { id: 'q', revision: 1, taskId: 'task', prompt: 'Which region?', status: 'open', addressedTo: { type: 'agent', id: 'initiator' } };
   journal.consume({ cursor: 'cursor', items: [{ id: 'event', type: 'question.ask', entityId: 'q', revision: 1, data: question }] });
-  let sends = 0, idle = false;
+  const sends = [];
+  let idle = false;
   const binding = { id: 'binding', native: { snapshot: async () => ({ idle, messages: [], inbox: [] }),
-    send: async () => { sends++; throw new Error('lost reply'); } }, observe: () => ({ state: 'finished', outcome: 'succeeded' }) };
+    send: async invocation => { sends.push(invocation); throw new Error('lost reply'); } }, observe: () => ({ state: 'finished', outcome: 'succeeded' }) };
   try {
+    const pending = JSON.parse(journal.db.prepare('SELECT data FROM notices').get().data);
+    assert.equal(pending.kind, 'question');
+    // A queued question persisted by an older node still gets a notice tag.
+    const { kind, ...legacy } = pending;
+    journal.db.prepare('UPDATE notices SET data=? WHERE id=?').run(JSON.stringify(legacy), legacy.id);
     await tickAgentNotices(journal, async () => question, async () => binding);
-    assert.equal(sends, 0);
+    assert.equal(sends.length, 0);
     idle = true;
     await tickAgentNotices(journal, async () => question, async () => binding);
     await tickAgentNotices(journal, async () => question, async () => binding);
-    assert.equal(sends, 1);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].noticeKind, 'question');
     assert.equal(journal.db.prepare('SELECT state FROM notices').get().state, 'settled');
   } finally { journal.close(); }
 });

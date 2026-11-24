@@ -1,4 +1,8 @@
 import { RelayError, requireValue } from './protocol.mjs';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { attachmentRequest } from './attachment-transport.mjs';
+import { validateAttachmentSize, validateSha256 } from './task-attachments.mjs';
 
 export function nativeBackendClient({ url, token, ingressKey, cloudflareAccess, trustedHttpProxyOrigin, fetch: request = fetch }) {
   const origin = new URL(url);
@@ -36,6 +40,21 @@ export function nativeBackendClient({ url, token, ingressKey, cloudflareAccess, 
     if (!response.ok) throw new RelayError(result.code ?? 'backend_error', result.message ?? 'Native backend request failed', response.status);
     return result;
   };
+  const binaryRequest = (method, path, headers, options) => attachmentRequest(origin.protocol === 'https:' ? httpsRequest : httpRequest, {
+    protocol: origin.protocol, hostname: origin.hostname.replace(/^\[|\]$/g, ''), port: origin.port, agent: false, method, path,
+    headers: { Authorization: `Bearer ${token}`, ...(ingressKey ? { 'X-API-Key': ingressKey } : {}),
+      ...(cloudflareAccess ? { 'CF-Access-Client-Id': cloudflareAccess.clientId, 'CF-Access-Client-Secret': cloudflareAccess.clientSecret } : {}), ...headers },
+  }, options);
+  client.uploadBlob = async (sha256, readable, { size, signal, timeoutMs = 120000 } = {}) => {
+    validateSha256(sha256);
+    validateAttachmentSize(size);
+    const result = await binaryRequest('PUT', `/v1/blobs/${sha256}`, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(size) },
+      { readable, signal, timeoutMs });
+    requireValue(result.sha256 === sha256 && result.size === size, 'invalid_backend_response', 'Invalid attachment upload receipt', 502);
+    return result;
+  };
+  client.downloadAttachment = (taskId, attachmentId, { signal, timeoutMs = 120000 } = {}) => binaryRequest('GET',
+    `/v1/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/content`, {}, { signal, timeoutMs });
   client.withToken = value => nativeBackendClient({ url, token: value, ingressKey, cloudflareAccess, trustedHttpProxyOrigin, fetch: request });
   return client;
 }

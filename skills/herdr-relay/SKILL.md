@@ -51,6 +51,12 @@ Creating a task captures work; it does not dispatch a model. For your own coding
 turn, record the task and continue rather than dispatching a redundant run to
 yourself.
 
+Share files across machines with `native task attach|attachments|download|detach`
+through `relay_cli`. The limit is 64 MiB per file. Specify `--output` for downloads
+and keep the original `--key` for attach/detach retries. Only the human owner or
+node operator can detach. Accepted interactive workers are limited to their
+assigned task and anchored workspace.
+
 Human TUI controls: **Agents x** deletes an eligible inactive entry. **Schedule c**
 creates a cron for an existing interactive agent or human reminder, **p** toggles
 activation and **x** cancels future ticks. Preview/confirm, retain history and
@@ -75,7 +81,7 @@ reply. Headless workers must send during their accepted run, before submitting.
 
 Use installed `relay_cli_help` for the current native command syntax. Arguments
 are arrays, task verbs start with `native`, and `{payload}` supplies private JSON.
-For human-requested attachment, retain the exact agent, receiving chat, inspected
+For human-requested chat attachment, retain the exact agent, receiving chat, inspected
 generation and original operation key. Use `/relay-attach` when selection or
 confirmation belongs to the human. Reuse enrolments rather than creating duplicates.
 
@@ -108,5 +114,6 @@ Approved headless instruction changes use `relay_headless_contract` preview and
 human approval, not direct edits to the live pinned contract.
 
 Detailed operational guides are in the installed Relay package or checkout under
-`docs/native-cli.md`, `docs/collaboration.md`, `docs/relay-operations-reference.md`
-and `docs/maintenance-recovery.md`. Load only the guide relevant to the operation.
+`docs/native-cli.md`, `docs/task-attachments.md`, `docs/collaboration.md`,
+`docs/relay-operations-reference.md` and `docs/maintenance-recovery.md`. Load only
+the guide relevant to the operation.

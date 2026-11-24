@@ -27,7 +27,7 @@ test('backend inventory reports native records and pending contract revisions wi
 async function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/onboarding-');
   const evo = join(root, 'evo'), surface = join(root, 'surface'); mkdirSync(evo); mkdirSync(surface);
-  const backendState = join(evo, 'backend'); mkdirSync(backendState);
+  const backendState = join(evo, 'backend'); mkdirSync(backendState, { recursive: true, mode: 0o700 });
   const backend = await startBackend({ database: join(backendState, 'backend.sqlite') });
   const owner = { url: backend.origin, userId: 'owner', token: backend.store.bootstrap().token };
   const ownerFile = join(evo, 'owner.json'); writeFileSync(ownerFile, JSON.stringify(owner), { mode: 0o600 });

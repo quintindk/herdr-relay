@@ -19,6 +19,12 @@ Backend and node journals are local SQLite databases. Do not share a live databa
 over a network filesystem. Additional machines join the backend using separately
 scoped credentials, not by copying its database or owner credential.
 
+[Task attachment](task-attachments.md) metadata is revisioned in the backend
+`entities` table as `task_attachment` records. Bytes live outside SQLite in
+the private content-addressed `blobs/<aa>/<sha256>` store. Binary HTTP routes
+stream uploads and downloads, with execution-scoped proxy routes on `node.sock`
+for interactive workers. JSON commands record attachment and detach mutations.
+
 ## Identity and work
 
 A node is a Relay participant; nodejs is its runtime. Durable agent identity is

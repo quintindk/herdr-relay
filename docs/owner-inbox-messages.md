@@ -51,6 +51,10 @@ derived native tool policy through their normal `relay_headless_permissions` che
 - The Inbox labels the item **Message** and shows its subject, sender and node.
 - List previews contain at most five wrapped body lines. Search uses the full body.
 - **Enter** opens the complete scrollable text. Opening/closing does not mark it read.
+- From **0.3.0**, **c** in details copies the full body without marking it read.
+  It uses the native clipboard where available and sends OSC 52 to compatible
+  terminals, including over SSH or through Herdr. The terminal must allow OSC 52,
+  and tmux must allow passthrough when used. The copy limit is 64 KiB of UTF-8.
 - **m** in the list marks it read directly. In message details, **m** or **Enter**
   marks it read without a confirmation dialog.
 - The body and sender history remain stored. Read acknowledgement changes no task,

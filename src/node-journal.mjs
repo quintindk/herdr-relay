@@ -143,7 +143,7 @@ export class NodeJournal {
           if (local) this.db.prepare('UPDATE schedules SET data=? WHERE id=?').run(JSON.stringify({ ...JSON.parse(local.data), state: 'transferred' }), event.entityId);
         }
         if (['question.ask', 'question.forward'].includes(event.type) && event.data?.addressedTo?.type === 'agent') {
-          const notice = { id: event.id, questionId: event.data.id, agentId: event.data.addressedTo.id,
+          const notice = { id: event.id, kind: 'question', questionId: event.data.id, agentId: event.data.addressedTo.id,
             revision: event.data.revision, prompt: event.data.prompt, state: 'pending' };
           this.db.prepare('INSERT OR IGNORE INTO notices VALUES (?,?,?)').run(notice.id, notice.state, JSON.stringify(notice));
         }

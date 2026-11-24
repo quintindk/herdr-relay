@@ -1,13 +1,13 @@
 // Shared by the executable router and its OpenCode bridge. A new native root
 // belongs here once, rather than in a second plugin command allowlist.
 export const nativeAdministrationGroups = Object.freeze(['backend', 'node', 'plugin', 'doctor', 'headless', 'skills']);
-export const nativeCliCollections = Object.freeze({ task: 'tasks', 'task-reference': 'task_reference_grants', comment: 'comments',
+export const nativeCliCollections = Object.freeze({ task: 'tasks', 'task-attachment': 'task_attachments', 'task-reference': 'task_reference_grants', comment: 'comments',
   agent: 'agents', node: 'nodes', execution: 'executions', schedule: 'schedules', occurrence: 'occurrences', interactive: 'provision_requests' });
 
 export function readOnlyCliInvocation(args) {
   const [group, action] = args.slice(1);
   return args[0] === 'native' && (Object.hasOwn(nativeCliCollections, group) && group !== 'task-reference' && ['list', 'inspect'].includes(action) ||
-    group === 'task' && action === 'resolve');
+    group === 'task' && ['resolve', 'attachments'].includes(action));
 }
 
 export function nativeCliInvocation(args) {
@@ -23,6 +23,6 @@ export function executionCliInvocation(args) {
   const [group, action] = args[0] === 'native' ? args.slice(1) : args;
   return args[0] === 'native' && (group === 'command' ||
     group === 'work' && action === 'owner-message' ||
-    ['task', 'comment', 'agent', 'node', 'execution', 'schedule', 'occurrence'].includes(group) && ['list', 'inspect'].includes(action) ||
-    group === 'task' && ['resolve', 'edit', 'comment'].includes(action));
+    ['task', 'task-attachment', 'comment', 'agent', 'node', 'execution', 'schedule', 'occurrence'].includes(group) && ['list', 'inspect'].includes(action) ||
+    group === 'task' && ['resolve', 'edit', 'comment', 'attach', 'attachments', 'download'].includes(action));
 }
