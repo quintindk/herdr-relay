@@ -31,7 +31,7 @@ const blobRoute = digest => `/v1/blobs/${digest}`;
 const contentRoute = a => `/v1/tasks/${a.taskId}/attachments/${a.id}/content`;
 const attachment = (taskId, bytes, others = {}) => ({ taskId, name: 'report.bin', sha256: sha(bytes), size: bytes.length, ...others });
 const detach = a => ({ id: a.id, taskId: a.taskId, expectedRevision: a.revision });
-const rootDirectory = () => mkdtempSync('/tmp/opencode/relay-attachments-');
+const rootDirectory = () => mkdtempSync(join(process.env.RELAY_TEST_SCRATCH ?? '/tmp/opencode', 'relay-attachments-'));
 
 async function fixture(t, options = {}) {
   const root = rootDirectory(), database = join(root, 'backend.sqlite');
@@ -289,6 +289,38 @@ test('rejects incorrect modes on blob roots, temporary directories, shards and e
   assert.throws(() => f.store.blobs.removeIfExists(p.sha256), { status: 500, code: 'blob_invalid' });
   assert.equal(statSync(f.tmp).mode & 0o777, 0o755);
   assert.deepEqual(readFileSync(path), bytes);
+});
+
+test('opens an existing private blob root under a safe non-private parent without changing its mode', async t => {
+  const scratch = rootDirectory(), bytes = Buffer.from('pre-existing private root'), digest = sha(bytes);
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  for (const mode of [0o750, 0o755, 0o1777]) {
+    const parent = join(scratch, `parent-${mode.toString(8)}`), root = join(parent, 'blobs');
+    mkdirSync(parent); mkdirSync(root, { mode: 0o700 }); chmodSync(parent, mode);
+    const before = statSync(root), store = new FilesystemBlobStore(root);
+    try {
+      await store.putStream(digest, Readable.from([bytes]));
+      const shard = join(root, digest.slice(0, 2));
+      assert.deepEqual(readFileSync(join(shard, digest)), bytes);
+      for (const path of [root, join(root, '.tmp'), shard]) assert.equal(statSync(path).mode & 0o7777, 0o700);
+      assert.equal(statSync(root).ino, before.ino);
+      assert.equal(statSync(parent).mode & 0o7777, mode);
+      assert.deepEqual(readdirSync(parent), ['blobs']);
+    } finally { store.close(); }
+  }
+});
+
+test('rejects an existing private blob root under a non-sticky writable parent before creating temporary directories', t => {
+  const parent = rootDirectory(), root = join(parent, 'blobs');
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  mkdirSync(root, { mode: 0o700 });
+  for (const mode of [0o775, 0o777]) {
+    chmodSync(parent, mode);
+    assert.throws(() => new FilesystemBlobStore(root), { status: 500, code: 'blob_invalid' });
+    assert.equal(statSync(parent).mode & 0o7777, mode);
+    assert.equal(statSync(root).mode & 0o7777, 0o700);
+    assert.deepEqual(readdirSync(root), []);
+  }
 });
 
 test('a permissive parent is rejected before creating any blob directories', t => {

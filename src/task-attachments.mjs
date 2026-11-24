@@ -111,12 +111,35 @@ function openCreationParent(path, recursive) {
 }
 
 function openPrivateDirectory(path, { create = false, recursive = false, parentFd } = {}) {
-  if (create && parentFd === undefined) {
+  if (parentFd === undefined) {
+    const existing = lstat(path);
+    if (existing) {
+      checkPrivateEntry(existing, 'dir');
+      // Opening an existing private root needs a parent that protects its name,
+      // not the private parent required to create a new root.
+      const parentEntry = lstat(dirname(path));
+      requireValue(parentEntry && parentEntry.isDirectory() && !parentEntry.isSymbolicLink() &&
+        (typeof process.getuid !== 'function' || (parentEntry.uid === process.getuid() && (parentEntry.mode & 0o022) === 0) ||
+          ((parentEntry.uid === process.getuid() || parentEntry.uid === 0) && (parentEntry.mode & 0o1000) !== 0)),
+        'blob_invalid', 'Blob directory parent must protect the existing directory from replacement', 500);
+      let fd;
+      try {
+        fd = openSync(path, directoryFlags);
+        requireValue(sameEntry(existing, checkPrivateEntry(fstatSync(fd), 'dir')),
+          'blob_invalid', 'Blob directory was replaced while opening', 500);
+        return fd;
+      } catch (error) {
+        if (fd !== undefined) closeSync(fd);
+        requireValue(!['ENOENT', 'ELOOP', 'ENOTDIR'].includes(error.code), 'blob_invalid', 'Blob directory was replaced while opening', 500);
+        throw error;
+      }
+    }
+    if (!create) return null;
     const fd = openCreationParent(dirname(path), recursive);
     try { return openPrivateDirectory(basename(path), { create, parentFd: fd }); }
     finally { closeSync(fd); }
   }
-  if (parentFd !== undefined) path = fdPath(parentFd, path);
+  path = fdPath(parentFd, path);
   let expected = assertPrivateEntry(path, 'dir', { optional: true });
   let created = false, parent;
   if (!expected && create) {
