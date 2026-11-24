@@ -16,7 +16,8 @@ import { maintenanceCli } from '../src/upgrade-cli.mjs';
 function fixture(t) {
   const root = mkdtempSync('/tmp/opencode/upgrade-');
   const backend = join(root, 'backend'), node = join(root, 'node'), config = join(root, 'config'), bin = join(root, 'bin'), units = join(root, 'units');
-  for (const directory of [backend, node, config, bin, units]) mkdirSync(directory);
+  mkdirSync(backend, { recursive: true, mode: 0o700 });
+  for (const directory of [node, config, bin, units]) mkdirSync(directory);
   const makePackage = (version, contract = compatibility) => {
     const directory = join(root, `release ${version}`); mkdirSync(join(directory, 'src'), { recursive: true });
     mkdirSync(join(directory, 'packages/opencode-relay'), { recursive: true });

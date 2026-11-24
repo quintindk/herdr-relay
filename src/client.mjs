@@ -1,6 +1,7 @@
 import { request } from 'node:http';
 import { RelayError } from './protocol.mjs';
 import { isAbsolute } from 'node:path';
+import { attachmentRequest } from './attachment-transport.mjs';
 
 export function call(connection, method, path, body, { signal } = {}) {
   if (!connection || typeof connection.socketPath !== 'string' || !isAbsolute(connection.socketPath) ||
@@ -27,4 +28,20 @@ export function call(connection, method, path, body, { signal } = {}) {
     req.on('error', reject);
     req.end(body === undefined ? undefined : JSON.stringify(body));
   });
+}
+
+function socketOptions(connection, path, method, headers = {}) {
+  if (!connection || typeof connection.socketPath !== 'string' || !isAbsolute(connection.socketPath) ||
+    typeof connection.token !== 'string' || !connection.token) throw new RelayError('invalid_worker_context',
+    'An exact scoped worker socket context is required, not an owner/backend context', 403);
+  return { socketPath: connection.socketPath, path, method, agent: false, headers: { ...headers, Authorization: `Bearer ${connection.token}` } };
+}
+
+export function callUploadStream(connection, path, readable, { headers = {}, signal, timeoutMs = 120000 } = {}) {
+  return attachmentRequest(request, socketOptions(connection, path, 'PUT', { 'Content-Type': 'application/octet-stream', ...headers, Expect: '100-continue' }),
+    { readable, signal, timeoutMs, waitForContinue: true });
+}
+
+export function callDownloadStream(connection, path, { signal, timeoutMs = 120000 } = {}) {
+  return attachmentRequest(request, socketOptions(connection, path, 'GET'), { signal, timeoutMs });
 }

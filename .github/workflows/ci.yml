@@ -50,6 +50,8 @@ jobs:
         run: node scripts/verify-owner-inbox.mjs
       - name: Interactive plugin to actual node CLI task hand-off
         run: node scripts/verify-cli-bridge.mjs
+      - name: Cross-node task file attachments, scoped worker proxy and blob collection
+        run: node scripts/verify-task-attachments.mjs
       - name: Interactive self-capture records a todo without self-dispatch
         run: node scripts/verify-cli-bridge.mjs --self-capture
       - name: Approval-notice CLI reads without an active execution or operator context

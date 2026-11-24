@@ -27,6 +27,7 @@ mkdirSync(artifactDirectory, { recursive: true });
 const staging = join(root, 'staging'); mkdirSync(staging);
 const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', staging], { encoding: 'utf8' }));
 assert.ok(!packed.files.some(f => /(^|\/)(\.env|owner\.json|node_modules|\.firecrawl|\.git)(\/|$)/.test(f.path)), 'Package contains private or development files');
+assert.ok(!packed.files.some(f => /^packages\/opencode-relay\/smoke[^/]*\.mjs$/.test(f.path)), 'Checkout-only OpenCode smoke fixtures must not ship');
 for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 'scripts/install-native-backend.mjs',
   'scripts/install-native-node.mjs', 'src/native-admin-cli.mjs', 'src/native-onboarding.mjs',
   'src/agent-messages.mjs', 'src/node-messages.mjs', 'src/native-headless.mjs', 'src/native-agent-relocation.mjs', 'src/skill-install.mjs',
@@ -36,6 +37,8 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'src/headless-capabilities.mjs', 'src/headless-tasks.mjs', 'src/headless-artifacts.mjs',
   'src/headless-permissions.mjs', 'packages/opencode-relay/headless-mcp.mjs', 'packages/opencode-relay/headless-history.mjs',
   'src/task-identity.mjs',
+  'src/task-attachments.mjs', 'src/task-attachments-cli.mjs', 'src/attachment-transport.mjs', 'src/clipboard.mjs',
+  'docs/task-attachments.md',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/release-setup.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
@@ -111,6 +114,7 @@ const installedTuiVerifications = [], installedCliBridgeVerifications = [], inst
 const installedNativeInputVerifications = [];
 const installedHeadlessScopeVerifications = [];
 const installedOwnerMessageVerifications = [];
+const installedTaskAttachmentVerifications = [];
 const supportedHosts = [['RELAY_V2_BINARY', '2.1.2'], ['RELAY_V2_BASELINE_BINARY', '2.1.0'], ['RELAY_V2_LATEST_BINARY', '2.2.5']];
 for (const [variable, version] of supportedHosts) {
   if (!process.env[variable]) { assert.equal(Boolean(values.release), false, `Release verification requires ${variable} for the supported ${version} host`); continue; }
@@ -130,6 +134,17 @@ for (const [variable, version] of supportedHosts) {
   for (const field of ['passed', 'realOwnerMessageTool', 'plainOwnerInbox', 'ownerMessageRead', 'ownerMessageCreatedNoRecipientTurn', 'ownerMessageNoTaskOrNotification']) assert.equal(ownerMessage[field], true, field);
   assert.equal(ownerMessage.userServicesTouched, false); assert.equal(ownerMessage.credentialsCopied, false);
   installedOwnerMessageVerifications.push(ownerMessage);
+  const taskAttachmentOutput = execFileSync(process.execPath, ['scripts/verify-task-attachments.mjs'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
+  process.stdout.write(taskAttachmentOutput);
+  const taskAttachment = JSON.parse(taskAttachmentOutput);
+  assert.equal(taskAttachment.runtime, version);
+  for (const field of ['passed', 'twoNodeOperatorAttachVerified', 'isolatedHostFixture',
+    'workerScopedDownloadAndAttachVerified', 'operatorDownloadDeliverableVerified', 'detachAndBlobGcVerified']) {
+    assert.equal(taskAttachment[field], true, `Missing installed task attachment gate on ${version}: ${field}`);
+  }
+  assert.equal(taskAttachment.userServicesTouched, false); assert.equal(taskAttachment.credentialsCopied, false);
+  installedTaskAttachmentVerifications.push(taskAttachment);
   const bridgeOutput = execFileSync(process.execPath, ['scripts/verify-cli-bridge.mjs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
     env: { ...process.env, RELAY_PACKAGE_DIRECTORY: installed, RELAY_V2_BINARY: process.env[variable] } });
   process.stdout.write(bridgeOutput);
@@ -221,6 +236,8 @@ assert.equal(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['--v
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['upgrade', '--help'], { encoding: 'utf8' }), /upgrade rollback/);
 const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['native', '--help'], { encoding: 'utf8', cwd: consumer });
 assert.match(help, /interactive grant\|request\|dispatch/);
+assert.match(help, /task attach TASK/);
+assert.match(help, /task download TASK ATTACHMENT/);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['headless', '--help'], { encoding: 'utf8' }), /headless provision/);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['node', 'recover', '--help'], { encoding: 'utf8' }), /preview-hash/);
 const skillConfig = join(root, 'installed-skills'); mkdirSync(skillConfig);
@@ -302,6 +319,7 @@ execFileSync(process.execPath, ['--input-type=module', '-e', `
   try { const token=backend.store.bootstrap().token; const response=await fetch(backend.origin+'/v1/info',{headers:{authorization:'Bearer '+token}});
     const info=await response.json(); assert.equal(info.features.interactiveProvisioning,true); assert.equal(info.features.headlessToolPermissions,true); assert.equal(info.features.nodeHeadlessGrants,true);
     assert.equal(info.features.grantsManagement,true);
+    assert.equal(info.features.taskAttachments,true);
     const store=backend.store, owner=store.authenticate(token);
     const joined=bootstrapNode(store,owner,{key:'join',id:'node',name:'Node',mode:'roots',roots:['/work']});
     const operator=store.authenticate(joined.operatorToken), node=store.authenticate(joined.nodeToken);
@@ -348,7 +366,7 @@ let onboarding;
     import {tickAgentNotices} from './src/node-notices.mjs';
     import {call} from './src/client.mjs';
     const root=${JSON.stringify(root)}, evo=join(root,'Evo'), surface=join(root,'Surface'), state=join(evo,'backend');
-    mkdirSync(state,{recursive:true}); mkdirSync(surface);
+    mkdirSync(state,{recursive:true,mode:0o700}); mkdirSync(surface);
     const backend=await startBackend({database:join(state,'backend.sqlite')});
     const rootToken=backend.store.bootstrap().token, owner=join(evo,'owner.json');
     writeFileSync(owner,JSON.stringify({userId:'owner',url:backend.origin,token:rootToken}),{mode:0o600});
@@ -419,6 +437,7 @@ if (audit) assert.equal(audit.metadata.vulnerabilities.total, 0);
 const result = { version: packed.version, artifact, sha256: sha(artifact), sourceCommit, sourceTreeClean, releaseVerified: Boolean(values.release && audit), interactiveProvisioningProtocol: 1, verifiedOn: new Date().toISOString(),
   cleanProductionInstall: true, cliEntrypointPassed: true, serverAndTuiImportsPassed: true, installerHandover, nativeLifecycleVerification, nativeInboxReadVerification, nativeOwnerInboxVerification, installedOwnerMessageVerifications, upgradeBackupVerification, installedTuiVerifications, installedCliBridgeVerifications, installedAgentGrantVerifications,
   installedInteractiveRecoveryVerifications, installedNativeInputVerifications, installedHeadlessScopeVerifications, installedHeadlessResponsesVerifications,
+  installedTaskAttachmentVerifications,
   herdrPanelVerification, nativeBackendStarted: true,
   installedGrantsApprovalResumed: true, installedRunResultNotificationsVerified: true,
   onboarding,

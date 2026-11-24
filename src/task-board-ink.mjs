@@ -3,6 +3,7 @@ import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { buildBoardRows, buildAgentRows, wrapBoardText } from './task-board-view.mjs';
 import { BoardDecisionModal, decisionText } from './task-board-decision.mjs';
+import { copyTextToClipboard } from './clipboard.mjs';
 import { GrantsPanel, nativeBoardTabs, nativeBoardViews } from './grants-panel.mjs';
 import { NativeDispatchModal } from './task-board-dispatch.mjs';
 import { RunResultNotificationsPanel } from './run-result-notifications-panel.mjs';
@@ -19,6 +20,11 @@ const labels = { backlog: 'Backlog', todo: 'Todo', in_progress: 'Active', blocke
   in_review: 'In review', done: 'Done', cancelled: 'Cancelled', delete: 'Delete permanently' };
 const terminal = status => ['done', 'cancelled'].includes(status);
 const clean = value => decisionText(value).trim();
+const shellQuote = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
+const attachmentSize = bytes => {
+  if (bytes < 1024) return `${bytes} B`;
+  return bytes < 1024 ** 2 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+};
 const lastSeenLabel = value => Number.isFinite(Date.parse(value)) ? `${new Date(value).toLocaleString('en-GB', {
   timeZone: 'Africa/Johannesburg', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
 })} SAST` : 'Not yet reported';
@@ -185,14 +191,15 @@ function AgentDetailModal({ detail, close, rename, remove, width, height }) {
 
 function DetailModal({ detail, close, openOccurrence, openAction, review, openRunResultNotifications, controlSchedule, width, height }) {
   const actions = detail.data?.actions ?? [];
-  const taskTabs = [...(actions.length ? ['Actions'] : []), 'Overview', 'Result', 'Comments', ...(detail.data?.activity ? ['Activity'] : [])];
+  const taskTabs = [...(actions.length ? ['Actions'] : []), 'Overview', 'Result', 'Comments',
+    ...(detail.data?.attachments !== undefined ? ['Attachments'] : []), ...(detail.data?.activity ? ['Activity'] : [])];
   const [tab, setTab] = useState(0);
   const [actionIndex, setActionIndex] = useState(0);
   const [technical, setTechnical] = useState(false);
-  const [scrolls, setScrolls] = useState({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
+  const [scrolls, setScrolls] = useState({ Overview: 0, Result: 0, Comments: 0, Attachments: 0, Routine: 0 });
   const detailId = detail.row?.taskId ?? detail.row?.routine?.id ?? detail.data?.task?.id ?? detail.data?.scheduleId;
   useEffect(() => {
-    setTab(0); setActionIndex(0); setTechnical(false); setScrolls({ Overview: 0, Result: 0, Comments: 0, Routine: 0 });
+    setTab(0); setActionIndex(0); setTechnical(false); setScrolls({ Overview: 0, Result: 0, Comments: 0, Attachments: 0, Routine: 0 });
   }, [detail.kind, detailId]);
   const { width: modalWidth, height: modalHeight } = modalSize(width, height, 100, 26);
   const contentWidth = Math.max(1, modalWidth - 6);
@@ -218,6 +225,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
         'Title', ...wrapLines(task.title), '', ...(task.originKind === 'routine_execution' ? [`Routine occurrence ${task.originRunId}`, ''] : []),
         ...(task.attentionLabel ? [task.attentionLabel, `Responsible: ${task.responsibleName || task.responsibleUserId || 'Not set'}`, `Worker: ${task.executionAgentName || 'None'}`, ''] : []),
         ...(task.executionNodeName ? [`Node: ${task.executionNodeName}`, `Machine: ${task.executionMachineName || 'Not advertised'}`, ''] : []),
+        ...(detail.data.attachments?.length ? [`Attachments: ${detail.data.attachments.length}`, ''] : []),
         'Summary', '', ...wrapLines(task.description || 'No description.'), ...(technical ? ['', `Task identity: ${task.id}`] : [])],
       Result: result ? ['Submitted result', '', ...wrapLines(result.summary), '',
         ...(detail.data.actions !== undefined && !technical ? ['Exact candidate identity: press t for technical details'] : [`Candidate  ${result.candidate}`]),
@@ -228,6 +236,12 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
       Comments: detail.data.comments?.length ? detail.data.comments.flatMap((comment, index) => [
         `${comment.authorUserId || comment.authorAgentId || 'system'}${comment.createdAt ? ` · ${comment.createdAt}` : ''}`,
         ...wrapLines(comment.body), ...(index < detail.data.comments.length - 1 ? [''] : [])]) : ['No comments.'],
+      Attachments: detail.data.attachments?.length ? detail.data.attachments.flatMap((a, index, attachments) => [
+        `${clean(a.name)} · ${attachmentSize(a.size)} · ${clean(a.id)} · sha256:${clean(a.sha256.slice(0, 12))}`,
+        `Uploaded by ${clean(a.uploadedBy?.type ?? 'unknown')}:${clean(a.uploadedBy?.id ?? '')}${a.createdAt ? ` · ${clean(a.createdAt)}` : ''}`,
+        `herdr-relay native task download --output <path> -- ${shellQuote(clean(task.reference || task.id))} ${shellQuote(clean(a.id))}`,
+        ...(index < attachments.length - 1 ? [''] : []),
+      ]) : ['No attachments.'],
       Activity: detail.data.activity?.length ? detail.data.activity.flatMap(wrapLines) : ['No recorded interactions.'],
     };
     content = taskSections[taskTabs[tab]];
@@ -311,7 +325,7 @@ function DetailModal({ detail, close, openOccurrence, openAction, review, openRu
     h(Text, { dimColor: true }, `${content.length ? scroll + 1 : 0}-${Math.min(content.length, scroll + viewportHeight)}/${content.length}`));
 }
 
-export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, markInboxRead, pendingDecisions,
+export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, detailRoutine, reviewTask, detailInbox, decideInbox, markInboxRead, pendingDecisions, copyToClipboard = copyTextToClipboard,
   prepareAgentDelete, deleteAgent, prepareScheduleCreation, prepareScheduleCreate, createSchedule, prepareScheduleChange, changeSchedule,
   detailGrant, decideGrant, createGrant, prepareInteractiveRepair, requestInteractiveRepair, pendingGrantDecisions, updateRunResultNotifications, prepareAgentRename, renameAgent, dispatchTask, prepareHandback, handbackTask, assignTask, statusTask, deleteTask, onQuit, interval = 5000, width: fixedWidth, height: fixedHeight }) {
   const window = useWindowSize(); const { exit } = useApp();
@@ -861,7 +875,7 @@ export function TaskBoardInkApp({ read, inspectTask, detailTask, detailAgent, de
     newScheduleModal ? h(ScheduleCreatePanel, { modal: newScheduleModal, setModal: setNewScheduleModal, preview: previewNewSchedule, submit: submitNewSchedule, close: () => {
       setNewScheduleModal(null); if (newScheduleModal.locked) { setView('inbox'); setSelected(0); setSelectedNativeId(null); }
     }, width, height }) : null,
-    decisionModal ? h(BoardDecisionModal, { modal: decisionModal, setModal: setDecisionModal, submit: submitDecision, width, height }) : null);
+    decisionModal ? h(BoardDecisionModal, { modal: decisionModal, setModal: setDecisionModal, submit: submitDecision, width, height, copyToClipboard }) : null);
 }
 
 export async function watchTaskBoardInk(read, options = {}) {

@@ -71,6 +71,21 @@ and keys even after later lifecycle changes.
 
 ## Transport and failure
 
+[Task file attachments](task-attachments.md) use a private descriptor-anchored
+blob store with `0700` directories and `0600` regular files. It refuses symlinks
+and unsafe directory ownership or parent modes. Attachment names are single
+filenames without path separators, controls or leading dots.
+Worker transfer paths reject symlinks (including ancestors) and Relay state and
+configuration paths inside the anchored workspace. Worker uploads also refuse
+hard-linked source files. A forced download replaces the destination entry
+atomically rather than modifying the contents of another link.
+
+Only the human owner or node operator can detach. Accepted interactive workers
+are scoped to their assigned task and workspace, enrolled read-only callers see
+metadata only, and grant approval sessions cannot access attachments. CLI bridge
+placeholders work only in their designated option positions before `--` and do
+not expose context credentials as attachment filenames or output paths.
+
 Use authenticated transport to the backend. Non-loopback HTTP is not an implicit
 trusted path. Public ingress must enforce its configured authentication/access
 policy independently of Relay's actor credentials.

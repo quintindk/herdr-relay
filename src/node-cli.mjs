@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { readFileSync, mkdirSync, writeFileSync, existsSync, unlinkSync, lstatSync, renameSync } from 'node:fs';
+import { closeSync, readFileSync, mkdirSync, writeFileSync, existsSync, unlinkSync, lstatSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -27,8 +27,14 @@ import { tickHeadlessSetups, assertHeadlessAccess } from './node-headless-setup.
 import { tickHeadlessContractUpdates } from './node-headless-contract.mjs';
 import { HeadlessAccess } from '../packages/opencode-relay/headless-access.mjs';
 import { NodeRunResultMessages } from './node-run-result-messages.mjs';
+import { openNoFollowDirectory } from './task-attachments-cli.mjs';
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+const workerWorkspace = directory => {
+  const { fd, path, entry } = openNoFollowDirectory(resolve(directory));
+  try { return { directory: path, directoryIdentity: { dev: entry.dev, ino: entry.ino } }; }
+  finally { closeSync(fd); }
+};
 try {
   const { values } = parseArgs({ options: { config: { type: 'string' } } });
   requireValue(values.config, 'invalid_request', 'Usage: node src/node-cli.mjs --config PRIVATE_JSON');
@@ -165,6 +171,8 @@ try {
       nativeEndpoints.set(nativeIdentity, entry.agentId);
       const worker = existsSync(contextFile) ? JSON.parse(readFileSync(contextFile, 'utf8')) :
         { socketPath, agentId: entry.agentId, sessionId: binding.identity?.sessionId ?? entry.identity?.sessionId ?? entry.conversationId,
+          ...(entry.directory ? workerWorkspace(entry.directory) : {}),
+          ...(entry.mode ? { mode: entry.mode } : {}),
           ...(entry.headlessSetupId ? { headlessSetupId: entry.headlessSetupId } : {}),
           ...(entry.receiverGeneration ? { bindingId: entry.id, bindingRevision: entry.receiverGeneration } : {}), token: randomBytes(32).toString('hex') };
       requireValue(worker.socketPath === socketPath && worker.agentId === entry.agentId, 'context_conflict', 'Worker context changed');

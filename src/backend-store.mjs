@@ -1,9 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync } from 'node:fs';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { canonical, digest, now, requireValue } from './protocol.mjs';
+import { canonical, digest, now, requireValue, validKey } from './protocol.mjs';
 import { previewCron } from './cron-schedule.mjs';
-import { isAbsolute, normalize } from 'node:path';
+import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import { applyInteractive, canonicalDirectory } from './interactive-contract.mjs';
 import { applyHeadlessSetup, headlessAuthority } from './headless-setup-contract.mjs';
 import { authoriseOperator } from './node-bootstrap.mjs';
@@ -18,6 +18,7 @@ import { agentName } from './agent-name.mjs';
 import { collaborationRequest, childTerminal } from './collaboration.mjs';
 import { requireDeletableAgent } from './agent-lifecycle.mjs';
 import { applyOwnerMessage } from './owner-messages.mjs';
+import { applyTaskAttachment, authoriseBlobUpload, FilesystemBlobStore, MemoryBlobStore } from './task-attachments.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -36,7 +37,7 @@ const string = (value, name, max = 16000) => requireValue(typeof value === 'stri
 // Native shared store. All public mutations include actor-bound idempotency and
 // append events in the same SQLite transaction. Never share this file over NFS.
 export class BackendStore {
-  constructor(path, { userId = 'owner' } = {}) {
+  constructor(path, { userId = 'owner', blobDirectory } = {}) {
     this.runResultMessages = new OnlineRunResultMessages();
     requireValue(validId(userId), 'invalid_user', 'Explicit user identity required');
     this.db = new DatabaseSync(path);
@@ -64,10 +65,14 @@ export class BackendStore {
     requireValue(this.owner === userId, 'backend_identity_mismatch', 'Backend belongs to another user');
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('instance', randomUUID());
     this.instance = this.db.prepare('SELECT value FROM settings WHERE key=?').get('instance').value;
-    expireRunResultDeliveries(this);
+    try {
+      const directory = blobDirectory === undefined && path !== ':memory:' ? join(dirname(resolve(path)), 'blobs') : blobDirectory;
+      this.blobs = directory === undefined ? new MemoryBlobStore() : new FilesystemBlobStore(directory);
+      expireRunResultDeliveries(this);
+    } catch (error) { this.close(); throw error; }
   }
 
-  close() { this.db.close(); }
+  close() { try { this.blobs?.close?.(); } finally { this.db.close(); } }
   transaction(fn) {
     if (this.inTransaction) return fn();
     this.db.exec('BEGIN IMMEDIATE');
@@ -77,7 +82,7 @@ export class BackendStore {
     try { result = fn(); this.db.exec('COMMIT'); }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
     finally { this.inTransaction = false; this.afterCommit = null; }
-    for (const effect of effects) try { effect(); } catch { /* Best-effort notices cannot undo a committed result. */ }
+    for (const effect of effects) try { effect(); } catch { /* Best-effort effects cannot undo a committed result. */ }
     return result;
   }
   notifyRunResult(occurrence, actor) {
@@ -112,7 +117,7 @@ export class BackendStore {
     .map(row => JSON.parse(row.data)).filter(item => includeDeleted || kind !== 'agent' || !item.deletedAt); }
   snapshot() {
     return this.transaction(() => ({ instanceId: this.instance, protocol: backendProtocol,
-      collections: Object.fromEntries(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
+      collections: Object.fromEntries(['task', 'task_attachment', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
         .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision', 'message']).map(kind => [kind, this.all(kind, true)])),
       cursor: Buffer.from(JSON.stringify({ instance: this.instance,
         after: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq) })).toString('base64url'), fetchedAt: now() }));
@@ -216,8 +221,15 @@ export class BackendStore {
       return row ? { state: 'recorded', hash: row.hash, receipt: JSON.parse(row.data), execution } : { state: 'absent', execution };
     });
   }
+  attachmentReceiptState(actor, key) {
+    authoriseBlobUpload(this, actor);
+    requireValue(validKey(key), 'invalid_key', 'Bounded idempotency key required');
+    const row = this.db.prepare('SELECT 1 FROM receipts WHERE actor=? AND key=?').get(`${actor.type}:${actor.id}`, key);
+    return { state: row ? 'recorded' : 'absent' };
+  }
   mutate(actor, key, action, payload, fn) {
-    requireValue(validId(key), 'invalid_key', 'Bounded idempotency key required');
+    const checkKey = ['task.attach', 'task.detach'].includes(action) ? validKey : validId;
+    requireValue(checkKey(key), 'invalid_key', 'Bounded idempotency key required');
     return this.transaction(() => {
       const identity = `${actor.type}:${actor.id}`;
       const hash = digest({ action, payload });
@@ -231,10 +243,13 @@ export class BackendStore {
       }
       const reusedSource = action === 'task.create' && payload.externalReference && this.get('reference', this.referenceIdentity(payload.externalReference), false);
       const value = fn();
+      // Nodes on relay/0.2 project task.* events as task records. Attachment
+      // events must never overwrite a task projection with attachment metadata.
       const eventType = value?.permissionRequest && action === 'interactive.request' ? 'grant.requested' :
         value?.permissionRequest && action === 'interactive.cancel' ? 'grant.request_cancelled' :
         action === 'schedule.result_notifications' || action === 'agent.schedule_result_notifications' ? 'schedule.install' :
         action.startsWith('agent.schedule_') ? `schedule.${action.slice('agent.schedule_'.length)}` :
+        ['task.attach', 'task.detach'].includes(action) ? `task_attachment.${action.slice('task.'.length)}` :
         reusedSource ? 'task.reference_reused' : action;
       this.event(eventType, value, actor, key);
       this.db.prepare('INSERT INTO receipts VALUES (?,?,?,?)').run(identity, key, hash, JSON.stringify(value));
@@ -282,6 +297,7 @@ export class BackendStore {
     if (action.startsWith('headless.') || ['agent.headless_grant', 'agent.headless_revoke'].includes(action)) return applyHeadlessSetup(this, actor, action, p, { created, changed });
     if (action.startsWith('message.')) return applyMessage(this, actor, action, p, { created, changed });
     if (action.startsWith('owner_message.')) return applyOwnerMessage(this, actor, action, p, { created, changed });
+    if (['task.attach', 'task.detach'].includes(action)) return applyTaskAttachment(this, actor, action, p, { created, changed });
     if (action === 'run_result.delivery') return recordRunResultDelivery(this, actor, p);
     const taskDisposition = (taskId, status, causation) => {
       if (!taskId) return;
@@ -1327,9 +1343,11 @@ export class BackendStore {
   }
 
   query(kind, { cursor, limit = 100, taskId, status } = {}) {
-    requireValue(['task', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'owner_message', 'monitor_result', 'artifact', 'provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision'].includes(kind), 'invalid_query', 'Unknown collection');
+    requireValue(['task', 'task_attachment', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'owner_message', 'monitor_result', 'artifact', 'provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision'].includes(kind), 'invalid_query', 'Unknown collection');
+    const filterTask = kind === 'task_attachment' ? taskId !== undefined : Boolean(taskId);
+    const filterStatus = kind === 'task_attachment' ? status !== undefined : Boolean(status);
     requireValue(Number.isSafeInteger(limit) && limit > 0 && limit <= 500 &&
-      (!taskId || validId(taskId)) && (!status || typeof status === 'string' && status.length <= 100), 'invalid_query', 'Invalid collection scope');
+      (!filterTask || validId(taskId)) && (!filterStatus || typeof status === 'string' && status.length <= 100), 'invalid_query', 'Invalid collection scope');
     const scope = digest({ kind, limit, taskId: taskId ?? null, status: status ?? null });
     let after = '';
     if (cursor) {
@@ -1341,9 +1359,10 @@ export class BackendStore {
     }
     const items = this.db.prepare(`SELECT data FROM entities WHERE kind=? AND id>?
       ${kind === 'agent' ? "AND json_extract(data,'$.deletedAt') IS NULL" : ''}
-      ${taskId ? "AND json_extract(data,'$.taskId')=?" : ''}
-      ${status ? "AND COALESCE(json_extract(data,'$.status'),json_extract(data,'$.state'))=?" : ''} ORDER BY id LIMIT ?`)
-      .all(kind, after, ...(taskId ? [taskId] : []), ...(status ? [status] : []), limit + 1).map(row => JSON.parse(row.data));
+      ${filterTask ? "AND json_extract(data,'$.taskId')=?" : ''}
+      ${filterStatus ? "AND COALESCE(json_extract(data,'$.status'),json_extract(data,'$.state'))=?" : ''}
+      ${kind === 'task_attachment' && !filterStatus ? "AND json_extract(data,'$.state')='active'" : ''} ORDER BY id LIMIT ?`)
+      .all(kind, after, ...(filterTask ? [taskId] : []), ...(filterStatus ? [status] : []), limit + 1).map(row => JSON.parse(row.data));
     const hasMore = items.length > limit;
     const page = items.slice(0, limit);
     return { items: page, nextCursor: hasMore ? Buffer.from(JSON.stringify({ instance: this.instance, scope, after: page.at(-1).id })).toString('base64url') : null,

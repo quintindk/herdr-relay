@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 24 November 2026
+
+- Share files across nodes on native Relay tasks. The CLI streams uploads and
+  verified downloads, the node socket proxies assigned worker transfers, and
+  Task Detail lists active attachments with download hints.
+- Keep worker file operations inside the anchored workspace and assigned task.
+  Enrolled read-only callers see metadata only. Human owner or operator detach
+  retains audit history and collects unreferenced blobs after commit.
+- Store bytes in a private content-addressed blob directory beside SQLite.
+  Protocol and database schemas are unchanged.
+- Press **c** in Inbox details to copy the full message without marking it read.
+  Relay supports native clipboards and OSC 52 for compatible SSH and Herdr terminals.
+
 ## 0.2.13 — 19 November 2026
 
 - Accept structured native OpenCode `agent-switched` events and built-in

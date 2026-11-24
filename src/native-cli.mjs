@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,22 @@ import { renameHerdrWorkspace } from '../packages/opencode-relay/herdr-session.m
 import { nativeWorkerApi } from './native-worker-api.mjs';
 import { relocateInteractive } from './native-agent-relocation.mjs';
 import { executionCliInvocation, readOnlyCliInvocation, nativeCliCollections } from './native-cli-surface.mjs';
+import { attachTaskFile, listTaskAttachments, downloadTaskAttachment, detachTaskAttachment } from './task-attachments-cli.mjs';
+import { withinRoots } from './interactive-contract.mjs';
+
+function executionFileScope(context, contextPath) {
+  const active = process.env.RELAY_CLI_WORKSPACE_DIR ? resolve(process.env.RELAY_CLI_WORKSPACE_DIR) : undefined;
+  const enrolled = context.directory ? resolve(context.directory) : undefined;
+  requireValue(active || enrolled, 'execution_workspace_required', 'Execution file operations require an authorised workspace root', 403);
+  requireValue(!active || !enrolled || withinRoots(active, [enrolled]), 'execution_workspace_mismatch',
+    'The active workspace must be within the enrolled workspace', 403);
+  const defaults = [join(homedir(), '.config'), join(homedir(), '.local/state'), join(homedir(), '.local/share'),
+    process.env.XDG_CONFIG_HOME, process.env.XDG_STATE_HOME, process.env.XDG_DATA_HOME].filter(Boolean);
+  return { workspaceRoot: active || enrolled, enrolledRoot: enrolled, workspaceIdentity: context.directoryIdentity,
+    excludedRoots: [dirname(resolve(context.socketPath)), dirname(resolve(contextPath)), dirname(realpathSync(contextPath)),
+    ...[process.env.RELAY_CLI_STATE_DIR, process.env.RELAY_NATIVE_CONTEXT && dirname(resolve(process.env.RELAY_NATIVE_CONTEXT))].filter(Boolean).map(dir => resolve(dir)),
+    ...defaults.flatMap(dir => ['herdr-relay', 'herdr-relay-native', 'herdr-relay-backend'].map(name => join(dir, name)))] };
+}
 
 export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
   headless provision|inspect --file MANIFEST_JSON [--config NODE_JSON] [--apply] [--schedule-output NEW_JSON]
@@ -45,6 +61,10 @@ export const nativeHelp = `herdr-relay native (Tasks and Collaboration)
   task create|edit|comment --file PAYLOAD_JSON --key KEY
   task resolve VALUE [--scope ALIAS_SCOPE]  [returns resolved, ambiguous or not_found, never guesses]
   task resolve --reference REL-32  [explicit primary-reference lookup]
+  task attach TASK --file PATH --key KEY [--name NAME] [--mime TYPE]
+  task attachments TASK [--limit N] [--cursor TOKEN] [--status active|detached]
+  task download TASK ATTACHMENT --output PATH [--force]
+  task detach TASK ATTACHMENT --revision N --key KEY [--reason TEXT]
   task-reference grant|revoke --file PAYLOAD_JSON --key KEY --context OWNER_JSON  [backend-root namespace approval]
   task-reference list|inspect [ID] --context CONTEXT  [inspect namespace-grant revisions]
   task complete|cancel ID --revision N --key KEY  [human task status only, not native execution settlement]
@@ -93,10 +113,10 @@ export async function main(args) {
   }
   if (await nativeAdmin(args)) return;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation', 'reference', 'scope', 'inbox', 'requester', 'from-directory', 'preview-hash'].map(k => [k, { type: 'string' }])),
-    help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' }, apply: { type: 'boolean' },
+    ...Object.fromEntries(['context', 'file', 'key', 'revision', 'reason', 'cron', 'timezone', 'limit', 'cursor', 'config', 'directory', 'session', 'transport', 'service-registration', 'config-dir', 'evidence-file', 'name', 'agent', 'generation', 'reference', 'scope', 'inbox', 'requester', 'from-directory', 'preview-hash', 'output', 'mime', 'status'].map(k => [k, { type: 'string' }])),
+    help: { type: 'boolean' }, here: { type: 'boolean' }, reserved: { type: 'boolean' }, json: { type: 'boolean' }, apply: { type: 'boolean' }, force: { type: 'boolean' },
   } });
-  const [group, action, id] = positionals;
+  const [group, action, id, secondaryId] = positionals;
   if (values.help || !group) { console.log(`${nativeHelp}\n\n${adminHelp}`); return; }
   const output = value => console.log(JSON.stringify(value, null, 2));
   const presentAttachment = async result => {
@@ -105,7 +125,7 @@ export async function main(args) {
     catch { workspaceRename = { state: 'unconfirmed' }; }
     output({ ...result, workspaceRename });
   };
-  requireValue(positionals.length <= 3, 'invalid_request', 'Unexpected positional arguments');
+  requireValue(positionals.length <= (group === 'task' && ['download', 'detach'].includes(action) ? 4 : 3), 'invalid_request', 'Unexpected positional arguments');
   const allowed = group === 'node' && ['install', 'run'].includes(action) ? ['config']
     : group === 'node' && action === 'configure-interactive' ? ['config', 'file']
     : group === 'node' && action === 'ensure' ? ['config', 'session']
@@ -119,6 +139,10 @@ export async function main(args) {
     : group === 'schedule' && action === 'result-notifications' ? ['context', 'revision', 'key', 'inbox', 'requester']
     : group === 'board' ? ['context', 'json']
     : group === 'task' && action === 'resolve' ? ['context', 'reference', 'scope']
+    : group === 'task' && action === 'attach' ? ['context', 'file', 'key', 'name', 'mime']
+    : group === 'task' && action === 'attachments' ? ['context', 'limit', 'cursor', 'status']
+    : group === 'task' && action === 'download' ? ['context', 'output', 'force']
+    : group === 'task' && action === 'detach' ? ['context', 'revision', 'key', 'reason']
     : group === 'interactive' && action === 'repair-preview' ? ['context', 'file']
     : group === 'interactive' && ['grant', 'request', 'dispatch', 'repair-request'].includes(action) ? ['context', 'file', 'key']
     : action === 'list' ? ['context', 'limit', 'cursor'] : action === 'inspect' ? ['context']
@@ -172,6 +196,8 @@ export async function main(args) {
     ? boardContext() : undefined);
   requireValue(path, 'invalid_request', 'Explicit --context or RELAY_NATIVE_CONTEXT is required');
   const context = readPrivateJson(path);
+  requireValue(!(process.env.RELAY_CLI_EXECUTION_ID || process.env.RELAY_CLI_READ_ONLY === '1') || context.socketPath,
+    'cli_context_mismatch', 'Scoped CLI requests require an exact worker socket context', 403);
   const backend = { url: context.url ?? 'http://127.0.0.1:3210', ...(context.cloudflareAccess ? { cloudflareAccess: context.cloudflareAccess } : {}),
     ...(context.trustedHttpProxyOrigin ? { trustedHttpProxyOrigin: context.trustedHttpProxyOrigin } : {}) };
   const api = context.socketPath ? nativeWorkerApi(context, { inputRevision: process.env.RELAY_CLI_INPUT_REVISION, readOnly: process.env.RELAY_CLI_READ_ONLY === '1', executionId: process.env.RELAY_CLI_EXECUTION_ID,
@@ -250,6 +276,18 @@ export async function main(args) {
     requireValue(Boolean(id) !== Boolean(values.reference), 'invalid_request', 'Choose VALUE or --reference REF');
     const query = new URLSearchParams({ ...(id ? { value: id } : { reference: values.reference }), ...(values.scope ? { scope: values.scope } : {}) });
     output(await api('GET', `/v1/task-identity?${query}`)); return;
+  }
+  if (group === 'task' && ['attach', 'attachments', 'download', 'detach'].includes(action)) {
+    requireValue(id, 'invalid_request', 'Exact task ID or reference is required');
+    const fileScope = context.socketPath && ['attach', 'download'].includes(action) ? executionFileScope(context, path) : {};
+    if (action === 'attach') output(await attachTaskFile(api, { taskRef: id, filePath: values.file, key: values.key, name: values.name, mimeType: values.mime, ...fileScope }));
+    else if (action === 'attachments') output(await listTaskAttachments(api, { taskRef: id, limit: values.limit, cursor: values.cursor, status: values.status }));
+    else if (action === 'download') output(await downloadTaskAttachment(api, { taskRef: id, attachmentId: secondaryId, outputPath: values.output, force: values.force, ...fileScope }));
+    else {
+      requireValue(/^[1-9]\d*$/.test(values.revision ?? ''), 'invalid_request', 'Exact --revision positive integer is required');
+      output(await detachTaskAttachment(api, { taskRef: id, attachmentId: secondaryId, revision: Number(values.revision), key: values.key, reason: values.reason }));
+    }
+    return;
   }
   if (collections[group] && ['list', 'inspect'].includes(action)) {
     requireValue(action === 'list' ? !id : Boolean(id), 'invalid_request', 'Inspect requires an ID. List takes no ID');

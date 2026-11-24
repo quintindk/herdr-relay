@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { BackendStore, backendProtocol } from './backend-store.mjs';
 import { RelayError, requireValue } from './protocol.mjs';
 import { interactiveAuthority } from './interactive-contract.mjs';
@@ -14,20 +15,24 @@ import { issueGrantApprovalSession, nodeGrantPolicy } from './grants.mjs';
 import { interactiveRepairPreview } from './interactive-repair.mjs';
 import { agentDeletionPreview } from './agent-lifecycle.mjs';
 import { runResultDeliveryView } from './run-result-notifications.mjs';
+import { authoriseAttachmentRead, authoriseBlobUpload, validateAttachmentSize } from './task-attachments.mjs';
+import { decodeAttachmentReceiptKey } from './attachment-transport.mjs';
 
 const equal = (a, b) => {
   const x = Buffer.from(a ?? ''), y = Buffer.from(b ?? '');
   return x.length > 0 && x.length === y.length && timingSafeEqual(x, y);
 };
 
-export async function startBackend({ database, userId = 'owner', port = 0, ingressKeys = [], maintenanceFile }) {
-  const store = new BackendStore(database, { userId });
+export async function startBackend({ database, userId = 'owner', port = 0, ingressKeys = [], maintenanceFile, blobDirectory }) {
+  const store = new BackendStore(database, { userId, blobDirectory });
   const server = createServer(async (req, res) => {
     try {
+      const url = new URL(req.url, 'http://relay');
+      const blobUpload = req.method === 'PUT' && /^\/v1\/blobs\/[^/]+$/.test(url.pathname);
+      req.setTimeout(blobUpload ? 30000 : 15000);
       if (ingressKeys.length) requireValue(ingressKeys.some(key => equal(req.headers['x-api-key'], key)),
         'unauthorised', 'Valid ingress key required', 401);
       const actor = store.authenticate(req.headers.authorization?.replace(/^Bearer /, '') ?? '');
-      const url = new URL(req.url, 'http://relay');
       if (actor.scope?.kind === 'grant_approval') requireValue(req.method === 'GET' && url.pathname === '/v1/info' || req.method === 'POST' && url.pathname === '/v1/commands',
         'forbidden', 'Human Grants sessions are limited to grant decisions', 403);
       const maintenance = Boolean(maintenanceFile && existsSync(maintenanceFile));
@@ -40,7 +45,7 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       let result;
       if (req.method === 'GET' && url.pathname === '/v1/info') result = { protocol: backendProtocol, instanceId: store.instance, userId: store.owner,
         version: releaseVersion, compatibility, maintenance,
-        features: { activeProviderConnections: true, ownerInboxMessages: true, agentDeletion: true, humanScheduleManagement: true, boundedCollaboration: true, interactiveRecovery: true, interactiveCapacity: true, interactiveGrantMatching: true, agentRename: true, agentWorkspaceRelocation: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true } };
+        features: { activeProviderConnections: true, ownerInboxMessages: true, agentDeletion: true, humanScheduleManagement: true, boundedCollaboration: true, interactiveRecovery: true, interactiveCapacity: true, interactiveGrantMatching: true, agentRename: true, agentWorkspaceRelocation: true, taskRevisionHandback: true, runResultNotifications: true, administrativeHandback: true, headlessContractRevisions: true, interactiveExistingTaskDispatch: true, scheduledHeadlessAdmission: true, nodeMachineAdvertisement: true, interactiveProvisioning: true, grantsManagement: true, scopedNodeBootstrap: true, agentMessages: true, agentMessageReplies: true, headlessSetup: true, headlessCapabilities: true, headlessToolPermissions: true, nodeHeadlessGrants: true, taskIdentity: true, taskAttachments: true } };
       else if (req.method === 'GET' && url.pathname === '/v1/identity') result = { type: actor.type, id: actor.id,
         credentialId: actor.credentialId, scope: actor.scope ?? null, instanceId: store.instance };
       else if (req.method === 'GET' && /^\/v1\/agents\/[^/]+\/delete-preview$/.test(url.pathname)) {
@@ -51,6 +56,10 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       else if (req.method === 'GET' && /^\/v1\/command-receipts\/[^/]+$/.test(url.pathname)) {
         requireValue(url.searchParams.size === 1 && url.searchParams.has('executionId'), 'invalid_query', 'Exact owning execution required');
         result = store.commandReceipt(actor, decodeURIComponent(url.pathname.split('/')[3]), url.searchParams.get('executionId'));
+      }
+      else if (req.method === 'GET' && /^\/v1\/task-attachment-receipts\/[^/]+$/.test(url.pathname)) {
+        requireValue(url.searchParams.size === 0, 'invalid_query', 'Attachment receipt lookup takes no query parameters');
+        result = store.attachmentReceiptState(actor, decodeAttachmentReceiptKey(url.pathname.split('/')[3]));
       }
       else if (req.method === 'GET' && /^\/v1\/nodes\/[^/]+\/provisioning-policy$/.test(url.pathname)) result = nodeGrantPolicy(store, decodeURIComponent(url.pathname.split('/')[3]));
       else if (req.method === 'GET' && /^\/v1\/provision_requests\/[^/]+\/authority$/.test(url.pathname)) {
@@ -93,9 +102,42 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       }
       else if (req.method === 'GET' && url.pathname === '/v1/events') result = store.events({ cursor: url.searchParams.get('cursor') ?? undefined,
         limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined });
-      else if (req.method === 'GET' && /^\/v1\/(task|task_reference_grant|review_grant|grant_request|grant_decision|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact|provision_grant|provision_request|headless_grant|headless_setup)s(?:\/[^/]+)?$/.test(url.pathname)) {
+      else if (blobUpload) {
+        authoriseBlobUpload(store, actor);
+        requireValue(url.searchParams.size === 0, 'invalid_query', 'Blob upload takes no query parameters');
+        const length = req.headers['content-length'];
+        requireValue(length === undefined || /^\d+$/.test(length), 'invalid_attachment', 'Content-Length must be a non-negative integer');
+        const expectedSize = length === undefined ? undefined : validateAttachmentSize(Number(length));
+        result = await store.blobs.putStream(url.pathname.split('/')[3], req, { expectedSize });
+      }
+      else if (req.method === 'GET' && /^\/v1\/tasks\/[^/]+\/attachments\/[^/]+\/content$/.test(url.pathname)) {
+        authoriseAttachmentRead(store, actor);
+        requireValue(url.searchParams.size === 0, 'invalid_query', 'Attachment content takes no query parameters');
+        const [, , , taskId, , id] = url.pathname.split('/');
+        const attachment = store.get('task_attachment', decodeURIComponent(id));
+        requireValue(attachment.taskId === decodeURIComponent(taskId), 'not_found', 'Unknown task attachment', 404);
+        requireValue(attachment.state === 'active', 'attachment_detached', 'Attachment was detached and its content is no longer available', 410);
+        const { stream, size } = store.blobs.openReadStream(attachment.sha256);
+        if (size !== attachment.size) {
+          stream.destroy();
+          throw new RelayError('blob_size_mismatch', 'Blob size does not match the attachment size', 500);
+        }
+        const filename = attachment.name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(size),
+          'X-Content-SHA256': attachment.sha256, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store',
+          'Content-Disposition': `attachment; filename="${filename}"` });
+        await pipeline(stream, res);
+        return;
+      }
+      else if (req.method === 'GET' && /^\/v1\/(task|task_attachment|task_reference_grant|review_grant|grant_request|grant_decision|execution|question|agent|node|comment|schedule|occurrence|notification|monitor_result|artifact|provision_grant|provision_request|headless_grant|headless_setup)s(?:\/[^/]+)?$/.test(url.pathname)) {
         const [, plural, id] = url.pathname.split('/').slice(1);
         const kind = plural.slice(0, -1);
+        if (kind === 'task_attachment') {
+          authoriseAttachmentRead(store, actor);
+          if (id) requireValue(url.searchParams.size === 0, 'invalid_query', 'Exact attachment inspection takes no collection filters');
+          else requireValue([...url.searchParams.keys()].every(key => url.searchParams.getAll(key).length === 1),
+            'invalid_query', 'Attachment collection filters cannot be repeated');
+        }
         requireValue([...url.searchParams.keys()].every(key => ['cursor', 'taskId', 'status', 'limit'].includes(key)),
           'invalid_query', 'Unsupported collection filters');
         result = id ? store.get(kind, decodeURIComponent(id), true, true) : store.query(kind, {
@@ -150,11 +192,13 @@ export async function startBackend({ database, userId = 'owner', port = 0, ingre
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(result));
     } catch (error) {
-      res.writeHead(error instanceof RelayError ? error.status : 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      if (res.destroyed || res.headersSent) return;
+      res.writeHead(error instanceof RelayError ? error.status : 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+        ...(req.method === 'PUT' && !req.complete ? { Connection: 'close' } : {}) });
       res.end(JSON.stringify({ code: error.code ?? 'internal_error', message: error instanceof RelayError ? error.message : 'Backend request failed' }));
     }
   });
-  server.requestTimeout = 15000;
+  server.requestTimeout = 120000;
   server.headersTimeout = 10000;
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });

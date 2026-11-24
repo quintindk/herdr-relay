@@ -12,6 +12,7 @@ for native work.
 | CLI surface | Bridge |
 |---|---|
 | Task create, edit, comment, resolve, inspect, list, complete, cancel | `relay_cli` with `native task ...` |
+| Task file attach, attachments, download, detach | `relay_cli` with `native task ...` |
 | Execution request, inspect, list, cancel | `relay_cli` with `native execution ...` |
 | Worker read, submit, questions, children, messages and other worker verbs | `relay_cli` with `native work ... --context {worker}` |
 | Schedule preview, create, inspect, list, pause, resume, cancel | `relay_cli` with `native schedule ...` |
@@ -78,6 +79,23 @@ and call the same CLI execution-request operation:
 There is no active-parent-execution requirement for this human-chat route. It does
 not provision an agent. Source/origin fields, where supplied, use the actual
 originating agent and chat rather than fabricated identifiers.
+
+## Task file attachments
+
+During an accepted interactive execution, omit `--context` or use
+`--context {worker}`. The bridge scopes `native task attachments`, `download`
+and `attach` to the assigned task. For file transfers, use real paths inside
+the anchored workspace in `--file` and `--output`. The CLI and node socket
+enforce the current execution scope. `detach` needs human owner/operator authority.
+
+Placeholders are recognised only as values for their designated options before
+`--`. In particular, `{operator}` and `{worker}` are not attachment filenames
+or output paths. `{payload}` is for private JSON, not a workspace upload.
+
+Positively identified permission, question and message notices use enrolled
+read-only authority, not operator or execution authority. They can list attachment
+metadata with `attachments` but cannot download, attach or detach. See
+[task file attachments](task-attachments.md#authority-and-workspace-boundaries).
 
 ## Runtime behaviour
 

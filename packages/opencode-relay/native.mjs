@@ -74,6 +74,7 @@ export class NativeOpenCodeV2 {
     // All callers enforce local admission. No retry or atomic idle-and-send claim.
     return this.client.session.prompt({ sessionID: this.identity.sessionId,
       id: invocation.messageId, text: invocation.prompt, delivery: 'queue', metadata: { herdrRelayInvocation: invocation.messageId,
+        ...(invocation.noticeKind ? { herdrRelayNotice: invocation.noticeKind } : {}),
         ...(invocation.runResultNotice ? { herdrRelayRunResult: invocation.runResultNotice } : {}) } }, options);
   }
 }

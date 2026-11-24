@@ -23,11 +23,11 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-stable version **0.2.13**. Its release assets and verification report must be
+stable version **0.3.0**. Its release assets and verification report must be
 published before installation or a live upgrade:
 
 ```sh
-herdr-relay release install --version 0.2.13
+herdr-relay release install --version 0.3.0
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -53,15 +53,15 @@ skills or configuration.
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.2.13 --key stable-0213-backend-host
-herdr-relay upgrade --services both --version 0.2.13 --key stable-0213-backend-host --apply
+herdr-relay upgrade --services both --version 0.3.0 --key stable-030-backend-host
+herdr-relay upgrade --services both --version 0.3.0 --key stable-030-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.2.13 --key stable-0213-node-host
-herdr-relay upgrade --services node --version 0.2.13 --key stable-0213-node-host --apply
+herdr-relay upgrade --services node --version 0.3.0 --key stable-030-node-host
+herdr-relay upgrade --services node --version 0.3.0 --key stable-030-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -74,8 +74,14 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4 through 0.2.13 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through 0.3.0 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
+
+Upgrade the backend and participating nodes and plugins to 0.3.0 to use
+[task file attachments](task-attachments.md). No SQLite migration is required.
+`blobs/` lives alongside `backend.sqlite`, outside `serviceIdentity` fingerprints
+and SQLite snapshots. Back it up with the matching SQLite snapshot for full-state
+recovery. The built-in SQLite backup covers attachment metadata, not file bytes.
 
 For 0.2.9 requester result-delivery fixes, upgrade both the backend and requester
 node. This enables backend-clock presence validation and correlated delivery

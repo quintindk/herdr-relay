@@ -10,13 +10,17 @@ import { createNodeBundle, joinNode } from '../../../src/native-onboarding.mjs';
 import { nativeAdministrationGroups } from '../../../src/native-cli-surface.mjs';
 
 function fixture() {
-  const f = { tools: [], calls: [], messages: [{ id: 'human', type: 'user', text: 'Create the task and send it to the other agent.', time: { created: 1 } },
+  const f = { tools: [], calls: [], lookups: [], messages: [{ id: 'human', type: 'user', text: 'Create the task and send it to the other agent.', time: { created: 1 } },
     { id: 'assistant', type: 'assistant', content: [] }], session: { location: { directory: '/workspace' } },
     worker: { sessionId: 'session', agentId: 'source', bindingId: 'binding', bindingRevision: 1 } };
   f.ctx = { options: { workerDirectory: '/node' }, location: { directory: '/workspace' },
     session: { get: async () => f.session, context: async () => f.messages }, permission: { assert: async () => { await f.onPermission?.(); } } };
   registerCliBridge({ add: tool => f.tools.push(tool) }, f.ctx, { connection: () => f.worker, workerContextPath: () => '/node/worker.json',
-    request: async (...args) => { assert.ok(f.current, 'No accepted execution was supplied'); return f.current; },
+    request: async (...args) => {
+      f.lookups.push(args);
+      if (f.currentError) throw f.currentError;
+      assert.ok(f.current, 'No accepted execution was supplied'); return f.current;
+    },
     runCli: async input => { f.calls.push(input); return { exitCode: 0, stdout: '{}', stderr: '', effectsUncertain: false }; } });
   f.invoke = input => f.tools.find(tool => tool.name === 'relay_cli').execute(input, { sessionID: 'session', messageID: 'assistant', agent: 'build', id: 'tool' });
   return f;
@@ -41,10 +45,36 @@ test('a current human may explicitly select worker context for an ordinary read 
   assert.equal(result.authority, 'enrolled_read_only'); assert.equal(result.context, 'worker'); assert.equal(result.operatorContextUsed, false);
   let assigned;
   await runRelayCli({ args: ['native', 'task', 'inspect', 'task', '--context', '{worker}'], directory: '/workspace',
-    workerContextFile: '/node/worker.json', executionSource: { executionId: 'execution', runId: 'run', id: 'source' } }, { run: async (_command, _args, options) => {
+    workerContextFile: '/node/worker.json', stateDirectory: '/node', executionSource: { executionId: 'execution', runId: 'run', id: 'source' } }, { run: async (_command, _args, options) => {
     assigned = options.env; return { stdout: '{}' };
   } });
   assert.equal(assigned.RELAY_CLI_READ_ONLY, ''); assert.equal(assigned.RELAY_CLI_EXECUTION_ID, 'execution');
+  assert.equal(assigned.RELAY_CLI_WORKSPACE_DIR, '/workspace'); assert.equal(assigned.RELAY_CLI_STATE_DIR, '/node');
+  assert.equal(environment.RELAY_CLI_WORKSPACE_DIR, ''); assert.equal(environment.RELAY_CLI_STATE_DIR, '');
+});
+
+test('credential and node config placeholders never resolve as attachment source or output paths', async () => {
+  const config = { directory: '/workspace', workerContextFile: '/node/worker.json', operatorContextFile: '/node/operator.json', nodeConfigFile: '/node/node.json' };
+  const fail = { run: () => assert.fail('Refused arguments must not start a child process') };
+  for (const placeholder of ['{worker}', '{operator}', '{node-config}']) {
+    for (const args of [['native', 'task', 'attach', 'REL-1', '--file', placeholder], ['native', 'task', 'download', 'REL-1', 'att-id', '--output', placeholder]]) {
+      await assert.rejects(runRelayCli({ ...config, args }, fail), { code: 'cli_context_mismatch' });
+      await assert.rejects(runRelayCli({ ...config, executionSource: { id: 'source' }, args }, fail), { code: 'cli_context_mismatch' });
+      await assert.rejects(runRelayCli({ ...config, agentReadSource: { id: 'notice' }, args }, fail), { code: 'cli_context_mismatch' });
+    }
+  }
+  for (const scope of [{ executionSource: { id: 'source' } }, { agentReadSource: { id: 'notice' } }]) {
+    await assert.rejects(runRelayCli({ ...config, ...scope, args: ['native', 'task', 'attachments', 'REL-1', '--config', '{node-config}'] }, fail),
+      { code: 'cli_context_unavailable' });
+    await assert.rejects(runRelayCli({ ...config, ...scope, args: ['native', 'task', 'attachments', 'REL-1', '--context', '/node/operator.json'] }, fail),
+      { code: 'cli_context_mismatch' });
+  }
+  await assert.rejects(runRelayCli({ ...config, args: ['native', 'task', 'download', '--', '--context', '{worker}'] }, fail), { code: 'cli_context_mismatch' });
+  const args = ['native', 'task', 'download', '--output', 'attachment.bin', '--', 'REL-1', '--context'];
+  await runRelayCli({ ...config, args }, { run: async (_command, argv) => {
+    assert.deepEqual(argv.slice(1), args);
+    return { stdout: '{}' };
+  } });
 });
 
 test('instruction loads and exact shell completions preserve human CLI provenance without granting authority to notifications', async () => {
@@ -156,6 +186,10 @@ test('a matching accepted execution uses worker CLI context and cannot become an
   await f.invoke({ args: ['native', 'task', 'comment', '--key', 'comment', '--file', '{payload}'], payload: { taskId: 'task', body: 'Progress' } });
   assert.equal(f.calls[0].operatorContextFile, undefined); assert.equal(f.calls[0].executionSource.executionId, 'execution');
   assert.equal(f.calls[0].workerContextFile, '/node/worker.json');
+  const list = await f.invoke({ args: ['native', 'task', 'attachments', 'REL-1'] });
+  assert.equal(JSON.parse(list.content).authority, 'execution');
+  assert.equal(f.calls.at(-1).executionSource.id, 'assigned'); assert.equal(f.calls.at(-1).agentReadSource, undefined);
+  assert.equal(f.calls.at(-1).nodeConfigFile, undefined); assert.equal(f.calls.at(-1).stateDirectory, '/node');
   await assert.rejects(runRelayCli({ args: ['backend', 'install'], directory: '/workspace', executionSource: f.calls[0].executionSource },
     { run: () => assert.fail('Lifecycle commands must never execute') }), { code: 'execution_cli_scope' });
   f.current.sourceMessageId = 'other';
@@ -186,17 +220,39 @@ test('native interrupted-stream continuation preserves the actual human or assig
 test('approval notices can reconcile execution/preparation reads without a human phrase, active execution or operator credential', async () => {
   const f = fixture();
   f.messages[0] = { id: 'permission-notice', type: 'user', text: 'Recorded approval evidence, not a human instruction',
-    metadata: { herdrRelayInvocation: 'permission-notice' } };
-  for (const args of [['native', 'execution', 'inspect', 'missing'], ['native', 'task', 'resolve', 'REL-285'], ['native', 'interactive', 'inspect', 'prepared']]) {
+    metadata: { herdrRelayInvocation: 'permission-notice', herdrRelayNotice: 'permission' } };
+  for (const args of [['native', 'execution', 'inspect', 'missing'], ['native', 'task', 'resolve', 'REL-285'], ['native', 'interactive', 'inspect', 'prepared'],
+    ['native', 'task', 'attachments', 'REL-1']]) {
     await f.invoke({ args });
     assert.equal(f.calls.at(-1).agentReadSource.authority, 'agent_read'); assert.equal(f.calls.at(-1).operatorContextFile, undefined);
     assert.equal(f.calls.at(-1).executionSource, undefined);
+    assert.equal(f.calls.at(-1).nodeConfigFile, undefined); assert.equal(f.calls.at(-1).stateDirectory, '/node');
   }
   await assert.rejects(runRelayCli({ args: ['native', 'execution', 'request'], directory: '/workspace', agentReadSource: { authority: 'agent_read' } },
     { run: () => assert.fail('Read-only notice must never dispatch') }), { code: 'agent_cli_read_only' });
-  await assert.rejects(f.invoke({ args: ['native', 'task', 'create'] }), /No accepted execution/);
+  await assert.rejects(f.invoke({ args: ['native', 'task', 'create'] }), { code: 'execution_source_required', status: 403 });
+  assert.equal(f.lookups.length, 0, 'Positively marked notices do not need an execution lookup');
   const headless = fixture(); headless.worker.headlessSetupId = 'setup';
   await assert.rejects(headless.invoke({ args: ['native', 'task', 'list'] }), { code: 'interactive_cli_required' });
+});
+
+test('attachment reads never fall back to enrolled read-only scope on an untagged Relay invocation', async () => {
+  const accepted = { execution: { id: 'execution', runId: 'run', state: 'accepted', cancellationRequested: false }, sourceMessageId: 'assigned' };
+  for (const code of ['lookup_failed', 'reconciliation_failed', 'work_ambiguous']) {
+    const f = fixture();
+    f.messages[0] = { id: 'assigned', type: 'user', metadata: { herdrRelayInvocation: 'assigned' } };
+    f.currentError = Object.assign(new Error(code), { code });
+    await assert.rejects(f.invoke({ args: ['native', 'task', 'attachments', 'REL-1'] }), error => error === f.currentError);
+    assert.equal(f.lookups[0][2], '/work/current'); assert.equal(f.calls.length, 0);
+  }
+  for (const current of [{ ...accepted, blocked: true }, { ...accepted, execution: { ...accepted.execution, cancellationRequested: true } },
+    { ...accepted, sourceMessageId: 'another-assignment' }, { ...accepted, execution: { ...accepted.execution, state: 'completed' } }]) {
+    const f = fixture();
+    f.messages[0] = { id: 'assigned', type: 'user', metadata: { herdrRelayInvocation: 'assigned' } };
+    f.current = current;
+    await assert.rejects(f.invoke({ args: ['native', 'task', 'attachments', 'REL-1'] }), { code: 'execution_source_required', status: 403 });
+    assert.equal(f.lookups[0][2], '/work/current'); assert.equal(f.calls.length, 0);
+  }
 });
 
 test('headless, peer/scheduled input and stale human input cannot use the interactive operator bridge', async () => {

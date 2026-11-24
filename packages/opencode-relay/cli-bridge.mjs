@@ -13,6 +13,8 @@ import { call } from '../../src/client.mjs';
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL('../../src/cli.mjs', import.meta.url));
 const sensitive = /^(?:token|password|secret|clientSecret|apiKey|authorization|accessToken|refreshToken|operatorToken|nodeToken)$/i;
+const placeholderOptions = Object.freeze({ '{operator}': '--context', '{worker}': '--context',
+  '{node-config}': '--config', '{payload}': '--file', '{session}': '--session' });
 
 function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
@@ -27,16 +29,23 @@ export function cliBridgeOutput(text) {
 
 // Invoke the installed CLI itself. There is deliberately no second command or
 // mutation implementation, and no per-operation bridge allowlist to drift.
-export async function runRelayCli({ args, directory, sessionId, operatorContextFile, workerContextFile, nodeConfigFile, executionSource, agentReadSource, payload, timeout = 120000, signal }, { run = execute } = {}) {
+export async function runRelayCli({ args, directory, sessionId, operatorContextFile, workerContextFile, nodeConfigFile, stateDirectory, executionSource, agentReadSource, payload, timeout = 120000, signal }, { run = execute } = {}) {
   requireValue(Array.isArray(args) && args.length > 0 && args.every(arg => typeof arg === 'string' && !arg.includes('\0')),
     'invalid_request', 'CLI arguments must be an array of strings, not a shell command');
   requireValue(nativeCliInvocation(args),
     'legacy_cli_not_supported', 'Use the native CLI: task and execution commands start with native');
+  const terminator = args.indexOf('--'), optionEnd = terminator < 0 ? args.length : terminator;
+  args.forEach((arg, index) => {
+    if (Object.hasOwn(placeholderOptions, arg)) requireValue(index < optionEnd && args[index - 1] === placeholderOptions[arg], 'cli_context_mismatch',
+      `${arg} is only available as the value of ${placeholderOptions[arg]}`);
+  });
   requireValue(!executionSource || executionCliInvocation(args), 'execution_cli_scope',
     'Assigned work has execution scope, not human operator authority. Use ordinary reads or comment/edit on the assigned task; lifecycle, new task creation and dispatch need separate authority', 403);
   requireValue(!agentReadSource || readOnlyCliInvocation(args), 'agent_cli_read_only', 'Enrolled read-only scope cannot create tasks, dispatch work or administer services', 403);
+  const scoped = Boolean(executionSource || agentReadSource);
   let scratch;
-  const substitutions = { '{operator}': operatorContextFile, '{worker}': workerContextFile, '{node-config}': nodeConfigFile, '{session}': sessionId };
+  const substitutions = { '{operator}': scoped ? undefined : operatorContextFile, '{worker}': workerContextFile,
+    '{node-config}': scoped ? undefined : nodeConfigFile, '{payload}': undefined, '{session}': sessionId };
   if (payload !== undefined) {
     requireValue(args.includes('{payload}'), 'invalid_request', 'Use {payload} as the argument for --file');
     scratch = mkdtempSync('/tmp/opencode/relay-cli-');
@@ -54,9 +63,9 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
     });
     // The bridge uses the configured local operator, not a model-selected owner
     // credential. Commands needing backend-root authority still fail in the CLI.
-    for (let i = 0; i < argv.length; i++) if (argv[i] === '--context' || argv[i].startsWith('--context=')) {
-      const selected = argv[i] === '--context' ? argv[++i] : argv[i].slice('--context='.length);
-      requireValue(selected && [operatorContextFile, workerContextFile].filter(Boolean).some(path => resolve(directory, selected) === resolve(path)),
+    for (let i = 0; i < optionEnd; i++) if (argv[i] === '--context' || argv[i].startsWith('--context=')) {
+      const selected = argv[i] === '--context' ? (++i < optionEnd ? argv[i] : undefined) : argv[i].slice('--context='.length);
+      requireValue(selected && [scoped ? undefined : operatorContextFile, workerContextFile].filter(Boolean).some(path => resolve(directory, selected) === resolve(path)),
         'cli_context_mismatch', 'CLI context must be the configured local operator or exact-session worker');
     }
   } catch (error) {
@@ -64,7 +73,7 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
     throw error;
   }
   let result;
-  const contextIndex = argv.findIndex(arg => arg === '--context' || arg.startsWith('--context='));
+  const contextIndex = argv.findIndex((arg, index) => index < optionEnd && (arg === '--context' || arg.startsWith('--context=')));
   const selectedContext = contextIndex < 0 ? executionSource || agentReadSource ? workerContextFile : operatorContextFile :
     argv[contextIndex] === '--context' ? argv[contextIndex + 1] : argv[contextIndex].slice('--context='.length);
   const workerReadOnly = Boolean(agentReadSource || !executionSource && selectedContext === workerContextFile && readOnlyCliInvocation(args));
@@ -78,7 +87,8 @@ export async function runRelayCli({ args, directory, sessionId, operatorContextF
       env: { ...process.env, RELAY_CONTEXT: '', RELAY_NATIVE_CONTEXT: executionSource || agentReadSource ? workerContextFile : operatorContextFile ?? '', OPENCODE_SESSION_ID: sessionId ?? '',
         RELAY_CLI_READ_ONLY: workerReadOnly ? '1' : '',
         RELAY_CLI_EXECUTION_ID: executionSource?.executionId ?? '', RELAY_CLI_RUN_ID: executionSource?.runId ?? '', RELAY_CLI_SOURCE_ID: executionSource?.id ?? '',
-        RELAY_CLI_INPUT_REVISION: executionSource?.inputRevision ?? '' } });
+        RELAY_CLI_INPUT_REVISION: executionSource?.inputRevision ?? '', RELAY_CLI_WORKSPACE_DIR: executionSource ? resolve(directory) : '',
+        RELAY_CLI_STATE_DIR: executionSource && stateDirectory ? resolve(stateDirectory) : '' } });
     if (scratch) rmSync(scratch, { recursive: true, force: true });
     return { exitCode: 0, stdout: cliBridgeOutput(result.stdout ?? ''), stderr: cliBridgeOutput(result.stderr ?? ''), effectsUncertain: false, ...readScope };
   } catch (error) {
@@ -117,10 +127,12 @@ export async function interactiveCliSource(ctx, context, connection = workerConn
   const readSource = () => ({ id: context.messageID, authority: 'agent_read', agentId: worker.agentId, sessionId: context.sessionID });
   let source;
   if (trigger?.type === 'user' && trigger.metadata?.herdrRelayInvocation === trigger.id) {
-    if (standingRead) source = readSource();
-    else {
+    if (['permission', 'question', 'message'].includes(trigger.metadata?.herdrRelayNotice)) {
+      requireValue(standingRead, 'execution_source_required', 'This Relay notice cannot execute mutations or acquire operator authority', 403);
+      source = readSource();
+    } else {
       const current = await request(worker, 'POST', '/work/current', { sessionId: context.sessionID });
-      requireValue(!current.blocked && current.execution?.state === 'accepted' && !current.execution.cancellationRequested && current.sourceMessageId === trigger.id,
+      requireValue(current && !current.blocked && current.execution?.state === 'accepted' && !current.execution.cancellationRequested && current.sourceMessageId === trigger.id,
         'execution_source_required', 'This Relay input has no matching active execution. Peer notices cannot acquire operator authority', 403);
       source = { id: trigger.id, text: trigger.text, createdAt: trigger.time?.created, authority: 'execution', executionId: current.execution.id, runId: current.execution.runId,
         ...(current.inputRevision ? { inputRevision: current.inputRevision } : {}) };
@@ -156,7 +168,9 @@ export function registerCliBridge(editor, ctx, dependencies = {}) {
       const result = await run({ ...input, signal: context.signal, directory: ctx.location.directory, sessionId: context.sessionID,
         operatorContextFile: ['execution', 'agent_read'].includes(source.authority) ? undefined : join(directory, 'operator.json'),
         agentReadSource: source.authority === 'agent_read' ? source : undefined,
-        executionSource: source.authority === 'execution' ? source : undefined, nodeConfigFile: join(directory, 'node.json'),
+        executionSource: source.authority === 'execution' ? source : undefined,
+        nodeConfigFile: ['execution', 'agent_read'].includes(source.authority) ? undefined : join(directory, 'node.json'),
+        stateDirectory: ['execution', 'agent_read'].includes(source.authority) ? directory : undefined,
         workerContextFile: dependencies.workerContextPath?.(ctx.options, context.sessionID) ?? workerContextPath(ctx.options, context.sessionID) });
       return { content: JSON.stringify({ ...result, authority: result.authority ?? (source.authority === 'agent_read' ? 'enrolled_read_only' : source.authority ?? 'human_operator'), sourceMessageId: source.id,
         ...(source.executionId ? { executionId: source.executionId } : {}) }) };

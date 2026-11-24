@@ -12,6 +12,8 @@ export function requireValue(condition, code, message, status = 400) {
   if (!condition) throw new RelayError(code, message, status);
 }
 
+export const validKey = value => typeof value === 'string' && value.length >= 1 && value.length <= 128 && !/[\s\x00-\x1f\x7f]/.test(value);
+
 export function text(value, name) {
   requireValue(typeof value === 'string' && value.trim().length > 0 && value.length <= 65536,
     'invalid_request', `${name} must be a non-empty string`);

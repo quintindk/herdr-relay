@@ -38,6 +38,7 @@ node scripts/verify-headless-setup.mjs --connection-bound-responses --capabiliti
 node scripts/verify-headless-setup.mjs --run-result-notifications --capabilities --shell
 node scripts/verify-inbox-read.mjs
 node scripts/verify-owner-inbox.mjs
+node scripts/verify-task-attachments.mjs
 node scripts/verify-herdr-panel.mjs
 node scripts/verify-upgrade.mjs --active-work
 node scripts/verify-package.mjs
@@ -47,10 +48,18 @@ These use explicit disposable state, fixture model/MCP responses and isolated
 HOME/XDG directories. The Herdr check creates and stops its own named test server.
 Do not redirect them to a user's live state. PTY checks require Python and POSIX.
 
+The root `smoke:v2` and plugin `smoke*` npm scripts are checkout-only development
+verifiers. Their entrypoint files are excluded from the production tarball.
+
 `RELAY_PACKAGE_DIRECTORY` selects an already installed package for supported
 verifiers. `verify-installed-tui.mjs --package DIRECTORY --binary OPENCODE_BINARY`
 checks the actual host renderer. Release verification requires the exact supported
 OpenCode host binaries and a fresh production audit.
+
+The task attachment verifier runs real OpenCode tool calls with a deterministic
+provider and two isolated node identities. It checks operator upload, assigned
+worker download and attach, operator download of the deliverable, detach and blob
+collection. Set `RELAY_V2_BINARY` to check another host without adopting live state.
 
 The recovery verifier uses actual scoped OpenCode tool calls, native receiving
 sessions, the Grants transport and concurrent backend HTTP admission. Its Herdr

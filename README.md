@@ -3,17 +3,15 @@
 Native tasks, agent collaboration and durable node services for **Herdr and
 OpenCode**. Relay owns its task backend. No external task tracker is required.
 
-**[0.2.13](docs/release-0.2.13.md)** removes interactive `agent-switched` input
-conflicts when switching OpenCode primary agents (`Tab` between `build`, `plan`
-and custom agents, or initial TUI selection on a Home-created chat) and accepts
-built-in `opencode.plan` `<system-reminder>` synthetics without pausing the
-active assignment. Install only published, verified assets from
-[GitHub Releases](https://github.com/quintindk/herdr-relay/releases). Existing
-installations must be on **0.2.1-rc4 or later** to upgrade.
+**[0.3.0](docs/release-0.3.0.md)** adds [task file attachments](docs/task-attachments.md)
+for sharing files across nodes without copying them by hand. Install only
+published, verified assets from [GitHub Releases](https://github.com/quintindk/herdr-relay/releases).
+Existing installations must be on **0.2.1-rc4 or later** to upgrade.
 
 ## What it does
 
-- Human-owned tasks with stable references, comments, dependencies and source links.
+- Human-owned tasks with stable references, comments, dependencies, source links
+  and file attachments.
 - Durable agents across receiving-chat changes and multiple machines.
 - Explicit work dispatch, human steering, questions, escalation and reviewed results.
 - Revocable interactive-provisioning and headless-automation grants.
@@ -48,8 +46,8 @@ for managed skills and local Herdr panel setup.
 - **Two-agent work:** [Bounded collaboration](docs/collaboration.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
-- **Release details:** [0.2.13 notes](docs/release-0.2.13.md),
-  [0.2.12 notes](docs/release-0.2.12.md) and
+- **Release details:** [0.3.0 notes](docs/release-0.3.0.md),
+  [0.2.13 notes](docs/release-0.2.13.md) and
   [the changelog](CHANGELOG.md).
 
 Do not reset a backend, delete a journal or repeat bootstrap to perform an upgrade.
@@ -65,6 +63,7 @@ Published versions and their assets are immutable.
 | Tasks, Inbox and result decisions | [Task Inbox](docs/native-task-inbox.md) |
 | Plain agent-to-owner correspondence | [Owner Inbox messages](docs/owner-inbox-messages.md) |
 | Task references and imported aliases | [Task identity](docs/native-task-references.md) |
+| Cross-node file sharing and blob backups | [Task attachments](docs/task-attachments.md) |
 | Interactive peer preparation and dispatch | [Interactive provisioning](docs/native-interactive-provisioning.md) |
 | Blocked preparation and capacity recovery | [Interactive repair](docs/interactive-recovery.md) |
 | Reusable authenticated automation | [Headless setup](docs/headless-authenticated-setup.md) |

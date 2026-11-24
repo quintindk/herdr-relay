@@ -95,6 +95,20 @@ eligible assignment and returns its task to Todo; it cannot discard a submitted
 result or active child work. Task completion is not execution settlement or review
 acceptance. The [TUI](task-board.md) provides a fresh, confirmed handback preview.
 
+### Task file attachments
+
+```sh
+herdr-relay native task attach TASK --file PATH --key KEY [--name NAME] [--mime TYPE]
+herdr-relay native task attachments TASK [--limit N] [--cursor TOKEN] [--status active|detached]
+herdr-relay native task download TASK ATTACHMENT --output PATH [--force]
+herdr-relay native task detach TASK ATTACHMENT --revision N --key KEY [--reason TEXT]
+```
+
+Use a task ID or primary reference. List active metadata by default and follow
+pagination. Download requires an explicit path. Only a human owner or node
+operator can detach, using the attachment revision from the listing. See
+[task file attachments](task-attachments.md) for examples, limits and context scope.
+
 ## Enrolment and receiving chats
 
 Prefer human `/relay-enrol` and `/relay-attach` in the intended OpenCode chat.
