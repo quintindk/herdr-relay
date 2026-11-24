@@ -29,11 +29,12 @@ function fixture(t, policy, { disk = false, reviewPolicy = 'none' } = {}) {
   f.other = f.store.authenticate(f.store.enrolCredential(f.owner, 'other', 'other').token);
   f.command(f.owner, 'agent.enrol', { id: 'mason', nodeId: 'node', name: 'Mason', directory: '/workspace' });
   f.command(f.owner, 'agent.attach', { id: 'mason', expectedBindingRevision: 0, conversationId: 'chat', directory: '/workspace', bindingId: 'receiver' });
-  f.advertise = (availability = 'available') => {
+  f.advertiseAgent = (availability = 'available') => {
     const agent = f.store.get('agent', 'mason');
     f.command(f.node, 'agent.advertise', { id: agent.id, expectedRevision: agent.revision, availability, bindingRevision: agent.bindingRevision, conversationId: agent.conversationId });
-    f.command(f.node, 'node.heartbeat', { id: 'node' });
   };
+  f.heartbeat = () => f.command(f.node, 'node.heartbeat', { id: 'node' });
+  f.advertise = availability => { f.advertiseAgent(availability); f.heartbeat(); };
   f.advertise();
   const worker = f.command(f.node, 'agent.register', { id: 'sweep', nodeId: 'node', name: 'Inbox sweep', mode: 'headless' });
   f.store.save('agent', { ...worker, headlessSetupId: 'setup' });
@@ -120,11 +121,15 @@ test('result and Inbox notification roll back together; post-commit transient ef
 });
 
 test('offline/stale requesters are skipped; reconnecting never replays their old results', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   for (const mode of ['offline', 'stale-agent', 'stale-node']) {
     const f = fixture(t, { inbox: true, requester: true });
     if (mode === 'offline') f.advertise('offline');
-    else { const kind = mode === 'stale-agent' ? 'agent' : 'node', id = kind === 'agent' ? 'mason' : 'node';
-      f.store.save(kind, { ...f.store.get(kind, id), lastSeenAt: '2020-01-01T00:00:00Z' }); }
+    else {
+      t.mock.timers.tick(16000);
+      if (mode === 'stale-agent') f.heartbeat();
+      else f.advertiseAgent();
+    }
     f.publish(); assert.equal(f.store.all('notification').length, 1); assert.equal(f.take().items.length, 0);
     f.advertise(); assert.equal(f.take().items.length, 0);
   }
@@ -361,7 +366,10 @@ test('backend restart preserves diagnostics but does not restore online result q
   const queued = f.publish();
   f.store.close(); f.store = new BackendStore(f.path);
   assert.equal(f.store.get('run_result_delivery', `run-result:${queued.id}`).reason, 'backend_restarted_before_take');
-  f.publish({ slot: '2026-10-28T07:00:00Z' }); f.take();
+  const offline = f.publish({ slot: '2026-10-28T07:00:00Z' });
+  assert.equal(f.store.get('run_result_delivery', `run-result:${offline.id}`).reason, 'requester_not_online');
+  assert.equal(f.take().items.length, 0);
+  f.advertise();
   const claimed = f.publish({ slot: '2026-10-28T08:00:00Z' }); f.take();
   f.store.close(); f.store = new BackendStore(f.path);
   const delivery = f.store.get('run_result_delivery', `run-result:${claimed.id}`);

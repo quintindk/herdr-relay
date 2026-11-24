@@ -23,11 +23,11 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-stable version **0.3.0**. Its release assets and verification report must be
+stable version **0.3.1**. Its release assets and verification report must be
 published before installation or a live upgrade:
 
 ```sh
-herdr-relay release install --version 0.3.0
+herdr-relay release install --version 0.3.1
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -50,18 +50,30 @@ skills or configuration.
 
 ## 2. Plan, then apply with the same key
 
+If pre-0.3.1 databases have grown large, stop the affected services after CLI
+activation and [compact them offline](maintenance-recovery.md#offline-database-compaction)
+before applying the upgrade. Upgrade backups then copy the compacted databases.
+The upgrader leaves previously stopped units stopped. Start any units you stopped
+for compaction after the upgrade, backend before nodes.
+
+Backend compaction preserves `sqlite_sequence` and keeps one trailing presence
+row only if needed to preserve `MAX(changes.seq)`, the cursor bound used by 0.3.0.
+This preserves node cursor continuity on compatible rollback. If `changes` was
+already truncated externally and `sqlite_sequence` is ahead of the event tail,
+0.3.0 still cannot accept cursors above that tail.
+
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.3.0 --key stable-030-backend-host
-herdr-relay upgrade --services both --version 0.3.0 --key stable-030-backend-host --apply
+herdr-relay upgrade --services both --version 0.3.1 --key stable-031-backend-host
+herdr-relay upgrade --services both --version 0.3.1 --key stable-031-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.3.0 --key stable-030-node-host
-herdr-relay upgrade --services node --version 0.3.0 --key stable-030-node-host --apply
+herdr-relay upgrade --services node --version 0.3.1 --key stable-031-node-host
+herdr-relay upgrade --services node --version 0.3.1 --key stable-031-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -74,10 +86,10 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4 through 0.3.0 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through 0.3.1 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
 
-Upgrade the backend and participating nodes and plugins to 0.3.0 to use
+Upgrade the backend and participating nodes and plugins to 0.3.0 or later to use
 [task file attachments](task-attachments.md). No SQLite migration is required.
 `blobs/` lives alongside `backend.sqlite`, outside `serviceIdentity` fingerprints
 and SQLite snapshots. Back it up with the matching SQLite snapshot for full-state

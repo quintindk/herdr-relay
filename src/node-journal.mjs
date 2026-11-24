@@ -1,18 +1,27 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { canonical, digest, now, requireValue } from './protocol.mjs';
 import { refusedDispatchErrors } from './interactive-dispatch-reconciliation.mjs';
 import { publicationOutcome, definitivePublicationRefusal } from './publication-outcomes.mjs';
+import { assertNotCompacting } from './compact-lock.mjs';
 
 export const abandonedWork = work => work?.state === 'administratively_abandoned';
 export const commandWorkId = command => command.payload?.executionId ?? command.payload?.parentExecutionId ??
   (command.action === 'schedule.ask' ? command.payload?.occurrenceId :
     command.action.startsWith('execution.') || ['schedule.publish', 'schedule.fail'].includes(command.action) ? command.payload?.id : undefined);
 
+function durablePresenceFields(data) {
+  const { lastSeenAt: _ignored, ...durable } = data;
+  return canonical(durable);
+}
+
 // Local node transport journal, separate from shared task storage and legacy runs.
 export class NodeJournal {
   constructor(path, { nodeId, instanceId, maxPending = 10000 }) {
     requireValue(Number.isSafeInteger(maxPending) && maxPending > 0, 'invalid_capacity', 'Positive outbox capacity required');
+    this.stateDirectory = path === ':memory:' ? null : dirname(resolve(path));
+    if (this.stateDirectory) assertNotCompacting(this.stateDirectory);
     this.db = new DatabaseSync(path);
     if (path !== ':memory:') chmodSync(path, 0o600);
     requireValue(this.db.prepare('PRAGMA user_version').get().user_version <= 1,
@@ -40,6 +49,7 @@ export class NodeJournal {
   close() { this.db.close(); }
   transaction(fn) {
     if (this.inTransaction) return fn();
+    if (this.stateDirectory) assertNotCompacting(this.stateDirectory);
     this.db.exec('BEGIN IMMEDIATE');
     this.inTransaction = true;
     try { const result = fn(); this.db.exec('COMMIT'); return result; }
@@ -51,8 +61,12 @@ export class NodeJournal {
     requireValue(snapshot.instanceId === this.instanceId && snapshot.protocol === 'relay/0.2' && snapshot.collections &&
       typeof snapshot.cursor === 'string', 'snapshot_identity_mismatch', 'Snapshot must belong to the pinned native backend');
     const events = [];
-    for (const kind of ['task', 'comment', 'agent', 'node']) for (const entity of snapshot.collections[kind] ?? []) events.push({
-      id: `snapshot:${kind}:${entity.id}:${entity.revision}`, type: `${kind}.snapshot`, entityId: entity.id, revision: entity.revision, data: entity });
+    for (const kind of ['task', 'comment', 'agent', 'node']) for (const entity of snapshot.collections[kind] ?? []) {
+      const seen = kind === 'node' ? snapshot.presence?.nodes?.[entity.id] :
+        kind === 'agent' && !entity.deletedAt ? snapshot.presence?.agents?.[entity.id] : undefined;
+      events.push({ id: `snapshot:${kind}:${entity.id}:${entity.revision}`, type: `${kind}.snapshot`, entityId: entity.id,
+        revision: entity.revision, data: typeof seen === 'string' ? { ...entity, lastSeenAt: seen } : entity });
+    }
     for (const execution of snapshot.collections.execution ?? []) events.push({ id: `snapshot:execution:${execution.id}:${execution.revision}`,
       type: 'execution.snapshot', entityId: execution.id, revision: execution.revision, data: execution });
     for (const question of snapshot.collections.question ?? []) if (question.status === 'open') events.push({
@@ -69,19 +83,25 @@ export class NodeJournal {
     for (const message of snapshot.collections.message ?? []) events.push({ id: `snapshot:message:${message.id}:${message.revision}`,
       type: 'message.snapshot', entityId: message.id, revision: message.revision, data: message });
     // Native delivery intent/history is never replaced from a shared snapshot.
-    // Only newer backend projections and new addressed work are merged.
+    // Only newer backend projections and new addressed work are merged. Node
+    // and agent snapshots are cache projections, not immutable inbox records.
     this.consume({ items: events, cursor: snapshot.cursor });
   }
   consume(page) {
     requireValue(Array.isArray(page.items) && typeof page.cursor === 'string' &&
       page.items.every(event => event && typeof event.id === 'string' && event.id && typeof event.type === 'string' &&
-        typeof event.entityId === 'string' && Number.isSafeInteger(event.revision) && event.revision > 0 && event.data && event.data.id === event.entityId),
+        typeof event.entityId === 'string' && Number.isSafeInteger(event.revision) && event.revision > 0 && event.data &&
+        event.data.id === event.entityId && event.data.revision === event.revision),
       'invalid_events', 'Valid event page required');
+    if (page.items.length === 0 && page.cursor === this.cursor()) return;
     return this.transaction(() => {
       for (const event of page.items) {
-        const previous = this.db.prepare('SELECT data FROM inbox WHERE id=?').get(event.id);
-        if (previous) { requireValue(previous.data === JSON.stringify(event), 'event_conflict', 'Event identity payload changed'); continue; }
-        this.db.prepare('INSERT INTO inbox VALUES (?,?)').run(event.id, JSON.stringify(event));
+        const presenceProjection = ['node.heartbeat', 'agent.advertise', 'node.snapshot', 'agent.snapshot'].includes(event.type);
+        if (!presenceProjection) {
+          const data = JSON.stringify(event), previous = this.db.prepare('SELECT data FROM inbox WHERE id=?').get(event.id);
+          if (previous) { requireValue(previous.data === data, 'event_conflict', 'Event identity payload changed'); continue; }
+          this.db.prepare('INSERT INTO inbox VALUES (?,?)').run(event.id, data);
+        }
         if (['headless.request', 'headless.activate', 'headless.block', 'headless.retry_access', 'headless.connection_rebind', 'headless.contract_approved', 'headless.contract_applied'].includes(event.type) && event.data.nodeId === this.nodeId) {
           const key = `headless-setup:${event.entityId}`;
           const old = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
@@ -102,13 +122,20 @@ export class NodeJournal {
             agentId: event.data.requesterAgentId, state: 'pending' };
           this.db.prepare('INSERT OR IGNORE INTO notices VALUES (?,?,?)').run(notice.id, notice.state, JSON.stringify(notice));
         }
-        const cacheKind = event.data.permissionRequest && event.data.requesterNodeId === this.nodeId ? 'grant_request' :
+        const cacheKind = presenceProjection ? event.type.split('.')[0] :
+          event.data.permissionRequest && event.data.requesterNodeId === this.nodeId ? 'grant_request' :
           event.type.startsWith('task.') ? 'task' : event.type.startsWith('comment.') ? 'comment' :
           event.type.startsWith('agent.') ? 'agent' : event.type.startsWith('node.') ? 'node' :
           event.type.startsWith('question.') ? 'question' : null;
         if (cacheKind) {
           const old = this.db.prepare('SELECT data FROM cached_entities WHERE kind=? AND id=?').get(cacheKind, event.entityId);
-          if (!old || JSON.parse(old.data).entity.revision <= event.revision) {
+          const oldEntity = old && JSON.parse(old.data).entity;
+          if (presenceProjection && oldEntity?.revision === event.revision) {
+            requireValue(durablePresenceFields(oldEntity) === durablePresenceFields(event.data),
+              'event_conflict', 'Conflicting durable fields at equal revision');
+            if (oldEntity.lastSeenAt === event.data.lastSeenAt) continue;
+          }
+          if (!oldEntity || oldEntity.revision <= event.revision) {
             this.db.prepare(`INSERT INTO cached_entities VALUES (?,?,?)
               ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data`).run(cacheKind, event.entityId, JSON.stringify({ entity: event.data, fetchedAt: now() }));
             if (cacheKind === 'agent' && event.data.nodeId === this.nodeId && event.data.deletedAt)
@@ -124,6 +151,7 @@ export class NodeJournal {
             }
           }
         }
+        if (presenceProjection) continue;
         if (['schedule.install', 'schedule.transfer_activate', 'schedule.cancel', 'schedule.pause', 'schedule.resume'].includes(event.type) && event.data?.definition?.nodeId === this.nodeId) {
           const schedule = event.data;
           const key = `schedule-pending:${schedule.id}`;
@@ -168,7 +196,7 @@ export class NodeJournal {
               { result: { candidate: event.data.candidate, summary: event.data.summary } }) } });
         }
       }
-      this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('cursor', page.cursor);
+      if (page.cursor !== this.cursor()) this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('cursor', page.cursor);
     });
   }
   work(id) { const row = this.db.prepare('SELECT data FROM work WHERE id=?').get(id); return row ? JSON.parse(row.data) : null; }

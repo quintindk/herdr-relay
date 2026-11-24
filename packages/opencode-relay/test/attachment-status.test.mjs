@@ -9,7 +9,7 @@ function watcher(t) {
     load: session => new Promise((resolve, reject) => f.loads.push({ session, resolve, reject })),
     observeSelection: callback => { f.track = callback; return () => { f.selectionStopped = true; }; },
     subscribe: callback => { f.reconnect = callback; return () => { f.connectionStopped = true; }; },
-    interval: callback => { f.tick = callback; return {}; }, clear: () => { f.timerStopped = true; } });
+    interval: (callback, ms) => { f.tick = callback; assert.equal(ms, 2000); return {}; }, clear: () => { f.timerStopped = true; } });
   f.watcher = watcher; t.after(watcher.stop); return f;
 }
 
@@ -44,6 +44,26 @@ test('sidebar avoids overlapping reads, shows outages, recovers and disposes lis
   f.tick(); f.loads[1].resolve({ sessionId: 'a', state: 'attached', generation: 3 }); await setImmediate();
   assert.equal(f.updates.at(-1).state, 'attached');
   f.watcher.stop(); assert.equal(f.timerStopped && f.connectionStopped && f.selectionStopped, true);
+});
+
+test('identical 2-second poll replies do not emit until status or session changes', async t => {
+  const f = watcher(t);
+  const attached = { sessionId: 'a', state: 'attached', generation: 3, obligations: 0 };
+  const reply = async value => { f.loads.at(-1).resolve({ ...value }); await setImmediate(); };
+  await reply(attached);
+  for (let i = 0; i < 3; i++) { f.tick(); await reply(attached); }
+  assert.equal(f.loads.length, 4);
+  assert.deepEqual(f.updates, [{ sessionId: 'a', state: 'checking' }, attached]);
+
+  const changed = { ...attached, obligations: 1 };
+  f.tick(); await reply(changed);
+  f.tick(); await reply(changed);
+  f.selected = 'b'; f.track('b');
+  const next = { ...changed, sessionId: 'b' }, checking = { sessionId: 'b', state: 'checking' };
+  f.tick(); await reply(next);
+  f.tick(); await reply(next);
+  f.reconnect(); f.reconnect();
+  assert.deepEqual(f.updates.slice(2), [changed, checking, next, checking, checking]);
 });
 
 test('sidebar text cannot inject terminal controls through agent names', () => {

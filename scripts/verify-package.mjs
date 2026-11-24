@@ -41,6 +41,7 @@ for (const path of ['src/node-interactive.mjs', 'src/interactive-contract.mjs', 
   'docs/task-attachments.md',
   'packages/opencode-relay/attachment-status.mjs', 'packages/opencode-relay/attachment-sidebar.mjs', 'packages/opencode-relay/attachment-sidebar.tsx',
   'src/service-upgrade.mjs', 'src/release-install.mjs', 'src/release-setup.mjs', 'src/upgrade-cli.mjs', 'src/herdr-install.mjs',
+  'src/database-compact.mjs', 'src/compact-lock.mjs', 'packages/opencode-relay/evidence-log.mjs',
   'packages/opencode-relay/server.mjs', 'packages/opencode-relay/tui.mjs', 'packages/opencode-relay/tui-setup.mjs',
   'packages/opencode-relay/attachment-sidebar-renderer.mjs', 'packages/opencode-relay/status-clock.mjs', 'packages/opencode-relay/headless-shell.mjs',
   'packages/opencode-relay/headless-scope.mjs', 'packages/opencode-relay/cli-bridge.mjs',
@@ -238,6 +239,8 @@ const help = execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['nat
 assert.match(help, /interactive grant\|request\|dispatch/);
 assert.match(help, /task attach TASK/);
 assert.match(help, /task download TASK ATTACHMENT/);
+assert.match(help, /backend compact/);
+assert.match(help, /node compact/);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['headless', '--help'], { encoding: 'utf8' }), /headless provision/);
 assert.match(execFileSync(join(consumer, 'node_modules/.bin/herdr-relay'), ['node', 'recover', '--help'], { encoding: 'utf8' }), /preview-hash/);
 const skillConfig = join(root, 'installed-skills'); mkdirSync(skillConfig);
@@ -356,6 +359,7 @@ let onboarding;
     import assert from 'node:assert/strict';
     import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs';
     import {join} from 'node:path';
+    import {execFileSync} from 'node:child_process';
     import {nativeAdmin} from './src/native-admin-cli.mjs';
     import {nativeBackendClient} from './src/backend-client.mjs';
     import {startBackend} from './src/backend-service.mjs';
@@ -419,6 +423,21 @@ let onboarding;
        assert.equal(captured.responsibleUserId,'owner');assert.equal(captured.status,'todo');
        await backend.close();
       await nativeAdmin(['backend','backup','--state-dir',state,'--output',join(evo,'backup.sqlite')]);
+      const cli=${JSON.stringify(installedCli)};
+      for (const [role, option, path, table, schema] of [
+        ['backend','--state-dir',state,'changes',2], ['node','--config',join(evo,'node/node.json'),'inbox',1],
+      ]) {
+        const args=[role,'compact',option,path];
+        const run=extra=>JSON.parse(execFileSync(cli,[...args,...extra],{encoding:'utf8'}));
+        const plan=run([]);
+        assert.equal(plan.state,'compact_plan'); assert.equal(plan.applied,false); assert.equal(plan.schema,schema);
+        assert.ok(plan[table+'Retained']>0);
+        const applied=run(['--apply']);
+        assert.equal(applied.state,'compacted'); assert.equal(applied.applied,true); assert.equal(applied.schema,schema);
+        assert.equal(applied[table+'Retained'],plan[table+'Retained']);
+        assert.equal(applied.originalRetained,false); assert.deepEqual(applied.retainedOriginals,[]);
+        assert.equal(run([])[table+'Total'],plan[table+'Retained']);
+      }
       await nativeAdmin(['backend','install','--state-dir',join(root,'dry-run-only'),'--dry-run']);
       assert.equal(existsSync(join(root,'dry-run-only')),false);
       const store=new BackendStore(join(state,'backend.sqlite'));

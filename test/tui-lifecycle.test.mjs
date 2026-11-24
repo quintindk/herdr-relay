@@ -145,13 +145,16 @@ test('uncertain creation and rename receipts remain reconcilable after later can
 
 test('unknown or stale presence is not treated as an active receiving chat, but fresh available/busy presence is protected', async t => {
   const f = await fixture(t), agent = f.store.get('agent', 'agent');
-  f.command(f.actors.local, 'unreachable', 'agent.advertise', { id: agent.id, expectedRevision: agent.revision,
-    availability: 'unknown', conversationId: agent.conversationId, bindingRevision: agent.bindingRevision });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const advertise = (key, availability) => f.command(f.actors.local, key, 'agent.advertise', { id: agent.id,
+    expectedRevision: f.store.get('agent', agent.id).revision, availability, conversationId: agent.conversationId, bindingRevision: agent.bindingRevision });
+  advertise('unreachable', 'unknown');
   assert.equal((await f.board.prepareAgentDelete({ agentId: agent.id })).eligible, true);
-  const unknown = f.store.get('agent', agent.id);
-  f.store.save('agent', { ...unknown, availability: 'busy', lastSeenAt: new Date(Date.now() - 60000).toISOString() });
+  advertise('busy', 'busy');
+  assert.equal((await f.board.prepareAgentDelete({ agentId: agent.id })).eligible, false);
+  t.mock.timers.tick(60000);
   assert.equal((await f.board.prepareAgentDelete({ agentId: agent.id })).eligible, true);
-  f.store.save('agent', { ...unknown, availability: 'busy' });
+  advertise('refreshed', 'busy');
   assert.equal((await f.board.prepareAgentDelete({ agentId: agent.id })).eligible, false);
 });
 

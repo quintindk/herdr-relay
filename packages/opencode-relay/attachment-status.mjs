@@ -20,10 +20,20 @@ export async function readAttachmentStatus(ctx, { sessionId }, { connection = wo
 
 export function watchAttachmentStatus({ selectedSession, load, update, subscribe, observeSelection, interval = setInterval, clear = clearInterval }) {
   let closed = false, busy = false, generation = 0, previous = selectedSession();
-  const reset = () => { if (!closed) update({ sessionId: selectedSession(), state: selectedSession() ? 'checking' : 'no_session' }); };
+  let lastEmitted = '';
+  const emit = value => {
+    const key = JSON.stringify(value);
+    if (key === lastEmitted) return;
+    lastEmitted = key;
+    update(value);
+  };
+  const reset = () => {
+    const sessionId = selectedSession();
+    if (!closed) emit({ sessionId, state: sessionId ? 'checking' : 'no_session' });
+  };
   const track = selected => { if (previous !== selected) { previous = selected; generation++; reset(); } };
   const stopSelection = observeSelection(track);
-  const stopConnection = subscribe(() => { generation++; reset(); });
+  const stopConnection = subscribe(() => { generation++; lastEmitted = ''; reset(); });
   const tick = async () => {
     if (closed) return;
     track(selectedSession());
@@ -33,8 +43,8 @@ export function watchAttachmentStatus({ selectedSession, load, update, subscribe
     try {
       const status = await load(session);
       if (status.sessionId !== session) throw Error('Attachment status belongs to another chat');
-      if (!closed && revision === generation && selectedSession() === session && status.sessionId === session) update(status);
-    } catch { if (!closed && revision === generation && selectedSession() === session) update({ sessionId: session, state: 'unavailable' }); }
+      if (!closed && revision === generation && selectedSession() === session && status.sessionId === session) emit(status);
+    } catch { if (!closed && revision === generation && selectedSession() === session) emit({ sessionId: session, state: 'unavailable' }); }
     finally { busy = false; }
   };
   reset();

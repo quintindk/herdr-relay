@@ -3,8 +3,8 @@
 Native tasks, agent collaboration and durable node services for **Herdr and
 OpenCode**. Relay owns its task backend. No external task tracker is required.
 
-**[0.3.0](docs/release-0.3.0.md)** adds [task file attachments](docs/task-attachments.md)
-for sharing files across nodes without copying them by hand. Install only
+**[0.3.1](docs/release-0.3.1.md)** removes steady-state presence writes, bounds
+optional TUI evidence logs and adds offline database compaction. Install only
 published, verified assets from [GitHub Releases](https://github.com/quintindk/herdr-relay/releases).
 Existing installations must be on **0.2.1-rc4 or later** to upgrade.
 
@@ -46,7 +46,7 @@ for managed skills and local Herdr panel setup.
 - **Two-agent work:** [Bounded collaboration](docs/collaboration.md).
 - **Commands:** `herdr-relay --help`, `herdr-relay native --help` and
   [CLI usage](docs/native-cli.md).
-- **Release details:** [0.3.0 notes](docs/release-0.3.0.md),
+- **Release details:** [0.3.1 notes](docs/release-0.3.1.md), [0.3.0 notes](docs/release-0.3.0.md),
   [0.2.13 notes](docs/release-0.2.13.md) and
   [the changelog](CHANGELOG.md).
 

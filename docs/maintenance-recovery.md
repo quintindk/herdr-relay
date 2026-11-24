@@ -4,6 +4,47 @@ Compatible code upgrades do not depend on work settlement. Use recovery when the
 human actually wants to withdraw stale bookkeeping, not to make an upgrade pass.
 Cross-schema database migrations are unsupported.
 
+## Offline database compaction
+
+Use `herdr-relay backend compact [--state-dir DIR]` or
+`herdr-relay node compact [--config NODE_JSON]` for a read-only plan. It reports
+current file bytes and counts of removable and retained rows. Stop the affected
+Relay user service before repeating with `--apply`. The backend unit is
+`herdr-relay-backend.service`. Use `herdr-relay node status` to identify the
+node's unit. Stop nodes before the local backend if compacting both.
+
+Apply takes the daemon's `serviceLock` (`service-lock.sqlite`) and the exclusive
+`compact-lock.sqlite` fence. It refuses active upgrade maintenance, and holds off
+writers through the atomic database replacement. The temporary database needs
+space for surviving rows, indexes and SQLite overhead, not a second copy of the
+bloated database. Apply checks the replacement's integrity, identity and row
+counts before cutover and checks it again before releasing the locks.
+
+Only strictly validated legacy presence event envelopes are removed. Backend
+receipts also require a SHA-256 match against a reconstructed heartbeat or
+advertisement command. A matching key alone is not proof. `sqlite_sequence`
+high-water marks are preserved. Backend compaction keeps the highest
+`changes.seq` row even if it is a presence event, so node cursors also survive a
+compatible rollback to 0.3.0, which uses `MAX(changes.seq)` as its cursor bound.
+If external truncation already left `sqlite_sequence` ahead of the event tail
+or left `changes` empty, compaction preserves both values. It does not repair
+that pre-existing rollback limitation.
+
+By default, apply removes the original after verifying the replacement. Add
+`--keep-original` to retain a private `.pre-compact-*` database at the reported
+`keptOriginalPath`. Keeping it does not reclaim its disk space. `backend.sqlite`
+contains sensitive credential and receipt state. Both the live database and any
+retained original must remain private (`0600`). Apply refuses any other mode on
+the source database, including `0644`, and refuses sidecars with group or other
+permissions. Compaction does not back up attachment blobs or external credential
+files such as `owner.json`, `node.json` or `operator.json`.
+
+The JSON result lists interrupted `.compact-*` candidates under
+`strandedCandidates` and `.pre-compact-*` copies under `retainedOriginals`.
+Apply cleans only recognised private abandoned candidates. It does not restore
+or delete retained originals from previous runs. Inspect reported paths before
+removing anything or resuming service after an interrupted cutover.
+
 ## Changed OpenCode project identity
 
 `native_project_identity_changed` means the same OpenCode conversation, directory
