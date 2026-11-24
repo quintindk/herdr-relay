@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync } from 'node:fs';
+import { createEvidenceRecorder } from './evidence-log.mjs';
 import { RelayRuntime } from './rpc.mjs';
 import { decisionPresenter } from './decision.mjs';
 import { registerHumanInbox } from './human-inbox.mjs';
@@ -14,10 +14,7 @@ export async function setupTui(ctx, { renderAttachment, renderClock } = {}) {
     const location = ctx.location ?? ctx.data.location.default();
     let closed = false;
     // Opt-in disposable smoke evidence. Never includes prompts or credentials.
-    const record = event => {
-      if (ctx.options.evidenceFile) appendFileSync(ctx.options.evidenceFile,
-        `${JSON.stringify({ ...event, clientId })}\n`, { mode: 0o600 });
-    };
+    const record = createEvidenceRecorder(ctx.options.evidenceFile, { clientId });
     const sessionId = () => {
       const route = ctx.ui.router.current();
       return route.type === 'session' ? route.sessionID : null;

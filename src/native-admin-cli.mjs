@@ -10,17 +10,20 @@ import { createNodeBundle, joinNode, revokeNodeBundle, contextClient, defaultNod
 import { installNativeInbox, uninstallNativePlugin } from './native-inbox-install.mjs';
 import { nativeDoctor } from './native-doctor.mjs';
 import { installSkills, skillStatus } from './skill-install.mjs';
+import { compactBackendDatabase, compactNodeDatabase } from './database-compact.mjs';
 
 export const adminHelp = `Installed-release administration (no checkout scripts required):
   backend install [--state-dir DIR] [--port PORT] [--dry-run]
   backend init|run --state-dir DIR [--port PORT]
   backend backup --output NEW_FILE [--state-dir DIR]
+  backend compact [--state-dir DIR] [--apply] [--keep-original]
   backend status|inventory --context ROOT_OWNER_JSON
   backend ingress-check --url HTTPS_ORIGIN --context ROOT_OWNER_JSON --access PRIVATE_ACCESS_ENV
   node bootstrap --context ROOT_OWNER_JSON --key KEY --name Evo|Surface --url NODE_BACKEND_URL --output PRIVATE_BUNDLE
     --local-user | --root ABSOLUTE_NODE_ROOT [--root ...] [--max-agents N] [--access PRIVATE_ACCESS_ENV] [--transport PRIVATE_TRANSPORT_JSON]
   node join --bundle PRIVATE_BUNDLE [--config LOCAL_NODE_JSON]
   node revoke --bundle PRIVATE_BUNDLE --key KEY --context ROOT_OWNER_JSON
+  node compact [--config NODE_JSON] [--apply] [--keep-original]
   plugin install [--config NODE_JSON] [--context OPERATOR_JSON] [--config-dir DIR] [--here|--session ID] [--replace-context]
   plugin uninstall [--config-dir DIR]
   plugin shortcut [--herdr-config TOML] [--dry-run]  [explicit prefix+t binding; preserves other Herdr keys]
@@ -28,6 +31,7 @@ export const adminHelp = `Installed-release administration (no checkout scripts 
   skills install [--config-dir DIR] [--dry-run] [--replace-modified]
   doctor [--config NODE_JSON] [--context OPERATOR_JSON] [--backend-only]
 No command here clears backend state, upgrades OpenCode or imports tasks implicitly.
+Compaction is read-only by default. Stop the relevant service before using --apply.
 Join bundles contain separate scoped daemon/human credentials, never Evo's root owner token.`;
 
 const defaultBackendState = () => join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'herdr-relay-backend');
@@ -42,22 +46,24 @@ export function inventoryProjection(snapshot) {
 }
 export async function nativeAdmin(args) {
   const [group, action] = args;
-  const selected = ['backend', 'plugin', 'doctor', 'skills'].includes(group) || group === 'node' && ['bootstrap', 'join', 'revoke'].includes(action);
+  const selected = ['backend', 'plugin', 'doctor', 'skills'].includes(group) || group === 'node' && ['bootstrap', 'join', 'revoke', 'compact'].includes(action);
   if (!selected) return false;
   if (args.includes('--help')) { console.log(adminHelp); return true; }
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     ...Object.fromEntries(['context', 'state-dir', 'port', 'output', 'key', 'name', 'url', 'bundle', 'config', 'transport', 'max-agents', 'config-dir',
       'session', 'evidence-file', 'access', 'herdr-config'].map(k => [k, { type: 'string' }])),
     root: { type: 'string', multiple: true },
-    ...Object.fromEntries(['dry-run', 'local-user', 'here', 'replace-context', 'replace-modified', 'backend-only'].map(k => [k, { type: 'boolean' }])),
+    ...Object.fromEntries(['dry-run', 'local-user', 'here', 'replace-context', 'replace-modified', 'backend-only', 'apply', 'keep-original'].map(k => [k, { type: 'boolean' }])),
   } });
   requireValue(positionals.length === (group === 'doctor' ? 1 : 2), 'invalid_request', 'Unexpected administrative positional arguments');
   const permitted = group === 'doctor' ? ['config', 'context', 'backend-only'] : {
     'backend:install': ['state-dir', 'port', 'dry-run'], 'backend:init': ['state-dir'], 'backend:run': ['state-dir', 'port'],
     'backend:backup': ['state-dir', 'output'], 'backend:status': ['context'], 'backend:inventory': ['context'],
+    'backend:compact': ['state-dir', 'apply', 'keep-original'],
     'backend:ingress-check': ['url', 'context', 'access'],
     'node:bootstrap': ['context', 'key', 'name', 'url', 'output', 'local-user', 'root', 'max-agents', 'transport', 'access'],
     'node:join': ['bundle', 'config'], 'node:revoke': ['bundle', 'key', 'context'],
+    'node:compact': ['config', 'apply', 'keep-original'],
     'plugin:install': ['config', 'context', 'config-dir', 'here', 'session', 'replace-context', 'evidence-file'], 'plugin:uninstall': ['config-dir'],
     'plugin:shortcut': ['herdr-config', 'dry-run'],
     'skills:status': ['config-dir'], 'skills:install': ['config-dir', 'dry-run', 'replace-modified'],
@@ -84,6 +90,8 @@ export async function nativeAdmin(args) {
     } else if (action === 'backup') {
       requireValue(values.output, 'invalid_request', 'Explicit new --output backup path required');
       script('./backend-backup.mjs', { database: join(values['state-dir'] ?? defaultBackendState(), 'backend.sqlite'), output: values.output });
+    } else if (action === 'compact') {
+      output(compactBackendDatabase({ stateDir: values['state-dir'] ?? defaultBackendState(), apply: Boolean(values.apply), keepOriginal: Boolean(values['keep-original']) }));
     } else if (action === 'status') { const report = await nativeDoctor({ contextFile: values.context, backendOnly: true }); output(report); if (!report.ready) process.exitCode = 1; }
     else if (action === 'inventory') {
       const snapshot = await ownerApi()('GET', '/v1/snapshot');
@@ -100,6 +108,7 @@ export async function nativeAdmin(args) {
       output(await createNodeBundle({ api: ownerApi(), output: values.output, key: values.key, name: values.name, url: values.url,
         mode: values['local-user'] ? 'localUser' : 'roots', roots: values.root, maxAgents: values['max-agents'] === undefined ? 100 : Number(values['max-agents']), transport }));
     } else if (action === 'join') output(await joinNode({ bundleFile: values.bundle, configFile: values.config }));
+    else if (action === 'compact') output(compactNodeDatabase({ configFile: values.config ?? defaultNodeConfig(), apply: Boolean(values.apply), keepOriginal: Boolean(values['keep-original']) }));
     else output(await revokeNodeBundle({ api: ownerApi(), bundleFile: values.bundle, key: values.key }));
   } else if (group === 'plugin') {
     if (action === 'shortcut') execFileSync('python3', [fileURLToPath(new URL('../scripts/install-herdr-shortcut.py', import.meta.url)),

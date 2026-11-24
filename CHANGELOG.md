@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — 24 November 2026
+
+- Track node and agent presence in memory. Unchanged heartbeats and idle polls
+  write nothing to SQLite. Nodes still accept older backends' presence events
+  without retaining them in the inbox.
+- Suppress unchanged sidebar status and render events. Keep opt-in TUI evidence
+  in two private files of at most 2 MiB each after rotation, repairing torn tails.
+- Compact backend and node databases offline. Preview before applying, remove
+  only proven legacy presence history and preserve event cursor continuity.
+  Protocol and database schemas are unchanged.
+
 ## 0.3.0 — 24 November 2026
 
 - Share files across nodes on native Relay tasks. The CLI streams uploads and

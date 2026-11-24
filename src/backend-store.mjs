@@ -19,6 +19,7 @@ import { collaborationRequest, childTerminal } from './collaboration.mjs';
 import { requireDeletableAgent } from './agent-lifecycle.mjs';
 import { applyOwnerMessage } from './owner-messages.mjs';
 import { applyTaskAttachment, authoriseBlobUpload, FilesystemBlobStore, MemoryBlobStore } from './task-attachments.mjs';
+import { assertNotCompacting } from './compact-lock.mjs';
 
 export const backendProtocol = 'relay/0.2';
 export const taskStatuses = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'];
@@ -34,12 +35,18 @@ const fields = (input, allowed, required = []) => {
 const string = (value, name, max = 16000) => requireValue(typeof value === 'string' && value.trim() && value.length <= max,
   'invalid_request', `${name} must be a non-empty string of at most ${max} characters`);
 
-// Native shared store. All public mutations include actor-bound idempotency and
-// append events in the same SQLite transaction. Never share this file over NFS.
+// Native shared store. Commands other than presence updates record actor-bound
+// receipts and events in the same transaction. Never share this file over NFS.
 export class BackendStore {
   constructor(path, { userId = 'owner', blobDirectory } = {}) {
     this.runResultMessages = new OnlineRunResultMessages();
+    this.nodePresence = new Map();
+    this.agentPresence = new Map();
+    this.pendingNodePresence = null;
+    this.pendingAgentPresence = null;
     requireValue(validId(userId), 'invalid_user', 'Explicit user identity required');
+    this.stateDirectory = path === ':memory:' ? null : dirname(resolve(path));
+    if (this.stateDirectory) assertNotCompacting(this.stateDirectory);
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA busy_timeout=5000');
     if (path !== ':memory:') chmodSync(path, 0o600);
@@ -71,17 +78,29 @@ export class BackendStore {
       expireRunResultDeliveries(this);
     } catch (error) { this.close(); throw error; }
   }
-
   close() { try { this.blobs?.close?.(); } finally { this.db.close(); } }
   transaction(fn) {
     if (this.inTransaction) return fn();
+    if (this.stateDirectory) assertNotCompacting(this.stateDirectory);
     this.db.exec('BEGIN IMMEDIATE');
     this.inTransaction = true;
+    this.pendingNodePresence = new Map();
+    this.pendingAgentPresence = new Map();
     const effects = []; this.afterCommit = effects;
     let result;
-    try { result = fn(); this.db.exec('COMMIT'); }
+    try {
+      result = fn(); this.db.exec('COMMIT');
+      for (const [id, seen] of this.pendingNodePresence) this.nodePresence.set(id, seen);
+      for (const [id, seen] of this.pendingAgentPresence) {
+        if (seen === null) this.agentPresence.delete(id);
+        else this.agentPresence.set(id, seen);
+      }
+    }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
-    finally { this.inTransaction = false; this.afterCommit = null; }
+    finally {
+      this.inTransaction = false; this.afterCommit = null;
+      this.pendingNodePresence = null; this.pendingAgentPresence = null;
+    }
     for (const effect of effects) try { effect(); } catch { /* Best-effort effects cannot undo a committed result. */ }
     return result;
   }
@@ -103,6 +122,18 @@ export class BackendStore {
       this.afterCommit.push(() => this.runResultMessages.offer(this, report));
     }
   }
+  withPresence(kind, entity) {
+    if (!entity) return entity;
+    if (kind === 'node') {
+      const seen = this.pendingNodePresence?.get(entity.id) ?? this.nodePresence.get(entity.id);
+      return seen ? { ...entity, lastSeenAt: seen } : entity;
+    }
+    if (kind === 'agent') {
+      const seen = this.pendingAgentPresence?.has(entity.id) ? this.pendingAgentPresence.get(entity.id) : this.agentPresence.get(entity.id);
+      return seen && !entity.deletedAt ? { ...entity, lastSeenAt: seen } : entity;
+    }
+    return entity;
+  }
   get(kind, id, required = true, includeDeleted = false) {
     const row = this.db.prepare('SELECT data FROM entities WHERE kind=? AND id=?').get(kind, id);
     const entity = row ? JSON.parse(row.data) : null;
@@ -111,16 +142,24 @@ export class BackendStore {
       return null;
     }
     requireValue(row || !required, 'not_found', `Unknown ${kind}`, 404);
-    return entity;
+    return this.withPresence(kind, entity);
   }
-  all(kind, includeDeleted = false) { return this.db.prepare('SELECT data FROM entities WHERE kind=? ORDER BY id').all(kind)
-    .map(row => JSON.parse(row.data)).filter(item => includeDeleted || kind !== 'agent' || !item.deletedAt); }
+  durableEntities(kind) { return this.db.prepare('SELECT data FROM entities WHERE kind=? ORDER BY id').all(kind).map(row => JSON.parse(row.data)); }
+  all(kind, includeDeleted = false) { return this.durableEntities(kind)
+    .filter(item => includeDeleted || kind !== 'agent' || !item.deletedAt).map(item => this.withPresence(kind, item)); }
+  highWaterSeq() {
+    return Math.max(Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq),
+      Number(this.db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM sqlite_sequence WHERE name='changes'").get()?.seq ?? 0));
+  }
   snapshot() {
     return this.transaction(() => ({ instanceId: this.instance, protocol: backendProtocol,
       collections: Object.fromEntries(['task', 'task_attachment', 'comment', 'execution', 'question', 'agent', 'node', 'schedule', 'occurrence', 'notification', 'artifact']
-        .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision', 'message']).map(kind => [kind, this.all(kind, true)])),
+        .concat(['provision_grant', 'provision_request', 'headless_grant', 'headless_setup', 'task_reference_grant', 'review_grant', 'grant_request', 'grant_decision', 'message']).map(kind => [kind, this.durableEntities(kind)])),
+      // Snapshot event IDs are revision-based. Keep their records byte-stable.
+      presence: { nodes: Object.fromEntries([...this.nodePresence, ...this.pendingNodePresence]),
+        agents: Object.fromEntries([...new Map([...this.agentPresence, ...this.pendingAgentPresence])].filter(([, seen]) => seen !== null)) },
       cursor: Buffer.from(JSON.stringify({ instance: this.instance,
-        after: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq) })).toString('base64url'), fetchedAt: now() }));
+        after: this.highWaterSeq() })).toString('base64url'), fetchedAt: now() }));
   }
   scheduleRevision(id, revision) {
     const row = this.db.prepare(`SELECT data FROM changes WHERE json_extract(data,'$.entityId')=? AND
@@ -142,6 +181,9 @@ export class BackendStore {
     this.db.prepare('INSERT INTO entities VALUES (?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET revision=excluded.revision,data=excluded.data')
       .run(kind, value.id, value.revision, JSON.stringify(value));
     return value;
+  }
+  changed(kind, entity, patch) {
+    return this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
   }
   event(type, entity, actor, requestKey) {
     const event = { id: randomUUID(), type, entityId: entity.id, revision: entity.revision, at: now(),
@@ -258,13 +300,57 @@ export class BackendStore {
   }
 
   command(actor, { key, action, payload }) {
-    if (!this.inTransaction) return this.transaction(() => this.command(actor, { key, action, payload }));
+    const presence = ['node.heartbeat', 'agent.advertise'].includes(action);
+    if (!presence && !this.inTransaction) return this.transaction(() => this.command(actor, { key, action, payload }));
     string(action, 'action', 100);
     requireValue(payload && typeof payload === 'object' && !Array.isArray(payload), 'invalid_request', 'Payload required');
     authoriseOperator(this, actor, action, payload);
+    if (presence) {
+      requireValue(validId(key), 'invalid_key', 'Bounded idempotency key required');
+      return action === 'node.heartbeat' ? this.heartbeat(actor, payload) : this.advertise(actor, payload);
+    }
     if (action === 'headless.task') return headlessTaskCommand(this, actor, key, payload);
     if (action === 'headless.capability_probe') return this.mutate(actor, key, action, payload, () => headlessTaskProbe(this, actor, payload));
     return this.mutate(actor, key, action, payload, () => this.apply(actor, action, structuredClone(payload)));
+  }
+  heartbeat(actor, p) {
+    fields(p, ['id', 'machine'], ['id']); this.nodeOnly(actor, p.id);
+    if (p.machine !== undefined) {
+      fields(p.machine, ['hostname', 'platform'], ['hostname']);
+      string(p.machine.hostname, 'machine.hostname', 253);
+      if (p.machine.platform !== undefined) string(p.machine.platform, 'machine.platform', 64);
+    }
+    const node = this.get('node', p.id), seen = now();
+    const result = p.machine !== undefined && !same(p.machine, node.machine ?? null)
+      ? this.transaction(() => this.changed('node', node, { lastSeenAt: seen, machine: structuredClone(p.machine) }))
+      : { ...node, lastSeenAt: seen };
+    (this.pendingNodePresence ?? this.nodePresence).set(node.id, seen);
+    return result;
+  }
+  advertise(actor, p) {
+    fields(p, ['id', 'expectedRevision', 'availability', 'bindingRevision', 'conversationId'], ['id', 'expectedRevision', 'availability']);
+    const historical = this.get('agent', p.id, true, true);
+    if (historical.deletedAt) {
+      // Old nodes may still advertise a stale configured binding. Acknowledge
+      // without reviving it or preventing their other agents from refreshing.
+      this.nodeOnly(actor, historical.nodeId); return historical;
+    }
+    const agent = this.agent(actor, p.id); this.revision(agent, p.expectedRevision);
+    requireValue(['available', 'busy', 'offline', 'unknown'].includes(p.availability) &&
+      (p.bindingRevision === undefined || Number.isSafeInteger(p.bindingRevision) && p.bindingRevision > 0) &&
+      (p.conversationId === undefined || typeof p.conversationId === 'string' && p.conversationId.length <= 512),
+    'invalid_advertisement', 'Invalid agent availability or identity');
+    requireValue(!agent.conversationId || p.conversationId === undefined || p.conversationId === agent.conversationId,
+      'conversation_adoption_required', 'Explicit human adoption required to replace an advertised conversation');
+    requireValue(!agent.standingGrant || p.conversationId === agent.conversationId && p.bindingRevision === agent.bindingRevision,
+      'stale_binding', 'Advertisement cannot replace the designated receiver');
+    const nextBindingRevision = p.bindingRevision ?? null, nextConversationId = p.conversationId ?? null, seen = now();
+    const durableChanged = agent.availability !== p.availability || (agent.bindingRevision ?? null) !== nextBindingRevision ||
+      (agent.conversationId ?? null) !== nextConversationId;
+    const result = durableChanged ? this.transaction(() => this.changed('agent', agent, { availability: p.availability,
+      bindingRevision: nextBindingRevision, conversationId: nextConversationId, lastSeenAt: seen })) : { ...agent, lastSeenAt: seen };
+    (this.pendingAgentPresence ?? this.agentPresence).set(agent.id, seen);
+    return result;
   }
   apply(actor, action, p, authority = {}) {
     if (!this.inTransaction) return this.transaction(() => this.apply(actor, action, p, authority));
@@ -272,7 +358,7 @@ export class BackendStore {
       requireValue(validId(input.id) && !this.get(kind, input.id, false, true), 'identity_conflict', `Unique ${kind} identity required`, 409);
       return this.save(kind, { ...input, revision: 1, createdAt: now(), updatedAt: now() });
     };
-    const changed = (kind, entity, patch) => this.save(kind, { ...entity, ...patch, revision: entity.revision + 1, updatedAt: now() });
+    const changed = (kind, entity, patch) => this.changed(kind, entity, patch);
     if (action === 'task.reference_namespace.grant' || action === 'task.reference_namespace.revoke') {
       if (authority.grantDecision) this.ownerOnly(actor); else this.rootOwnerOnly(actor);
       fields(p, ['principal', 'prefix', ...(action.endsWith('.grant') ? ['maxNumber', 'expectedRevision'] : ['expectedRevision'])], ['principal', 'prefix']);
@@ -322,15 +408,6 @@ export class BackendStore {
       const node = created('node', { ...p, lastSeenAt: null });
       return node;
     }
-    if (action === 'node.heartbeat') {
-      fields(p, ['id', 'machine'], ['id']); this.nodeOnly(actor, p.id);
-      if (p.machine !== undefined) {
-        fields(p.machine, ['hostname', 'platform'], ['hostname']);
-        string(p.machine.hostname, 'machine.hostname', 253);
-        if (p.machine.platform !== undefined) string(p.machine.platform, 'machine.platform', 64);
-      }
-      return changed('node', this.get('node', p.id), { lastSeenAt: now(), ...(p.machine ? { machine: p.machine } : {}) });
-    }
     if (action === 'credential.revoke') {
       this.ownerOnly(actor); fields(p, ['id'], ['id']);
       const row = this.db.prepare('SELECT data FROM credentials WHERE id=?').get(p.id);
@@ -374,8 +451,10 @@ export class BackendStore {
       const agent = this.get('agent', p.id); this.revision(agent, p.expectedRevision);
       string(p.reason, 'reason', 2000); requireDeletableAgent(this, agent);
       // Retain identity/history and make older code refuse new execution as well.
-      return changed('agent', agent, { deletedAt: now(), deletion: { userId: actor.id, reason: p.reason,
+      const deleted = changed('agent', agent, { deletedAt: now(), deletion: { userId: actor.id, reason: p.reason,
         nativeProcessTerminationClaimed: false }, availability: 'offline', capabilities: [...new Set([...agent.capabilities, 'observation_only'])] });
+      this.pendingAgentPresence.set(agent.id, null);
+      return deleted;
     }
     if (action === 'agent.attach' || action === 'agent.relocate') {
       if (!authority.interactiveRequest) this.ownerOnly(actor);
@@ -416,26 +495,6 @@ export class BackendStore {
       requireValue(['interactive', 'headless'].includes(p.mode) && (!p.capabilities || Array.isArray(p.capabilities) &&
         p.capabilities.length <= 64 && p.capabilities.every(validId)), 'invalid_request', 'Invalid agent mode/capabilities');
       return created('agent', { ...p, capabilities: p.capabilities ?? [], ownerId: this.owner });
-    }
-    if (action === 'agent.advertise') {
-      fields(p, ['id', 'expectedRevision', 'availability', 'bindingRevision', 'conversationId'], ['id', 'expectedRevision', 'availability']);
-      const historical = this.get('agent', p.id, true, true);
-      if (historical.deletedAt) {
-        // Old nodes may still advertise a stale configured binding. Acknowledge
-        // without reviving it or preventing their other agents from refreshing.
-        this.nodeOnly(actor, historical.nodeId); return historical;
-      }
-      const agent = this.agent(actor, p.id); this.revision(agent, p.expectedRevision);
-      requireValue(['available', 'busy', 'offline', 'unknown'].includes(p.availability) &&
-        (p.bindingRevision === undefined || Number.isSafeInteger(p.bindingRevision) && p.bindingRevision > 0) &&
-        (p.conversationId === undefined || typeof p.conversationId === 'string' && p.conversationId.length <= 512),
-        'invalid_advertisement', 'Invalid agent availability or identity');
-      requireValue(!agent.conversationId || p.conversationId === undefined || p.conversationId === agent.conversationId,
-        'conversation_adoption_required', 'Explicit human adoption required to replace an advertised conversation');
-      requireValue(!agent.standingGrant || p.conversationId === agent.conversationId && p.bindingRevision === agent.bindingRevision,
-        'stale_binding', 'Advertisement cannot replace the designated receiver');
-      return changed('agent', agent, { availability: p.availability, bindingRevision: p.bindingRevision ?? null,
-        conversationId: p.conversationId ?? null, lastSeenAt: now() });
     }
     if (action === 'agent.adopt') {
       this.ownerOnly(actor);
@@ -683,7 +742,7 @@ export class BackendStore {
         const settled = changed('execution', execution, { state: occurrence.state,
           ...(failed ? { failure: { reason: p.reason, evidence: p.evidence, ...(p.failure ? { diagnostic: p.failure } : {}) } } : {
             result: { candidate: p.candidate, summary: p.summary, evidence: p.evidence, digest: digest({ candidate: p.candidate, summary: p.summary }),
-              sequence: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0)+1 AS seq FROM changes').get().seq) } }) });
+              sequence: this.highWaterSeq() + 1 } }) });
         this.event(failed ? 'execution.scheduled_failure' : 'execution.scheduled_result', settled, actor, occurrence.id);
         taskDisposition(execution.taskId, failed ? 'blocked' : occurrence.state === 'in_review' ? 'in_review' : 'done', occurrence.id);
         occurrence.executionId = execution.id;
@@ -1197,7 +1256,7 @@ export class BackendStore {
         result: { candidate: p.candidate, summary: p.summary, evidence: p.evidence,
           ...(failedPeerTasks.size ? { peerFailures: peers.filter(child => child.state !== 'completed').map(child => ({ id: child.id,
             taskId: child.taskId, state: child.state, settlement: child.settlement })) } : {}),
-          sequence: Number(this.db.prepare('SELECT COALESCE(MAX(seq),0)+1 AS seq FROM changes').get().seq),
+          sequence: this.highWaterSeq() + 1,
           digest: digest({ candidate: p.candidate, summary: p.summary }) } });
     }
     if (action === 'occurrence.review') {
@@ -1332,8 +1391,7 @@ export class BackendStore {
       requireValue(value?.instance === this.instance && Number.isSafeInteger(value.after) && value.after >= 0,
         'invalid_cursor', 'Cursor belongs to another backend or is malformed');
       after = value.after;
-      requireValue(after <= Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM changes').get().seq),
-        'invalid_cursor', 'Event cursor is ahead of this backend');
+      requireValue(after <= this.highWaterSeq(), 'invalid_cursor', 'Event cursor is ahead of this backend');
     }
     const rows = this.db.prepare('SELECT seq,data FROM changes WHERE seq>? ORDER BY seq LIMIT ?').all(after, limit + 1);
     const page = rows.slice(0, limit);
@@ -1362,7 +1420,8 @@ export class BackendStore {
       ${filterTask ? "AND json_extract(data,'$.taskId')=?" : ''}
       ${filterStatus ? "AND COALESCE(json_extract(data,'$.status'),json_extract(data,'$.state'))=?" : ''}
       ${kind === 'task_attachment' && !filterStatus ? "AND json_extract(data,'$.state')='active'" : ''} ORDER BY id LIMIT ?`)
-      .all(kind, after, ...(filterTask ? [taskId] : []), ...(filterStatus ? [status] : []), limit + 1).map(row => JSON.parse(row.data));
+      .all(kind, after, ...(filterTask ? [taskId] : []), ...(filterStatus ? [status] : []), limit + 1)
+      .map(row => this.withPresence(kind, JSON.parse(row.data)));
     const hasMore = items.length > limit;
     const page = items.slice(0, limit);
     return { items: page, nextCursor: hasMore ? Buffer.from(JSON.stringify({ instance: this.instance, scope, after: page.at(-1).id })).toString('base64url') : null,

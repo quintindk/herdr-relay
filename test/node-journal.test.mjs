@@ -20,7 +20,8 @@ test('local event effects and checkpoint survive restart and repeated events do 
     journal.consume({ items: [event], cursor: 'cursor-1' });
     assert.equal(journal.works().length, 1);
     assert.equal(journal.cursor(), 'cursor-1');
-    assert.throws(() => journal.consume({ items: [{ ...event, revision: 2 }], cursor: 'cursor-bad' }), { code: 'event_conflict' });
+    assert.throws(() => journal.consume({ items: [{ ...event, revision: 2 }], cursor: 'cursor-bad' }), { code: 'invalid_events' });
+    assert.throws(() => journal.consume({ items: [{ ...event, revision: 2, data: { ...event.data, revision: 2 } }], cursor: 'cursor-bad' }), { code: 'event_conflict' });
     assert.equal(journal.cursor(), 'cursor-1');
   } finally { journal.close(); rmSync(dir, { recursive: true, force: true }); }
 });

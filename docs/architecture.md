@@ -19,6 +19,13 @@ Backend and node journals are local SQLite databases. Do not share a live databa
 over a network filesystem. Additional machines join the backend using separately
 scoped credentials, not by copying its database or owner credential.
 
+Node and agent liveness (`lastSeenAt`) is ephemeral in backend memory. Heartbeats
+and advertisements persist SQLite entity fields only when durable values change.
+They do not append presence rows to backend `changes` or `receipts`. Nodes also
+filter legacy presence events before writing to their `inbox`. Snapshots keep
+durable node and agent records in their existing collections and expose live
+timestamps separately under `snapshot.presence`.
+
 [Task attachment](task-attachments.md) metadata is revisioned in the backend
 `entities` table as `task_attachment` records. Bytes live outside SQLite in
 the private content-addressed `blobs/<aa>/<sha256>` store. Binary HTTP routes

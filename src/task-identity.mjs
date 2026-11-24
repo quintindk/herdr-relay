@@ -39,7 +39,7 @@ export function assertTaskIdentityIntegrity(db) {
     WHERE t.kind='task' AND c.task_id IS NULL LIMIT 1`).get(), 'task_identity_recovery_required', 'Task reference claim coverage is inconsistent');
   requireValue(!db.prepare(`SELECT 1 FROM task_reference_claims c LEFT JOIN task_reference_counters n ON n.prefix=c.prefix
     WHERE n.high_water IS NULL OR n.high_water<c.number LIMIT 1`).get(), 'task_identity_recovery_required', 'Namespace counters are behind issued claims. Explicit recovery is required');
-  for (const claim of db.prepare('SELECT reference,prefix,number FROM task_reference_claims').all()) {
+  for (const claim of db.prepare('SELECT reference,prefix,number FROM task_reference_claims').iterate()) {
     const parsed = parseTaskReference(claim.reference);
     requireValue(parsed.prefix === claim.prefix && parsed.number === claim.number, 'task_identity_recovery_required', 'Reference registry contains inconsistent claims');
   }

@@ -29,6 +29,17 @@ shortcuts and disabled plugins are never overwritten. See
 [panel setup](installation-and-onboarding.md#7-optional-herdr-panel) for the manual
 commands still required by the published 0.2.2 installer.
 
+## Offline database compaction
+
+```sh
+herdr-relay backend compact [--state-dir DIR] [--apply] [--keep-original]
+herdr-relay node compact [--config NODE_JSON] [--apply] [--keep-original]
+```
+
+Omit `--apply` for a read-only plan. Stop the relevant service before applying.
+See [offline compaction](maintenance-recovery.md#offline-database-compaction)
+for space, backup and recovery guidance.
+
 ## Context and authority
 
 Backend mutations require the appropriate explicit `--context FILE` or configured
