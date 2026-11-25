@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { BackendStore } from '../src/backend-store.mjs';
-import { nodeHeartbeatPayload } from '../src/node-discovery.mjs';
+import { bindingAvailability, nodeHeartbeatPayload } from '../src/node-discovery.mjs';
+
+test('presence uses the light probe and does not retry a failed probe with a full snapshot', async () => {
+  let snapshots = 0;
+  const native = { availability: async () => 'busy', snapshot: async () => { snapshots++; return { idle: true }; } };
+  assert.equal(await bindingAvailability({ native }), 'busy');
+  native.availability = async () => { throw Error('Native identity changed'); };
+  assert.equal(await bindingAvailability({ native }), 'unknown');
+  assert.equal(snapshots, 0);
+  delete native.availability;
+  assert.equal(await bindingAvailability({ native }), 'available');
+  assert.equal(snapshots, 1);
+});
 
 test('node machine advertisement is optional and capability-gated for older backends', () => {
   const machine = { hostname: 'desktop', platform: 'linux' };

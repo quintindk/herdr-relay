@@ -98,7 +98,7 @@ export async function tickAutomation(journal, resolveBinding, clock = Date.now()
       journal.save({ ...work, state: 'conflict', error: 'native_conversation_replaced' }); continue;
     }
     const capacityAvailable = () => !journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain','conflict')").all()
-      .some(item => JSON.parse(item.data).bindingId === binding.id) && !journal.works().some(other => other.id !== work?.id &&
+      .some(item => JSON.parse(item.data).bindingId === binding.id) && !journal.workForTick().some(other => other.id !== work?.id &&
         other.bindingId === binding.id && other.state !== 'settled' &&
         !['completed', 'cancelled', 'failed', 'rejected', 'in_review'].includes(other.execution.state) &&
         ['intent', 'observing', 'uncertain', 'conflict', 'admitted', 'native_finished'].includes(other.state));

@@ -73,6 +73,30 @@ test('versioned snapshot traverses native pages and rejects changed identity', a
   await assert.rejects(native.snapshot(), { code: 'native_identity_mismatch' });
 });
 
+test('availability verifies the pinned chat and never reads its transcript or inbox', async () => {
+  let identityReads = 0, activityReads = 0;
+  const identity = { sessionId: 'session', projectId: 'project', directory: '/workspace', createdAt: 1 };
+  const session = { id: 'session', projectID: 'project', location: { directory: '/workspace' }, time: { created: 1 } };
+  let active = { other: { type: 'running' } };
+  const native = new NativeOpenCodeV2({
+    session: {
+      get: async input => { assert.deepEqual(input, { sessionID: 'session' }); identityReads++; return session; },
+      active: async () => { activityReads++; return active; },
+      inbox: { list: () => assert.fail('Presence must not fetch queued input') },
+    },
+    message: { list: () => assert.fail('Presence must not fetch messages') },
+  }, identity);
+  assert.equal(await native.availability(), 'available');
+  active.session = { type: 'running' };
+  assert.equal(await native.availability(), 'busy');
+  active = [];
+  await assert.rejects(native.availability(), { code: 'invalid_native_response' });
+  session.projectID = 'other-project';
+  await assert.rejects(native.availability(), { code: 'native_project_identity_changed' });
+  assert.equal(identityReads, 4);
+  assert.equal(activityReads, 3);
+});
+
 test('snapshot rejects looping native cursors instead of silently truncating', async () => {
   let page = 0;
   const native = new NativeOpenCodeV2({

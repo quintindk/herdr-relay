@@ -14,7 +14,7 @@ export async function tickNode(journal, api, resolveBinding) {
     if (error.status && error.status < 500) throw error;
     connected = false;
   }
-  for (let work of journal.works()) {
+  for (let work of journal.workForTick()) {
     try {
     let execution = work.execution;
     if (abandonedWork(work)) continue;
@@ -141,7 +141,7 @@ export async function tickNode(journal, api, resolveBinding) {
       const snapshot = await binding.native.snapshot();
       if (journal.db.prepare("SELECT data FROM notices WHERE state IN ('observing','uncertain','conflict')").all()
         .some(row => JSON.parse(row.data).bindingId === binding.id)) continue;
-      if (!snapshot.idle || snapshot.inbox?.length || journal.works().some(other =>
+      if (!snapshot.idle || snapshot.inbox?.length || journal.workForTick().some(other =>
         other.id !== work.id && other.bindingId === binding.id &&
         !['completed', 'cancelled', 'rejected', 'failed', 'in_review'].includes(other.execution.state) &&
         ['intent', 'observing', 'uncertain', 'conflict', 'admitted', 'native_finished'].includes(other.state))) continue;

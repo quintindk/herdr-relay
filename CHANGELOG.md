@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Check OpenCode chat availability without fetching transcripts. The node tick
+  and worker status reads skip settled execution history without deleting it.
+
 ## 0.3.1 — 24 November 2026
 
 - Track node and agent presence in memory. Unchanged heartbeats and idle polls

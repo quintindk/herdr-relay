@@ -11,6 +11,15 @@ export const commandWorkId = command => command.payload?.executionId ?? command.
   (command.action === 'schedule.ask' ? command.payload?.occurrenceId :
     command.action.startsWith('execution.') || ['schedule.publish', 'schedule.fail'].includes(command.action) ? command.payload?.id : undefined);
 
+const workField = path => `CASE WHEN json_valid(data) THEN json_extract(data,'$.${path}') END`;
+const openExecution = `COALESCE(${workField('execution.state')},'') NOT IN ('completed','cancelled','failed','rejected')`;
+const workAgent = workField('execution.targetAgentId');
+const openWork = `state <> 'administratively_abandoned' AND ${openExecution}`;
+// Terminal backend state is not always local settlement. Keep rows that still
+// need a terminal-unresolved record, as well as all interactive continuations.
+const tickWork = `state <> 'administratively_abandoned' AND
+  (state NOT IN ('settled','native_finished','settled_waiting','terminal_unresolved') OR ${openExecution})`;
+
 function durablePresenceFields(data) {
   const { lastSeenAt: _ignored, ...durable } = data;
   return canonical(durable);
@@ -37,6 +46,8 @@ export class NodeJournal {
     this.db.exec('CREATE TABLE IF NOT EXISTS local_notifications(id TEXT PRIMARY KEY,data TEXT NOT NULL)');
     this.db.exec('CREATE TABLE IF NOT EXISTS execution_history(id TEXT PRIMARY KEY,data TEXT NOT NULL)');
     this.db.exec('CREATE TABLE IF NOT EXISTS cached_entities(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id))');
+    this.db.exec(`CREATE INDEX IF NOT EXISTS work_for_tick ON work(id) WHERE ${tickWork};
+      CREATE INDEX IF NOT EXISTS open_work_by_agent ON work(${workAgent},id) WHERE ${openWork};`);
     this.db.exec('PRAGMA user_version=1');
     const identity = canonical({ nodeId, instanceId });
     const existing = this.db.prepare('SELECT value FROM settings WHERE key=?').get('identity');
@@ -217,6 +228,10 @@ export class NodeJournal {
     });
   }
   works() { return this.db.prepare('SELECT data FROM work ORDER BY id').all().map(row => JSON.parse(row.data)); }
+  workForTick() { return this.db.prepare(`SELECT data FROM work WHERE ${tickWork} ORDER BY id`).all().map(row => JSON.parse(row.data)); }
+  openWorkForAgent(agentId) {
+    return this.db.prepare(`SELECT data FROM work WHERE ${openWork} AND ${workAgent}=? ORDER BY id`).all(agentId).map(row => JSON.parse(row.data));
+  }
   assertReceiver(binding) {
     requireValue(!this.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`agent-deleted:${binding.agentId}`),
       'agent_deleted', 'Deleted agents cannot receive new work', 410);

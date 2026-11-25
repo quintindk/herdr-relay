@@ -9,6 +9,14 @@ export function nodeHeartbeatPayload(nodeId, info, machine = { hostname: hostnam
   return { id: nodeId, ...(info.features?.nodeMachineAdvertisement === true ? { machine } : {}) };
 }
 
+export async function bindingAvailability(binding) {
+  try {
+    if (binding.native.availability) return await binding.native.availability();
+    // Hermes has no separate verified status call in the current adapter.
+    return (await binding.native.snapshot()).idle ? 'available' : 'busy';
+  } catch { return 'unknown'; }
+}
+
 export function herdrInventory(socketPath) {
   requireValue(isAbsolute(socketPath), 'invalid_herdr_config', 'Absolute Herdr socket required');
   return new Promise((resolve, reject) => {
