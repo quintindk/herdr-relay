@@ -65,6 +65,42 @@ test('continuation history retains original exact invocation and refuses rewriti
   } finally { journal.close(); }
 });
 
+test('tick and agent status projections use indexes and retain work still needing reconciliation', t => {
+  const journal = new NodeJournal(':memory:', { nodeId: 'node', instanceId: 'backend' });
+  t.after(() => journal.close());
+  const work = (id, state, backendState, targetAgentId = 'a') => ({ id, state,
+    execution: { id, state: backendState, targetAgentId }, invocation: { prompt: `Evidence for ${id}` } });
+  const records = [
+    work('done', 'settled', 'completed'),
+    work('finished', 'native_finished', 'completed'),
+    work('waiting-terminal', 'settled_waiting', 'cancelled'),
+    work('unresolved', 'terminal_unresolved', 'cancelled'),
+    work('withdrawn', 'administratively_abandoned', 'accepted'),
+    work('needs-reconciliation', 'observing', 'cancelled'),
+    work('awaiting-result', 'native_finished', 'accepted'),
+    work('continuation', 'settled_waiting', 'continuation_ready'),
+    work('review', 'native_finished', 'in_review'),
+    work('other', 'observing', 'accepted', 'b'),
+  ];
+  for (const row of records) journal.save(row);
+
+  const prepare = journal.db.prepare.bind(journal.db), plans = [];
+  journal.db.prepare = sql => {
+    if (sql.startsWith('SELECT data FROM work WHERE')) {
+      const plan = prepare(`EXPLAIN QUERY PLAN ${sql}`);
+      plans.push((sql.includes('=?') ? plan.all('a') : plan.all()).map(row => row.detail).join('\n'));
+    }
+    return prepare(sql);
+  };
+  assert.deepEqual(journal.workForTick().map(row => row.id), ['awaiting-result', 'continuation', 'needs-reconciliation', 'other', 'review']);
+  assert.deepEqual(journal.openWorkForAgent('a').map(row => row.id), ['awaiting-result', 'continuation', 'review']);
+  assert.deepEqual(journal.openWorkForAgent('b').map(row => row.id), ['other']);
+  assert.match(plans[0], /USING INDEX work_for_tick/);
+  assert.match(plans[1], /USING INDEX open_work_by_agent/);
+  assert.equal(journal.works().length, records.length);
+  assert.deepEqual(journal.work('done'), records[0]);
+});
+
 test('snapshot recovery merges backend state without erasing an uncertain native invocation', () => {
   const journal = new NodeJournal(':memory:', { nodeId: 'node', instanceId: 'backend' });
   try {

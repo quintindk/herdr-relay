@@ -13,7 +13,7 @@ import { requireValue, digest } from './protocol.mjs';
 import { tickAutomation } from './node-automation.mjs';
 import { hermesNodeBinding } from './node-hermes.mjs';
 import { tickAgentNotices } from './node-notices.mjs';
-import { herdrInventory, nodeHeartbeatPayload, publishHerdrInventory } from './node-discovery.mjs';
+import { bindingAvailability, herdrInventory, nodeHeartbeatPayload, publishHerdrInventory } from './node-discovery.mjs';
 import { provisionNodeWorktree, finaliseNodeWorktree, retireNodeWorktree } from './node-resources.mjs';
 import { nodeTasks } from './node-tasks.mjs';
 import { enrolledDirectory, resolveFolderBinding } from './node-folder.mjs';
@@ -337,13 +337,13 @@ try {
               .run(`runtime-health:${agentId}`, JSON.stringify({ state: 'ready', generation: binding.runtime.descriptor.generation,
                 pluginReloadPending: binding.runtime.relayPluginUpdatePending }));
           }
+          if (!owned.entry.retireOnCompletion && !owned.entry.worktree?.finalise) continue;
           const priorRetirement = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`retired-binding:${binding.id}`);
           if (priorRetirement && JSON.parse(priorRetirement.value).state === 'retired') continue;
           const works = journal.works().filter(work => work.bindingId === binding.id);
           const settled = works.filter(work => work.execution.state === 'completed' && work.execution.result &&
             ['native_finished', 'settled'].includes(work.state));
           for (const work of settled) {
-            if (!owned.entry.retireOnCompletion && !owned.entry.worktree?.finalise) continue;
             const execution = await api('GET', `/v1/executions/${encodeURIComponent(work.id)}`);
             requireValue(execution.state === 'completed' && execution.result.candidate === work.execution.result.candidate &&
               execution.runId === work.execution.runId &&
@@ -377,8 +377,7 @@ try {
           for (const [agentId, binding] of bindings) {
             const agent = await api('GET', `/v1/agents/${encodeURIComponent(agentId)}`);
             if (agent.deletedAt) { receivers.markDeleted(agent); bindings.delete(agentId); continue; }
-            let availability = 'unknown';
-            try { availability = (await binding.native.snapshot()).idle ? 'available' : 'busy'; } catch {}
+            const availability = await bindingAvailability(binding);
             await api('POST', '/v1/commands', { key: `advertise:${agentId}:${lastHeartbeat}`, action: 'agent.advertise',
               payload: { id: agentId, expectedRevision: agent.revision, availability,
                 conversationId: binding.identity?.sessionId ?? config.bindings.find(entry => entry.agentId === agentId).conversationId,

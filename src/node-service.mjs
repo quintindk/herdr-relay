@@ -452,8 +452,7 @@ export async function startNodeService({ journal, socketPath, workers, api, task
         const receiver = row ? { ...JSON.parse(row.value), ...(journal.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`agent-deleted:${worker.agentId}`) ? { state: 'deleted' } : {}) } : null;
         const enrolment = journal.db.prepare('SELECT value FROM settings WHERE key=?').get(`enrolment:${worker.agentId}`);
         const node = journal.cached('node').find(entry => entry.entity.id === journal.nodeId)?.entity;
-        const works = journal.works().filter(w => !abandonedWork(w) && w.execution.targetAgentId === worker.agentId &&
-          !['completed', 'cancelled', 'failed', 'rejected'].includes(w.execution.state));
+        const works = journal.openWorkForAgent(worker.agentId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ agentId: worker.agentId, agentName: enrolment ? JSON.parse(enrolment.value).name : null,
           nodeId: journal.nodeId, nodeName: node?.name ?? null, sessionId: worker.sessionId, receiver,
@@ -566,11 +565,12 @@ export async function startNodeService({ journal, socketPath, workers, api, task
       if (path === '/work/current') {
         requireValue(typeof worker.sessionId === 'string' && body.sessionId === worker.sessionId && Object.keys(body).length === 1,
           'forbidden', 'Exact enrolled native session required', 403);
-        if (resolveBinding) for (const work of journal.works().filter(work => !abandonedWork(work) && ownsWork(work) && work.execution.state === 'accepted')) {
+        const accepted = () => journal.openWorkForAgent(worker.agentId).filter(work => ownsWork(work) && work.execution.state === 'accepted');
+        if (resolveBinding) for (const work of accepted()) {
           const binding = await resolveBinding(worker.agentId, work);
           if (binding) await reconcileInteractiveWork(journal, binding, work);
         }
-        const matching = journal.works().filter(work => !abandonedWork(work) && ownsWork(work) && work.execution.state === 'accepted');
+        const matching = accepted();
         const candidates = matching.filter(work =>
           ['intent', 'observing', 'uncertain', 'native_finished'].includes(work.state) && work.execution.state === 'accepted');
         const conflicts = matching.filter(work => work.state === 'conflict');

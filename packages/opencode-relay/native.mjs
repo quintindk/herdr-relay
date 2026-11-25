@@ -36,6 +36,15 @@ export class NativeOpenCodeV2 {
     return session;
   }
 
+  // Presence is not observation evidence. Do not page the transcript to learn
+  // whether this exact chat is running.
+  async availability() {
+    await this.verify();
+    const active = await this.client.session.active();
+    check(active && typeof active === 'object' && !Array.isArray(active), 'invalid_native_response');
+    return Object.hasOwn(active, this.identity.sessionId) ? 'busy' : 'available';
+  }
+
   async snapshot() {
     await this.verify();
     const messages = [];

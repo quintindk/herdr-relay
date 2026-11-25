@@ -25,6 +25,10 @@ They do not append presence rows to backend `changes` or `receipts`. Nodes also
 filter legacy presence events before writing to their `inbox`. Snapshots keep
 durable node and agent records in their existing collections and expose live
 timestamps separately under `snapshot.presence`.
+For OpenCode, presence checks verify the pinned chat and read native activity
+without fetching messages. Admission and observation still check the full
+transcript when they need evidence. The node scheduler and status endpoints use
+indexed projections instead of parsing settled work history on each poll.
 
 [Task attachment](task-attachments.md) metadata is revisioned in the backend
 `entities` table as `task_attachment` records. Bytes live outside SQLite in

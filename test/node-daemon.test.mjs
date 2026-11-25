@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startBackend } from '../src/backend-service.mjs';
@@ -82,4 +83,57 @@ test('real node startup excludes a refused attachment before native authenticati
   assert.deepEqual(receivers.get('attachment:refused'), before);
   assert.deepEqual(receivers.get(`native-binding:${operation.binding.id}`), operation.binding);
   assert.equal(receivers.get(`retired-binding:${operation.binding.id}`), null);
+});
+
+test('the daemon advertises OpenCode presence without requesting transcripts on repeated heartbeats', { timeout: 20000 }, async t => {
+  const root = mkdtempSync('/tmp/opencode/relay-presence-daemon-'), state = join(root, 'node');
+  mkdirSync(state, { mode: 0o700 });
+  const backend = await startBackend({ database: ':memory:' });
+  const sessionId = 'ses_presence', info = { id: sessionId, projectID: 'global', location: { directory: root }, time: { created: 1 } };
+  const requests = [];
+  let active = {}, child, diagnostics = '';
+  const runtime = createServer((req, res) => {
+    const path = new URL(req.url, 'http://localhost').pathname;
+    requests.push(path);
+    const reply = path === '/api/info' ? { version: '2.1.0', pid: process.pid, urls: [], paths: { tmp: root } }
+      : path === `/api/session/${sessionId}` ? { data: info }
+        : path === '/api/session/active' ? { data: active } : null;
+    res.writeHead(reply ? 200 : 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(reply));
+  });
+  t.after(async () => {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const done = once(child, 'exit'); child.kill('SIGTERM'); await done;
+    }
+    await new Promise(resolve => runtime.close(resolve)); await backend.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  await new Promise(resolve => runtime.listen(0, '127.0.0.1', resolve));
+
+  const owner = backend.store.authenticate(backend.store.bootstrap().token);
+  backend.store.command(owner, { key: 'node', action: 'node.enrol', payload: { id: 'node', name: 'Node' } });
+  const token = backend.store.enrolCredential(owner, 'node', 'credential').token;
+  const configPath = join(root, 'node.json'), authFile = join(root, 'fixture-auth.json');
+  writeFileSync(authFile, JSON.stringify({ password: 'fixture-only' }), { mode: 0o600 });
+  writeFileSync(configPath, JSON.stringify({ nodeId: 'node', stateDirectory: state, backend: { url: backend.origin, token }, bindings: [{
+    id: 'binding', agentId: 'agent', mode: 'interactive', harness: 'opencode-v2', reserved: true, authFile,
+    url: `http://127.0.0.1:${runtime.address().port}`,
+    identity: { sessionId, projectId: info.projectID, directory: root, createdAt: info.time.created },
+  }] }), { mode: 0o600 });
+
+  child = spawn(process.execPath, [resolve('src/node-cli.mjs'), '--config', configPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.on('data', chunk => { diagnostics += chunk; });
+  child.stderr.on('data', chunk => { diagnostics += chunk; });
+  const waitFor = async availability => {
+    const deadline = Date.now() + 9000;
+    while (Date.now() < deadline && child.exitCode === null) {
+      if (backend.store.get('agent', 'agent', false)?.availability === availability) return;
+      await delay(30);
+    }
+    assert.fail(`Agent did not advertise ${availability}: ${diagnostics}`);
+  };
+  await waitFor('available');
+  active = { [sessionId]: { type: 'running' } };
+  await waitFor('busy');
+  assert.equal(requests.filter(path => path === '/api/session/active').length, 2);
+  assert.ok(requests.every(path => ['/api/info', `/api/session/${sessionId}`, '/api/session/active'].includes(path)), requests.join('\n'));
 });
