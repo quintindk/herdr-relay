@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 — 25 November 2026
 
 - Check OpenCode chat availability without fetching transcripts. The node tick
   and worker status reads skip settled execution history without deleting it.

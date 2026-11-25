@@ -23,11 +23,11 @@ CLI and service versions are separate. Backend status on a node-only machine is
 not remote backend administration. Doctor checks this node's backend connection.
 
 Activate the exact **published** target version first. The examples below target
-stable version **0.3.1**. Its release assets and verification report must be
+stable version **0.3.2**. Its release assets and verification report must be
 published before installation or a live upgrade:
 
 ```sh
-herdr-relay release install --version 0.3.1
+herdr-relay release install --version 0.3.2
 ```
 
 Run the public CLI from the terminal, not an older plugin's package-pinned bridge.
@@ -65,15 +65,15 @@ already truncated externally and `sqlite_sequence` is ahead of the event tail,
 On a host running both backend and node:
 
 ```sh
-herdr-relay upgrade --services both --version 0.3.1 --key stable-031-backend-host
-herdr-relay upgrade --services both --version 0.3.1 --key stable-031-backend-host --apply
+herdr-relay upgrade --services both --version 0.3.2 --key stable-032-backend-host
+herdr-relay upgrade --services both --version 0.3.2 --key stable-032-backend-host --apply
 ```
 
 On a node-only host:
 
 ```sh
-herdr-relay upgrade --services node --version 0.3.1 --key stable-031-node-host
-herdr-relay upgrade --services node --version 0.3.1 --key stable-031-node-host --apply
+herdr-relay upgrade --services node --version 0.3.2 --key stable-032-node-host
+herdr-relay upgrade --services node --version 0.3.2 --key stable-032-node-host --apply
 ```
 
 Backend-only maintenance uses `--services backend`. The role-specific `node upgrade`
@@ -86,8 +86,10 @@ conflicts, pending publications and backend executions remain recorded work stat
 They do not block schema-compatible maintenance or require cancellation. Candidate
 and database schemas must match.
 
-RC4 through 0.3.1 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
+RC4 through 0.3.2 retain protocol `relay/0.2`, backend schema 2 and node schema 1.
 Removing retired source code does not migrate or rewrite imported task provenance.
+The 0.3.2 CPU fix takes effect when the running node is upgraded. It adds local
+journal indexes on startup without deleting work or changing the schema version.
 
 Upgrade the backend and participating nodes and plugins to 0.3.0 or later to use
 [task file attachments](task-attachments.md). No SQLite migration is required.
